@@ -1,0 +1,601 @@
+{% extends "base.html" %}
+{% from "staff/_badges.html" import status_badge, role_badge, yes_no_badge %}
+{% from "staff/_form.html" import member_form %}
+{% from "staff/_potential_form.html" import potential_form %}
+
+{% macro platform_logo(platform) -%}
+  {% if platform == 'Zoom' %}
+    <img class="platform-logo-img" src="{{ url_for('static', filename='img/zoom.png') }}" alt="Zoom" title="Zoom">
+  {% elif platform == 'Meet' %}
+    <img class="platform-logo-img platform-logo-meet" src="{{ url_for('static', filename='img/google-meet.png') }}" alt="Google Meet" title="Google Meet">
+  {% else %}
+    <span class="muted">-</span>
+  {% endif %}
+{%- endmacro %}
+
+{% block title %}Academic staff | Path Examinations{% endblock %}
+
+{% block content %}
+<header class="page-header">
+  <div>
+    <p class="eyebrow">Academic staff</p>
+    <h1>Academic staff</h1>
+    <p>Manage examiners, supervisors and interns for Path Examinations.</p>
+  </div>
+  <div class="page-actions">
+    <button class="secondary-button" type="button" data-open-modal="import-members">Import</button>
+    <button class="potential-button" type="button" data-open-modal="create-potential-entry">Add potential entry</button>
+    <button class="primary-button" type="button" data-open-modal="create-member">Add new member</button>
+  </div>
+</header>
+
+<section class="toolbar">
+  <div class="toolbar-actions">
+    <form method="get" class="filters" data-auto-filter>
+      <input type="hidden" name="page_size" value="{{ pagination.page_size if pagination else '10' }}">
+      <input name="q" value="{{ filters.q }}" placeholder="Search name, email, phone, city, account...">
+      <select name="status">
+        <option value="">All statuses</option>
+        {% for status in statuses %}
+          <option value="{{ status }}" {% if filters.status == status %}selected{% endif %}>{{ status }}</option>
+        {% endfor %}
+      </select>
+      <fieldset class="role-filter" aria-label="Filter by roles">
+        <legend>Roles</legend>
+        {% for role in roles %}
+          <label class="role-filter-chip role-{{ role|lower }}">
+            <input type="checkbox" name="roles" value="{{ role }}" {% if role in filters.roles %}checked{% endif %}>
+            <span>{{ role }}</span>
+          </label>
+        {% endfor %}
+      </fieldset>
+      <select name="has_car">
+        <option value="">Has a car</option>
+        <option value="Yes" {% if filters.has_car == 'Yes' %}selected{% endif %}>Yes</option>
+        <option value="No" {% if filters.has_car == 'No' %}selected{% endif %}>No</option>
+      </select>
+      {% if filters.show_archived %}
+        <input type="hidden" name="show_archived" value="1">
+      {% endif %}
+      <a class="text-link" href="{{ url_for('staff.index') }}">Reset</a>
+    </form>
+    <form method="get" class="archive-toggle-form">
+      {% if filters.q %}<input type="hidden" name="q" value="{{ filters.q }}">{% endif %}
+      {% for role in filters.roles %}
+        <input type="hidden" name="roles" value="{{ role }}">
+      {% endfor %}
+      {% if filters.has_car %}<input type="hidden" name="has_car" value="{{ filters.has_car }}">{% endif %}
+      {% if pagination %}<input type="hidden" name="page_size" value="{{ pagination.page_size }}">{% endif %}
+      {% if not filters.show_archived %}
+        <input type="hidden" name="show_archived" value="1">
+      {% endif %}
+      <button class="archive-toggle-button {% if filters.show_archived %}is-archived{% endif %}" type="submit">
+        {% if filters.show_archived %}Show active staff{% else %}Show archived staff{% endif %}
+      </button>
+    </form>
+  </div>
+</section>
+
+<section class="potential-section" aria-label="Potential entries">
+  <div class="section-heading">
+    <div>
+      <h2>{% if filters.show_rejected %}Rejected potential entries{% else %}Potential entries{% endif %}</h2>
+      <p>{% if filters.show_rejected %}Hidden selection records kept for audit and follow-up.{% else %}Track prospective staff members before they join the team.{% endif %}</p>
+    </div>
+    <div class="section-actions">
+      <span class="count-pill">{{ potential_entries|length }}</span>
+      <button class="collapse-button" type="button" data-toggle-section="potential-entries-content" aria-expanded="true">Hide</button>
+      {% if filters.show_rejected %}
+        <a class="secondary-button link-button" href="{{ url_for('staff.index') }}">Show active entries</a>
+      {% else %}
+        <a class="secondary-button link-button" href="{{ url_for('staff.index', show_rejected=1) }}">Show rejected entries</a>
+      {% endif %}
+    </div>
+  </div>
+  <div class="potential-content" id="potential-entries-content">
+    {% if potential_entries %}
+      <div class="potential-grid">
+        {% for entry in potential_entries %}
+          <article class="potential-card">
+            <button class="potential-card-main" type="button" data-open-modal="potential-entry-{{ entry.id }}">
+              {% if entry.is_rejected %}
+                <span class="badge potential-status-rejected">Rejected</span>
+              {% else %}
+                <span class="badge potential-status-{{ entry.status|lower|replace(' ', '-') }}">{{ entry.status }}</span>
+              {% endif %}
+              <strong>{{ entry.full_name }}</strong>
+              <span>{{ entry.email or 'No email recorded' }}</span>
+              {% if entry.is_rejected %}
+                <span>Rejected on: {{ entry.rejected_on|localdt if entry.rejected_on else '-' }}</span>
+              {% endif %}
+              <span>{{ entry.city or '-' }}{% if entry.province %}, {{ entry.province }}{% endif %}</span>
+              {% if entry.status == 'Interview arranged' or entry.status == 'Interview scheduled' %}
+                <span class="potential-schedule">
+                  {{ entry.interview_date|display_date if entry.interview_date else '-' }} {{ entry.interview_time or '' }}
+                  {{ platform_logo(entry.platform) }}
+                </span>
+                {% if entry.interviewer %}
+                  <span>{{ entry.interviewer|display_interviewer }}</span>
+                {% endif %}
+              {% endif %}
+            </button>
+            <div class="potential-card-actions">
+              {% if entry.cv %}
+                <a class="mini-button link-button" href="{{ entry.cv }}" target="_blank" rel="noopener noreferrer">View CV</a>
+              {% else %}
+                <span class="mini-button disabled-button">No link</span>
+              {% endif %}
+              <button class="mini-button" type="button" data-open-modal="potential-note-{{ entry.id }}">Add notes</button>
+            </div>
+          </article>
+        {% endfor %}
+      </div>
+    {% else %}
+      <div class="potential-empty">No potential entries yet.</div>
+    {% endif %}
+  </div>
+</section>
+
+<form id="staff-bulk-export-form" method="post" action="{{ url_for('staff.export_members') }}" data-bulk-form data-bulk-scope="[data-staff-records-table]">
+  <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+</form>
+
+<section class="bulk-actions" data-bulk-root data-bulk-actions data-bulk-scope="[data-staff-records-table]" hidden>
+  <div class="bulk-action-copy">
+    <span data-selected-count>0 members selected</span>
+    <span class="bulk-status" data-bulk-status></span>
+  </div>
+  <div class="bulk-action-buttons">
+    <details class="bulk-action-menu">
+      <summary class="secondary-button">Bulk actions</summary>
+      <div class="bulk-action-panel">
+        <form method="post" action="{{ url_for('staff.bulk_update_members') }}" data-bulk-stage-form data-bulk-scope="[data-staff-records-table]" data-bulk-empty-message="Please select at least one member before applying a bulk action.">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+          <input type="hidden" name="bulk_action" value="status">
+          <label>
+            <span>Change Status</span>
+            <select name="status" required>
+              {% for status in statuses %}
+                <option value="{{ status }}">{{ status }}</option>
+              {% endfor %}
+            </select>
+          </label>
+          <button class="primary-button compact-action" type="submit">Apply</button>
+        </form>
+        <form method="post" action="{{ url_for('staff.bulk_update_members') }}" data-bulk-stage-form data-bulk-scope="[data-staff-records-table]" data-bulk-empty-message="Please select at least one member before applying a bulk action.">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+          <input type="hidden" name="bulk_action" value="role">
+          <label>
+            <span>Add or remove role</span>
+            <div class="bulk-inline-controls">
+              <select name="role_action" required>
+                <option value="add">Add</option>
+                <option value="remove">Remove</option>
+              </select>
+              <select name="role" required>
+                {% for role in roles %}
+                  <option value="{{ role }}">{{ role }}</option>
+                {% endfor %}
+              </select>
+            </div>
+          </label>
+          <button class="primary-button compact-action" type="submit">Apply</button>
+        </form>
+        <form method="post" action="{{ url_for('staff.bulk_update_members') }}" data-bulk-stage-form data-bulk-scope="[data-staff-records-table]" data-bulk-empty-message="Please select at least one member before applying a bulk action.">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+          <input type="hidden" name="bulk_action" value="has_car">
+          <label>
+            <span>Change car ownership</span>
+            <select name="has_car" required>
+              <option value="Yes">Yes</option>
+              <option value="No">No</option>
+            </select>
+          </label>
+          <button class="primary-button compact-action" type="submit">Apply</button>
+        </form>
+        {% if filters.show_archived %}
+          <form method="post" action="{{ url_for('staff.bulk_update_members') }}" data-bulk-stage-form data-bulk-scope="[data-staff-records-table]" data-bulk-empty-message="Please select at least one archived member before deleting." data-confirm-password-submit="This will permanently delete the selected archived members and all their related records. This cannot be undone.">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+            <input type="hidden" name="bulk_action" value="permanent_delete">
+            <input type="hidden" name="deletion_password" value="">
+            <button class="danger-button compact-action" type="submit">Delete permanently</button>
+          </form>
+        {% endif %}
+      </div>
+    </details>
+    <button class="primary-button" type="submit" form="staff-bulk-export-form">Export</button>
+    <button class="secondary-button" type="button" data-clear-selection>Clear selection</button>
+  </div>
+</section>
+
+<section class="table-wrap" aria-label="Academic staff list" data-staff-records-table>
+  <table>
+    <thead>
+      <tr>
+        <th class="select-column">
+          <input class="bulk-checkbox" type="checkbox" data-select-all-members aria-label="Select all visible members">
+        </th>
+        <th>Status</th>
+        <th>
+          <a class="table-sort {% if filters.sort == 'title' %}is-active{% endif %}" href="{{ sort_url('title') }}">
+            Title
+            <span>{{ '↑' if filters.sort == 'title' and filters.dir == 'asc' else '↓' if filters.sort == 'title' else '↕' }}</span>
+          </a>
+        </th>
+        <th>
+          <a class="table-sort {% if filters.sort == 'full_name' %}is-active{% endif %}" href="{{ sort_url('full_name') }}">
+            Full name
+            <span>{{ '↑' if filters.sort == 'full_name' and filters.dir == 'asc' else '↓' if filters.sort == 'full_name' else '↕' }}</span>
+          </a>
+        </th>
+        <th>Roles</th>
+        <th>Phone</th>
+        <th>Email</th>
+        <th>Has a car</th>
+        <th>Full address</th>
+        <th>
+          <a class="table-sort {% if filters.sort == 'city' %}is-active{% endif %}" href="{{ sort_url('city') }}">
+            City
+            <span>{{ '↑' if filters.sort == 'city' and filters.dir == 'asc' else '↓' if filters.sort == 'city' else '↕' }}</span>
+          </a>
+        </th>
+        <th>
+          <a class="table-sort {% if filters.sort == 'province' %}is-active{% endif %}" href="{{ sort_url('province') }}">
+            Province
+            <span>{{ '↑' if filters.sort == 'province' and filters.dir == 'asc' else '↓' if filters.sort == 'province' else '↕' }}</span>
+          </a>
+        </th>
+        <th>
+          <a class="table-sort {% if filters.sort == 'country' %}is-active{% endif %}" href="{{ sort_url('country') }}">
+            Country
+            <span>{{ '↑' if filters.sort == 'country' and filters.dir == 'asc' else '↓' if filters.sort == 'country' else '↕' }}</span>
+          </a>
+        </th>
+        <th>CV</th>
+        <th>History</th>
+        <th>Account ID</th>
+        <th>Account owner</th>
+        <th>Profile picture</th>
+        <th>
+          <a class="table-sort {% if filters.sort == 'started_in' %}is-active{% endif %}" href="{{ sort_url('started_in') }}">
+            Started in
+            <span>{{ '↑' if filters.sort == 'started_in' and filters.dir == 'asc' else '↓' if filters.sort == 'started_in' else '↕' }}</span>
+          </a>
+        </th>
+        <th>Sessions</th>
+        <th>
+          <a class="table-sort {% if filters.sort == 'updated_on' %}is-active{% endif %}" href="{{ sort_url('updated_on') }}">
+            Updated on
+            <span>{{ '↑' if filters.sort == 'updated_on' and filters.dir == 'asc' else '↓' if filters.sort == 'updated_on' else '↕' }}</span>
+          </a>
+        </th>
+        <th>Edit</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for member in members %}
+      <tr>
+        <td class="select-column">
+          <input class="bulk-checkbox" type="checkbox" name="member_ids" value="{{ member.id }}" form="staff-bulk-export-form" data-member-select aria-label="Select {{ member.full_name }}">
+        </td>
+        <td>{{ status_badge(member.status) }}</td>
+        <td>{{ member.title or '-' }}</td>
+        <td>
+          <div class="name-cell">
+            <span class="strong">{{ member.full_name }}</span>
+            {% if member.seniority %}
+              <span class="senior-badge">Senior</span>
+            {% endif %}
+          </div>
+        </td>
+        <td class="badge-list">
+          <div class="role-badges">
+            {% for role in member.roles_list() %}
+              {{ role_badge(role) }}
+            {% else %}
+              <span class="muted">-</span>
+            {% endfor %}
+          </div>
+        </td>
+        <td>{{ member.phone or '-' }}</td>
+        <td>{{ member.email or '-' }}</td>
+        <td>{{ yes_no_badge(member.has_car) }}</td>
+        <td>
+          {% if member.full_address_google_maps %}
+            <div class="copy-address-cell">
+              <span>{{ member.full_address_google_maps }}</span>
+              <button class="copy-icon-button" type="button" data-copy-text="{{ member.full_address_google_maps }}" aria-label="Copy full address" title="Copy full address">
+                <svg viewBox="0 0 24 24" aria-hidden="true">
+                  <rect x="9" y="9" width="10" height="10" rx="2"></rect>
+                  <path d="M5 15V7a2 2 0 0 1 2-2h8"></path>
+                </svg>
+                <span class="copy-button-feedback">Copied</span>
+              </button>
+            </div>
+          {% else %}
+            <span class="muted">-</span>
+          {% endif %}
+        </td>
+        <td>{{ member.city or '-' }}</td>
+        <td>{{ member.province or '-' }}</td>
+        <td>{{ member.country or '-' }}</td>
+        <td>
+          {% if member.cv %}
+            <a class="text-link" href="{{ member.cv }}" target="_blank" rel="noopener noreferrer">Link</a>
+          {% else %}
+            <span class="muted">-</span>
+          {% endif %}
+        </td>
+        <td><button class="mini-button" type="button" data-open-modal="interview-{{ member.id }}">Notes</button></td>
+        <td>{{ member.account_id or '-' }}</td>
+        <td>{{ member.account_owner or '-' }}</td>
+        <td>
+          {% if member.profile_picture %}
+            <a class="mini-button link-button" href="{{ member.profile_picture }}" target="_blank" rel="noopener noreferrer">See</a>
+          {% else %}
+            <span class="muted">-</span>
+          {% endif %}
+        </td>
+        <td>
+          {% if member.started_in %}
+            <div class="started-cell">
+              <span>{{ member.started_in }}</span>
+              <span class="tenure-box">{{ member.started_in|tenure_label }}</span>
+            </div>
+          {% else %}
+            <span class="muted">-</span>
+          {% endif %}
+        </td>
+        <td>
+          <span class="staff-session-count-chip">{{ confirmed_session_counts.get(member.id, 0) }}</span>
+        </td>
+        <td class="datetime-cell">{{ member.updated_on|localdt }}</td>
+        <td>
+          <div class="row-actions">
+            <button class="mini-button" type="button" data-open-modal="edit-member-{{ member.id }}">Edit</button>
+            {% if filters.show_archived and member.status == 'Archived' %}
+              <form method="post" action="{{ url_for('staff.delete_member', member_id=member.id) }}" data-confirm-password-submit="This will permanently delete {{ member.full_name }} and all related records. This cannot be undone.">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                <input type="hidden" name="deletion_password" value="">
+                <button class="danger-button compact-action" type="submit">Delete</button>
+              </form>
+            {% endif %}
+          </div>
+        </td>
+      </tr>
+      {% else %}
+      <tr>
+        <td colspan="21" class="empty-state">No members found.</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</section>
+
+{% include "_pagination.html" %}
+
+<div class="modal" id="create-member" aria-hidden="true">
+  <div class="modal-panel large">
+    <div class="modal-header">
+      <h2>Add new member</h2>
+      <button class="icon-button" type="button" data-close-modal>&times;</button>
+    </div>
+    {{ member_form(None, url_for('staff.create_member'), create_statuses, roles, csrf_token, 'Create member', 'create-member') }}
+  </div>
+</div>
+
+<div class="modal" id="import-members" aria-hidden="true">
+  <div class="modal-panel import-modal-panel">
+    <div class="modal-header">
+      <div>
+        <h2>Import members</h2>
+        <p>Upload an Excel file generated from the Export feature to create or update Academic Staff members.</p>
+      </div>
+      <button class="icon-button" type="button" data-close-modal>&times;</button>
+    </div>
+    <form method="post" action="{{ url_for('staff.import_members_preview') }}" enctype="multipart/form-data" class="import-form" data-import-form>
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+      <label class="upload-dropzone" data-upload-dropzone>
+        <input class="visually-hidden-file" name="import_file" type="file" accept=".xlsx" required data-import-file>
+        <span class="upload-icon" aria-hidden="true">XLSX</span>
+        <strong>Upload Excel file</strong>
+        <span>Drag & drop your .xlsx file here</span>
+        <em>or</em>
+        <span class="secondary-button upload-button">Choose file</span>
+        <span class="upload-file-state" data-file-state>No file selected</span>
+        <span class="upload-validation" data-upload-validation></span>
+      </label>
+
+      <section class="import-card">
+        <h3>Import options</h3>
+        <label class="import-option-check">
+          <input name="update_empty_fields" type="checkbox">
+          <span>
+            <strong>Update empty fields</strong>
+            <small>If enabled, empty values from the Excel file will overwrite existing information in existing members.</small>
+          </span>
+        </label>
+      </section>
+
+      <section class="import-card supported-format">
+        <h3>Supported format</h3>
+        <p>The imported file must use the same structure generated by the Export feature.</p>
+        <strong>Required columns:</strong>
+        <ul>
+          <li>Status</li>
+          <li>Full name</li>
+          <li>Roles</li>
+          <li>Email</li>
+          <li>Has a car</li>
+          <li>City</li>
+          <li>Province</li>
+          <li>Country</li>
+        </ul>
+        <p>All other columns are optional.</p>
+      </section>
+
+      <div class="form-actions">
+        <button class="secondary-button" type="button" data-close-modal>Cancel</button>
+        <button class="primary-button" type="submit" data-import-submit disabled>Preview import</button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<div class="modal" id="create-potential-entry" aria-hidden="true">
+  <div class="modal-panel large">
+    <div class="modal-header">
+      <h2>Add potential entry</h2>
+      <button class="icon-button" type="button" data-close-modal>&times;</button>
+    </div>
+    {{ potential_form(None, url_for('staff.create_potential_entry'), potential_statuses, csrf_token, 'Create', interviewer_options) }}
+  </div>
+</div>
+
+{% for entry in potential_entries %}
+<div class="modal" id="potential-entry-{{ entry.id }}" aria-hidden="true">
+  <div class="modal-panel">
+    <div class="modal-header">
+      <h2>Potential entry</h2>
+      <button class="icon-button" type="button" data-close-modal>&times;</button>
+    </div>
+    <div class="potential-detail">
+      {% if entry.is_rejected %}
+        <span class="badge potential-status-rejected">Rejected</span>
+      {% else %}
+        <span class="badge potential-status-{{ entry.status|lower|replace(' ', '-') }}">{{ entry.status }}</span>
+      {% endif %}
+      <h3>{{ entry.full_name }}</h3>
+      <dl>
+        <div><dt>Phone</dt><dd>{{ entry.phone or '-' }}</dd></div>
+        <div><dt>Email</dt><dd>{{ entry.email or '-' }}</dd></div>
+        <div><dt>City</dt><dd>{{ entry.city or '-' }}</dd></div>
+        <div><dt>Province</dt><dd>{{ entry.province or '-' }}</dd></div>
+        <div><dt>CV</dt><dd>{% if entry.cv %}<a class="text-link" href="{{ entry.cv }}" target="_blank" rel="noopener noreferrer">Link</a>{% else %}-{% endif %}</dd></div>
+        {% if entry.status == 'Interview arranged' or entry.status == 'Interview scheduled' %}
+          <div><dt>Interview date</dt><dd>{{ entry.interview_date|display_date if entry.interview_date else '-' }}</dd></div>
+          <div><dt>Interview time</dt><dd>{{ entry.interview_time or '-' }}</dd></div>
+          <div><dt>Platform</dt><dd>{{ platform_logo(entry.platform) }}</dd></div>
+          <div><dt>Interviewer</dt><dd>{{ entry.interviewer|display_interviewer if entry.interviewer else '-' }}</dd></div>
+        {% endif %}
+        {% if entry.is_rejected %}
+          <div><dt>Rejected on</dt><dd>{{ entry.rejected_on|localdt if entry.rejected_on else '-' }}</dd></div>
+        {% endif %}
+      </dl>
+      {% set potential_interview_entries = entry.interview|interview_entries %}
+      {% if potential_interview_entries %}
+        <div class="history-list compact-history">
+          {% for note in potential_interview_entries|reverse %}
+            <article class="history-entry">
+              <time>{{ note.date }}</time>
+              <p>{{ note.note }}</p>
+            </article>
+          {% endfor %}
+        </div>
+      {% endif %}
+      <div class="potential-actions">
+        {% if entry.is_rejected %}
+          <span class="muted">This rejected record is kept for audit.</span>
+        {% else %}
+          <button class="secondary-button" type="button" data-open-modal="edit-potential-entry-{{ entry.id }}">Edit</button>
+          <form method="post" action="{{ url_for('staff.reject_potential_entry', entry_id=entry.id) }}">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+            <button class="danger-button" type="submit">Rejected</button>
+          </form>
+          <button class="primary-button" type="button" data-open-modal="accept-potential-entry-{{ entry.id }}">Accepted</button>
+        {% endif %}
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="modal" id="potential-note-{{ entry.id }}" aria-hidden="true">
+  <div class="modal-panel">
+    <div class="modal-header">
+      <h2>Add interview note</h2>
+      <button class="icon-button" type="button" data-close-modal>&times;</button>
+    </div>
+    <form method="post" action="{{ url_for('staff.add_potential_note', entry_id=entry.id) }}" class="form-grid one-column">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+      <label>
+        Interview history
+        <textarea name="interview" rows="5" maxlength="4000" placeholder="Add a note for {{ entry.full_name }}" required></textarea>
+      </label>
+      <div class="form-actions">
+        <button class="secondary-button" type="button" data-close-modal>Cancel</button>
+        <button class="primary-button" type="submit">Add notes</button>
+      </div>
+    </form>
+  </div>
+</div>
+
+{% if not entry.is_rejected %}
+<div class="modal" id="edit-potential-entry-{{ entry.id }}" aria-hidden="true">
+  <div class="modal-panel large">
+    <div class="modal-header">
+      <h2>Edit potential entry</h2>
+      <button class="icon-button" type="button" data-close-modal>&times;</button>
+    </div>
+    {{ potential_form(entry, url_for('staff.update_potential_entry', entry_id=entry.id), potential_statuses, csrf_token, 'Save changes', interviewer_options) }}
+  </div>
+</div>
+
+<div class="modal" id="accept-potential-entry-{{ entry.id }}" aria-hidden="true">
+  <div class="modal-panel large">
+    <div class="modal-header">
+      <h2>Accept as academic staff</h2>
+      <button class="icon-button" type="button" data-close-modal>&times;</button>
+    </div>
+    {{ member_form(entry, url_for('staff.accept_potential_entry', entry_id=entry.id), create_statuses, roles, csrf_token, 'Create member', 'accept-potential-entry-' ~ entry.id) }}
+  </div>
+</div>
+{% endif %}
+{% endfor %}
+
+{% for member in members %}
+<div class="modal" id="interview-{{ member.id }}" aria-hidden="true">
+  <div class="modal-panel">
+    <div class="modal-header">
+      <h2>History</h2>
+      <button class="icon-button" type="button" data-close-modal>&times;</button>
+    </div>
+    <details class="history-add-panel">
+      <summary class="primary-button">Add</summary>
+      <form method="post" action="{{ url_for('staff.add_member_note', member_id=member.id) }}" class="form-grid one-column history-add-form">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <label>
+          New note
+          <textarea name="interview" rows="4" maxlength="4000" placeholder="Add a new history note" required></textarea>
+        </label>
+        <div class="form-actions">
+          <button class="primary-button" type="submit">Add</button>
+        </div>
+      </form>
+    </details>
+    {% set interview_entries = member.interview|interview_entries %}
+    {% if interview_entries %}
+      <div class="history-list">
+        {% for entry in interview_entries|reverse %}
+          <article class="history-entry">
+            <time>{{ entry.date }}</time>
+            <p>{{ entry.note }}</p>
+          </article>
+        {% endfor %}
+      </div>
+    {% else %}
+      <p class="empty-history">No interview history recorded.</p>
+    {% endif %}
+  </div>
+</div>
+
+<div class="modal" id="edit-member-{{ member.id }}" aria-hidden="true">
+  <div class="modal-panel large">
+    <div class="modal-header">
+      <h2>Edit member</h2>
+      <button class="icon-button" type="button" data-close-modal>&times;</button>
+    </div>
+    {{ member_form(member, url_for('staff.update_member', member_id=member.id), statuses, roles, csrf_token, 'Save changes', 'edit-member-' ~ member.id) }}
+  </div>
+</div>
+{% endfor %}
+{% endblock %}

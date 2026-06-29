@@ -1,0 +1,47 @@
+{% extends "base.html" %}
+
+{% block title %}Sign in | Path Examinations{% endblock %}
+
+{% block content %}
+<section class="login-layout">
+  <aside class="login-hero">
+    <img class="login-hero-logo" src="{{ url_for('static', filename='img/path-logo-white-transparent.png') }}" alt="Path International Examinations">
+    <div class="login-hero-copy">
+      <h2>Your work drives experiences, <span>transforms futures.</span></h2>
+      <p>Welcome to the Path staff space.</p>
+      <p>Sign in with your credentials to access your panel and manage academic operations, staff records and internal processes.</p>
+    </div>
+  </aside>
+
+  <section class="login-panel-wrap">
+    <div class="login-card">
+      <div class="login-logo-badge">
+        <img class="login-logo" src="{{ url_for('static', filename='img/path-logo-web.png') }}" alt="Path International Examinations">
+      </div>
+      <div class="login-title">
+        <h1>Internal team portal</h1>
+        <p>Sign in to manage internal processes and operations.</p>
+      </div>
+      {% if error %}<div class="flash error">{{ error }}</div>{% endif %}
+      <form method="post" class="form-grid one-column login-form">
+        <label>
+          Username
+          <input name="username" autocomplete="username" placeholder="admin" required>
+        </label>
+        <label>
+          Password
+          <input name="password" type="password" autocomplete="current-password" placeholder="Password" required>
+        </label>
+        <div class="login-options">
+          <label class="remember-option">
+            <input type="checkbox" name="remember" disabled>
+            Remember me
+          </label>
+        </div>
+        <button class="primary-button login-submit" type="submit">Sign in <span aria-hidden="true">&rarr;</span></button>
+      </form>
+      <p class="hint">Default local credentials: admin / admin123. Change them in .env before real use.</p>
+    </div>
+  </section>
+</section>
+{% endblock %}

@@ -1,0 +1,118 @@
+{% extends "base.html" %}
+{% from "staff/_badges.html" import status_badge %}
+
+{% block title %}Staff payments | Path Examinations{% endblock %}
+
+{% block content %}
+<header class="page-header">
+  <div>
+    <p class="eyebrow">Staff payments</p>
+    <h1>Staff payments</h1>
+    <p>Review confirmed session totals and track invoice and payment status by year.</p>
+  </div>
+</header>
+
+<section class="toolbar {% if archived_session_years %}toolbar-with-archive{% endif %}">
+  <div>
+    <p class="archived-year-copy">Use the active year selector to review staff payments by exam session year.</p>
+  </div>
+  {% if archived_session_years %}
+    <section class="archived-year-panel" aria-label="Archived Staff payments years">
+      <h2>Archived years</h2>
+      <div class="archived-year-list">
+        {% for year_item in archived_session_years %}
+          <span class="archived-year-pill">{{ year_item.year }}</span>
+        {% endfor %}
+      </div>
+    </section>
+  {% endif %}
+</section>
+
+{% if session_years %}
+<section class="year-toolbar" aria-label="Staff payments years">
+  <div class="year-tabs">
+    {% for year_item in session_years %}
+      <a class="year-tab {% if year_item.year == selected_session_year %}active{% endif %}" href="{{ url_for('staff.staff_payments', session_year=year_item.year) }}">{{ year_item.year }}</a>
+    {% endfor %}
+  </div>
+</section>
+{% endif %}
+
+<div class="flash-stack providers-feedback" data-staff-payment-feedback hidden></div>
+<input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+
+<section class="table-wrap staff-payments-table-wrap" aria-label="Staff payments list">
+  <table class="staff-payments-table">
+    <thead>
+      <tr>
+        <th>Status</th>
+        <th>Staff member</th>
+        <th>Account ID</th>
+        <th>Total sum</th>
+        <th>Currency</th>
+        <th>Sessions</th>
+        <th>Invoice</th>
+        <th>Payment</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for row in rows %}
+        <tr data-staff-payment-row data-member-id="{{ row.member.id }}" data-year="{{ selected_session_year }}" data-action="{{ url_for('staff.update_staff_payment', member_id=row.member.id, payment_year=selected_session_year) }}">
+          <td data-staff-payment-status-cell>{{ status_badge(row.status) }}</td>
+          <td class="strong">{{ row.member.full_name }}</td>
+          <td>
+            {% if row.account_id %}
+              {{ row.account_id }}
+            {% else %}
+              <span class="muted">-</span>
+            {% endif %}
+          </td>
+          <td class="strong">{{ row.total_label }}</td>
+          <td>
+            {% if row.currency_label %}
+              <span class="currency-chip currency-chip-{{ row.currency_label|lower }}">{{ row.currency_label }}</span>
+            {% else %}
+              <span class="muted">-</span>
+            {% endif %}
+          </td>
+          <td>
+            <div class="session-count-popover">
+              <span class="session-count-chip" tabindex="0">{{ row.session_count }}</span>
+              <div class="session-count-detail" role="tooltip">
+                {% for session_item in row.sessions %}
+                  <div class="session-count-detail-row">
+                    <span>{{ session_item.name }}</span>
+                    <strong>{{ session_item.total_label }}</strong>
+                  </div>
+                {% endfor %}
+                <div class="session-count-detail-total">
+                  <span>Total</span>
+                  <strong>{{ row.popover_total_label }}</strong>
+                </div>
+              </div>
+            </div>
+          </td>
+          <td>
+            <label class="staff-payment-checkbox">
+              <input type="checkbox" data-staff-payment-invoice {% if row.invoice_verified %}checked{% endif %}>
+              <span>Verified</span>
+            </label>
+          </td>
+          <td>
+            <label class="staff-payment-checkbox {% if not row.invoice_verified %}is-disabled{% endif %}">
+              <input type="checkbox" data-staff-payment-payment {% if row.payment_completed %}checked{% endif %} {% if not row.invoice_verified %}disabled{% endif %}>
+              <span>Completed</span>
+            </label>
+          </td>
+        </tr>
+      {% else %}
+        <tr>
+          <td colspan="8" class="empty-state">No confirmed staff payments found for this year.</td>
+        </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</section>
+
+{% include "_pagination.html" %}
+{% endblock %}

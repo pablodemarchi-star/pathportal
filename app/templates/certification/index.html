@@ -1,0 +1,665 @@
+{% extends "base.html" %}
+{% from "staff/_badges.html" import status_badge, role_badge %}
+{% set page_title = page_title|default('Examiner certification') %}
+{% set page_description = page_description|default('Track annual participation in internal training, meetings and certification stages.') %}
+{% set reset_endpoint = reset_endpoint|default('staff.annual_certification_programme') %}
+{% set export_endpoint = export_endpoint|default('staff.export_annual_certification') %}
+{% set add_record_endpoint = add_record_endpoint|default('staff.add_annual_certification') %}
+{% set delete_record_endpoint = delete_record_endpoint|default('staff.delete_annual_certification') %}
+{% set update_fut_endpoint = update_fut_endpoint|default('staff.update_fut_checkbox') %}
+{% set add_note_endpoint = add_note_endpoint|default('staff.add_certification_member_note') %}
+{% set archive_year_endpoint = archive_year_endpoint|default('staff.archive_examiner_certification_year') %}
+{% set add_year_endpoint = add_year_endpoint|default('staff.add_examiner_certification_year') %}
+{% set unarchive_year_endpoint = unarchive_year_endpoint|default('staff.unarchive_examiner_certification_year') %}
+{% set delete_year_endpoint = delete_year_endpoint|default('staff.delete_examiner_certification_year') %}
+{% set update_remote_training_endpoint = update_remote_training_endpoint|default('staff.update_examiner_remote_training') %}
+{% set update_annual_meeting_endpoint = update_annual_meeting_endpoint|default('staff.update_examiner_annual_meeting') %}
+{% set update_stage_2_endpoint = update_stage_2_endpoint|default('staff.update_intern_stage_2') %}
+{% set update_stage_3_endpoint = update_stage_3_endpoint|default('staff.update_intern_stage_3') %}
+{% set add_staff_fut_endpoint = add_staff_fut_endpoint|default('staff.add_staff_fut_options') %}
+{% set toggle_staff_fut_endpoint = toggle_staff_fut_endpoint|default('staff.toggle_staff_fut_option') %}
+{% set delete_staff_fut_endpoint = delete_staff_fut_endpoint|default('staff.delete_staff_fut_option') %}
+{% set bulk_form_id = bulk_form_id|default('annual-certification-bulk-form') %}
+{% set certification_statuses = certification_statuses|default({}) %}
+{% set bulk_success_message = bulk_success_message|default('Examiner Certification export downloaded successfully.') %}
+{% set show_intern_bulk_actions = show_intern_bulk_actions|default(false) %}
+{% set bulk_stage_update_endpoint = bulk_stage_update_endpoint|default('staff.bulk_update_intern_stages') %}
+{% set show_certification_bulk_actions = show_certification_bulk_actions|default(false) %}
+{% set bulk_certification_update_endpoint = bulk_certification_update_endpoint|default('staff.bulk_update_examiner_certification') %}
+{% set fut_checked_attr = fut_checked_attr|default('fut_checked') %}
+{% set fut_selections = fut_selections|default({}) %}
+{% set fut2_selections = fut2_selections|default({}) %}
+{% set fut_options = fut_options|default([]) %}
+{% set remote_training_selections = remote_training_selections|default({}) %}
+{% set remote_training_options = remote_training_options|default([]) %}
+{% set stage_2_options = stage_2_options|default(remote_training_options) %}
+{% set stage_3_options = stage_3_options|default(remote_training_options) %}
+{% set annual_meeting_selections = annual_meeting_selections|default({}) %}
+{% set annual_meeting_options = annual_meeting_options|default([]) %}
+{% set stage_2_selections = stage_2_selections|default({}) %}
+{% set stage_3_selections = stage_3_selections|default({}) %}
+{% set examiner_years = examiner_years|default([]) %}
+{% set archived_examiner_years = archived_examiner_years|default([]) %}
+{% set selected_certification_year = selected_certification_year|default(none) %}
+{% set certification_year_settings_endpoint = certification_year_settings_endpoint|default('staff.update_examiner_certification_year_settings') %}
+{% set certification_annual_meeting_date_value = certification_annual_meeting_date_value|default('') %}
+{% set certification_annual_meeting_time_value = certification_annual_meeting_time_value|default('') %}
+{% set certification_remote_training_period_value = certification_remote_training_period_value|default('') %}
+{% set module_key = module_key|default('certification') %}
+{% set visible_role_filters = visible_role_filters|default([]) %}
+{% set show_annual_meeting_filter = show_annual_meeting_filter|default(true) %}
+{% set show_role_filter = show_role_filter|default(true) %}
+{% set show_remote_training_filter = show_remote_training_filter|default(true) %}
+{% set show_stage_filters = show_stage_filters|default(false) %}
+{% set fut_requires_stage_certification = fut_requires_stage_certification|default(false) %}
+
+{% block title %}{{ page_title }} | Path Examinations{% endblock %}
+
+{% block content %}
+<header class="page-header">
+  <div>
+    <p class="eyebrow">{{ page_title }}</p>
+    <h1>{{ page_title }}</h1>
+    <p>{{ page_description }}</p>
+  </div>
+</header>
+
+<section class="toolbar {% if archived_examiner_years %}toolbar-with-archive{% endif %}">
+  <form method="get" class="filters certification-filters {% if module_key == 'certification' %}examiner-certification-filters{% endif %}" data-auto-filter>
+    {% if selected_certification_year %}
+      <input type="hidden" name="certification_year" value="{{ selected_certification_year }}">
+    {% endif %}
+    <input type="hidden" name="page_size" value="{{ pagination.page_size if pagination else '10' }}">
+    <input name="q" value="{{ filters.q }}" placeholder="Search name or email...">
+    {% if module_key != 'certification' %}
+      <select name="status">
+        <option value="">All visible statuses</option>
+        {% for status in statuses %}
+          <option value="{{ status }}" {% if filters.status == status %}selected{% endif %}>{{ status }}</option>
+        {% endfor %}
+      </select>
+    {% endif %}
+    {% if show_role_filter %}
+      <fieldset class="role-filter" aria-label="Filter by roles">
+        <legend>Roles</legend>
+        {% for role in roles %}
+          {% if visible_role_filters and role in visible_role_filters or (not visible_role_filters and (module_key != 'certification' or role not in ['Examiner', 'Intern'])) %}
+            <label class="role-filter-chip role-{{ role|lower }}">
+              <input type="checkbox" name="roles" value="{{ role }}" {% if role in filters.roles %}checked{% endif %}>
+              <span>{{ role }}</span>
+            </label>
+          {% endif %}
+        {% endfor %}
+      </fieldset>
+    {% endif %}
+    {% if module_key == 'certification' %}
+      <div class="certification-filter-row examiner-certification-filter-row">
+        {% if show_remote_training_filter %}
+          <select name="remote_training">
+            <option value="">Remote training</option>
+            <option value="Pending" {% if filters.remote_training == 'Pending' %}selected{% endif %}>Pending</option>
+            <option value="With FUT" {% if filters.remote_training == 'With FUT' %}selected{% endif %}>With FUT</option>
+            <option value="Certified" {% if filters.remote_training == 'Certified' %}selected{% endif %}>Certified</option>
+          </select>
+        {% endif %}
+        {% if show_annual_meeting_filter %}
+          <select name="annual_meeting">
+            <option value="">Annual meeting</option>
+            <option value="Attended" {% if filters.annual_meeting == 'Attended' %}selected{% endif %}>Attended</option>
+            <option value="Absent" {% if filters.annual_meeting == 'Absent' %}selected{% endif %}>Absent</option>
+          </select>
+        {% endif %}
+        {% if show_stage_filters %}
+          <select name="stage_1">
+            <option value="">Stage 1</option>
+            {% for option in remote_training_options %}
+              <option value="{{ option }}" {% if filters.stage_1 == option %}selected{% endif %}>{{ option }}</option>
+            {% endfor %}
+          </select>
+          <select name="stage_2">
+            <option value="">Stage 2</option>
+            {% for option in stage_2_options %}
+              <option value="{{ option }}" {% if filters.stage_2 == option %}selected{% endif %}>{{ option }}</option>
+            {% endfor %}
+          </select>
+          <select name="fut">
+            <option value="">FUT</option>
+            <option value="Without" {% if filters.fut == 'Without' %}selected{% endif %}>Without</option>
+            <option value="With completed FUT" {% if filters.fut == 'With completed FUT' %}selected{% endif %}>With completed FUT</option>
+            <option value="With pending FUT" {% if filters.fut == 'With pending FUT' %}selected{% endif %}>With pending FUT</option>
+          </select>
+          <select name="stage_3">
+            <option value="">Stage 3</option>
+            {% for option in stage_3_options %}
+              <option value="{{ option }}" {% if filters.stage_3 == option %}selected{% endif %}>{{ option }}</option>
+            {% endfor %}
+          </select>
+        {% else %}
+          <select name="fut">
+            <option value="">FUT</option>
+            <option value="Without" {% if filters.fut == 'Without' %}selected{% endif %}>Without</option>
+            <option value="With completed FUT" {% if filters.fut == 'With completed FUT' %}selected{% endif %}>With completed FUT</option>
+            <option value="With pending FUT" {% if filters.fut == 'With pending FUT' %}selected{% endif %}>With pending FUT</option>
+          </select>
+        {% endif %}
+      </div>
+    {% else %}
+      <div class="certification-filter-row">
+        <select name="completed_certification">
+          <option value="">Completed</option>
+          {% for certification in filter_certifications %}
+            <option value="{{ certification.key }}" {% if filters.completed_certification == certification.key %}selected{% endif %}>{{ certification.label }}</option>
+          {% endfor %}
+        </select>
+        <select name="pending_certification">
+          <option value="">Pending</option>
+          {% for certification in filter_certifications %}
+            <option value="{{ certification.key }}" {% if filters.pending_certification == certification.key %}selected{% endif %}>{{ certification.label }}</option>
+          {% endfor %}
+        </select>
+        <select name="fut">
+          <option value="">FUT</option>
+          <option value="Yes" {% if filters.fut == 'Yes' %}selected{% endif %}>Yes</option>
+          <option value="No" {% if filters.fut == 'No' %}selected{% endif %}>No</option>
+        </select>
+        <input name="year" value="{{ filters.year }}" inputmode="numeric" pattern="\d{4}" maxlength="4" placeholder="Year">
+        <select name="no_years_yet">
+          <option value="">No years yet</option>
+          <option value="Yes" {% if filters.no_years_yet == 'Yes' %}selected{% endif %}>Pending</option>
+          <option value="No" {% if filters.no_years_yet == 'No' %}selected{% endif %}>Completed</option>
+        </select>
+      </div>
+    {% endif %}
+    <a class="text-link" href="{{ url_for(reset_endpoint) }}">Reset</a>
+  </form>
+  {% if archived_examiner_years %}
+    <section class="archived-year-panel" aria-label="Archived {{ page_title }} years">
+      <div>
+        <p class="archived-year-title">Archived years</p>
+        <p class="archived-year-copy">Archived years are hidden from the active selector, but their records are preserved.</p>
+      </div>
+      <div class="archived-year-list">
+        {% for year_item in archived_examiner_years %}
+          <article class="archived-year-item">
+            <span>{{ year_item.year }}</span>
+            <form method="post" action="{{ url_for(unarchive_year_endpoint, year=year_item.year) }}" data-confirm-submit="Restore {{ year_item.year }} to active years?">
+              <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+              <button class="secondary-button compact-action" type="submit">Unarchive</button>
+            </form>
+            <form method="post" action="{{ url_for(delete_year_endpoint, year=year_item.year) }}" data-confirm-submit="Permanently delete {{ year_item.year }} and all its {{ page_title }} records? This cannot be undone.">
+              <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+              <button class="danger-button compact-action" type="submit">Delete permanently</button>
+            </form>
+          </article>
+        {% endfor %}
+      </div>
+    </section>
+  {% endif %}
+</section>
+
+{% if examiner_years %}
+<section class="year-toolbar" aria-label="{{ page_title }} years">
+  <div class="year-tabs">
+    {% for year_item in examiner_years %}
+      <a class="year-tab {% if year_item.year == selected_certification_year %}active{% endif %}" href="{{ url_for(reset_endpoint, certification_year=year_item.year) }}">{{ year_item.year }}</a>
+    {% endfor %}
+  </div>
+  <form method="post" action="{{ url_for(archive_year_endpoint, year=selected_certification_year) }}" data-confirm-submit="Archive {{ selected_certification_year }}? This year will be hidden but its information will be preserved.">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <button class="secondary-button compact-action" type="submit">Archive year</button>
+  </form>
+  <form method="post" action="{{ url_for(add_year_endpoint) }}">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <button class="primary-button icon-action" type="submit" aria-label="Add year">+</button>
+  </form>
+</section>
+{% endif %}
+
+{% if selected_certification_year and module_key == 'certification' %}
+<section class="certification-year-settings" aria-label="{{ page_title }} annual settings">
+  <form method="post" action="{{ url_for(certification_year_settings_endpoint) }}" class="certification-year-settings-form">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <input type="hidden" name="certification_year" value="{{ selected_certification_year }}">
+    <label>
+      Remote training period
+      <input
+        name="remote_training_period"
+        value="{{ certification_remote_training_period_value }}"
+        placeholder="DD/MM/{{ selected_certification_year }} to DD/MM/{{ selected_certification_year }}"
+        inputmode="numeric"
+        maxlength="24"
+        pattern="\d{2}/\d{2}/{{ selected_certification_year }} to \d{2}/\d{2}/{{ selected_certification_year }}"
+      >
+    </label>
+    <label>
+      Annual meeting date & time
+      <span class="certification-date-time-fields">
+        <input
+          name="annual_meeting_date"
+          value="{{ certification_annual_meeting_date_value }}"
+          placeholder="DD/MM/{{ selected_certification_year }}"
+          inputmode="numeric"
+          maxlength="10"
+          pattern="\d{2}/\d{2}/{{ selected_certification_year }}"
+          aria-label="Annual meeting date"
+        >
+        <input
+          name="annual_meeting_time"
+          value="{{ certification_annual_meeting_time_value }}"
+          placeholder="hh:mm"
+          inputmode="numeric"
+          maxlength="5"
+          pattern="([01]\d|2[0-3]):[0-5]\d"
+          aria-label="Annual meeting time"
+        >
+      </span>
+    </label>
+    <button class="secondary-button compact-action" type="submit">Save settings</button>
+  </form>
+</section>
+{% endif %}
+
+<form id="{{ bulk_form_id }}" method="post" action="{{ url_for(export_endpoint) }}" data-bulk-form data-bulk-scope="[data-annual-records-table]" data-bulk-empty-message="Please select at least one member to export." data-bulk-success-message="{{ bulk_success_message }}">
+  <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+  {% if selected_certification_year %}
+    <input type="hidden" name="certification_year" value="{{ selected_certification_year }}">
+  {% endif %}
+</form>
+
+<section class="bulk-actions" data-bulk-root data-bulk-actions data-bulk-scope="[data-annual-records-table]" hidden>
+  <div class="bulk-action-copy">
+    <span data-selected-count>0 members selected</span>
+    <span class="bulk-status" data-bulk-status></span>
+  </div>
+  <div class="bulk-action-buttons">
+    {% if show_intern_bulk_actions %}
+      <details class="bulk-action-menu">
+        <summary class="secondary-button">Bulk actions</summary>
+        <div class="bulk-action-panel">
+          <form method="post" action="{{ url_for(bulk_stage_update_endpoint) }}" data-bulk-stage-form data-bulk-scope="[data-annual-records-table]" data-bulk-empty-message="Please select at least one member before applying a bulk action.">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+            <input type="hidden" name="stage" value="stage_1">
+            {% if selected_certification_year %}
+              <input type="hidden" name="certification_year" value="{{ selected_certification_year }}">
+            {% endif %}
+            <label>
+              <span>Change Stage 1 status</span>
+              <select name="status" required>
+                {% for option in remote_training_options %}
+                  <option value="{{ option }}">{{ option }}</option>
+                {% endfor %}
+              </select>
+            </label>
+            <button class="primary-button compact-action" type="submit">Apply</button>
+          </form>
+          <form method="post" action="{{ url_for(bulk_stage_update_endpoint) }}" data-bulk-stage-form data-bulk-scope="[data-annual-records-table]" data-bulk-empty-message="Please select at least one member before applying a bulk action.">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+            <input type="hidden" name="stage" value="stage_2">
+            {% if selected_certification_year %}
+              <input type="hidden" name="certification_year" value="{{ selected_certification_year }}">
+            {% endif %}
+            <label>
+              <span>Change Stage 2 status</span>
+              <select name="status" required>
+                {% for option in stage_2_options %}
+                  <option value="{{ option }}">{{ option }}</option>
+                {% endfor %}
+              </select>
+            </label>
+            <button class="primary-button compact-action" type="submit">Apply</button>
+          </form>
+          <form method="post" action="{{ url_for(bulk_stage_update_endpoint) }}" data-bulk-stage-form data-bulk-scope="[data-annual-records-table]" data-bulk-empty-message="Please select at least one member before applying a bulk action.">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+            <input type="hidden" name="stage" value="stage_3">
+            {% if selected_certification_year %}
+              <input type="hidden" name="certification_year" value="{{ selected_certification_year }}">
+            {% endif %}
+            <label>
+              <span>Change Stage 3 status</span>
+              <select name="status" required>
+                {% for option in stage_3_options %}
+                  <option value="{{ option }}">{{ option }}</option>
+                {% endfor %}
+              </select>
+            </label>
+            <button class="primary-button compact-action" type="submit">Apply</button>
+          </form>
+        </div>
+      </details>
+    {% endif %}
+    {% if show_certification_bulk_actions %}
+      <details class="bulk-action-menu">
+        <summary class="secondary-button">Bulk actions</summary>
+        <div class="bulk-action-panel">
+          <form method="post" action="{{ url_for(bulk_certification_update_endpoint) }}" data-bulk-stage-form data-bulk-scope="[data-annual-records-table]" data-bulk-empty-message="Please select at least one member before applying a bulk action.">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+            <input type="hidden" name="bulk_action" value="annual_meeting">
+            {% if selected_certification_year %}
+              <input type="hidden" name="certification_year" value="{{ selected_certification_year }}">
+            {% endif %}
+            <label>
+              <span>Change Annual meeting</span>
+              <select name="status" required>
+                {% for option in annual_meeting_options %}
+                  <option value="{{ option }}">{{ option }}</option>
+                {% endfor %}
+              </select>
+            </label>
+            <button class="primary-button compact-action" type="submit">Apply</button>
+          </form>
+          <form method="post" action="{{ url_for(bulk_certification_update_endpoint) }}" data-bulk-stage-form data-bulk-scope="[data-annual-records-table]" data-bulk-empty-message="Please select at least one member before applying a bulk action.">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+            <input type="hidden" name="bulk_action" value="remote_training">
+            {% if selected_certification_year %}
+              <input type="hidden" name="certification_year" value="{{ selected_certification_year }}">
+            {% endif %}
+            <label>
+              <span>Change Remote training</span>
+              <select name="status" required>
+                {% for option in remote_training_options %}
+                  <option value="{{ option }}">{{ option }}</option>
+                {% endfor %}
+              </select>
+            </label>
+            <button class="primary-button compact-action" type="submit">Apply</button>
+          </form>
+        </div>
+      </details>
+    {% endif %}
+    <button class="primary-button" type="submit" form="{{ bulk_form_id }}">Export</button>
+    <button class="secondary-button" type="button" data-clear-selection>Clear selection</button>
+  </div>
+</section>
+
+<section class="table-wrap certification-table-wrap" aria-label="{{ page_title }} list" data-annual-records-table>
+  <table class="certification-table">
+    <thead>
+      <tr>
+        <th class="select-column">
+          <input class="bulk-checkbox" type="checkbox" data-select-all-members aria-label="Select all visible members">
+        </th>
+        <th>Status</th>
+        <th>Full name</th>
+        <th>Roles</th>
+        <th>History</th>
+        {% for certification in certifications %}
+          <th class="certification-heading">{{ certification.label }}</th>
+        {% endfor %}
+      </tr>
+    </thead>
+    <tbody>
+      {% for member in members %}
+        {% set member_certifications = certification_years.get(member.id, {}) %}
+        <tr>
+          <td class="select-column">
+            <input class="bulk-checkbox" type="checkbox" name="member_ids" value="{{ member.id }}" form="{{ bulk_form_id }}" data-member-select aria-label="Select {{ member.full_name }}">
+          </td>
+          <td>{{ status_badge(certification_statuses.get(member.id, member.status)) }}</td>
+          <td>
+            <div class="name-cell">
+              <span class="strong">{{ member.full_name }}</span>
+              <span class="muted">{{ member.email or 'No email recorded' }}</span>
+            </div>
+          </td>
+          <td class="badge-list">
+            <div class="role-badges">
+              {% for role in member.roles_list() %}
+                {{ role_badge(role) }}
+              {% else %}
+                <span class="muted">-</span>
+              {% endfor %}
+            </div>
+          </td>
+          <td><button class="mini-button" type="button" data-open-modal="{{ module_key }}-history-{{ member.id }}">Notes</button></td>
+          {% for certification in certifications %}
+            {% set records = member_certifications.get(certification.key, []) %}
+            {% set is_certification_available = certification_allowed(member, certification) %}
+            <td class="certification-cell certification-{{ certification.key|replace('_', '-') }} {% if not is_certification_available %}is-na{% endif %}">
+              {% if is_certification_available %}
+                {% if certification.key in ['remote_training', 'stage_2', 'stage_3', 'annual_meeting'] and module_key == 'certification' %}
+                  {% if certification.key == 'annual_meeting' %}
+                    {% set status_selection = annual_meeting_selections.get(member.id) %}
+                    {% set status_options = annual_meeting_options %}
+                    {% set status_field = 'annual_meeting_status' %}
+                    {% set status_endpoint = update_annual_meeting_endpoint %}
+                  {% elif certification.key == 'stage_2' %}
+                    {% set status_selection = stage_2_selections.get(member.id) %}
+                    {% set status_options = stage_3_options %}
+                    {% set status_field = 'stage_status' %}
+                    {% set status_endpoint = update_stage_2_endpoint %}
+                    {% set stage_3_selection = stage_3_selections.get(member.id) %}
+                  {% elif certification.key == 'stage_3' %}
+                    {% set status_selection = stage_3_selections.get(member.id) %}
+                    {% set status_options = stage_2_options %}
+                    {% set status_field = 'stage_status' %}
+                    {% set status_endpoint = update_stage_3_endpoint %}
+                    {% set stage_1_selection = remote_training_selections.get(member.id) %}
+                  {% else %}
+                    {% set status_selection = remote_training_selections.get(member.id) %}
+                    {% set status_options = remote_training_options %}
+                    {% set status_field = 'remote_training_status' %}
+                    {% set status_endpoint = update_remote_training_endpoint %}
+                  {% endif %}
+                  {% set default_status = 'Pending' if certification.key in ['remote_training', 'stage_2', 'stage_3'] else 'Absent' %}
+                  {% set selected_status = status_selection.status if status_selection else default_status %}
+                  <div class="remote-training-cell">
+                    {% if certification.key == 'stage_3' and (not stage_1_selection or stage_1_selection.status not in ['Completed', 'Certified']) %}
+                      <span class="centered-dash">-</span>
+                    {% elif certification.key == 'stage_2' and (not stage_3_selection or stage_3_selection.status not in ['Completed', 'Certified']) %}
+                      <span class="centered-dash">-</span>
+                    {% else %}
+                      <form method="post" action="{{ url_for(status_endpoint, member_id=member.id) }}" class="remote-training-form">
+                        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                        <input type="hidden" name="return_to" value="{{ request.full_path }}">
+                        <select
+                          class="remote-training-select {% if selected_status %}remote-training-{{ selected_status|lower|replace(' ', '-') }}{% endif %}"
+                          name="{{ status_field }}"
+                          data-submit-on-change
+                          data-current-value="{{ selected_status }}"
+                          {% if certification.key in ['remote_training', 'stage_3'] and selected_status in ['Completed', 'Certified'] %}data-confirm-certified-change="Changing this status will affect the following stages and FUT records. Do you want to continue?"{% endif %}
+                          aria-label="{{ certification.label }} status for {{ member.full_name }}"
+                        >
+                          {% for option in status_options %}
+                            <option value="{{ option }}" {% if selected_status == option %}selected{% endif %}>{{ option }}</option>
+                          {% endfor %}
+                        </select>
+                      </form>
+                    {% endif %}
+                  </div>
+                {% elif certification.key in ['fut', 'fut_2'] %}
+                  {% if module_key == 'certification' %}
+                    {% if certification.key == 'fut_2' %}
+                      {% set member_fut_selections = fut2_selections.get(member.id, []) %}
+                      {% set add_fut_endpoint = 'staff.add_staff_fut2_options' %}
+                      {% set toggle_fut_endpoint = 'staff.toggle_staff_fut2_option' %}
+                      {% set delete_fut_endpoint = 'staff.delete_staff_fut2_option' %}
+                    {% else %}
+                      {% set member_fut_selections = fut_selections.get(member.id, []) %}
+                      {% set add_fut_endpoint = add_staff_fut_endpoint %}
+                      {% set toggle_fut_endpoint = toggle_staff_fut_endpoint %}
+                      {% set delete_fut_endpoint = delete_staff_fut_endpoint %}
+                    {% endif %}
+                    {% set selected_fut_names = member_fut_selections|map(attribute='option_name')|list %}
+                    {% set fut_stage_1_selection = remote_training_selections.get(member.id) %}
+                    {% set fut_stage_2_selection = stage_3_selections.get(member.id) %}
+                    {% set is_fut_available = (not fut_requires_stage_certification) or (fut_stage_1_selection and fut_stage_1_selection.status in ['Completed', 'Certified'] and fut_stage_2_selection and fut_stage_2_selection.status in ['Attended meeting', 'With FUT', 'Completed', 'Certified']) %}
+                    <div class="staff-fut-cell">
+                      {% if not is_fut_available %}
+                        <span class="centered-dash">-</span>
+                      {% elif member_fut_selections %}
+                        <div class="staff-fut-tags">
+                          {% for selection in member_fut_selections %}
+                            <div class="staff-fut-tag {% if selection.status == 'completed' %}is-completed{% endif %}">
+                              <form method="post" action="{{ url_for(toggle_fut_endpoint, selection_id=selection.id) }}">
+                                <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                                <input type="hidden" name="return_to" value="{{ request.full_path }}">
+                                <button type="submit" title="Toggle {{ selection.option_name }} status">
+                                  {% if selection.status == 'completed' %}<span class="staff-fut-check">✓</span>{% endif %}
+                                  {{ selection.option_name }}
+                                </button>
+                              </form>
+                              <form method="post" action="{{ url_for(delete_fut_endpoint, selection_id=selection.id) }}" data-confirm-submit="Remove {{ selection.option_name }} from {{ certification.label }} for {{ member.full_name }}?">
+                                <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                                <input type="hidden" name="return_to" value="{{ request.full_path }}">
+                                <button class="staff-fut-remove" type="submit" aria-label="Remove {{ selection.option_name }}">×</button>
+                              </form>
+                            </div>
+                          {% endfor %}
+                        </div>
+                      {% else %}
+                        <span class="staff-fut-empty">-</span>
+                      {% endif %}
+                      {% if is_fut_available %}
+                        <div class="staff-fut-picker" data-fut-picker>
+                          <button
+                            class="staff-fut-trigger"
+                            type="button"
+                            data-fut-picker-toggle
+                            aria-expanded="false"
+                          >Add {{ certification.label }}</button>
+                          <form
+                            method="post"
+                            action="{{ url_for(add_fut_endpoint, member_id=member.id) }}"
+                            class="staff-fut-popover"
+                            data-fut-picker-panel
+                            hidden
+                          >
+                            <div class="staff-fut-popover-header">
+                              <strong>Add {{ certification.label }}</strong>
+                              <button class="staff-fut-popover-close" type="button" data-fut-picker-close aria-label="Close Add {{ certification.label }}">×</button>
+                            </div>
+                            <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                            <input type="hidden" name="return_to" value="{{ request.full_path }}">
+                            <div class="staff-fut-options">
+                              {% for option in fut_options %}
+                                <label>
+                                  <input type="checkbox" name="fut_options" value="{{ option }}" {% if option in selected_fut_names %}disabled{% endif %}>
+                                  <span>{{ option }}</span>
+                                </label>
+                              {% endfor %}
+                            </div>
+                            <div class="staff-fut-popover-actions">
+                              <button class="secondary-button compact-action" type="button" data-fut-picker-close>Close</button>
+                              <button class="certification-add-button" type="submit">Add</button>
+                            </div>
+                          </form>
+                        </div>
+                      {% endif %}
+                    </div>
+                  {% else %}
+                    <div class="fut-certification-row">
+                      <form method="post" action="{{ url_for(update_fut_endpoint, member_id=member.id) }}" class="fut-checkbox-form">
+                        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                        <input type="hidden" name="return_to" value="{{ request.full_path }}">
+                        <input type="hidden" name="fut_checked" value="no">
+                        <label class="fut-checkbox">
+                          <input type="checkbox" name="fut_checked" value="yes" data-toggle-certification-add="{{ module_key }}-fut-add-{{ member.id }}" data-submit-on-change {% if member|attr(fut_checked_attr) %}checked{% endif %}>
+                          <span aria-hidden="true"></span>
+                        </label>
+                      </form>
+                      {% if records %}
+                        <div class="certification-years fut-years">
+                          {% for record in records %}
+                            <form method="post" action="{{ url_for(delete_record_endpoint, record_id=record.id) }}" data-confirm-submit="Remove {{ record.year }} from {{ certification.label }} for {{ member.full_name }}?">
+                              <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                              <input type="hidden" name="return_to" value="{{ request.full_path }}">
+                              <button class="certification-year-badge {{ record.year|year_color }}" type="submit" title="Created {{ record.created_on|localdt }}{% if record.created_by %} by {{ record.created_by }}{% endif %}">
+                                {{ record.year }} <span>&times;</span>
+                              </button>
+                            </form>
+                          {% endfor %}
+                        </div>
+                      {% else %}
+                        <div class="certification-years fut-years is-empty"></div>
+                      {% endif %}
+                    </div>
+                    <form method="post" action="{{ url_for(add_record_endpoint, member_id=member.id) }}" class="certification-add-form" id="{{ module_key }}-fut-add-{{ member.id }}" {% if not member|attr(fut_checked_attr) %}hidden{% endif %}>
+                      <input name="year" type="number" min="1900" max="2100" value="{{ current_year }}" aria-label="Year for {{ certification.label }}">
+                      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                      <input type="hidden" name="return_to" value="{{ request.full_path }}">
+                      <input type="hidden" name="certification_type" value="{{ certification.key }}">
+                      <button class="certification-add-button" type="submit">Add</button>
+                    </form>
+                  {% endif %}
+                {% else %}
+                  {% if records %}
+                    <div class="certification-years">
+                      {% for record in records %}
+                        <form method="post" action="{{ url_for(delete_record_endpoint, record_id=record.id) }}" data-confirm-submit="Remove {{ record.year }} from {{ certification.label }} for {{ member.full_name }}?">
+                          <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                          <input type="hidden" name="return_to" value="{{ request.full_path }}">
+                          <button class="certification-year-badge {{ record.year|year_color }}" type="submit" title="Created {{ record.created_on|localdt }}{% if record.created_by %} by {{ record.created_by }}{% endif %}">
+                            {{ record.year }} <span>&times;</span>
+                          </button>
+                        </form>
+                      {% endfor %}
+                    </div>
+                  {% else %}
+                    <div class="certification-years is-empty">
+                      <span class="certification-empty-note">No years yet</span>
+                    </div>
+                  {% endif %}
+                  <form method="post" action="{{ url_for(add_record_endpoint, member_id=member.id) }}" class="certification-add-form">
+                    <input name="year" type="number" min="1900" max="2100" value="{{ current_year }}" aria-label="Year for {{ certification.label }}">
+                    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                    <input type="hidden" name="return_to" value="{{ request.full_path }}">
+                    <input type="hidden" name="certification_type" value="{{ certification.key }}">
+                    <button class="certification-add-button" type="submit">Add</button>
+                  </form>
+                {% endif %}
+              {% else %}
+                <span class="na-badge">N/A</span>
+              {% endif %}
+            </td>
+          {% endfor %}
+        </tr>
+      {% else %}
+        <tr>
+          <td colspan="{{ 5 + certifications|length }}" class="empty-state">No members found.</td>
+        </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</section>
+
+{% include "_pagination.html" %}
+
+{% for member in members %}
+<div class="modal" id="{{ module_key }}-history-{{ member.id }}" aria-hidden="true">
+  <div class="modal-panel">
+    <div class="modal-header">
+      <h2>History</h2>
+      <button class="icon-button" type="button" data-close-modal>&times;</button>
+    </div>
+    <details class="history-add-panel">
+      <summary class="primary-button">Add</summary>
+      <form method="post" action="{{ url_for(add_note_endpoint, member_id=member.id) }}" class="form-grid one-column history-add-form">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <input type="hidden" name="return_to" value="{{ request.full_path }}">
+        <label>
+          New note
+          <textarea name="interview" rows="4" maxlength="4000" placeholder="Add a new history note" required></textarea>
+        </label>
+        <div class="form-actions">
+          <button class="secondary-button" type="button" data-close-modal>Cancel</button>
+          <button class="primary-button" type="submit">Add note</button>
+        </div>
+      </form>
+    </details>
+    {% set interview_entries = member.interview|interview_entries %}
+    {% if interview_entries %}
+      <div class="history-list">
+        {% for entry in interview_entries|reverse %}
+          <article class="history-entry">
+            <time>{{ entry.date }}</time>
+            <p>{{ entry.note }}</p>
+          </article>
+        {% endfor %}
+      </div>
+    {% else %}
+      <p class="muted">No history recorded.</p>
+    {% endif %}
+  </div>
+</div>
+{% endfor %}
+{% endblock %}

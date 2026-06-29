@@ -1,0 +1,69 @@
+{% macro potential_form(entry, action, statuses, csrf_token, submit_label, interviewer_options) %}
+<form method="post" action="{{ action }}" class="form-grid member-form">
+  <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+  <label>
+    Status *
+    <select name="status" required>
+      <option value="">Select status</option>
+      {% for status in statuses %}
+        <option value="{{ status }}" {% if entry and entry.status == status %}selected{% endif %}>{{ status }}</option>
+      {% endfor %}
+    </select>
+  </label>
+  <label>
+    Full name *
+    <input name="full_name" value="{{ entry.full_name if entry else '' }}" required maxlength="160">
+  </label>
+  <label>
+    Phone
+    <input name="phone" value="{{ entry.phone if entry else '' }}" maxlength="80">
+  </label>
+  <label>
+    Email
+    <input name="email" type="email" value="{{ entry.email if entry else '' }}" maxlength="160">
+  </label>
+  <label>
+    City
+    <input name="city" value="{{ entry.city if entry else '' }}" maxlength="120">
+  </label>
+  <label>
+    Province
+    <input name="province" value="{{ entry.province if entry else '' }}" maxlength="120">
+  </label>
+  <label class="full-span">
+    CV
+    <input name="cv" type="url" value="{{ entry.cv if entry else '' }}" placeholder="https://example.com/cv" maxlength="500">
+  </label>
+  <div class="arranged-fields full-span" data-arranged-fields>
+    <label>
+      Interview date
+      <input name="interview_date" type="date" value="{{ entry.interview_date if entry else '' }}">
+    </label>
+    <label>
+      Interview time
+      <input name="interview_time" type="time" step="1" value="{{ entry.interview_time if entry else '' }}">
+    </label>
+    <label>
+      Platform
+      <select name="platform">
+        <option value="">Select platform</option>
+        <option value="Zoom" {% if entry and entry.platform == 'Zoom' %}selected{% endif %}>Zoom</option>
+        <option value="Meet" {% if entry and entry.platform == 'Meet' %}selected{% endif %}>Meet</option>
+      </select>
+    </label>
+    <label class="full-span">
+      Interviewer
+      <select name="interviewer">
+        <option value="">Select interviewer</option>
+        {% for interviewer in interviewer_options %}
+          <option value="{{ interviewer }}" {% if entry and entry.interviewer == interviewer %}selected{% endif %}>{{ interviewer }}</option>
+        {% endfor %}
+      </select>
+    </label>
+  </div>
+  <div class="form-actions full-span">
+    <button class="secondary-button" type="button" data-close-modal>Cancel</button>
+    <button class="primary-button" type="submit">{{ submit_label }}</button>
+  </div>
+</form>
+{% endmacro %}

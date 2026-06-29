@@ -1,0 +1,28 @@
+{% if pagination %}
+<nav class="table-pagination" aria-label="Table pagination">
+  <div class="pagination-size">
+    <span>Showing:</span>
+    <div class="pagination-size-links" aria-label="Records per page">
+      {% for option in pagination.page_size_links %}
+        <a class="{% if option.active %}active{% endif %}" href="{{ option.url }}">{{ option.value|capitalize }}</a>
+      {% endfor %}
+    </div>
+  </div>
+  <div class="pagination-count">
+    {{ pagination.shown }} / {{ pagination.total }} results
+  </div>
+  <div class="pagination-nav">
+    {% if pagination.previous_url %}
+      <a class="secondary-button compact-action" href="{{ pagination.previous_url }}">Previous</a>
+    {% else %}
+      <span class="secondary-button compact-action disabled-button">Previous</span>
+    {% endif %}
+    <span class="pagination-page">Page {{ pagination.page }} of {{ pagination.total_pages }}</span>
+    {% if pagination.next_url %}
+      <a class="secondary-button compact-action" href="{{ pagination.next_url }}">Next</a>
+    {% else %}
+      <span class="secondary-button compact-action disabled-button">Next</span>
+    {% endif %}
+  </div>
+</nav>
+{% endif %}

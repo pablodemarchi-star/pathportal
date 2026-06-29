@@ -1,0 +1,100 @@
+{% macro member_form(member, action, statuses, roles, csrf_token, submit_label, modal_id) %}
+<form method="post" action="{{ action }}" class="form-grid member-form" data-modal-form="{{ modal_id }}">
+  <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+  <input type="hidden" name="confirm_archive" value="no">
+  <label>
+    Status *
+    <select name="status" required>
+      <option value="">Select status</option>
+      {% for status in statuses %}
+        <option value="{{ status }}" {% if member and member.status == status %}selected{% endif %}>{{ status }}</option>
+      {% endfor %}
+    </select>
+  </label>
+  <label>
+    Title
+    <input name="title" value="{{ member.title if member else '' }}" maxlength="120">
+  </label>
+  <label>
+    Full name *
+    <input name="full_name" value="{{ member.full_name if member else '' }}" required maxlength="160">
+  </label>
+  <label class="checkbox-field">
+    <input name="seniority" type="checkbox" {% if member and member.seniority %}checked{% endif %}>
+    <span>Seniority</span>
+  </label>
+  <fieldset class="form-role-picker">
+    <legend>Roles</legend>
+      {% set selected_roles = member.roles_list() if member else [] %}
+      {% for role in roles %}
+        <label class="role-filter-chip role-{{ role|lower }}">
+          <input type="checkbox" name="roles" value="{{ role }}" {% if role in selected_roles %}checked{% endif %}>
+          <span>{{ role }}</span>
+        </label>
+      {% endfor %}
+  </fieldset>
+  <label>
+    Phone
+    <input name="phone" value="{{ member.phone if member else '' }}" maxlength="80">
+  </label>
+  <label>
+    Email
+    <input name="email" type="email" value="{{ member.email if member else '' }}" maxlength="160">
+  </label>
+  <label>
+    Has a car
+    <select name="has_car">
+      <option value="">Select option</option>
+      <option value="Yes" {% if member and member.has_car == 'Yes' %}selected{% endif %}>Yes</option>
+      <option value="No" {% if member and member.has_car == 'No' %}selected{% endif %}>No</option>
+    </select>
+  </label>
+  <label>
+    Started in
+    <input name="started_in" type="text" inputmode="numeric" pattern="\d{4}" value="{{ member.started_in if member else '' }}" placeholder="2026" maxlength="4">
+  </label>
+  <label class="full-span">
+    Full address copied from Google Maps
+    <input name="full_address_google_maps" value="{{ member.full_address_google_maps if member else '' }}" maxlength="500">
+  </label>
+  <label>
+    City
+    <input name="city" value="{{ member.city if member else '' }}" maxlength="120">
+  </label>
+  <label>
+    Province
+    <input name="province" value="{{ member.province if member else '' }}" maxlength="120">
+  </label>
+  <label>
+    Country
+    <input name="country" value="{{ member.country if member else '' }}" maxlength="120">
+  </label>
+  <label>
+    CV
+    <input name="cv" type="url" value="{{ member.cv if member else '' }}" placeholder="https://example.com/cv" maxlength="500">
+  </label>
+  <label>
+    Profile picture
+    <input name="profile_picture" type="url" value="{{ member.profile_picture if member else '' }}" placeholder="https://example.com/profile-picture" maxlength="500">
+  </label>
+  <label>
+    Account ID
+    <input name="account_id" value="{{ member.account_id if member else '' }}" maxlength="120">
+  </label>
+  <label>
+    Account owner
+    <input name="account_owner" value="{{ member.account_owner if member else '' }}" maxlength="160">
+  </label>
+  <label class="full-span">
+    History
+    <textarea name="interview" rows="5" maxlength="4000" placeholder="Add a new interview note. It will be saved with date and time."></textarea>
+    {% if member and member.interview %}
+      <span class="field-hint">Existing interview history is preserved. New text will be appended with date and time.</span>
+    {% endif %}
+  </label>
+  <div class="form-actions full-span">
+    <button class="secondary-button" type="button" data-close-modal>Cancel</button>
+    <button class="primary-button" type="submit">{{ submit_label }}</button>
+  </div>
+</form>
+{% endmacro %}

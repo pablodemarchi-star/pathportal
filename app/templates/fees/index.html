@@ -1,0 +1,180 @@
+{% extends "base.html" %}
+{% from "staff/_badges.html" import role_badge %}
+
+{% macro fee_chip(value, class_name='fee-chip') -%}
+  <span class="{{ class_name }} {{ class_name }}-{{ value|lower|replace(' ', '-') }}">{{ value }}</span>
+{%- endmacro %}
+
+{% macro fee_form(action, submit_label, fee, roles, currency_options, unit_options, valid_through_months, csrf_token) -%}
+  {% set selected_valid_through = fee.valid_through_list() if fee else [] %}
+  <form method="post" action="{{ action }}" class="form-grid fee-form" data-fee-form>
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <label>
+      Fee description
+      <input name="fee_description" value="{{ fee.fee_description if fee else '' }}" maxlength="180" required>
+    </label>
+    <label>
+      Currency
+      <select name="currency" required>
+        <option value="">Select currency</option>
+        {% for currency in currency_options %}
+          <option value="{{ currency }}" {% if fee and fee.currency == currency %}selected{% endif %}>{{ currency }}</option>
+        {% endfor %}
+      </select>
+    </label>
+    <label>
+      Fee
+      <input name="fee_value" value="{{ fee.fee_value if fee else '' }}" placeholder="1500,50" inputmode="decimal" data-fee-value required>
+    </label>
+    <label>
+      Unit of measure
+      <select name="unit_of_measure" required>
+        <option value="">Select unit</option>
+        {% for unit in unit_options %}
+          <option value="{{ unit }}" {% if fee and fee.unit_of_measure == unit %}selected{% endif %}>{{ unit }}</option>
+        {% endfor %}
+      </select>
+    </label>
+    <label>
+      Role
+      <select name="role_id">
+        <option value="">General fee</option>
+        {% for role in roles %}
+          <option value="{{ role.id }}" {% if fee and fee.role_id == role.id %}selected{% endif %}>{{ role.name }}</option>
+        {% endfor %}
+      </select>
+    </label>
+    <div class="fee-month-field">
+      <span class="fee-month-field-title">Valid through</span>
+      <details class="fee-month-picker" data-fee-month-picker>
+        <summary>
+          <span data-fee-month-summary>Select valid months</span>
+          <span class="fee-month-caret">▼</span>
+        </summary>
+        <div class="fee-month-panel">
+          {% for month in valid_through_months %}
+            <label class="fee-month-option">
+              <input type="checkbox" name="valid_through" value="{{ month }}" {% if month in selected_valid_through %}checked{% endif %}>
+              <span>{{ month }}</span>
+            </label>
+          {% endfor %}
+        </div>
+      </details>
+      <div class="fee-month-selected-list" data-fee-month-selected-list aria-live="polite"></div>
+    </div>
+    <div class="form-actions full-span">
+      <button class="secondary-button" type="button" data-close-modal>Cancel</button>
+      <button class="primary-button" type="submit" data-fee-submit disabled>{{ submit_label }}</button>
+    </div>
+  </form>
+{%- endmacro %}
+
+{% block title %}Fees | Path Examinations{% endblock %}
+
+{% block content %}
+<header class="page-header">
+  <div>
+    <p class="eyebrow">Fees</p>
+    <h1>Fees</h1>
+    <p>Create and manage fee values by currency, unit of measure and optional role.</p>
+  </div>
+  <div class="page-actions">
+    <button class="primary-button" type="button" data-open-modal="create-fee">Create new fee</button>
+  </div>
+</header>
+
+<section class="table-wrap" aria-label="Fees list">
+  <table>
+    <thead>
+      <tr>
+        <th>Fee description</th>
+        <th>Currency</th>
+        <th>Fee</th>
+        <th>Unit of measure</th>
+        <th>Role</th>
+        <th>Valid through</th>
+        <th>Created on</th>
+        <th>Updated on</th>
+        <th>Edit</th>
+        <th>Delete</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for fee in fees %}
+        <tr>
+          <td class="strong">{{ fee.fee_description }}</td>
+          <td>{{ fee_chip(fee.currency, 'currency-chip') }}</td>
+          <td class="strong">{{ fee.fee_value }}</td>
+          <td>{{ fee_chip(fee.unit_of_measure, 'unit-chip') }}</td>
+          <td>
+            {% if fee.role %}
+              {{ role_badge(fee.role.name) }}
+            {% else %}
+              <span class="muted">-</span>
+            {% endif %}
+          </td>
+          <td>
+            {% set valid_through = fee.valid_through_list() %}
+            {% if valid_through %}
+              <div class="month-chip-list">
+                {% for month in valid_through %}
+                  <span class="valid-through-chip">{{ month }}</span>
+                {% endfor %}
+              </div>
+            {% else %}
+              <span class="muted">-</span>
+            {% endif %}
+          </td>
+          <td class="datetime-cell">{{ fee.created_on|localdt }} h</td>
+          <td class="datetime-cell">{{ fee.updated_on|localdt }} h</td>
+          <td><button class="mini-button" type="button" data-open-modal="edit-fee-{{ fee.id }}">Edit</button></td>
+          <td><button class="danger-button compact-action" type="button" data-open-modal="delete-fee-{{ fee.id }}">Delete</button></td>
+        </tr>
+      {% else %}
+        <tr>
+          <td colspan="10" class="empty-state">No fees found.</td>
+        </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</section>
+
+{% include "_pagination.html" %}
+
+<div class="modal" id="create-fee" aria-hidden="true">
+  <div class="modal-panel large">
+    <div class="modal-header">
+      <h2>Create new fee</h2>
+      <button class="icon-button" type="button" data-close-modal>&times;</button>
+    </div>
+    {{ fee_form(url_for('staff.create_fee'), 'Create', none, roles, currency_options, unit_options, valid_through_months, csrf_token) }}
+  </div>
+</div>
+
+{% for fee in fees %}
+  <div class="modal" id="edit-fee-{{ fee.id }}" aria-hidden="true">
+    <div class="modal-panel large">
+      <div class="modal-header">
+        <h2>Edit fee</h2>
+        <button class="icon-button" type="button" data-close-modal>&times;</button>
+      </div>
+      {{ fee_form(url_for('staff.update_fee', fee_id=fee.id), 'Save changes', fee, roles, currency_options, unit_options, valid_through_months, csrf_token) }}
+    </div>
+  </div>
+
+  <div class="modal" id="delete-fee-{{ fee.id }}" aria-hidden="true">
+    <div class="modal-panel confirm-panel">
+      <div class="modal-header">
+        <h2>Delete fee</h2>
+        <button class="icon-button" type="button" data-close-modal>&times;</button>
+      </div>
+      <p>Are you sure you want to delete this fee? This action cannot be undone.</p>
+      <form method="post" action="{{ url_for('staff.delete_fee', fee_id=fee.id) }}" class="form-actions">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <button class="secondary-button" type="button" data-close-modal>Cancel</button>
+        <button class="danger-button" type="submit">Delete</button>
+      </form>
+    </div>
+  </div>
+{% endfor %}
+{% endblock %}

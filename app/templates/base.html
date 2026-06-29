@@ -1,0 +1,136 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>{% block title %}Path Examinations Internal App{% endblock %}</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/styles.css', v='20260622-provider-availability-note-01') }}">
+  </head>
+  <body>
+    <div class="app-shell">
+      {% if g.user %}
+      <aside class="sidebar">
+        <div class="brand">
+          <img class="brand-logo brand-logo-white" src="{{ url_for('static', filename='img/path-logo-white-transparent.png') }}" alt="Path International Examinations">
+        </div>
+        <nav>
+          <section class="nav-group" aria-label="External staff">
+            <div class="nav-section-title">External staff</div>
+            <a class="nav-link {% if request.endpoint == 'staff.index' %}active{% endif %}" href="{{ url_for('staff.index') }}">
+              <svg class="nav-icon" viewBox="0 0 24 24" aria-hidden="true">
+                <path d="M16 11a4 4 0 1 0-3.2-6.4" />
+                <path d="M8 13a4 4 0 1 0 0-8 4 4 0 0 0 0 8Z" />
+                <path d="M2.5 21a5.5 5.5 0 0 1 11 0" />
+                <path d="M14.5 17.5A5 5 0 0 1 21.5 21" />
+              </svg>
+              <span>Staff members</span>
+            </a>
+            <a class="nav-link {% if request.endpoint == 'staff.annual_certification_programme' %}active{% endif %}" href="{{ url_for('staff.annual_certification_programme') }}">
+              <svg class="nav-icon" viewBox="0 0 24 24" aria-hidden="true">
+                <path d="M8 4h8" />
+                <path d="M9 2h6v4H9z" />
+                <path d="M6 5h12v16H6z" />
+                <path d="m9 14 2 2 4-5" />
+              </svg>
+              <span>Examiner certification</span>
+            </a>
+            <a class="nav-link {% if request.endpoint == 'staff.supervisor_certification' %}active{% endif %}" href="{{ url_for('staff.supervisor_certification') }}">
+              <svg class="nav-icon" viewBox="0 0 24 24" aria-hidden="true">
+                <path d="M8 4h8" />
+                <path d="M9 2h6v4H9z" />
+                <path d="M6 5h12v16H6z" />
+                <path d="m9 14 2 2 4-5" />
+              </svg>
+              <span>Supervisor certification</span>
+            </a>
+            <a class="nav-link {% if request.endpoint == 'staff.intern_stages' %}active{% endif %}" href="{{ url_for('staff.intern_stages') }}">
+              <svg class="nav-icon" viewBox="0 0 24 24" aria-hidden="true">
+                <path d="M8 4h8" />
+                <path d="M9 2h6v4H9z" />
+                <path d="M6 5h12v16H6z" />
+                <path d="m9 14 2 2 4-5" />
+              </svg>
+              <span>Internship stages</span>
+            </a>
+          </section>
+          <a class="nav-link standalone-nav-link {% if request.endpoint == 'staff.exam_session_planner' %}active{% endif %}" href="{{ url_for('staff.exam_session_planner') }}">
+            <svg class="nav-icon" viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M7 3v4" />
+              <path d="M17 3v4" />
+              <path d="M4 7h16" />
+              <path d="M5 5h14v16H5z" />
+              <path d="M8 12h3" />
+              <path d="M13 12h3" />
+              <path d="M8 16h3" />
+            </svg>
+            <span>Exam session planner</span>
+          </a>
+          <a class="nav-link standalone-nav-link {% if request.endpoint in ['staff.pre_session_control_tower', 'staff.update_schedule_workflow'] %}active{% endif %}" href="{{ url_for('staff.pre_session_control_tower') }}">
+            <svg class="nav-icon" viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M4 5h16v14H4z" />
+              <path d="M8 9h8" />
+              <path d="M8 13h5" />
+              <path d="M16 15l2 2 3-5" />
+            </svg>
+            <span>Pre-session Control Tower</span>
+          </a>
+          <a class="nav-link standalone-nav-link {% if request.endpoint == 'staff.monthly_exam_session_registrations' %}active{% endif %}" href="{{ url_for('staff.monthly_exam_session_registrations') }}">
+            <svg class="nav-icon" viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M4 5h16v14H4z" />
+              <path d="M4 9h16" />
+              <path d="M8 5v14" />
+              <path d="M12 13h4" />
+              <path d="M12 16h3" />
+            </svg>
+            <span>Monthly exam session registrations</span>
+          </a>
+          <a class="nav-link standalone-nav-link {% if request.endpoint in ['staff.staff_payments', 'staff.update_staff_payment'] %}active{% endif %}" href="{{ url_for('staff.staff_payments') }}">
+            <svg class="nav-icon" viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M4 7h16" />
+              <path d="M4 12h16" />
+              <path d="M7 17h5" />
+              <path d="M16 15v4" />
+              <path d="M14 17h4" />
+            </svg>
+            <span>Staff payments</span>
+          </a>
+          <a class="nav-link standalone-nav-link {% if request.endpoint in ['staff.fees', 'staff.create_fee', 'staff.update_fee', 'staff.delete_fee'] %}active{% endif %}" href="{{ url_for('staff.fees') }}">
+            <svg class="nav-icon" viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M4 7h16" />
+              <path d="M4 12h16" />
+              <path d="M4 17h10" />
+              <path d="M17 14v6" />
+              <path d="M14 17h6" />
+            </svg>
+            <span>Fees</span>
+          </a>
+          <a class="nav-link standalone-nav-link {% if request.endpoint in ['staff.providers', 'staff.create_provider', 'staff.update_provider', 'staff.delete_provider', 'staff.create_provider_type', 'staff.delete_provider_type', 'staff.update_provider_experience', 'staff.add_provider_note'] %}active{% endif %}" href="{{ url_for('staff.providers') }}">
+            <svg class="nav-icon" viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M4 19V8l8-4 8 4v11" />
+              <path d="M8 19v-7h8v7" />
+              <path d="M10 15h4" />
+            </svg>
+            <span>Providers</span>
+          </a>
+        </nav>
+        <form method="post" action="{{ url_for('logout') }}" class="logout-form">
+          <button type="submit">Sign out</button>
+        </form>
+      </aside>
+      {% endif %}
+      <main class="main-content {% if not g.user %}centered{% endif %}">
+        {% with messages = get_flashed_messages(with_categories=true) %}
+          {% if messages %}
+            <div class="flash-stack">
+              {% for category, message in messages %}
+                <div class="flash {{ category }}">{{ message }}</div>
+              {% endfor %}
+            </div>
+          {% endif %}
+        {% endwith %}
+        {% block content %}{% endblock %}
+      </main>
+    </div>
+    <script src="{{ url_for('static', filename='js/app.js', v='20260622-provider-availability-note-01') }}"></script>
+  </body>
+</html>

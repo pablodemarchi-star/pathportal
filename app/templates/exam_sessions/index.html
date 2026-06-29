@@ -1,0 +1,1142 @@
+{% extends "base.html" %}
+
+{% macro session_status_badge(status, tooltip='') -%}
+  <span class="badge exam-status-{{ status|lower }}" {% if tooltip %}title="{{ tooltip }}" aria-label="{{ status }}: {{ tooltip }}"{% endif %}>{{ status }}</span>
+{%- endmacro %}
+
+{% macro module_badge(module, registration_count=none) -%}
+  <span class="badge exam-module-{{ module|lower|replace(' ', '-') }}">{{ module }}{% if registration_count is not none %} ({{ registration_count }}){% endif %}</span>
+{%- endmacro %}
+
+{% macro shift_badge(shift) -%}
+  <span class="badge exam-shift-{{ shift|lower|replace(' ', '-') }}">{{ shift }}</span>
+{%- endmacro %}
+
+{% macro format_badge(format) -%}
+  <span class="badge exam-format-{{ format|lower }}">{{ format }}</span>
+{%- endmacro %}
+
+{% macro logistics_activity_badge(active) -%}
+  {% if active %}
+    <span class="badge logistics-activity-yes">Yes</span>
+  {% else %}
+    <span class="centered-dash muted">-</span>
+  {% endif %}
+{%- endmacro %}
+
+{% macro centre_type_badge(centre_type) -%}
+  {% if centre_type %}
+    <span class="centre-type-chip centre-type-{{ centre_type|lower|replace(' ', '-') }}">{{ centre_type }}</span>
+  {% endif %}
+{%- endmacro %}
+
+{% macro session_marker_badges(session) -%}
+  {% if session.format != 'Online' and session.rsg_enabled %}
+    <span class="session-marker-chip is-active">RSG</span>
+  {% endif %}
+  {% if session.pen_enabled %}
+    <span class="session-marker-chip is-active">PEN</span>
+  {% endif %}
+  {% if session.pst_enabled %}
+    <span class="session-marker-chip is-active">PST</span>
+  {% endif %}
+{%- endmacro %}
+
+{% macro logistics_status_badge_class(status) -%}
+  {%- if status == 'Confirmed' -%}logistics-status-confirmed
+  {%- elif status == 'In progress' -%}logistics-status-in-progress
+  {%- elif status == 'Pre-confirmed' -%}logistics-status-pre-confirmed
+  {%- else -%}logistics-status-pending
+  {%- endif -%}
+{%- endmacro %}
+
+{% macro logistics_concept_row(concept, row_key, status_options, provider_type_options, provider_options, currency_options) -%}
+  {% set selected_status = 'Pre-confirmed' if concept and concept.status == 'Payment scheduled' else (concept.status if concept else 'Pending') %}
+  {% set selected_provider_id = concept.provider_id if concept and concept.provider_id else none %}
+  {% set selected_provider_type_id = concept.provider_record.provider_type_id if concept and concept.provider_record else none %}
+  {% set selected_currency = concept.currency if concept else 'ARS' %}
+  <tr data-logistics-concept-row>
+    <td class="row-status-cell logistics-status-cell">
+      <input type="hidden" name="logistics_concept_row_keys" value="{{ row_key }}">
+      <input type="hidden" name="logistics_concept_id_{{ row_key }}" value="{{ concept.id if concept else '' }}">
+      <div class="logistics-status-stack">
+        <select name="logistics_status_{{ row_key }}" class="logistics-chip-select {{ logistics_status_badge_class(selected_status) }}" data-logistics-status>
+          {% for status in status_options %}
+            <option value="{{ status }}" {% if selected_status == status %}selected{% endif %}>{{ status }}</option>
+          {% endfor %}
+        </select>
+        <span class="fee-state-chip is-locked logistics-lock-chip" data-logistics-lock-chip {% if selected_status not in ['Pre-confirmed', 'Confirmed'] %}hidden{% endif %}>Locked</span>
+      </div>
+    </td>
+    <td>
+      <select name="logistics_provider_type_id_{{ row_key }}" class="logistics-provider-type-select" data-logistics-provider-type>
+        <option value="">Select type</option>
+        {% for provider_type in provider_type_options %}
+          <option value="{{ provider_type.id }}" {% if selected_provider_type_id == provider_type.id %}selected{% endif %}>{{ provider_type.name }}</option>
+        {% endfor %}
+      </select>
+    </td>
+    <td>
+      <select name="logistics_provider_id_{{ row_key }}" class="logistics-provider-select" data-logistics-provider-select {% if not selected_provider_type_id %}disabled{% endif %}>
+        <option value="">Select provider</option>
+        {% if concept and concept.provider and not concept.provider_id %}
+          <option value="" selected>{{ concept.provider }}</option>
+        {% endif %}
+        {% for provider in provider_options %}
+          {% if provider.available_in_logistics or selected_provider_id == provider.id %}
+            <option value="{{ provider.id }}" data-provider-type-id="{{ provider.provider_type_id }}" {% if selected_provider_id == provider.id %}selected{% endif %}>
+              {{ provider.name }}{% if selected_provider_id == provider.id and not provider.available_in_logistics %} — No longer available for new Logistics concepts{% endif %}
+            </option>
+          {% endif %}
+        {% endfor %}
+      </select>
+    </td>
+    <td>
+      <select name="logistics_currency_{{ row_key }}" class="logistics-chip-select logistics-currency-chip logistics-currency-{{ selected_currency|lower }}" data-logistics-currency>
+        {% for currency in currency_options %}
+          <option value="{{ currency }}" {% if selected_currency == currency %}selected{% endif %}>{{ currency }}</option>
+        {% endfor %}
+      </select>
+    </td>
+    <td>
+      <input class="logistics-fee-input" name="logistics_fee_{{ row_key }}" value="{{ concept.fee if concept and concept.fee is not none else '' }}" inputmode="decimal" pattern="[0-9]+(,[0-9]+)?" placeholder="0" data-logistics-fee>
+    </td>
+    <td class="logistics-provider-details-cell">
+      <button class="mini-button provider-details-button" type="button" data-provider-details-button {% if selected_provider_id %}data-open-modal="provider-details-{{ selected_provider_id }}"{% else %}disabled{% endif %} aria-label="Provider details" title="Provider details">i</button>
+    </td>
+    <td class="logistics-notes-cell">
+      {% if concept %}
+        {% set concept_note_count = logistics_notes.get(concept.id, [])|length %}
+        <button class="mini-button" type="button" data-logistics-notes-button data-logistics-note-count="{{ concept_note_count }}" data-open-modal="logistics-history-{{ concept.id }}">Notes{% if concept_note_count > 0 %} ({{ concept_note_count }}){% endif %}</button>
+      {% else %}
+        <button class="mini-button" type="button" data-logistics-notes-button data-logistics-note-count="0" data-logistics-row-key="{{ row_key }}">Notes</button>
+      {% endif %}
+    </td>
+    <td>
+      <button class="danger-button compact-action" type="button" data-delete-logistics-concept>Delete</button>
+    </td>
+  </tr>
+{%- endmacro %}
+
+{% macro member_option_label(member) -%}
+  {{ member.full_name }}
+  {% for role in member.roles_list() %}
+    [{{ role }}]
+  {% endfor %}
+{%- endmacro %}
+
+{% macro member_location_label(member) -%}
+  {%- if member.city and member.province -%}
+    {{ member.city }}, {{ member.province }}
+  {%- elif member.city -%}
+    {{ member.city }}
+  {%- elif member.province -%}
+    {{ member.province }}
+  {%- endif -%}
+{%- endmacro %}
+
+{% macro staff_member_option_markup(member, session_count=0) -%}
+  <span class="staff-option-main">
+    <span>{{ member.full_name }}</span>
+    {% for role in member.roles_list() %}
+      <span class="staff-option-role">[{{ role }}]</span>
+    {% endfor %}
+  </span>
+  {% set location_label = member_location_label(member) %}
+  {% if location_label %}
+    <span class="staff-option-location">{{ location_label }}</span>
+  {% endif %}
+  {% if member.seniority %}
+    <span class="staff-option-senior">Senior</span>
+  {% endif %}
+  {% if member.has_car == 'Yes' %}
+    <span class="staff-option-car">Has a car</span>
+  {% endif %}
+  <span class="staff-option-count">({{ session_count }})</span>
+{%- endmacro %}
+
+{% macro staff_assignment_row(session, section_key, row_key, assignment, section_members, section_member_map, section_states, member_session_counts, participation_options, shipment_recipient_supervisor_id=none) -%}
+  {% set selected_team_id = assignment.team_member_id if assignment else none %}
+  {% set selected_member = section_member_map.get(selected_team_id) if selected_team_id else none %}
+  {% set selected_state = section_states.get(session.id, {}).get(selected_team_id, 'warning') if selected_team_id else '' %}
+  {% set is_shipment_recipient = section_key == 'supervisor' and selected_team_id and shipment_recipient_supervisor_id and selected_team_id == shipment_recipient_supervisor_id %}
+  {% set raw_participation_status = assignment.participation_status if assignment else 'Pending' %}
+  {% set participation_status = 'Pre-confirmation sent' if raw_participation_status == 'Sent' else raw_participation_status %}
+  {% set participation_class = participation_status|lower|replace(' ', '-') %}
+  {% set raw_logistics_type = assignment.logistics_type if assignment and assignment.logistics_type else '' %}
+  {% set logistics_type = raw_logistics_type if raw_logistics_type in logistics_type_options else ('Simple logistics' if assignment and assignment.logistics_enabled else 'Does not apply') %}
+  {% set logistics_type_class = logistics_type|lower|replace(' ', '-') %}
+  <article class="staff-assignment-card" data-supervisor-row data-section-key="{{ section_key }}" data-saved-team-member-id="{{ selected_team_id or '' }}" data-saved-participation-status="{{ assignment.participation_status if assignment else '' }}" {% if is_shipment_recipient %}data-shipment-recipient-row="true"{% endif %}>
+    <div class="staff-card-header">
+      <div class="staff-card-title-stack">
+        <span class="staff-card-role-label">{{ 'Supervisor' if section_key == 'supervisor' else 'Examiner' if section_key == 'examiner' else 'Intern' }}</span>
+        <strong data-staff-card-title>{{ selected_member.full_name if selected_member else 'Role to cover' }}</strong>
+        <div class="staff-card-header-tags" aria-label="Staff assignment summary">
+          <span class="staff-card-header-tag participation-{{ participation_class }}" data-staff-header-participation>{{ participation_status }}</span>
+          <span class="staff-card-header-tag staff-logistics-{{ logistics_type_class }}" data-staff-header-logistics>{{ logistics_type }}</span>
+        </div>
+      </div>
+      <div class="staff-card-header-actions">
+        {% if is_shipment_recipient %}
+          <span class="shipment-recipient-chip">Receives shipment</span>
+        {% endif %}
+        <button class="danger-button compact-action" type="button" data-remove-supervisor-row aria-label="Remove {{ 'supervisor' if section_key == 'supervisor' else 'examiner' if section_key == 'examiner' else 'intern' }}">Remove</button>
+      </div>
+    </div>
+
+    <section class="staff-card-block staff-card-assignment-block is-collapsed" aria-label="Assignment" data-staff-collapsible-section>
+      <div class="staff-card-section-header">
+        <h4>Assignment</h4>
+        <button class="staff-card-section-toggle" type="button" data-staff-section-toggle aria-expanded="false" aria-label="Expand Assignment">
+          <span aria-hidden="true">+</span>
+        </button>
+      </div>
+      <div class="staff-card-section-content" data-staff-section-content>
+      <div class="staff-card-field staff-card-field-wide">
+        <span class="staff-card-field-label">Staff member</span>
+      <input type="hidden" name="{{ section_key }}_row_keys" value="{{ row_key }}">
+      <input type="hidden" name="{{ section_key }}_assignment_id_{{ row_key }}" value="{{ assignment.id if assignment else '' }}">
+      <input type="hidden" name="{{ section_key }}_manual_fee_override_{{ row_key }}" value="{{ '1' if assignment and assignment.manual_fee_override and assignment.participation_status == 'Pending' else '' }}" data-manual-fee-override>
+      <span data-row-non-available-fields data-non-available-section-key="{{ section_key }}" data-non-available-row-key="{{ row_key }}" hidden></span>
+      <div class="staff-member-select-row">
+        <input type="hidden" name="{{ section_key }}_team_member_id_{{ row_key }}" value="{{ selected_team_id or '' }}" data-original-value="{{ selected_team_id or '' }}" data-team-member-select>
+        <details class="team-member-picker" data-team-member-picker>
+          <summary>
+            <span class="team-member-summary-content" data-team-member-selected>
+              {% if selected_member %}
+                {% if selected_state == 'completed' %}<span class="team-member-check">✓</span>{% endif %}
+                <span>{{ selected_member.full_name }}</span>
+                {% set selected_location_label = member_location_label(selected_member) %}
+                {% if selected_location_label %}
+                  <span class="staff-option-location">{{ selected_location_label }}</span>
+                {% endif %}
+                {% if selected_member.seniority %}
+                  <span class="staff-option-senior">Senior</span>
+                {% endif %}
+                {% if selected_member.has_car == 'Yes' %}
+                  <span class="staff-option-car">Has a car</span>
+                {% endif %}
+                <span class="staff-option-count">({{ member_session_counts.get(selected_member.id, 0) }})</span>
+              {% else %}
+                <span class="team-member-placeholder" title="Select a staff member to cover this role.">Role to cover</span>
+              {% endif %}
+            </span>
+            <span class="team-member-caret">▼</span>
+          </summary>
+          <div class="team-member-picker-panel">
+            <button class="team-member-option" type="button" data-team-member-option data-value="" data-name="" data-state="" data-full-address="" data-email="" data-phone="" data-base-label="Select staff member">
+              <span class="team-member-placeholder">Role to cover</span>
+            </button>
+            {% for member in section_members %}
+              {% set state = section_states.get(session.id, {}).get(member.id, 'warning') %}
+              {% set session_count = member_session_counts.get(member.id, 0) %}
+              <button class="team-member-option" type="button" data-team-member-option data-value="{{ member.id }}" data-name="{{ member.full_name }}" data-state="{{ state }}" data-full-address="{{ member.full_address_google_maps or '' }}" data-email="{{ member.email or '' }}" data-phone="{{ member.phone or '' }}" data-seniority="{{ 'true' if member.seniority else 'false' }}" data-has-car="{{ 'true' if member.has_car == 'Yes' else 'false' }}" data-session-count="{{ session_count }}" data-base-session-count="{{ session_count }}" data-base-label="{{ member_option_label(member) }}">
+                {{ staff_member_option_markup(member, session_count) }}
+                <span class="team-member-assigned-note">Already assigned</span>
+              </button>
+            {% endfor %}
+          </div>
+        </details>
+        {% if session.format == 'Onsite' %}
+          <button class="copy-icon-button copy-inline-action" type="button" data-staff-address-copy disabled aria-label="Copy staff full address" title="Copy staff full address">
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <rect x="9" y="9" width="10" height="10" rx="2"></rect>
+              <path d="M5 15V7a2 2 0 0 1 2-2h8"></path>
+            </svg>
+            <span>Address</span>
+            <span class="copy-button-feedback">Copied</span>
+          </button>
+        {% endif %}
+      </div>
+      </div>
+      <div class="staff-card-field row-status-cell">
+      <span class="staff-card-field-label">Participation</span>
+      <div class="participation-cell-stack">
+        <select name="{{ section_key }}_participation_status_{{ row_key }}" class="participation-select participation-{{ participation_class }}" data-participation-select>
+          {% for option in participation_options %}
+            <option value="{{ option }}" {% if participation_status == option %}selected{% endif %} {% if not selected_team_id and option != 'Pending' %}disabled{% endif %}>{{ option }}</option>
+          {% endfor %}
+        </select>
+        <span class="fee-state-chip {{ 'is-live' if participation_status == 'Pending' else 'is-locked' }}" data-fee-state-chip>
+          {{ 'Live calculation' if participation_status == 'Pending' else 'Locked' }}
+        </span>
+      </div>
+      </div>
+      <div class="staff-card-field centered-table-cell">
+      <span class="staff-card-field-label">Logistics</span>
+      <select name="{{ section_key }}_logistics_type_{{ row_key }}" class="staff-logistics-select staff-logistics-{{ logistics_type_class }}" data-logistics-control>
+        {% for option in logistics_type_options %}
+          <option value="{{ option }}" {% if logistics_type == option %}selected{% endif %}>{{ option }}</option>
+        {% endfor %}
+      </select>
+      <input type="hidden" name="{{ section_key }}_logistics_enabled_{{ row_key }}" value="{{ '1' if logistics_type != 'Does not apply' else '' }}" data-logistics-enabled-input>
+      </div>
+      </div>
+    </section>
+
+    <section class="staff-card-block staff-card-time-block is-collapsed" aria-label="Time and distance" data-staff-collapsible-section>
+      <div class="staff-card-section-header">
+        <h4>Time & distance</h4>
+        <button class="staff-card-section-toggle" type="button" data-staff-section-toggle aria-expanded="false" aria-label="Expand Time and distance">
+          <span aria-hidden="true">+</span>
+        </button>
+      </div>
+      <div class="staff-card-section-content" data-staff-section-content>
+      <div class="staff-card-field">
+      <span class="staff-card-field-label">Km.</span>
+      <div class="km-field" data-km-field>
+        {% if assignment and assignment.km is not none %}
+          <input class="km-input" name="{{ section_key }}_km_{{ row_key }}" value="{{ assignment.km }}" inputmode="numeric" pattern="[0-9]*" min="0" step="1" placeholder="Km." data-km-input data-km-name="{{ section_key }}_km_{{ row_key }}" data-integer-input>
+          <button class="km-disable-button" type="button" data-disable-km hidden aria-label="Disable Km">&times;</button>
+        {% else %}
+          <label class="km-checkbox-label">
+            <input type="checkbox" data-enable-km data-km-name="{{ section_key }}_km_{{ row_key }}">
+          </label>
+        {% endif %}
+      </div>
+      </div>
+      <div class="staff-card-field staff-card-field-wide">
+      <span class="staff-card-field-label">Time range</span>
+      <div class="time-range-stack" data-time-range-stack>
+        {% set ranges = assignment.time_ranges_list() if assignment else [{'start': '', 'end': ''}] %}
+        {% for time_range in ranges %}
+          <div class="time-range-fields" data-time-range-row>
+            <label class="time-range-control">
+              <input class="time-range-input" type="text" name="{{ section_key }}_start_time_{{ row_key }}" value="{{ time_range.start }}" inputmode="numeric" maxlength="5" pattern="([01][0-9]|2[0-4]):[0-5][0-9]" aria-label="Start time" title="Start time" placeholder="Start time" data-time-input>
+              <span>h.</span>
+            </label>
+            <label class="time-range-control">
+              <input class="time-range-input" type="text" name="{{ section_key }}_end_time_{{ row_key }}" value="{{ time_range.end }}" inputmode="numeric" maxlength="5" pattern="([01][0-9]|2[0-4]):[0-5][0-9]" aria-label="End time" title="End time" placeholder="End time" data-time-input>
+              <span>h.</span>
+            </label>
+            {% if loop.first %}
+              <button class="time-range-add-button" type="button" data-add-time-range aria-label="Add time range">+</button>
+            {% else %}
+              <button class="time-range-remove-button" type="button" data-remove-time-range aria-label="Remove time range">&times;</button>
+            {% endif %}
+          </div>
+        {% endfor %}
+        <span class="time-range-error" data-time-error></span>
+      </div>
+      </div>
+      </div>
+    </section>
+
+    <section class="staff-card-block staff-card-fees-block is-collapsed" aria-label="Fees" data-staff-collapsible-section>
+      <div class="staff-card-section-header">
+        <h4>Fees</h4>
+        <button class="staff-card-section-toggle" type="button" data-staff-section-toggle aria-expanded="false" aria-label="Expand Fees">
+          <span aria-hidden="true">+</span>
+        </button>
+      </div>
+      <div class="staff-card-section-content" data-staff-section-content>
+      <div class="staff-card-field">
+      <span class="staff-card-field-label">Role fee</span>
+      {% if section_key in ['supervisor', 'examiner', 'intern'] %}
+        <input type="hidden" name="{{ section_key }}_role_fee_{{ row_key }}" value="{{ assignment.role_fee if assignment and assignment.role_fee else '' }}" data-role-fee-input>
+        <input type="hidden" name="{{ section_key }}_role_fee_currency_{{ row_key }}" value="{{ assignment.role_fee_currency if assignment and assignment.role_fee_currency else '' }}" data-role-fee-currency-input>
+        <input type="hidden" name="{{ section_key }}_role_fee_base_value_{{ row_key }}" value="{{ assignment.role_fee_base_value if assignment and assignment.role_fee_base_value else '' }}" data-role-fee-base-input>
+        <input type="hidden" name="{{ section_key }}_role_fee_unit_{{ row_key }}" value="{{ assignment.role_fee_unit if assignment and assignment.role_fee_unit else '' }}" data-role-fee-unit-input>
+        <span class="calculated-role-fee" data-role-fee-display title="{{ assignment.role_fee if assignment and assignment.role_fee else '' }}">{{ assignment.role_fee if assignment and assignment.role_fee else ('No intern fee configured' if section_key == 'intern' else 'No examiner fee configured' if section_key == 'examiner' else 'No supervisor fee configured') }}</span>
+      {% else %}
+        <input class="assignment-cost-input" name="{{ section_key }}_role_fee_{{ row_key }}" value="{{ assignment.role_fee if assignment and assignment.role_fee else '' }}" placeholder="Role fee" data-role-fee-input>
+      {% endif %}
+      </div>
+      <div class="staff-card-field">
+      <span class="staff-card-field-label">Device dep.</span>
+      <input type="hidden" name="{{ section_key }}_device_dep_{{ row_key }}" value="{{ assignment.device_dep if assignment and assignment.device_dep else '' }}" data-device-dep-input>
+      <input type="hidden" name="{{ section_key }}_device_dep_currency_{{ row_key }}" value="{{ assignment.device_dep_currency if assignment and assignment.device_dep_currency else '' }}" data-device-dep-currency-input>
+      <input type="hidden" name="{{ section_key }}_device_dep_base_value_{{ row_key }}" value="{{ assignment.device_dep_base_value if assignment and assignment.device_dep_base_value else '' }}" data-device-dep-base-input>
+      <input type="hidden" name="{{ section_key }}_device_dep_unit_{{ row_key }}" value="{{ assignment.device_dep_unit if assignment and assignment.device_dep_unit else '' }}" data-device-dep-unit-input>
+      <span class="calculated-role-fee" data-device-dep-display title="{{ assignment.device_dep if assignment and assignment.device_dep else '' }}">{{ assignment.device_dep if assignment and assignment.device_dep else 'No Device dep. fee configured' }}</span>
+      </div>
+      <div class="staff-card-field" data-commuting-cell>
+      <span class="staff-card-field-label">Commuting</span>
+      {% if assignment and assignment.km is not none %}
+        <input type="hidden" name="{{ section_key }}_commuting_{{ row_key }}" value="{{ assignment.commuting if assignment and assignment.commuting else '' }}" data-commuting-input>
+        <input type="hidden" name="{{ section_key }}_commuting_currency_{{ row_key }}" value="{{ assignment.commuting_currency if assignment and assignment.commuting_currency else '' }}" data-commuting-currency-input>
+        <input type="hidden" name="{{ section_key }}_commuting_base_value_{{ row_key }}" value="{{ assignment.commuting_base_value if assignment and assignment.commuting_base_value else '' }}" data-commuting-base-input>
+        <input type="hidden" name="{{ section_key }}_commuting_unit_{{ row_key }}" value="{{ assignment.commuting_unit if assignment and assignment.commuting_unit else '' }}" data-commuting-unit-input>
+        <span class="calculated-role-fee" data-commuting-display title="{{ assignment.commuting if assignment and assignment.commuting else '' }}">{{ assignment.commuting if assignment and assignment.commuting else 'No Commuting fee configured' }}</span>
+      {% else %}
+        <span class="assignment-disabled-dash" data-commuting-dash data-commuting-name="{{ section_key }}_commuting_{{ row_key }}">-</span>
+      {% endif %}
+      </div>
+    {% set fuel_vehicle_allowed = selected_member and selected_member.has_car == 'Yes' and assignment and assignment.km is not none and assignment.km >= 60 %}
+    {% set fuel_vehicle_enabled = assignment and (assignment.fuel_enabled or assignment.fuel or assignment.vehicle_dep) %}
+      <div class="staff-card-field" data-fuel-cell>
+      <span class="staff-card-field-label">Fuel</span>
+      {% if fuel_vehicle_enabled %}
+        <input type="hidden" name="{{ section_key }}_fuel_enabled_{{ row_key }}" value="1" data-fuel-enabled-input>
+        <input type="hidden" name="{{ section_key }}_fuel_{{ row_key }}" value="{{ assignment.fuel if assignment and assignment.fuel else '' }}" data-fuel-input>
+        <input type="hidden" name="{{ section_key }}_fuel_currency_{{ row_key }}" value="{{ assignment.fuel_currency if assignment and assignment.fuel_currency else '' }}" data-fuel-currency-input>
+        <input type="hidden" name="{{ section_key }}_fuel_base_value_{{ row_key }}" value="{{ assignment.fuel_base_value if assignment and assignment.fuel_base_value else '' }}" data-fuel-base-input>
+        <input type="hidden" name="{{ section_key }}_fuel_unit_{{ row_key }}" value="{{ assignment.fuel_unit if assignment and assignment.fuel_unit else '' }}" data-fuel-unit-input>
+        <span class="calculated-role-fee" data-fuel-display title="{{ assignment.fuel if assignment and assignment.fuel else '' }}">{{ assignment.fuel if assignment and assignment.fuel else 'No Fuel fee configured' }}</span>
+      {% elif fuel_vehicle_allowed %}
+        <label class="fuel-checkbox-label">
+          <input type="checkbox" data-enable-fuel-vehicle data-fuel-name="{{ section_key }}_fuel_{{ row_key }}" data-vehicle-name="{{ section_key }}_vehicle_dep_{{ row_key }}">
+        </label>
+      {% else %}
+        <span class="assignment-disabled-dash" data-fuel-dash data-fuel-name="{{ section_key }}_fuel_{{ row_key }}" data-vehicle-name="{{ section_key }}_vehicle_dep_{{ row_key }}">-</span>
+      {% endif %}
+      </div>
+      <div class="staff-card-field" data-vehicle-cell>
+      <span class="staff-card-field-label">Vehicle dep.</span>
+      {% if fuel_vehicle_enabled %}
+        <input type="hidden" name="{{ section_key }}_vehicle_dep_{{ row_key }}" value="{{ assignment.vehicle_dep if assignment and assignment.vehicle_dep else '' }}" data-vehicle-input>
+        <input type="hidden" name="{{ section_key }}_vehicle_dep_currency_{{ row_key }}" value="{{ assignment.vehicle_dep_currency if assignment and assignment.vehicle_dep_currency else '' }}" data-vehicle-currency-input>
+        <input type="hidden" name="{{ section_key }}_vehicle_dep_base_value_{{ row_key }}" value="{{ assignment.vehicle_dep_base_value if assignment and assignment.vehicle_dep_base_value else '' }}" data-vehicle-base-input>
+        <input type="hidden" name="{{ section_key }}_vehicle_dep_unit_{{ row_key }}" value="{{ assignment.vehicle_dep_unit if assignment and assignment.vehicle_dep_unit else '' }}" data-vehicle-unit-input>
+        <span class="calculated-role-fee" data-vehicle-display title="{{ assignment.vehicle_dep if assignment and assignment.vehicle_dep else '' }}">{{ assignment.vehicle_dep if assignment and assignment.vehicle_dep else 'No Vehicle dep. fee configured' }}</span>
+      {% else %}
+        <span class="assignment-disabled-dash" data-vehicle-dash data-vehicle-name="{{ section_key }}_vehicle_dep_{{ row_key }}">-</span>
+      {% endif %}
+      </div>
+      <div class="staff-card-field">
+      <span class="staff-card-field-label">Seniority</span>
+      <input type="hidden" name="{{ section_key }}_seniority_fee_{{ row_key }}" value="{{ assignment.seniority_fee if assignment and assignment.seniority_fee else '' }}" data-seniority-input>
+      <input type="hidden" name="{{ section_key }}_seniority_applied_{{ row_key }}" value="{{ '1' if assignment and assignment.seniority_applied else '' }}" data-seniority-applied-input>
+      <input type="hidden" name="{{ section_key }}_seniority_percentage_{{ row_key }}" value="{{ assignment.seniority_percentage if assignment and assignment.seniority_percentage else '' }}" data-seniority-percentage-input>
+      <input type="hidden" name="{{ section_key }}_seniority_currency_{{ row_key }}" value="{{ assignment.seniority_currency if assignment and assignment.seniority_currency else '' }}" data-seniority-currency-input>
+      <span class="calculated-role-fee" data-seniority-display title="{{ assignment.seniority_fee if assignment and assignment.seniority_fee else '' }}">{{ assignment.seniority_fee if assignment and assignment.seniority_fee else '-' }}</span>
+      </div>
+      <div class="staff-card-field staff-card-total-fee total-fee-cell" data-total-fee-cell>
+        <span class="staff-card-field-label">Total fee</span>
+        <span data-total-fee-value>-</span>
+      </div>
+      <div class="staff-card-actions-row">
+        <button class="secondary-button compact-action row-edit-fees-button" type="button" data-edit-assignment-fees {% if participation_status != 'Pending' %}hidden{% endif %}>Edit</button>
+      </div>
+      </div>
+    </section>
+
+    <section class="staff-card-block staff-card-contact-block" aria-label="Contact">
+      <h4>Contact</h4>
+      <div class="staff-card-field staff-card-field-wide staff-email-cell" data-staff-email-cell>
+      <span class="staff-card-field-label">Email</span>
+      {% if selected_member %}
+        <div class="staff-email-actions">
+          {% if selected_member.email %}
+            <a href="#" data-staff-gmail-link>{{ selected_member.email }}</a>
+          {% else %}
+            <span class="muted">-</span>
+          {% endif %}
+          <button class="copy-icon-button email-invitation-copy-button" type="button" data-copy-invitation-email aria-label="Copy invitation email" title="Copy invitation email">
+            <svg class="copy-icon" viewBox="0 0 24 24" aria-hidden="true">
+              <rect x="9" y="9" width="10" height="10" rx="2"></rect>
+              <path d="M5 15V7a2 2 0 0 1 2-2h8"></path>
+            </svg>
+            <svg class="check-icon" viewBox="0 0 24 24" aria-hidden="true">
+              <path d="m5 12 4 4 10-10"></path>
+            </svg>
+            <span class="copy-button-feedback">Copied!</span>
+          </button>
+        </div>
+      {% else %}
+        <span class="muted">-</span>
+      {% endif %}
+      </div>
+    </section>
+  </article>
+{%- endmacro %}
+
+{% macro session_form(session, action, submit_label, status_options, module_options, shift_options, format_options, category_options, csrf_token, selected_session_year) -%}
+  {% set selected_modules = session.modules_list() if session else [] %}
+  {% set selected_shifts = session.shifts_list() if session else [] %}
+  {% set selected_format = session.format if session else '' %}
+  <form method="post" action="{{ action }}" class="form-grid exam-session-form" data-exam-session-form {% if session %}data-original-session-year="{{ session.session_date.year }}"{% endif %}>
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <input type="hidden" name="session_year" value="{{ selected_session_year }}">
+    <label class="exam-session-field">
+      Exam session name
+      <input name="exam_session_name" value="{{ session.exam_session_name if session else '' }}" maxlength="160" required>
+    </label>
+    <label class="exam-session-field">
+      Category
+      <select name="category" required>
+        <option value="">Select category</option>
+        {% for category in category_options %}
+          <option value="{{ category }}" {% if session and session.category == category %}selected{% endif %}>{{ category }}</option>
+        {% endfor %}
+      </select>
+    </label>
+    <label class="exam-session-field">
+      Status
+      <select name="status" required>
+        <option value="">Select status</option>
+        {% for status in status_options %}
+          <option value="{{ status }}" {% if session and session.status == status %}selected{% endif %}>{{ status }}</option>
+        {% endfor %}
+      </select>
+    </label>
+    <label class="exam-session-field">
+      Date
+      <input name="session_date" value="{{ session.session_date|session_date if session else '' }}" placeholder="DD/MM/YYYY" inputmode="numeric" maxlength="10" pattern="\d{2}/\d{2}/\d{4}" required>
+      <span class="field-error" data-date-error></span>
+    </label>
+    <fieldset class="full-span role-filter form-role-picker exam-shift-picker" data-exam-shift-picker>
+      <legend>Shifts</legend>
+      {% for shift in shift_options %}
+        <label class="role-filter-chip exam-shift-choice exam-shift-{{ shift|lower|replace(' ', '-') }}">
+          <input type="checkbox" name="shifts" value="{{ shift }}" data-exam-shift-option {% if shift in selected_shifts %}checked{% endif %}>
+          <span>{{ shift }}</span>
+        </label>
+      {% endfor %}
+    </fieldset>
+    <fieldset class="full-span role-filter form-role-picker exam-module-picker">
+      <legend>Modules</legend>
+      {% for module in module_options %}
+        <label class="role-filter-chip exam-module-choice exam-module-{{ module|lower|replace(' ', '-') }}">
+          <input type="checkbox" name="modules" value="{{ module }}" {% if module in selected_modules %}checked{% endif %}>
+          <span>{{ module }}</span>
+        </label>
+      {% endfor %}
+    </fieldset>
+    <fieldset class="full-span exam-format-picker">
+      <legend>Format</legend>
+      {% for format in format_options %}
+        <label>
+          <input type="radio" name="format" value="{{ format }}" {% if selected_format == format %}checked{% endif %} required>
+          <span>{{ format }}</span>
+        </label>
+      {% endfor %}
+    </fieldset>
+    <label class="full-span" data-onsite-field {% if selected_format != 'Onsite' %}hidden{% endif %}>
+      Full address copied from Google Maps
+      <input name="full_address_google_maps" value="{{ session.full_address_google_maps if session else '' }}" maxlength="500">
+    </label>
+    <label data-onsite-field {% if selected_format != 'Onsite' %}hidden{% endif %}>
+      City
+      <input name="city" value="{{ session.city if session else '' }}">
+    </label>
+    <label data-onsite-field {% if selected_format != 'Onsite' %}hidden{% endif %}>
+      Province
+      <input name="province" value="{{ session.province if session else '' }}">
+    </label>
+    <label class="full-span">
+      All session details
+      <input name="details_url" value="{{ session.details_url if session else '' }}" placeholder="https://...">
+    </label>
+    <div class="form-actions full-span">
+      <button class="secondary-button" type="button" data-close-modal>Cancel</button>
+      <button class="primary-button" type="submit" data-exam-session-submit disabled>{{ submit_label }}</button>
+    </div>
+  </form>
+{%- endmacro %}
+
+{% block title %}Exam session planner | Path Examinations{% endblock %}
+
+{% block content %}
+<header class="page-header">
+  <div>
+    <p class="eyebrow">Exam session planner</p>
+    <h1>Exam session planner</h1>
+    <p>Create and manage examination sessions.</p>
+  </div>
+  <div class="page-actions">
+    <button class="primary-button" type="button" data-open-modal="create-exam-session">New exam session</button>
+  </div>
+</header>
+
+<section class="toolbar {% if archived_session_years %}toolbar-with-archive{% endif %}">
+  <div>
+    <p class="archived-year-title">Session years</p>
+    <p class="archived-year-copy">Use the active year selector to manage exam sessions by year.</p>
+  </div>
+  {% if archived_session_years %}
+    <section class="archived-year-panel" aria-label="Archived Exam session planner years">
+      <div>
+        <p class="archived-year-title">Archived years</p>
+        <p class="archived-year-copy">Archived years are hidden from the active selector, but their records are preserved.</p>
+      </div>
+      <div class="archived-year-list">
+        {% for year_item in archived_session_years %}
+          <article class="archived-year-item">
+            <span>{{ year_item.year }}</span>
+            <form method="post" action="{{ url_for('staff.unarchive_exam_session_year', year=year_item.year) }}" data-confirm-submit="Restore {{ year_item.year }} to active years?">
+              <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+              <button class="secondary-button compact-action" type="submit">Unarchive</button>
+            </form>
+            <form method="post" action="{{ url_for('staff.delete_exam_session_year', year=year_item.year) }}" data-confirm-submit="Permanently delete {{ year_item.year }} and all its exam session records? This cannot be undone.">
+              <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+              <button class="danger-button compact-action" type="submit">Delete permanently</button>
+            </form>
+          </article>
+        {% endfor %}
+      </div>
+    </section>
+  {% endif %}
+</section>
+
+{% if session_years %}
+<section class="year-toolbar" aria-label="Exam session planner years">
+  <div class="year-tabs">
+    {% for year_item in session_years %}
+      <a class="year-tab {% if year_item.year == selected_session_year %}active{% endif %}" href="{{ url_for('staff.exam_session_planner', session_year=year_item.year) }}">{{ year_item.year }}</a>
+    {% endfor %}
+  </div>
+  <form method="post" action="{{ url_for('staff.archive_exam_session_year', year=selected_session_year) }}" data-confirm-submit="Archive {{ selected_session_year }}? This year will be hidden but its information will be preserved.">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <button class="secondary-button compact-action" type="submit">Archive year</button>
+  </form>
+  <form method="post" action="{{ url_for('staff.duplicate_exam_session_year') }}" data-confirm-submit="Duplicate the latest available year into a new year? This will copy exam sessions and session staff member information.">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <button class="secondary-button compact-action" type="submit">Duplicate</button>
+  </form>
+  <form method="post" action="{{ url_for('staff.add_exam_session_year') }}">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <button class="primary-button icon-action" type="submit" aria-label="Add year">+</button>
+  </form>
+</section>
+{% endif %}
+
+<section class="table-wrap" aria-label="Exam session list">
+  <table class="exam-session-table">
+    <thead>
+      <tr>
+        <th aria-label="Enter"></th>
+        <th>Status</th>
+        <th>Exam session name</th>
+        <th>Date</th>
+        <th>Shifts</th>
+        <th>Modules</th>
+        <th>Format</th>
+        <th>Logistics</th>
+        <th>Full address</th>
+        <th class="centered-table-column">City</th>
+        <th class="centered-table-column">Province</th>
+        <th class="all-session-details-column">All session details</th>
+        <th>Supervisors</th>
+        <th>Examiners</th>
+        <th>Interns</th>
+        <th>Logistics</th>
+        <th>TOTAL COST</th>
+        <th>Created on</th>
+        <th>Updated on</th>
+        <th>Edit</th>
+        <th>Delete</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for session in sessions %}
+        <tr data-session-row data-session-id="{{ session.id }}">
+          {% set warning_ns = namespace(count=0) %}
+          {% for assignment in supervisor_assignments.get(session.id, []) %}
+            {% if assignment.team_member_id and supervisor_states.get(session.id, {}).get(assignment.team_member_id, 'warning') == 'warning' %}
+              {% set warning_ns.count = warning_ns.count + 1 %}
+            {% endif %}
+          {% endfor %}
+          {% for assignment in examiner_assignments.get(session.id, []) %}
+            {% if assignment.team_member_id and examiner_states.get(session.id, {}).get(assignment.team_member_id, 'warning') == 'warning' %}
+              {% set warning_ns.count = warning_ns.count + 1 %}
+            {% endif %}
+          {% endfor %}
+          {% for assignment in intern_assignments.get(session.id, []) %}
+            {% if assignment.team_member_id and intern_states.get(session.id, {}).get(assignment.team_member_id, 'warning') == 'warning' %}
+              {% set warning_ns.count = warning_ns.count + 1 %}
+            {% endif %}
+          {% endfor %}
+          <td><button class="enter-session-button" type="button" data-open-modal="exam-session-members-{{ session.id }}">Enter</button></td>
+          <td>
+            <div class="session-status-with-alerts">
+              {{ session_status_badge(session.status, pending_status_tooltips_by_session.get(session.id, '') if session.status == 'Pending' else '') }}
+              {% if session.status == 'Confirmed' %}
+                {% for _ in range(warning_ns.count) %}
+                  <span class="session-certification-warning-mark" title="Member certification stages incomplete">!</span>
+                {% endfor %}
+              {% endif %}
+            </div>
+          </td>
+          <td>
+            <div class="session-name-cell">
+              <span>{{ session.exam_session_name }}</span>
+              {{ centre_type_badge(session.category) }}
+            </div>
+          </td>
+          <td>
+            <div class="session-date-cell">
+              <span>{{ session.session_date|long_session_date }}</span>
+              {% for duplicate_tag in same_date_duplicate_tags.get(session.id, []) %}
+                <span class="member-duplication-tag {{ duplicate_tag.class }}" title="{{ duplicate_tag.title }}">{{ duplicate_tag.label }}</span>
+              {% endfor %}
+            </div>
+          </td>
+          <td class="badge-list">
+            {% if session.shifts_list() %}
+              <div class="role-badges">
+                {% for shift in session.shifts_list() %}
+                  {{ shift_badge(shift) }}
+                {% endfor %}
+              </div>
+            {% else %}
+              <span class="centered-dash muted">-</span>
+            {% endif %}
+          </td>
+          <td class="badge-list">
+            <div class="role-badges">
+              {% for module in session.modules_list() %}
+                {% if session.id in module_registration_counts %}
+                  {{ module_badge(module, module_registration_counts.get(session.id, {}).get(module, 0)) }}
+                {% else %}
+                  {{ module_badge(module) }}
+                {% endif %}
+              {% endfor %}
+              {{ session_marker_badges(session) }}
+            </div>
+          </td>
+          <td>{{ format_badge(session.format) }}</td>
+          <td class="centered-table-cell" data-session-logistics-status-cell data-session-id="{{ session.id }}">{{ logistics_activity_badge(logistics_activity_by_session.get(session.id, false)) }}</td>
+          <td>
+            {% if session.full_address_google_maps %}
+              <div class="copy-address-cell">
+                <span>{{ session.full_address_google_maps }}</span>
+                <button class="copy-icon-button" type="button" data-copy-text="{{ session.full_address_google_maps }}" aria-label="Copy full address" title="Copy full address">
+                  <svg viewBox="0 0 24 24" aria-hidden="true">
+                    <rect x="9" y="9" width="10" height="10" rx="2"></rect>
+                    <path d="M5 15V7a2 2 0 0 1 2-2h8"></path>
+                  </svg>
+                  <span class="copy-button-feedback">Copied</span>
+                </button>
+              </div>
+            {% else %}
+              <span class="muted">-</span>
+            {% endif %}
+          </td>
+          <td class="centered-table-cell">
+            {% if session.city %}
+              {{ session.city }}
+            {% else %}
+              <span class="centered-dash muted">-</span>
+            {% endif %}
+          </td>
+          <td class="centered-table-cell">
+            {% if session.province %}
+              {{ session.province }}
+            {% else %}
+              <span class="centered-dash muted">-</span>
+            {% endif %}
+          </td>
+          <td class="all-session-details-cell">
+            {% if session.details_url %}
+              <a class="badge exam-details-link" href="{{ session.details_url }}" target="_blank" rel="noopener noreferrer">View on Sinapsis</a>
+            {% else %}
+              <span class="centered-dash muted">-</span>
+            {% endif %}
+          </td>
+          {% set session_costs = session_cost_summaries.get(session.id, {}) %}
+          <td class="session-cost-cell">{{ session_costs.get('supervisors', '-') }}</td>
+          <td class="session-cost-cell">{{ session_costs.get('examiners', '-') }}</td>
+          <td class="session-cost-cell">{{ session_costs.get('interns', '-') }}</td>
+          <td class="session-cost-cell">{{ session_costs.get('logistics', '-') }}</td>
+          <td class="session-cost-cell total-cost-cell">{{ session_costs.get('total', '-') }}</td>
+          <td class="datetime-cell">{{ session.created_on|localdt }} h</td>
+          <td class="datetime-cell">{{ session.updated_on|localdt }} h</td>
+          <td><button class="mini-button" type="button" data-open-modal="edit-exam-session-{{ session.id }}">Edit</button></td>
+          <td>
+            <form method="post" action="{{ url_for('staff.delete_exam_session', session_id=session.id) }}" data-confirm-password-submit="This will permanently delete this exam session. This cannot be undone.">
+              <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+              <input type="hidden" name="session_year" value="{{ selected_session_year }}">
+              <input type="hidden" name="deletion_password" value="">
+              <button class="danger-button compact-action" type="submit">Delete</button>
+            </form>
+          </td>
+        </tr>
+      {% else %}
+        <tr>
+          <td colspan="21" class="empty-state">No exam sessions found.</td>
+        </tr>
+      {% endfor %}
+    </tbody>
+    <tfoot class="exam-session-cost-footer">
+      <tr>
+        <td colspan="12">Visible total</td>
+        <td class="session-cost-cell">{{ session_page_cost_totals.get('supervisors', '-') }}</td>
+        <td class="session-cost-cell">{{ session_page_cost_totals.get('examiners', '-') }}</td>
+        <td class="session-cost-cell">{{ session_page_cost_totals.get('interns', '-') }}</td>
+        <td class="session-cost-cell">{{ session_page_cost_totals.get('logistics', '-') }}</td>
+        <td class="session-cost-cell total-cost-cell">{{ session_page_cost_totals.get('total', '-') }}</td>
+        <td colspan="4"></td>
+      </tr>
+    </tfoot>
+  </table>
+</section>
+
+{% include "_pagination.html" %}
+
+<div class="modal" id="create-exam-session" aria-hidden="true">
+  <div class="modal-panel large">
+    <div class="modal-header">
+      <h2>New exam session</h2>
+      <button class="icon-button" type="button" data-close-modal>&times;</button>
+    </div>
+    {{ session_form(None, url_for('staff.create_exam_session'), 'Create exam session', status_options, module_options, shift_options, format_options, category_options, csrf_token, selected_session_year) }}
+  </div>
+</div>
+
+<div class="modal" id="year-change-confirmation" aria-hidden="true">
+  <div class="modal-panel confirm-panel">
+    <div class="modal-header">
+      <h2>Year change detected</h2>
+      <button class="icon-button" type="button" data-year-change-cancel>&times;</button>
+    </div>
+    <p>Changing the exam session year will affect the information displayed on the Monthly exam session registrations panel.</p>
+    <p>Do you want to continue?</p>
+    <div class="form-actions">
+      <button class="secondary-button" type="button" data-year-change-cancel>Cancel</button>
+      <button class="primary-button" type="button" data-year-change-continue>Continue</button>
+    </div>
+  </div>
+</div>
+
+<div class="modal nested-modal logistics-confirmed-password-modal" id="logistics-confirmed-password-modal" aria-hidden="true">
+  <div class="modal-panel confirm-panel">
+    <div class="modal-header">
+      <h2>Confirm logistics concept</h2>
+      <button class="icon-button" type="button" data-logistics-confirm-cancel>&times;</button>
+    </div>
+    <p>Enter the confirmation password to change this logistics concept to Confirmed.</p>
+    <form class="form-grid one-column" data-logistics-confirm-password-form>
+      <label>
+        Password
+        <input name="logistics_confirmed_password" type="password" autocomplete="off" required data-logistics-confirm-password>
+        <span class="field-error" data-logistics-confirm-password-error></span>
+      </label>
+      <div class="form-actions">
+        <button class="secondary-button" type="button" data-logistics-confirm-cancel>Cancel</button>
+        <button class="primary-button" type="submit">Ok</button>
+      </div>
+    </form>
+  </div>
+</div>
+
+{% for session in sessions %}
+  <div class="modal" id="exam-session-members-{{ session.id }}" aria-hidden="true">
+    <div class="modal-panel extra-large" data-session-modal-panel data-session-id="{{ session.id }}" data-session-name="{{ session.exam_session_name }}" data-session-date="{{ session.session_date.isoformat() }}" data-session-date-label="{{ session.session_date|long_session_date }}" data-session-format="{{ session.format }}" data-session-address="{{ session.full_address_google_maps or '' }}" data-session-city="{{ session.city or '' }}" data-session-province="{{ session.province or '' }}" data-session-details-url="{{ session.details_url or '' }}">
+      <div class="modal-header">
+        <div>
+          <h2>
+            Exam session staff members for
+            {% if session.details_url %}
+              <a class="exam-session-title-link" href="{{ session.details_url }}" target="_blank" rel="noopener noreferrer">{{ session.exam_session_name }}</a>
+            {% else %}
+              {{ session.exam_session_name }}
+            {% endif %}
+          </h2>
+          <p class="modal-subtitle">{{ session.session_date|long_session_date }}</p>
+          {% if session.format == 'Onsite' and (session.city or session.province) %}
+            <p class="modal-location-subtitle">
+              {% if session.city and session.province %}
+                {{ session.city }}, {{ session.province }}
+              {% else %}
+                {{ session.city or session.province }}
+              {% endif %}
+            </p>
+          {% endif %}
+          {% if session.format == 'Onsite' and session.full_address_google_maps %}
+            <div class="exam-session-address-actions">
+              <button class="copy-icon-button copy-inline-action exam-session-address-copy" type="button" data-copy-text="{{ session.full_address_google_maps }}" aria-label="Copy full session address" title="Copy full session address">
+                <svg viewBox="0 0 24 24" aria-hidden="true">
+                  <rect x="9" y="9" width="10" height="10" rx="2"></rect>
+                  <path d="M5 15V7a2 2 0 0 1 2-2h8"></path>
+                </svg>
+                <span>{{ session.full_address_google_maps }}</span>
+                <span class="copy-button-feedback">Copied</span>
+              </button>
+              <a class="secondary-button compact-action" href="https://www.google.com/maps/dir///@-34.4551866,-58.9118453,14z/data=!4m2!4m1!3e0?entry=ttu&amp;g_ep=EgoyMDI2MDYxMC4wIKXMDSoASAFQAw%3D%3D" target="_blank" rel="noopener noreferrer">Calculate distances</a>
+            </div>
+          {% endif %}
+          {% set session_non_available_options = session_non_available_staff_members.get(session.id, []) %}
+          {% set selected_non_available_ids = session_non_available_member_ids.get(session.id, []) %}
+          <div class="modal-non-available-control">
+            <span class="modal-non-available-label">Non-available staff members</span>
+            <details class="session-member-picker modal-non-available-picker" data-member-multiselect data-session-non-available-picker>
+              <summary>
+                <span class="session-member-summary-tags" data-member-tags></span>
+                <span class="session-member-summary-placeholder" data-member-placeholder>Non-available staff members</span>
+                <span class="session-member-summary-caret">▼</span>
+              </summary>
+              <div class="session-member-picker-panel">
+                <div class="session-member-picker-panel-title">Non-available staff members</div>
+                {% for member in session_non_available_options %}
+                  <label class="session-member-option">
+                    <input type="checkbox" value="{{ member.id }}" data-member-name="{{ member.full_name }}" {% if member.id in selected_non_available_ids %}checked{% endif %}>
+                    <span data-base-label="{{ member_option_label(member) }}">{{ staff_member_option_markup(member, 0) }}</span>
+                    <span class="session-member-assigned-note">Already assigned</span>
+                  </label>
+                {% endfor %}
+              </div>
+            </details>
+          </div>
+        </div>
+        {% set modal_conflicts = same_date_assignment_conflicts.get(session.id, []) %}
+        <div class="same-date-conflict-alert" role="alert" aria-label="Same date staff assignment warning" data-same-date-conflict-alert {% if not modal_conflicts %}hidden{% endif %}>
+          <span class="same-date-conflict-icon">!</span>
+          <div data-same-date-conflict-messages>
+            {% if modal_conflicts %}
+              {% for conflict_message in modal_conflicts %}
+                <p>{{ conflict_message }}</p>
+              {% endfor %}
+            {% endif %}
+          </div>
+        </div>
+        <button class="icon-button" type="button" data-close-modal>&times;</button>
+      </div>
+      {% set session_logistics_config = logistics_by_session.get(session.id) %}
+      {% set staffing_readiness = staffing_readiness_by_session.get(session.id, {}) %}
+      {% set logistics_readiness = logistics_readiness_by_session.get(session.id, {}) %}
+      <form id="exam-session-members-form-{{ session.id }}" method="post" action="{{ url_for('staff.update_exam_session_members', session_id=session.id) }}" data-session-members-form data-session-id="{{ session.id }}" data-saved-staff-confirmed="{{ 'true' if persisted_staff_confirmed_by_session.get(session.id) else 'false' }}" data-staffing-status="{{ staffing_readiness.get('status', 'not_configured') }}" data-staffing-final-email-ready="{{ 'true' if staffing_readiness.get('final_email_ready') else 'false' }}" data-staffing-email-blocker-message="{{ staffing_readiness.get('email_blocker_message', 'Email copy unavailable') }}" data-logistics-applies="{{ 'true' if logistics_readiness.get('applies') else 'false' }}" data-logistics-status="{{ logistics_readiness.get('status', 'not_applicable') }}" data-logistics-ready="{{ 'true' if logistics_readiness.get('ready') else 'false' }}" data-logistics-final-email-ready="{{ 'true' if logistics_readiness.get('final_email_ready') else 'false' }}" data-logistics-files-url="{{ session_logistics_config.logistics_files_url if session_logistics_config else '' }}" data-logistics-email-blocker-message="{{ logistics_readiness.get('email_blocker_message', 'Email copy unavailable') }}" data-device-dep-fee-currency="{{ device_dep_fee.currency if device_dep_fee else '' }}" data-device-dep-fee-value="{{ device_dep_fee.fee_value if device_dep_fee else '' }}" data-device-dep-fee-unit="{{ device_dep_fee.unit_of_measure if device_dep_fee else '' }}" data-commuting-fee-currency="{{ commuting_fee.currency if commuting_fee else '' }}" data-commuting-fee-value="{{ commuting_fee.fee_value if commuting_fee else '' }}" data-commuting-fee-unit="{{ commuting_fee.unit_of_measure if commuting_fee else '' }}" data-fuel-fee-currency="{{ fuel_fee.currency if fuel_fee else '' }}" data-fuel-fee-value="{{ fuel_fee.fee_value if fuel_fee else '' }}" data-fuel-fee-unit="{{ fuel_fee.unit_of_measure if fuel_fee else '' }}" data-vehicle-dep-fee-currency="{{ vehicle_dep_fee.currency if vehicle_dep_fee else '' }}" data-vehicle-dep-fee-value="{{ vehicle_dep_fee.fee_value if vehicle_dep_fee else '' }}" data-vehicle-dep-fee-unit="{{ vehicle_dep_fee.unit_of_measure if vehicle_dep_fee else '' }}">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <input type="hidden" name="session_year" value="{{ selected_session_year }}">
+        <input type="hidden" name="logistics_confirmation_password" value="" data-logistics-confirmation-password>
+        <div data-deleted-assignments></div>
+        <section class="session-member-section" data-role-fee-label="supervisor" data-role-fee-currency="{{ supervisor_fee.currency if supervisor_fee else '' }}" data-role-fee-value="{{ supervisor_fee.fee_value if supervisor_fee else '' }}" data-role-fee-unit="{{ supervisor_fee.unit_of_measure if supervisor_fee else '' }}" data-supervisor-fee-currency="{{ supervisor_fee.currency if supervisor_fee else '' }}" data-supervisor-fee-value="{{ supervisor_fee.fee_value if supervisor_fee else '' }}" data-supervisor-fee-unit="{{ supervisor_fee.unit_of_measure if supervisor_fee else '' }}">
+          {% set session_supervisors = session_supervisor_members.get(session.id, supervisor_members) %}
+          <div class="session-member-section-header">
+            <div>
+              <h3>Supervisors</h3>
+              <p>Assign supervisor availability, team members and participation status for this exam session.</p>
+            </div>
+            <div class="session-member-section-actions">
+              <button class="secondary-button compact-action" type="button" data-add-member-row>Add supervisor</button>
+            </div>
+          </div>
+          <div class="staff-card-grid" data-supervisor-rows>
+            {% set shipment_recipient_supervisor = shipment_recipient_supervisors.get(session.id) %}
+            {% for assignment in supervisor_assignments.get(session.id, []) %}
+              {{ staff_assignment_row(session, 'supervisor', 'existing-' ~ assignment.id, assignment, session_supervisors, supervisor_member_map, supervisor_states, member_session_counts, participation_options, shipment_recipient_supervisor.id if shipment_recipient_supervisor else none) }}
+            {% endfor %}
+          </div>
+          <template data-supervisor-row-template>
+            {{ staff_assignment_row(session, 'supervisor', '__KEY__', none, session_supervisors, supervisor_member_map, supervisor_states, member_session_counts, participation_options) }}
+          </template>
+        </section>
+        <section class="session-member-section" data-role-fee-label="examiner" data-role-fee-currency="{{ examiner_fee.currency if examiner_fee else '' }}" data-role-fee-value="{{ examiner_fee.fee_value if examiner_fee else '' }}" data-role-fee-unit="{{ examiner_fee.unit_of_measure if examiner_fee else '' }}">
+          {% set session_examiners = session_examiner_members.get(session.id, examiner_members) %}
+          <div class="session-member-section-header">
+            <div>
+              <h3>Examiners</h3>
+              <p>Assign examiner availability, staff members and participation status for this exam session.</p>
+            </div>
+            <div class="session-member-section-actions">
+              <button class="secondary-button compact-action" type="button" data-add-member-row>Add examiner</button>
+            </div>
+          </div>
+          <div class="staff-card-grid" data-supervisor-rows>
+            {% for assignment in examiner_assignments.get(session.id, []) %}
+              {{ staff_assignment_row(session, 'examiner', 'existing-' ~ assignment.id, assignment, session_examiners, examiner_member_map, examiner_states, examiner_member_session_counts, participation_options) }}
+            {% endfor %}
+          </div>
+          <template data-supervisor-row-template>
+            {{ staff_assignment_row(session, 'examiner', '__KEY__', none, session_examiners, examiner_member_map, examiner_states, examiner_member_session_counts, participation_options) }}
+          </template>
+        </section>
+        {% set session_interns = session_intern_members.get(session.id, intern_members) %}
+        {% set has_intern_assignments = intern_assignments.get(session.id, [])|length > 0 %}
+        <section class="session-member-section" id="intern-section-{{ session.id }}" data-optional-section="intern" data-role-fee-label="intern" data-role-fee-currency="{{ intern_fee.currency if intern_fee else '' }}" data-role-fee-value="{{ intern_fee.fee_value if intern_fee else '' }}" data-role-fee-unit="{{ intern_fee.unit_of_measure if intern_fee else '' }}" {% if not has_intern_assignments %}hidden{% endif %}>
+          <div class="session-member-section-header">
+            <div>
+              <h3>Interns</h3>
+              <p>Assign intern availability, staff members and participation status for this exam session.</p>
+            </div>
+            <div class="session-member-section-actions">
+              <button class="secondary-button compact-action" type="button" data-add-member-row>Add intern</button>
+            </div>
+          </div>
+          <div class="staff-card-grid" data-supervisor-rows>
+            {% for assignment in intern_assignments.get(session.id, []) %}
+              {{ staff_assignment_row(session, 'intern', 'existing-' ~ assignment.id, assignment, session_interns, intern_member_map, intern_states, intern_member_session_counts, participation_options) }}
+            {% endfor %}
+          </div>
+          <template data-supervisor-row-template>
+            {{ staff_assignment_row(session, 'intern', '__KEY__', none, session_interns, intern_member_map, intern_states, intern_member_session_counts, participation_options) }}
+          </template>
+        </section>
+        <div class="session-member-toggle-row">
+          <button class="secondary-button compact-action" type="button" data-toggle-optional-section="intern-section-{{ session.id }}" data-activate-label="Activate interns" data-deactivate-label="Deactivate interns">
+            {{ 'Deactivate interns' if has_intern_assignments else 'Activate interns' }}
+          </button>
+        </div>
+        {% set session_logistics_config = logistics_by_session.get(session.id) %}
+        {% set session_logistics_concepts = logistics_concepts.get(session.id, []) %}
+        {% set logistics_ns = namespace(enabled=false) %}
+        {% for assignment in supervisor_assignments.get(session.id, []) %}
+          {% if assignment.logistics_enabled %}{% set logistics_ns.enabled = true %}{% endif %}
+        {% endfor %}
+        {% for assignment in examiner_assignments.get(session.id, []) %}
+          {% if assignment.logistics_enabled %}{% set logistics_ns.enabled = true %}{% endif %}
+        {% endfor %}
+        {% for assignment in intern_assignments.get(session.id, []) %}
+          {% if assignment.logistics_enabled %}{% set logistics_ns.enabled = true %}{% endif %}
+        {% endfor %}
+        <section class="session-member-section logistics-section" data-logistics-section {% if not logistics_ns.enabled and session_logistics_concepts|length == 0 %}hidden{% endif %}>
+          <div class="session-member-section-header">
+            <div>
+              <h3>Logistics</h3>
+              <p>Manage logistical arrangements for this exam session.</p>
+            </div>
+            <div class="session-member-section-actions">
+              <button class="icon-button logistics-link-config-button" type="button" data-configure-logistics-link aria-label="Configure logistics files link" title="Configure logistics files link" {% if session_logistics_config and session_logistics_config.logistics_files_url %}hidden{% endif %}>+</button>
+              <div class="logistics-files-action-stack">
+                {% if session_logistics_config and session_logistics_config.logistics_files_url %}
+                  <a class="secondary-button compact-action" href="{{ session_logistics_config.logistics_files_url }}" target="_blank" rel="noopener noreferrer" data-logistics-files-link>Check logistics files</a>
+                {% else %}
+                  <a class="secondary-button compact-action is-disabled" aria-disabled="true" data-logistics-files-link>Check logistics files</a>
+                {% endif %}
+                <button class="logistics-link-edit-button" type="button" data-edit-logistics-link aria-label="Edit logistics files link" title="Edit logistics files link" {% if not (session_logistics_config and session_logistics_config.logistics_files_url) %}hidden{% endif %}>Edit</button>
+              </div>
+              <button class="secondary-button compact-action" type="button" data-add-logistics-concept>Add concept</button>
+            </div>
+          </div>
+          <label class="logistics-files-field" {% if not (session_logistics_config and session_logistics_config.logistics_files_url) %}hidden{% endif %}>
+            <input name="logistics_files_url" value="{{ session_logistics_config.logistics_files_url if session_logistics_config else '' }}" placeholder="https://..." data-logistics-files-url>
+            <span class="field-error" data-logistics-url-error></span>
+          </label>
+          <div class="table-wrap compact-table-wrap logistics-table-wrap">
+            <table class="session-members-table logistics-concepts-table">
+              <colgroup>
+                <col class="logistics-status-col">
+                <col class="logistics-provider-type-col">
+                <col class="logistics-provider-col">
+                <col class="logistics-currency-col">
+                <col class="logistics-fee-col">
+                <col class="logistics-provider-details-col">
+                <col class="logistics-history-col">
+                <col class="logistics-delete-col">
+              </colgroup>
+              <thead>
+                <tr>
+                  <th>Status</th>
+                  <th>Type of provider</th>
+                  <th>Provider</th>
+                  <th>Currency</th>
+                  <th>Fee</th>
+                  <th>Provider details</th>
+                  <th>History</th>
+                  <th>Delete</th>
+                </tr>
+              </thead>
+              <tbody data-logistics-concepts>
+                {% for concept in session_logistics_concepts %}
+                  {{ logistics_concept_row(concept, 'existing-' ~ concept.id, logistics_status_options, logistics_provider_type_options, logistics_provider_options, logistics_currency_options) }}
+                {% endfor %}
+              </tbody>
+            </table>
+          </div>
+          <template data-logistics-concept-template>
+            {{ logistics_concept_row(none, '__KEY__', logistics_status_options, logistics_provider_type_options, logistics_provider_options, logistics_currency_options) }}
+          </template>
+        </section>
+      </form>
+      <div class="session-modal-bottom-bar">
+        <div class="session-modal-module-summary" aria-label="Configured modules with latest registration numbers">
+          {% for module in session.modules_list() %}
+            {% if session.id in module_registration_counts %}
+              {{ module_badge(module, module_registration_counts.get(session.id, {}).get(module, 0)) }}
+            {% else %}
+              {{ module_badge(module) }}
+            {% endif %}
+          {% endfor %}
+          {{ session_marker_badges(session) }}
+        </div>
+        <div class="form-actions modal-bottom-actions">
+          <button class="secondary-button" type="button" data-close-modal>Cancel</button>
+          <button class="secondary-button" type="submit" name="modal_action" value="save" form="exam-session-members-form-{{ session.id }}" data-session-members-save>Save</button>
+          <button class="primary-button" type="submit" name="modal_action" value="save_close" form="exam-session-members-form-{{ session.id }}" data-session-members-save>Save and close</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  {% for concept in session_logistics_concepts %}
+    <div class="modal nested-modal" id="logistics-history-{{ concept.id }}" aria-hidden="true">
+      <div class="modal-panel">
+        <div class="modal-header">
+          <h2>History</h2>
+          <button class="icon-button" type="button" data-close-modal>&times;</button>
+        </div>
+        <details class="history-add-panel">
+          <summary class="secondary-button compact-action">Add note</summary>
+          <form method="post" action="{{ url_for('staff.add_logistics_concept_note', concept_id=concept.id) }}" class="form-grid one-column history-add-form">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+            <label>
+              New note
+              <textarea name="interview" rows="4" maxlength="4000" placeholder="Add a new history note" required></textarea>
+            </label>
+            <div class="form-actions">
+              <button class="primary-button" type="submit">Add note</button>
+            </div>
+          </form>
+        </details>
+        {% set concept_notes = logistics_notes.get(concept.id, []) %}
+        {% if concept_notes %}
+          <div class="history-list">
+            {% for note in concept_notes|reverse %}
+              <article class="history-entry">
+                <time>{{ note.created_on|localdt }}{% if note.created_by %} | {{ note.created_by }}{% endif %}</time>
+                <p>{{ note.comment }}</p>
+              </article>
+            {% endfor %}
+          </div>
+        {% else %}
+          <p class="empty-history">No history recorded.</p>
+        {% endif %}
+      </div>
+    </div>
+  {% endfor %}
+
+  <div class="modal" id="edit-exam-session-{{ session.id }}" aria-hidden="true">
+    <div class="modal-panel large">
+      <div class="modal-header">
+        <h2>Edit exam session</h2>
+        <button class="icon-button" type="button" data-close-modal>&times;</button>
+      </div>
+      {{ session_form(session, url_for('staff.update_exam_session', session_id=session.id), 'Save changes', status_options, module_options, shift_options, format_options, category_options, csrf_token, selected_session_year) }}
+    </div>
+  </div>
+{% endfor %}
+
+{% for provider in logistics_provider_options %}
+  <div class="modal nested-modal" id="provider-details-{{ provider.id }}" aria-hidden="true">
+    <div class="modal-panel">
+      <div class="modal-header">
+        <div>
+          <h2>{{ provider.name }}</h2>
+          <p>{{ provider.provider_type.name if provider.provider_type else 'Provider' }}</p>
+        </div>
+        <button class="icon-button" type="button" data-close-modal>&times;</button>
+      </div>
+      <div class="provider-details-grid">
+        <section>
+          <h3>Full address</h3>
+          <p>{{ provider.full_address }}</p>
+        </section>
+        <section>
+          <h3>Experience</h3>
+          <div class="provider-rating is-readonly" aria-label="Experience rating: {{ provider.experience_rating }} out of 5">
+            {% for rating in range(1, 6) %}
+              <span class="provider-star-static">{{ '★' if rating <= provider.experience_rating else '☆' }}</span>
+            {% endfor %}
+          </div>
+        </section>
+        <section class="full-span">
+          <h3>History</h3>
+          {% set provider_notes = logistics_provider_history.get(provider.id, []) %}
+          {% if provider_notes %}
+            <div class="history-list">
+              {% for note in provider_notes|reverse %}
+                <article class="history-entry">
+                  <time>{{ note.created_on|localdt }} h{% if note.created_by %} | {{ note.created_by }}{% endif %}</time>
+                  <p>{{ note.comment }}</p>
+                </article>
+              {% endfor %}
+            </div>
+          {% else %}
+            <p class="empty-history">No history recorded.</p>
+          {% endif %}
+        </section>
+      </div>
+    </div>
+  </div>
+{% endfor %}
+{% endblock %}

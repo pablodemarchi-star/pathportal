@@ -1,0 +1,104 @@
+{% extends "base.html" %}
+
+{% block title %}{% if journey %}{{ journey.title }}{% else %}Path Session Journey unavailable{% endif %}{% endblock %}
+
+{% block content %}
+<section class="journey-page {% if journey %}journey-page-{{ journey.audience }}{% endif %}">
+  {% if unavailable %}
+    <article class="journey-unavailable">
+      <p class="eyebrow">Path Session Journey</p>
+      <h1>{{ unavailable_title or 'This journey link is no longer available.' }}</h1>
+      <p>{{ unavailable_message or 'Please contact Path Examinations if you need an updated link.' }}</p>
+    </article>
+  {% else %}
+    <header class="journey-hero">
+      <div class="journey-brand-mark">Path</div>
+      <p class="eyebrow">{% if is_preview %}Preview{% else %}Shared journey{% endif %}</p>
+      <h1>{{ journey.title }}</h1>
+      <p class="journey-hero-message">{{ journey.hero_message }}</p>
+      <div class="journey-countdown" aria-label="Countdown">
+        <strong>{{ journey.countdown.label }}</strong>
+        {% if not journey.countdown.is_today and not journey.countdown.has_passed and journey.countdown.days_to_go is not none %}
+          <span>until {% if journey.audience == 'public' %}your Path exam session{% else %}the exam session{% endif %}</span>
+        {% endif %}
+      </div>
+      {% if journey.audience == 'public' %}
+        <p class="journey-emotional-copy">{{ journey.supporting_message }}</p>
+      {% endif %}
+    </header>
+
+    <section class="journey-session-card" aria-label="Session summary">
+      <div>
+        <span>Session</span>
+        <strong>{{ journey.session_name }}</strong>
+      </div>
+      <div>
+        <span>Date</span>
+        <strong>{{ journey.session_date|session_date }}</strong>
+      </div>
+      <div>
+        <span>Format</span>
+        <strong>{{ journey.format or 'To be confirmed' }}</strong>
+      </div>
+      {% if journey.venue %}
+        <div>
+          <span>Venue</span>
+          <strong>{{ journey.venue }}</strong>
+        </div>
+      {% endif %}
+      <div>
+        <span>Journey status</span>
+        <strong>{{ journey.overall_label }}</strong>
+      </div>
+      {% if journey.last_updated %}
+        <div>
+          <span>Last updated</span>
+          <strong>{{ journey.last_updated|localdt }}</strong>
+        </div>
+      {% endif %}
+    </section>
+
+    {% if journey.administrative_readiness.visible %}
+      <section class="journey-admin-card" aria-label="Administrative and payment readiness">
+        <div>
+          <span>{{ journey.administrative_readiness.label }}</span>
+          <strong>{{ journey.administrative_readiness.status }}</strong>
+        </div>
+        <p>{{ journey.administrative_readiness.message }}</p>
+      </section>
+    {% endif %}
+
+    <section class="journey-timeline" aria-label="Journey milestones">
+      <h2>Milestones</h2>
+      <ol>
+        {% for milestone in journey.milestones %}
+          <li class="journey-milestone is-{{ milestone.status }}">
+            <span class="journey-milestone-marker" aria-hidden="true">{% if milestone.status == 'completed' %}✓{% else %}•{% endif %}</span>
+            <div>
+              <strong>{{ milestone.label }}</strong>
+              <small>{{ milestone.status_label }}</small>
+              <p>{{ milestone.message }}</p>
+            </div>
+          </li>
+        {% endfor %}
+      </ol>
+    </section>
+
+    {% if journey.next_steps %}
+      <section class="journey-next-steps" aria-label="Next steps">
+        <h2>Next steps</h2>
+        {% for step in journey.next_steps %}
+          <p>{{ step }}</p>
+        {% endfor %}
+      </section>
+    {% endif %}
+
+    <footer class="journey-footer">
+      <p>{{ journey.final_message }}</p>
+      {% if journey.visibility_note %}
+        <small>{{ journey.visibility_note }}</small>
+      {% endif %}
+    </footer>
+  {% endif %}
+</section>
+{% endblock %}

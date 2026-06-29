@@ -1,0 +1,16776 @@
+import json
+import os
+import re
+import secrets
+from decimal import Decimal, InvalidOperation, ROUND_FLOOR
+from datetime import datetime, timezone, timedelta
+import calendar
+from io import BytesIO
+from urllib.parse import parse_qs, urlparse
+
+from flask import Blueprint, Response, abort, current_app, flash, has_request_context, jsonify, redirect, render_template, request, session, url_for
+from openpyxl import load_workbook
+from openpyxl import Workbook
+from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
+from openpyxl.utils import get_column_letter
+from sqlalchemy import or_
+from sqlalchemy.orm import joinedload
+
+from app import db, login_required, validate_csrf
+from app.models import (
+    AcademicStaff,
+    AnnualCertificationRecord,
+    AnnualMeetingRecord,
+    CertificationYearConfiguration,
+    ExaminerCertificationAnnualMeetingSelection,
+    ExaminerCertificationFut1Selection,
+    ExaminerCertificationFut2Selection,
+    ExaminerCertificationRemoteTrainingSelection,
+    ExaminerCertificationYear,
+    ExamSession,
+    ExamSessionCommunicationsChecklistItem,
+    ExamSessionCommunicationsControl,
+    ExamSessionCommunicationsEvent,
+    ExamSessionExaminerAssignment,
+    ExamSessionFinanceControl,
+    ExamSessionFinanceEvent,
+    ExamSessionIncident,
+    ExamSessionIncidentChecklistItem,
+    ExamSessionIncidentEvent,
+    ExamSessionIncidentImpactReview,
+    ExamSessionIncidentReviewFlag,
+    ExamSessionInternAssignment,
+    ExamSessionJourneyShare,
+    ExamSessionLogistics,
+    ExamSessionLogisticsControl,
+    ExamSessionLogisticsConcept,
+    ExamSessionLogisticsConceptNote,
+    ExamSessionMonthlyCandidateTotal,
+    ExamSessionMonthlyRegistration,
+    ExamSessionPackageChecklistItem,
+    ExamSessionPackageEvent,
+    ExamSessionPackageUnit,
+    ExamSessionScheduleEvent,
+    ExamSessionScheduleWorkflow,
+    ExamSessionShipmentBundle,
+    ExamSessionShipmentBundleSession,
+    ExamSessionShipmentChecklistItem,
+    ExamSessionShipmentEvent,
+    ExamSessionSinapsisChecklistItem,
+    ExamSessionSinapsisControl,
+    ExamSessionSinapsisEvent,
+    ExamSessionStaffingControl,
+    ExamSessionSupervisorAssignment,
+    ExamSessionYear,
+    Fee,
+    InternStage2Selection,
+    InternStage3Selection,
+    InternStageAnnualMeetingSelection,
+    InternStageFutSelection,
+    InternStageRemoteTrainingSelection,
+    InternStageYear,
+    PotentialEntry,
+    Provider,
+    ProviderHistory,
+    ProviderType,
+    Role,
+    StaffPayment,
+    StaffCertificationFut2Selection,
+    StaffCertificationFutSelection,
+    SupervisorCertificationAnnualMeetingSelection,
+    SupervisorCertificationFutSelection,
+    SupervisorCertificationRemoteTrainingSelection,
+    SupervisorCertificationYear,
+)
+from app.validators import is_valid_google_maps_url, is_valid_url, validate_member_form, validate_potential_form
+
+staff_bp = Blueprint("staff", __name__)
+LOCAL_TZ = timezone(timedelta(hours=-3))
+CREATE_STATUS_OPTIONS = ["Inactive", "Active"]
+EDIT_STATUS_OPTIONS = ["Archived", "Inactive", "Active"]
+ROLE_OPTIONS = ["Examiner", "RSG", "Supervisor", "Intern"]
+POTENTIAL_STATUS_OPTIONS = ["To be interviewed", "Interview arranged"]
+INTERVIEWER_OPTIONS = [
+    "Prof. Mgter. Pablo Demarchi | Managing Director",
+    "Prof. Lic. Agustina Savini | Team Leader",
+    "Prof. Brenda Sartori | Customer Experience Officer",
+    "Prof. Marcela Romero | Admissions Officer",
+]
+CERTIFICATION_TYPES = [
+    {"key": "remote_training", "label": "Remote training", "roles": []},
+    {"key": "fut", "label": "FUT", "roles": []},
+    {"key": "examiner_annual_meeting", "label": "Examiner annual meeting", "roles": ["Examiner"]},
+    {"key": "rsg_annual_meeting", "label": "RSG annual meeting", "roles": ["RSG"]},
+    {"key": "supervisor_annual_meeting", "label": "Supervisor annual meeting", "roles": ["Supervisor"]},
+    {"key": "intern_1st_stage", "label": "Intern 1st stage", "roles": ["Intern"]},
+    {"key": "intern_2nd_stage", "label": "Intern 2nd stage", "roles": ["Intern"]},
+    {"key": "intern_3rd_stage", "label": "Intern 3rd stage", "roles": ["Intern"]},
+]
+STAFF_CERTIFICATION_TYPES = [
+    {"key": "annual_meeting", "label": "Annual meeting", "roles": []},
+    {"key": "remote_training", "label": "Remote training", "roles": []},
+    {"key": "fut", "label": "FUT", "roles": []},
+]
+INTERN_STAGE_CERTIFICATION_TYPES = [
+    {"key": "remote_training", "label": "Stage 1", "roles": []},
+    {"key": "stage_3", "label": "Stage 2", "roles": []},
+    {"key": "fut", "label": "FUT", "roles": []},
+    {"key": "stage_2", "label": "Stage 3", "roles": []},
+]
+CERTIFICATION_KEYS = {certification["key"] for certification in CERTIFICATION_TYPES}
+STAFF_CERTIFICATION_KEYS = {certification["key"] for certification in STAFF_CERTIFICATION_TYPES}
+STAFF_YEAR_CERTIFICATION_TYPES = [
+    certification for certification in STAFF_CERTIFICATION_TYPES if certification["key"] not in {"remote_training", "annual_meeting", "fut"}
+]
+STAFF_YEAR_CERTIFICATION_KEYS = {certification["key"] for certification in STAFF_YEAR_CERTIFICATION_TYPES}
+REMOTE_TRAINING_OPTIONS = ["Pending", "With FUT", "Certified"]
+INTERN_STAGE_1_2_OPTIONS = ["Pending", "Attended meeting", "Completed"]
+INTERN_STAGE_3_OPTIONS = ["Pending", "Attended meeting", "With FUT", "Completed"]
+ANNUAL_MEETING_OPTIONS = ["Attended", "Absent"]
+PAGE_SIZE_OPTIONS = ["5", "10", "25", "50", "all"]
+DEFAULT_PAGE_SIZE = "10"
+PERMANENT_DELETE_PASSWORD = "7284"
+EXAM_SESSION_STATUS_OPTIONS = ["Pending", "Confirmed"]
+EXAM_SESSION_CATEGORY_OPTIONS = [
+    "Approved Exam Centre",
+    "Premium Exam Centre",
+    "Path School",
+    "Educational Partner",
+]
+EXAM_SESSION_MODULE_OPTIONS = ["Reading and writing", "Listening and speaking", "Speaking"]
+EXAM_SESSION_SHIFT_OPTIONS = ["Morning", "Afternoon", "Night", "All day"]
+EXAM_SESSION_FORMAT_OPTIONS = ["Online", "Onsite"]
+EXAM_SESSION_PARTICIPATION_OPTIONS = [
+    "Pending",
+    "Pre-confirmation sent",
+    "Pre-confirmed",
+    "Official confirmation sent",
+    "Confirmed",
+]
+EXAM_SESSION_LOGISTICS_TYPE_OPTIONS = [
+    "Does not apply",
+    "Simple logistics",
+    "Complex logistics",
+]
+EXAM_SESSION_LOGISTICS_ACTIVE_TYPES = {"Simple logistics", "Complex logistics"}
+LEGACY_PARTICIPATION_STATUS_MAP = {
+    "Sent": "Pre-confirmation sent",
+}
+LOGISTICS_STATUS_OPTIONS = ["Pending", "In progress", "Pre-confirmed", "Confirmed"]
+LOGISTICS_CONFIRMED_PASSWORD = "Check"
+LEGACY_LOGISTICS_STATUS_MAP = {
+    "Payment scheduled": "Pre-confirmed",
+}
+EXAMINER_CERTIFICATION_MODULE_KEY = "examiner_certification"
+SUPERVISOR_CERTIFICATION_MODULE_KEY = "supervisor_certification"
+FINANCE_STATUS_OPTIONS = [
+    "Not reviewed",
+    "Payment follow-up required",
+    "Conditional clearance",
+    "Finance hold",
+    "Exception approved",
+    "Cleared",
+]
+FINANCE_STATUS_SLUGS = {
+    "Not reviewed": "not_reviewed",
+    "Payment follow-up required": "payment_follow_up_required",
+    "Conditional clearance": "conditional_clearance",
+    "Finance hold": "finance_hold",
+    "Exception approved": "exception_approved",
+    "Cleared": "cleared",
+}
+FINANCE_CAN_PROCEED_STATUSES = {"Conditional clearance", "Exception approved", "Cleared"}
+FINANCE_ACTION_STATUSES = {"Not reviewed", "Payment follow-up required", "Conditional clearance", "Finance hold"}
+FINANCE_NOTE_REQUIRED_STATUSES = {
+    "Payment follow-up required",
+    "Conditional clearance",
+    "Finance hold",
+    "Exception approved",
+}
+FINANCE_TRANSITIONS = {
+    "Not reviewed": {
+        "Payment follow-up required",
+        "Conditional clearance",
+        "Finance hold",
+        "Exception approved",
+        "Cleared",
+    },
+    "Payment follow-up required": {
+        "Conditional clearance",
+        "Finance hold",
+        "Exception approved",
+        "Cleared",
+        "Not reviewed",
+    },
+    "Conditional clearance": {
+        "Cleared",
+        "Payment follow-up required",
+        "Finance hold",
+        "Exception approved",
+        "Not reviewed",
+    },
+    "Finance hold": {
+        "Payment follow-up required",
+        "Conditional clearance",
+        "Exception approved",
+        "Cleared",
+        "Not reviewed",
+    },
+    "Exception approved": {
+        "Cleared",
+        "Payment follow-up required",
+        "Finance hold",
+        "Not reviewed",
+    },
+    "Cleared": {
+        "Payment follow-up required",
+        "Conditional clearance",
+        "Finance hold",
+        "Exception approved",
+        "Not reviewed",
+    },
+}
+SINAPSIS_STATUS_OPTIONS = ["Not reviewed", "In progress", "Needs correction", "Ready"]
+SINAPSIS_STATUS_SLUGS = {
+    "Not reviewed": "not_reviewed",
+    "In progress": "in_progress",
+    "Needs correction": "needs_correction",
+    "Ready": "ready",
+}
+SINAPSIS_ACTION_STATUSES = {"Not reviewed", "In progress", "Needs correction"}
+SINAPSIS_TRANSITIONS = {
+    "Not reviewed": {"In progress", "Needs correction", "Ready"},
+    "In progress": {"Needs correction", "Ready", "Not reviewed"},
+    "Needs correction": {"In progress", "Ready", "Not reviewed"},
+    "Ready": {"Needs correction", "In progress", "Not reviewed"},
+}
+SINAPSIS_CHECKLIST_ITEMS = [
+    {
+        "key": "session_visible",
+        "label": "Session visible in Sinapsis",
+        "description": "Verify that the exam session is visible and accessible in Sinapsis.",
+    },
+    {
+        "key": "candidates_loaded",
+        "label": "Candidates correctly loaded",
+        "description": "Verify that candidates are correctly loaded for the exam session.",
+    },
+    {
+        "key": "modules_configured",
+        "label": "Modules correctly configured",
+        "description": "Verify that the correct modules are configured for the session.",
+    },
+    {
+        "key": "staff_assigned",
+        "label": "Staff members correctly assigned",
+        "description": "Verify that the assigned staff members are correctly reflected in Sinapsis.",
+    },
+    {
+        "key": "attendance_enabled",
+        "label": "Attendance enabled",
+        "description": "Verify that attendance can be completed in Sinapsis.",
+    },
+    {
+        "key": "marks_upload_enabled",
+        "label": "Marks upload enabled",
+        "description": "Verify that marks can be uploaded in Sinapsis.",
+    },
+    {
+        "key": "speaking_recordings_checked",
+        "label": "Speaking recordings process checked",
+        "description": "Verify that the Speaking recordings process is clear and available when applicable.",
+    },
+    {
+        "key": "details_link_verified",
+        "label": "Session details link verified",
+        "description": "Verify that the session details link works correctly.",
+    },
+    {
+        "key": "final_check_completed",
+        "label": "Final Sinapsis check completed",
+        "description": "Complete the final check before the exam session date.",
+    },
+]
+COMMUNICATIONS_STATUS_OPTIONS = ["Not started", "In progress", "Needs follow-up", "Completed"]
+COMMUNICATIONS_STATUS_SLUGS = {
+    "Not started": "not_started",
+    "In progress": "in_progress",
+    "Needs follow-up": "needs_follow_up",
+    "Completed": "completed",
+}
+COMMUNICATIONS_ACTION_STATUSES = {"Not started", "In progress", "Needs follow-up"}
+COMMUNICATIONS_TRANSITIONS = {
+    "Not started": {"In progress", "Needs follow-up", "Completed"},
+    "In progress": {"Needs follow-up", "Completed", "Not started"},
+    "Needs follow-up": {"In progress", "Completed", "Not started"},
+    "Completed": {"Needs follow-up", "In progress", "Not started"},
+}
+COMMUNICATIONS_GROUPS = [
+    ("STAFF_COMMUNICATIONS", "Staff communications"),
+    ("EXAM_CENTRE_COMMUNICATIONS", "Exam centre communications"),
+]
+COMMUNICATIONS_CHECKLIST_ITEMS = [
+    {
+        "group_key": "STAFF_COMMUNICATIONS",
+        "key": "final_staff_structure_sent",
+        "label": "Final staff structure communication sent or registered",
+        "description": "Confirm that the final staff structure communication has been sent or registered for the confirmed staff members.",
+    },
+    {
+        "group_key": "STAFF_COMMUNICATIONS",
+        "key": "staff_logistics_shared",
+        "label": "Staff logistics information shared if applicable",
+        "description": "Confirm that staff logistics details and links were shared with the corresponding staff members when applicable.",
+    },
+    {
+        "group_key": "STAFF_COMMUNICATIONS",
+        "key": "staff_materials_confirmed",
+        "label": "Staff materials and links confirmed",
+        "description": "Confirm that the relevant session materials, links or references were shared with staff members as required.",
+    },
+    {
+        "group_key": "STAFF_COMMUNICATIONS",
+        "key": "staff_access_checked",
+        "label": "Staff access or receipt checked",
+        "description": "Confirm that staff members can access the relevant information or that receipt was appropriately verified when applicable.",
+    },
+    {
+        "group_key": "EXAM_CENTRE_COMMUNICATIONS",
+        "key": "pre_session_exam_centre_message_sent",
+        "label": "Pre-session exam centre message sent or registered",
+        "description": "Confirm that the pre-session message was sent or registered.",
+    },
+    {
+        "group_key": "EXAM_CENTRE_COMMUNICATIONS",
+        "key": "emergency_contact_shared",
+        "label": "Emergency or contact information shared if applicable",
+        "description": "Confirm that relevant emergency or contact information was shared when applicable.",
+    },
+    {
+        "group_key": "EXAM_CENTRE_COMMUNICATIONS",
+        "key": "compliance_link_shared",
+        "label": "End-of-session compliance link shared",
+        "description": "Confirm that the End-of-session compliance link was shared.",
+    },
+    {
+        "group_key": "EXAM_CENTRE_COMMUNICATIONS",
+        "key": "final_support_message_completed",
+        "label": "Final support message completed",
+        "description": "Confirm that the message indicating that the team is ready to support the exam day experience was completed or registered.",
+    },
+]
+INCIDENT_TYPES = [
+    "Staff member unavailable",
+    "Flight cancelled",
+    "Supervisor changed",
+    "Package sent to wrong supervisor",
+    "Shipment at risk",
+    "Recipient review discrepancy",
+    "Finance hold escalation",
+    "Sinapsis issue",
+    "Venue or date change",
+    "Schedule change after approval",
+    "Other",
+]
+INCIDENT_SEVERITIES = ["Low", "Medium", "High", "Critical"]
+INCIDENT_STATUSES = ["Open", "In progress", "Waiting external", "Resolved", "Cancelled"]
+INCIDENT_ACTIVE_STATUSES = {"Open", "In progress", "Waiting external"}
+INCIDENT_INACTIVE_STATUSES = {"Resolved", "Cancelled"}
+INCIDENT_RESPONSIBLE_DEPARTMENTS = ["ADMIN", "LOGISTICS", "MANAGEMENT", "FINANCE"]
+INCIDENT_TYPE_DEFAULT_DEPARTMENT = {
+    "Staff member unavailable": "ADMIN",
+    "Flight cancelled": "ADMIN",
+    "Supervisor changed": "ADMIN",
+    "Package sent to wrong supervisor": "LOGISTICS",
+    "Shipment at risk": "LOGISTICS",
+    "Recipient review discrepancy": "LOGISTICS",
+    "Finance hold escalation": "FINANCE",
+    "Sinapsis issue": "ADMIN",
+    "Venue or date change": "MANAGEMENT",
+    "Schedule change after approval": "MANAGEMENT",
+    "Other": "ADMIN",
+}
+INCIDENT_TRANSITIONS = {
+    "Open": {"In progress", "Waiting external", "Resolved", "Cancelled"},
+    "In progress": {"Waiting external", "Resolved", "Cancelled", "Open"},
+    "Waiting external": {"In progress", "Resolved", "Cancelled", "Open"},
+    "Resolved": {"In progress", "Open"},
+    "Cancelled": {"Open", "In progress"},
+}
+INCIDENT_PLAYBOOKS = {
+    "Staff member unavailable": [
+        "Confirm affected role and time range.",
+        "Identify whether a replacement is required.",
+        "Open Exam session planner and update the staff assignment if needed.",
+        "Review whether staff logistics are affected.",
+        "Review whether package personalization is affected.",
+        "Review whether final staff communication must be updated.",
+    ],
+    "Flight cancelled": [
+        "Confirm cancellation and expected impact.",
+        "Check whether the staff member can still arrive on time.",
+        "Evaluate alternative travel options.",
+        "Decide whether replacement is required.",
+        "Update logistics documents or notes if needed.",
+        "Review whether final staff communication must be updated.",
+    ],
+    "Supervisor changed": [
+        "Confirm the new supervisor.",
+        "Update the supervisor assignment in Exam session planner if needed.",
+        "Review delivery address and shipment bundle.",
+        "Review package labels or session documentation.",
+        "Review final staff communication.",
+        "Review Sinapsis readiness if applicable.",
+    ],
+    "Package sent to wrong supervisor": [
+        "Identify affected bundle and tracking number.",
+        "Contact courier or delivery provider if applicable.",
+        "Contact the unintended recipient if needed.",
+        "Determine whether the package can be redirected or returned.",
+        "Decide whether a replacement shipment is required.",
+        "Notify MANAGEMENT if session delivery may be affected.",
+        "Record evidence and resolution.",
+    ],
+    "Shipment at risk": [
+        "Review shipment status and tracking.",
+        "Check earliest affected session date.",
+        "Contact courier or provider if applicable.",
+        "Decide whether urgent follow-up is required.",
+        "Update shipment status if needed.",
+        "Notify MANAGEMENT if delivery deadline may be at risk.",
+    ],
+    "Recipient review discrepancy": [
+        "Document the discrepancy reported by the recipient.",
+        "Identify affected session or package.",
+        "Determine whether any material is missing or incorrect.",
+        "Decide whether corrective shipment or clarification is required.",
+        "Record evidence.",
+        "Close discrepancy after resolution.",
+    ],
+    "Finance hold escalation": [
+        "Confirm the current Finance status.",
+        "Review reason for Finance hold.",
+        "Confirm whether session can proceed or must remain blocked.",
+        "Record finance note or evidence.",
+        "Coordinate any required communication through FINANCE.",
+        "Update Finance control if needed.",
+    ],
+    "Sinapsis issue": [
+        "Document the Sinapsis issue.",
+        "Identify affected module, staff, candidate or permission.",
+        "Correct the issue in Sinapsis if applicable.",
+        "Verify the correction.",
+        "Update Sinapsis readiness if needed.",
+        "Record evidence or notes.",
+    ],
+    "Venue or date change": [
+        "Confirm the approved venue/date change.",
+        "Review Schedule workflow impact.",
+        "Review Staffing impact.",
+        "Review Packages impact.",
+        "Review Shipments impact.",
+        "Review Sinapsis readiness.",
+        "Review Communications.",
+        "Notify relevant departments.",
+    ],
+    "Schedule change after approval": [
+        "Confirm why schedules need to change.",
+        "Reopen or update Schedule workflow if needed.",
+        "Review Packages already prepared.",
+        "Review Staff communications.",
+        "Review Sinapsis readiness.",
+        "Review Shipments if package dispatch is affected.",
+        "Record reason and resolution.",
+    ],
+    "Other": [
+        "Describe the issue clearly.",
+        "Identify affected area.",
+        "Assign responsible department.",
+        "Define next step.",
+        "Record resolution.",
+    ],
+}
+
+
+def incident_status_slug(status):
+    return re.sub(r"[^a-z0-9]+", "_", (status or "").lower()).strip("_") or "unknown"
+
+
+def incident_type_key(incident_type):
+    return incident_status_slug(incident_type)
+
+
+INCIDENT_IMPACT_REVIEW_STATUSES = ["Review suggested", "Reviewed", "Not applicable"]
+INCIDENT_REVIEW_FLAG_STATUSES = ["Needs review", "Reviewed", "Dismissed"]
+INCIDENT_REVIEW_FLAG_AREAS = {
+    "schedule": "Schedule",
+    "staffing": "Staffing",
+    "logistics": "Logistics",
+    "packages": "Packages",
+    "shipments": "Shipments",
+    "finance": "Finance",
+    "sinapsis": "Sinapsis readiness",
+    "communications": "Communications",
+}
+INCIDENT_REVIEW_FLAG_AREA_RESPONSIBLE = {
+    "schedule": "MANAGEMENT",
+    "staffing": "ADMIN",
+    "logistics": "ADMIN",
+    "packages": "LOGISTICS",
+    "shipments": "LOGISTICS",
+    "finance": "FINANCE",
+    "sinapsis": "ADMIN",
+    "communications": "ADMIN",
+}
+INCIDENT_IMPACT_TARGET_ANCHORS = {
+    "Schedule": "schedule",
+    "Staffing": "staffing",
+    "Logistics": "logistics",
+    "Packages": "packages",
+    "Shipments": "shipments",
+    "Finance": "finance",
+    "Sinapsis readiness": "sinapsis",
+    "Communications": "communications",
+    "Incidents": "incidents",
+}
+
+
+def incident_impact(incident_type, area, responsible, suggested_action, reason):
+    area_key = INCIDENT_IMPACT_TARGET_ANCHORS.get(area, incident_status_slug(area))
+    return {
+        "impact_key": f"{incident_type_key(incident_type)}:{area_key}",
+        "affected_area": area_key,
+        "affected_area_label": area,
+        "responsible_department": responsible,
+        "suggested_action": suggested_action,
+        "reason": reason,
+        "target_anchor": INCIDENT_IMPACT_TARGET_ANCHORS.get(area, "incidents"),
+    }
+
+
+INCIDENT_IMPACT_MATRIX = {
+    "Staff member unavailable": [
+        incident_impact("Staff member unavailable", "Staffing", "ADMIN", "Review staff assignment and replacement need.", "The assigned staff member may need to be replaced."),
+        incident_impact("Staff member unavailable", "Logistics", "ADMIN", "Review staff logistics arrangements.", "Travel or accommodation may be affected."),
+        incident_impact("Staff member unavailable", "Communications", "ADMIN", "Review final staff communication.", "Staff structure or logistics communication may need to be updated."),
+        incident_impact("Staff member unavailable", "Sinapsis readiness", "ADMIN", "Review staff setup in Sinapsis.", "Staff changes may need to be reflected in Sinapsis."),
+    ],
+    "Flight cancelled": [
+        incident_impact("Flight cancelled", "Logistics", "ADMIN", "Review travel alternatives or logistics documents.", "Travel arrangements may need to be changed."),
+        incident_impact("Flight cancelled", "Staffing", "ADMIN", "Review whether a replacement is required.", "The staff member may not arrive on time."),
+        incident_impact("Flight cancelled", "Communications", "ADMIN", "Review staff communication.", "The affected staff member may need updated instructions."),
+    ],
+    "Supervisor changed": [
+        incident_impact("Supervisor changed", "Staffing", "ADMIN", "Review supervisor assignment.", "The confirmed supervisor may have changed."),
+        incident_impact("Supervisor changed", "Packages", "LOGISTICS", "Review package personalization.", "Package labels or supervisor documentation may need review."),
+        incident_impact("Supervisor changed", "Shipments", "LOGISTICS", "Review shipment recipient and delivery address.", "The shipment may need to go to a different supervisor."),
+        incident_impact("Supervisor changed", "Communications", "ADMIN", "Review final staff communication.", "Staff structure communication may need to be updated."),
+        incident_impact("Supervisor changed", "Sinapsis readiness", "ADMIN", "Review staff setup in Sinapsis.", "Supervisor changes may need to be reflected in Sinapsis."),
+    ],
+    "Package sent to wrong supervisor": [
+        incident_impact("Package sent to wrong supervisor", "Packages", "LOGISTICS", "Review affected packages.", "Package destination or contents may need verification."),
+        incident_impact("Package sent to wrong supervisor", "Shipments", "LOGISTICS", "Review shipment bundle and tracking.", "Shipment destination or routing may be incorrect."),
+        incident_impact("Package sent to wrong supervisor", "Incidents", "LOGISTICS", "Review incident resolution steps.", "This incident may require additional follow-up and evidence."),
+    ],
+    "Shipment at risk": [
+        incident_impact("Shipment at risk", "Shipments", "LOGISTICS", "Review shipment status and delivery risk.", "Delivery timing may affect the exam session."),
+        incident_impact("Shipment at risk", "Communications", "ADMIN", "Review whether communication is needed.", "Affected parties may need updated information if delivery risk increases."),
+    ],
+    "Recipient review discrepancy": [
+        incident_impact("Recipient review discrepancy", "Shipments", "LOGISTICS", "Review recipient discrepancy.", "The recipient reported an issue with the shipment."),
+        incident_impact("Recipient review discrepancy", "Packages", "LOGISTICS", "Review package contents and quality check.", "The discrepancy may be related to package preparation."),
+    ],
+    "Finance hold escalation": [
+        incident_impact("Finance hold escalation", "Finance", "FINANCE", "Review Finance hold and clearance.", "The session may be blocked from a financial point of view."),
+        incident_impact("Finance hold escalation", "Communications", "FINANCE", "Review finance-related communication.", "Sensitive payment communication should be handled by FINANCE."),
+    ],
+    "Sinapsis issue": [
+        incident_impact("Sinapsis issue", "Sinapsis readiness", "ADMIN", "Review Sinapsis readiness.", "The issue may affect operational setup in Sinapsis."),
+    ],
+    "Venue or date change": [
+        incident_impact("Venue or date change", "Schedule", "MANAGEMENT", "Review schedule workflow.", "Venue or date changes may affect approved schedules."),
+        incident_impact("Venue or date change", "Packages", "LOGISTICS", "Review package preparation.", "Package labels or session details may need review."),
+        incident_impact("Venue or date change", "Shipments", "LOGISTICS", "Review shipment planning.", "Shipment timing or destination may be affected."),
+        incident_impact("Venue or date change", "Sinapsis readiness", "ADMIN", "Review Sinapsis setup.", "Venue or date changes may need to be reflected in Sinapsis."),
+        incident_impact("Venue or date change", "Communications", "ADMIN", "Review communications.", "Staff or exam centre communications may need to be updated."),
+    ],
+    "Schedule change after approval": [
+        incident_impact("Schedule change after approval", "Schedule", "MANAGEMENT", "Review schedule workflow.", "Approved schedules may need to be reopened or updated."),
+        incident_impact("Schedule change after approval", "Packages", "LOGISTICS", "Review package preparation.", "Package order, labels or grids may be affected."),
+        incident_impact("Schedule change after approval", "Sinapsis readiness", "ADMIN", "Review Sinapsis setup.", "Schedule changes may need to be reflected in Sinapsis."),
+        incident_impact("Schedule change after approval", "Communications", "ADMIN", "Review communications.", "Staff or exam centre communications may need to be updated."),
+    ],
+    "Other": [
+        incident_impact("Other", "Incidents", "ADMIN", "Review incident manually.", "This incident type requires manual assessment."),
+    ],
+}
+PACKAGE_UNIT_STATUSES = [
+    "Not started",
+    "Pre-packing",
+    "Pre-packing blocked",
+    "Impersonal package ready",
+    "Ready to personalize",
+    "Final assembly",
+    "Personalized",
+    "Quality checked",
+    "Needs review",
+]
+PACKAGE_PRE_PACKING_PHASE = "PRE_PACKING"
+PACKAGE_FINAL_ASSEMBLY_PHASE = "FINAL_ASSEMBLY"
+PACKAGE_UNIT_CHECKLIST_TEMPLATES = {
+    PACKAGE_PRE_PACKING_PHASE: [
+        {
+            "item_key": "print_labels",
+            "label": "Print labels for each room and module.",
+            "description": "Print the labels corresponding to this room and module.",
+            "is_required": True,
+            "display_order": 10,
+        },
+        {
+            "item_key": "check_label_count",
+            "label": "Check label count against the schedule grid.",
+            "description": "Verify that the number of downloaded labels matches the total number of candidates shown in the corresponding schedule grid.",
+            "is_required": True,
+            "display_order": 20,
+        },
+        {
+            "item_key": "report_mismatch",
+            "label": "Report label mismatch if needed.",
+            "description": "If labels are missing or extra labels were downloaded, report the issue to MANAGEMENT/ADMIN and pause the process.",
+            "is_required": True,
+            "display_order": 30,
+        },
+        {
+            "item_key": "apply_labels",
+            "label": "Apply labels to the corresponding exams.",
+            "description": "If there are candidates with NEP, locate the adapted exam materials and include them accordingly.",
+            "is_required": True,
+            "display_order": 40,
+        },
+        {
+            "item_key": "group_seal_impersonal",
+            "label": "Group and seal the impersonal package.",
+            "description": "Group the exam sets for this room and module in the same order as shown in the schedule grid. Seal the package without attaching the exam record or schedule grid to the front.",
+            "is_required": True,
+            "display_order": 50,
+        },
+    ],
+    PACKAGE_FINAL_ASSEMBLY_PHASE: [
+        {
+            "item_key": "attach_schedule_grid",
+            "label": "Print and attach the exam record / schedule grid.",
+            "description": "Print the exam record or schedule grid for each room and module on A4 label templates and attach it to the corresponding package.",
+            "is_required": True,
+            "display_order": 10,
+        },
+        {
+            "item_key": "add_nep_label",
+            "label": "Add NEP identification label if applicable.",
+            "description": "If the room includes candidates with NEP, add the corresponding identification label to the package.",
+            "is_required": False,
+            "display_order": 20,
+        },
+    ],
+}
+PACKAGE_SESSION_CHECKLIST_TEMPLATES = {
+    PACKAGE_PRE_PACKING_PHASE: [
+        {
+            "item_key": "path_bag_gift",
+            "label": "Add Path Examinations bag with gift inside.",
+            "description": "",
+            "is_required": True,
+            "display_order": 10,
+        },
+        {
+            "item_key": "wristbands",
+            "label": "Add Path Examinations wristbands.",
+            "description": "Include one wristband per candidate, including candidates taking only one module. Do not include extras.",
+            "is_required": True,
+            "display_order": 20,
+        },
+        {
+            "item_key": "staff_lanyards",
+            "label": "Add staff lanyards if applicable.",
+            "description": "Include lanyards with rigid cards for staff members who do not already have them.",
+            "is_required": True,
+            "display_order": 30,
+        },
+        {
+            "item_key": "return_packages",
+            "label": "Add return packages by module.",
+            "description": "Include return packages according to the modules in the session: Listening and Speaking SUBMITTED, Listening and Speaking ABSENT, Reading and Writing SUBMITTED, Reading and Writing ABSENT. The quantity of return packages must correspond to the number of exams.",
+            "is_required": True,
+            "display_order": 40,
+        },
+        {
+            "item_key": "qr_board",
+            "label": "Add QR board.",
+            "description": "Include the board with QRs.",
+            "is_required": True,
+            "display_order": 50,
+        },
+    ],
+    PACKAGE_FINAL_ASSEMBLY_PHASE: [
+        {
+            "item_key": "supervisors_folder_grids",
+            "label": "Add schedule grids to the Supervisors folder.",
+            "description": "Place the stapled schedule grids for each room and module of the full session in the Supervisors folder.",
+            "is_required": True,
+            "display_order": 10,
+        },
+        {
+            "item_key": "examiners_folder_grids",
+            "label": "Add schedule grids to the Examiners folder.",
+            "description": "Place the stapled schedule grids for each room and module of the full session in the Examiners folder.",
+            "is_required": True,
+            "display_order": 20,
+        },
+        {
+            "item_key": "seal_session_box",
+            "label": "Seal the session box.",
+            "description": "Close the box, wrap it with black nylon and apply heat sealing. Add the session identification label on the side of the sealed box.",
+            "is_required": True,
+            "display_order": 30,
+        },
+    ],
+}
+SHIPMENT_BUNDLE_STATUSES = [
+    "Preparing bundle",
+    "Ready to dispatch",
+    "In transit to post office",
+    "Dispatched",
+    "Recipient notified",
+    "In transit to recipient",
+    "Delayed",
+    "Delivered successfully",
+    "Recipient review successful",
+    "Recipient review with discrepancy",
+]
+SHIPMENT_DEFAULT_COURIER = "Correo Argentino"
+SHIPMENT_TRANSIT_DAYS = 10
+SHIPMENT_RECEPTION_BUFFER_DAYS = 0
+SHIPMENT_DELIVERY_RISK_DAYS = 3
+SHIPMENT_PROTECTED_STATUSES = {
+    "In transit to post office",
+    "Dispatched",
+    "Recipient notified",
+    "In transit to recipient",
+    "Delayed",
+    "Delivered successfully",
+    "Recipient review successful",
+    "Recipient review with discrepancy",
+    "Confirmed",
+    "Process completed",
+    "Shipment process completed",
+}
+SHIPMENT_COMPLETED_STATUSES = {
+    "Confirmed",
+    "Process completed",
+    "Recipient review successful",
+    "Shipment process completed",
+}
+SHIPMENT_AUTO_MANAGED_STATUSES = {"Preparing bundle", "Ready to dispatch"}
+SHIPMENT_CHECKLIST_TEMPLATES = [
+    {
+        "item_key": "verify_sessions_boxes",
+        "label": "Verify included sessions and sealed boxes.",
+        "description": "Confirm that all sessions included in this bundle have their sealed boxes ready.",
+        "is_required": True,
+        "display_order": 10,
+    },
+    {
+        "item_key": "emergency_pack",
+        "label": "Include sealed emergency pack.",
+        "description": "Include one sealed emergency pack with two exams of each level.",
+        "is_required": True,
+        "display_order": 20,
+    },
+    {
+        "item_key": "jbl_speakers_dice",
+        "label": "Include JBL speakers and dice pack.",
+        "description": "Include the JBL speakers and dice pack according to the session with the highest number of simultaneous Listening and Speaking rooms.",
+        "is_required": True,
+        "display_order": 30,
+    },
+    {
+        "item_key": "correo_label",
+        "label": "Attach Correo Argentino shipping label.",
+        "description": "Attach the Correo Argentino shipping label to the top of the bundle/set.",
+        "is_required": True,
+        "display_order": 40,
+    },
+    {
+        "item_key": "verify_delivery_address",
+        "label": "Verify delivery address.",
+        "description": "Confirm the supervisor delivery address before dispatch.",
+        "is_required": True,
+        "display_order": 50,
+    },
+]
+SCHEDULE_WORKFLOW_STATUSES = [
+    "Not started",
+    "In progress",
+    "Ready to send",
+    "Sent for review",
+    "Changes requested",
+    "Approved",
+]
+SCHEDULE_WORKFLOW_ACTIONS = {
+    "start_preparation": {
+        "from": "Not started",
+        "to": "In progress",
+        "label": "Start schedule preparation",
+        "deadline_required": True,
+    },
+    "mark_ready": {
+        "from": "In progress",
+        "to": "Ready to send",
+        "label": "Mark schedules as ready to send",
+        "deadline_required": True,
+    },
+    "send_for_review": {
+        "from": "Ready to send",
+        "to": "Sent for review",
+        "label": "Mark as sent for review",
+        "deadline_required": True,
+        "sent": True,
+    },
+    "record_changes": {
+        "from": "Sent for review",
+        "to": "Changes requested",
+        "label": "Record requested changes",
+        "deadline_required": True,
+        "note_required": True,
+        "changes_requested": True,
+    },
+    "mark_revised_ready": {
+        "from": "Changes requested",
+        "to": "Ready to send",
+        "label": "Mark revised schedules as ready to send",
+        "deadline_required": True,
+    },
+    "approve": {
+        "from": "Sent for review",
+        "to": "Approved",
+        "label": "Mark schedules as approved",
+        "approved": True,
+    },
+    "continue_editing": {
+        "from": "Ready to send",
+        "to": "In progress",
+        "label": "Continue editing schedules",
+        "deadline_required": True,
+    },
+    "reopen": {
+        "from": "Approved",
+        "to": "In progress",
+        "label": "Reopen schedule preparation",
+        "deadline_required": True,
+        "note_required": True,
+        "reopen": True,
+    },
+    "update_deadline": {
+        "from_any": ["In progress", "Ready to send", "Sent for review", "Changes requested"],
+        "label": "Update deadline",
+        "deadline_required": True,
+        "same_status": True,
+    },
+}
+SCHEDULE_WORKFLOW_NEXT_ACTIONS = {
+    "Not started": "Start preparing schedules",
+    "In progress": "Complete schedules in Sinapsis",
+    "Ready to send": "Send schedules for review",
+    "Sent for review": "Follow up schedule approval",
+    "Changes requested": "Update schedules in Sinapsis",
+    "Approved": "Schedule workflow completed",
+}
+SCHEDULE_WORKFLOW_RESPONSIBLE = {
+    "Not started": "MANAGEMENT",
+    "In progress": "MANAGEMENT",
+    "Ready to send": "ADMIN",
+    "Sent for review": "ADMIN",
+    "Changes requested": "MANAGEMENT",
+    "Approved": "Completed",
+}
+SYSTEM_PROVIDER_TYPES = [
+    "Hotel",
+    "AirBnb",
+    "Booking.com",
+    "Airline",
+    "Bus",
+    "BusBud",
+    "BusPlus",
+    "Car rental",
+    "Restaurant",
+]
+PROVIDER_TYPE_COLOR_KEYS = [f"provider-type-{index}" for index in range(12)]
+FEE_CURRENCY_OPTIONS = ["ARS", "EUR", "GBP", "USD", "UYU"]
+FEE_UNIT_OPTIONS = ["per hour", "per minute", "per km", "per unit"]
+FEE_VALID_THROUGH_MONTHS = [
+    "January",
+    "February",
+    "March",
+    "April",
+    "May",
+    "June",
+    "July",
+    "August",
+    "September",
+    "October",
+    "November",
+    "December",
+]
+MONTHLY_REGISTRATION_MONTHS = [
+    (1, "January"),
+    (2, "February"),
+    (3, "March"),
+    (4, "April"),
+    (5, "May"),
+    (6, "June"),
+    (7, "July"),
+    (8, "August"),
+    (9, "September"),
+    (10, "October"),
+    (11, "November"),
+    (12, "December"),
+]
+MEMBER_DEPENDENT_MODELS = [
+    AnnualCertificationRecord,
+    AnnualMeetingRecord,
+    StaffCertificationFutSelection,
+    StaffCertificationFut2Selection,
+    ExaminerCertificationFut1Selection,
+    ExaminerCertificationFut2Selection,
+    ExaminerCertificationRemoteTrainingSelection,
+    ExaminerCertificationAnnualMeetingSelection,
+    SupervisorCertificationFutSelection,
+    SupervisorCertificationRemoteTrainingSelection,
+    SupervisorCertificationAnnualMeetingSelection,
+    InternStageFutSelection,
+    InternStageRemoteTrainingSelection,
+    InternStage2Selection,
+    InternStage3Selection,
+    InternStageAnnualMeetingSelection,
+]
+STAFF_FUT_OPTIONS = [
+    "Ready",
+    "Steady",
+    "Go!",
+    "SPA level I",
+    "SPA level II",
+    "SPA level III",
+    "A1- Entry",
+    "A1 Access",
+    "A1+ Achiever",
+    "A2 Preliminary",
+    "A2+ Elementary",
+    "B1 Progress",
+    "B1+ Onwards",
+    "B2 Competency",
+    "B2+ Forward",
+    "C Multi-level Proficiency Test",
+    "Speaking Professional Test",
+]
+
+
+def local_datetime(value):
+    if not value:
+        return ""
+    if value.tzinfo is None:
+        value = value.replace(tzinfo=timezone.utc)
+    return value.astimezone(LOCAL_TZ).strftime("%d/%m/%Y %H:%M GMT-3")
+
+
+def export_datetime(value):
+    if not value:
+        return ""
+    if value.tzinfo is None:
+        value = value.replace(tzinfo=timezone.utc)
+    return value.astimezone(LOCAL_TZ).strftime("%d/%m/%Y %H:%M")
+
+
+def normalize_logistics_fee(value):
+    raw_value = (value or "").strip()
+    if not raw_value:
+        return None, None
+    if not re.fullmatch(r"\d+(,\d+)?", raw_value):
+        return None, "Fee must be a positive number."
+    try:
+        amount = Decimal(raw_value.replace(",", "."))
+    except InvalidOperation:
+        return None, "Fee must be a positive number."
+    integer_part = int(amount.to_integral_value(rounding=ROUND_FLOOR))
+    decimal_part = amount - Decimal(integer_part)
+    if decimal_part > Decimal("0.50"):
+        integer_part += 1
+    return integer_part, None
+
+
+def logistics_concepts_have_data(concepts):
+    return any(
+        concept.provider
+        or concept.fee is not None
+        or concept.status != "Pending"
+        or concept.currency != "ARS"
+        or concept.notes
+        for concept in concepts
+    )
+
+
+def logistics_enabled_for_session(session_id):
+    for model in (ExamSessionSupervisorAssignment, ExamSessionExaminerAssignment, ExamSessionInternAssignment):
+        if model.query.filter_by(exam_session_id=session_id, logistics_enabled=True).first():
+            return True
+    return False
+
+
+def logistics_readiness_contract(assignments, concepts, logistics_config=None):
+    required_member_ids = sorted({
+        assignment.team_member_id
+        for assignment in assignments
+        if assignment.team_member_id is not None and assignment.logistics_enabled
+    })
+    has_enabled_assignments = bool(required_member_ids)
+    active_concepts = list(concepts or [])
+    logistics_files_url = (logistics_config.logistics_files_url or "").strip() if logistics_config else ""
+    has_files_url = bool(logistics_files_url and is_valid_url(logistics_files_url))
+    blocking_concepts = [
+        {
+            "id": concept.id,
+            "status": concept.status,
+            "provider": concept.provider,
+        }
+        for concept in active_concepts
+        if concept.status != "Confirmed"
+    ]
+    confirmed_concepts = sum(1 for concept in active_concepts if concept.status == "Confirmed")
+    blockers = []
+
+    if not has_enabled_assignments and not active_concepts:
+        status = "not_applicable"
+        ready = True
+    elif has_enabled_assignments and not active_concepts:
+        status = "configuration_required"
+        ready = False
+        blockers.append({
+            "code": "LOGISTICS_CONCEPTS_MISSING",
+            "message": "Logistics is enabled but no logistics concepts have been configured.",
+        })
+    elif blocking_concepts:
+        status = "in_progress"
+        ready = False
+        blockers.append({
+            "code": "LOGISTICS_CONCEPTS_PENDING",
+            "message": "Waiting for all logistics concepts to be confirmed.",
+        })
+    else:
+        status = "confirmed"
+        ready = True
+
+    final_email_ready = ready
+    if has_enabled_assignments and ready and not has_files_url:
+        final_email_ready = False
+        blockers.append({
+            "code": "LOGISTICS_FILES_URL_MISSING",
+            "message": "Add the Check logistics files link before copying the final email.",
+        })
+
+    return {
+        "applies": has_enabled_assignments or bool(active_concepts),
+        "status": status,
+        "ready": ready,
+        "final_email_ready": final_email_ready,
+        "required_member_ids": required_member_ids,
+        "total_concepts": len(active_concepts),
+        "confirmed_concepts": confirmed_concepts,
+        "blocking_concepts": blocking_concepts,
+        "has_files_url": has_files_url,
+        "blockers": blockers,
+    }
+
+
+def logistics_email_blocker_message(contract):
+    blocker_codes = {blocker["code"] for blocker in contract.get("blockers", [])}
+    if "LOGISTICS_CONCEPTS_MISSING" in blocker_codes:
+        return "Logistics details must be configured before copying the final email."
+    if "LOGISTICS_FILES_URL_MISSING" in blocker_codes:
+        return "Add the Check logistics files link before copying the final email."
+    if "LOGISTICS_CONCEPTS_PENDING" in blocker_codes:
+        return "Waiting for all logistics concepts to be confirmed."
+    return "Email copy unavailable"
+
+
+def empty_staffing_counts():
+    return {
+        "required": 0,
+        "assigned": 0,
+        "open_positions": 0,
+        "pending_assigned": 0,
+        "sent": 0,
+        "confirmed": 0,
+    }
+
+
+def normalize_participation_status(status):
+    status = (status or "Pending").strip()
+    return LEGACY_PARTICIPATION_STATUS_MAP.get(status, status)
+
+
+def normalize_assignment_logistics_type(logistics_type, legacy_enabled=False):
+    logistics_type = (logistics_type or "").strip()
+    if logistics_type in EXAM_SESSION_LOGISTICS_TYPE_OPTIONS:
+        return logistics_type
+    if legacy_enabled:
+        return "Simple logistics"
+    return "Does not apply"
+
+
+def participation_status_is_in_progress(status):
+    return normalize_participation_status(status) in {
+        "Pre-confirmation sent",
+        "Pre-confirmed",
+        "Official confirmation sent",
+    }
+
+
+def staffing_readiness_contract(supervisor_assignments=None, examiner_assignments=None, intern_assignments=None):
+    role_sources = {
+        "Supervisor": list(supervisor_assignments or []),
+        "Examiner": list(examiner_assignments or []),
+        "Intern": list(intern_assignments or []),
+    }
+    totals = empty_staffing_counts()
+    by_role = {}
+    open_position_details = []
+    blockers = []
+    invalid_found = False
+
+    for role, assignments in role_sources.items():
+        counts = empty_staffing_counts()
+        for assignment in assignments:
+            assignment_id = getattr(assignment, "id", None)
+            team_member_id = getattr(assignment, "team_member_id", None)
+            participation_status = normalize_participation_status(getattr(assignment, "participation_status", "Pending"))
+            has_member = team_member_id is not None
+
+            counts["required"] += 1
+            if has_member:
+                counts["assigned"] += 1
+                if participation_status == "Pending":
+                    counts["pending_assigned"] += 1
+                elif participation_status_is_in_progress(participation_status):
+                    counts["sent"] += 1
+                elif participation_status == "Confirmed":
+                    counts["confirmed"] += 1
+                else:
+                    invalid_found = True
+                    blockers.append({
+                        "code": "INVALID_PARTICIPATION_STATUS",
+                        "role": role,
+                        "assignment_id": assignment_id,
+                        "message": f"{role} has an invalid participation status.",
+                    })
+            else:
+                counts["open_positions"] += 1
+                open_position_details.append({
+                    "assignment_id": assignment_id,
+                    "role": role,
+                })
+                if participation_status == "Pending":
+                    blockers.append({
+                        "code": "OPEN_STAFF_POSITION",
+                        "role": role,
+                        "assignment_id": assignment_id,
+                        "message": f"A {role} position still needs to be filled.",
+                    })
+                else:
+                    invalid_found = True
+                    blockers.append({
+                        "code": "INVALID_EMPTY_STAFF_POSITION_STATUS",
+                        "role": role,
+                        "assignment_id": assignment_id,
+                        "message": "A staff position without an assigned member must remain Pending.",
+                    })
+
+        counts["ready"] = (
+            counts["required"] == 0
+            or (
+                counts["open_positions"] == 0
+                and counts["assigned"] == counts["required"]
+                and counts["confirmed"] == counts["required"]
+            )
+        )
+        by_role[role] = counts
+        for key in totals:
+            totals[key] += counts[key]
+
+    if totals["required"] == 0:
+        status = "not_configured"
+        blockers.append({
+            "code": "STAFFING_NOT_CONFIGURED",
+            "message": "Configure at least one staff position before copying the final email.",
+        })
+    elif invalid_found:
+        status = "invalid"
+    elif totals["open_positions"] > 0:
+        status = "open_positions"
+    elif totals["pending_assigned"] > 0 or totals["sent"] > 0:
+        status = "awaiting_confirmations"
+        blockers.append({
+            "code": "STAFFING_AWAITING_CONFIRMATIONS",
+            "message": "Waiting for all staff members to confirm their participation.",
+        })
+    else:
+        status = "confirmed"
+
+    ready = (
+        totals["required"] > 0
+        and totals["open_positions"] == 0
+        and totals["assigned"] == totals["required"]
+        and totals["confirmed"] == totals["required"]
+        and not invalid_found
+    )
+
+    return {
+        "status": status,
+        "ready": ready,
+        "final_email_ready": ready,
+        "totals": totals,
+        "by_role": by_role,
+        "open_position_details": open_position_details,
+        "blockers": blockers,
+    }
+
+
+def staffing_email_blocker_message(contract):
+    blocker_codes = {blocker["code"] for blocker in contract.get("blockers", [])}
+    if "STAFFING_NOT_CONFIGURED" in blocker_codes:
+        return "Configure at least one staff position before copying the final email."
+    if "OPEN_STAFF_POSITION" in blocker_codes:
+        return "Assign a staff member to every required role before copying the final email."
+    if "STAFFING_AWAITING_CONFIRMATIONS" in blocker_codes:
+        return "Waiting for all staff members to confirm their participation."
+    if blocker_codes:
+        return "A staff assignment needs to be corrected before copying the final email."
+    return "Email copy unavailable"
+
+
+def persisted_staff_confirmed(*assignment_groups):
+    if len(assignment_groups) == 1:
+        assignment_groups = (assignment_groups[0], [], [])
+    return staffing_readiness_contract(*assignment_groups)["ready"]
+
+
+def final_email_ready(staffing_contract, logistics_contract):
+    return bool(
+        staffing_contract.get("final_email_ready")
+        and logistics_contract.get("final_email_ready")
+    )
+
+
+def pluralize_count(count, singular, plural=None):
+    label = singular if count == 1 else (plural or f"{singular}s")
+    return f"{count} {label}"
+
+
+def exam_session_pending_status_tooltip(staffing_contract, logistics_contract):
+    missing_items = []
+    staffing_status = staffing_contract.get("status")
+    staffing_totals = staffing_contract.get("totals", {})
+    if staffing_status == "not_configured":
+        missing_items.append("Add at least one staff position.")
+    elif staffing_status == "invalid":
+        missing_items.append("Correct invalid staff rows.")
+    elif staffing_status == "open_positions":
+        open_positions = staffing_totals.get("open_positions", 0)
+        missing_items.append(
+            f"Assign staff members to {pluralize_count(open_positions, 'open staff position')}."
+        )
+    elif staffing_status == "awaiting_confirmations":
+        pending = staffing_totals.get("pending_assigned", 0)
+        sent = staffing_totals.get("sent", 0)
+        status_parts = []
+        if pending:
+            status_parts.append(pluralize_count(pending, "Pending staff member"))
+        if sent:
+            status_parts.append(pluralize_count(sent, "confirmation in progress", "confirmations in progress"))
+        suffix = f" ({', '.join(status_parts)})" if status_parts else ""
+        missing_items.append(f"Confirm all assigned staff{suffix}.")
+
+    logistics_status = logistics_contract.get("status")
+    if logistics_status == "configuration_required":
+        blocker_codes = {blocker["code"] for blocker in logistics_contract.get("blockers", [])}
+        if "LOGISTICS_CONCEPTS_MISSING" in blocker_codes:
+            missing_items.append("Add at least one logistics concept.")
+        if "LOGISTICS_FILES_URL_MISSING" in blocker_codes:
+            missing_items.append("Add the Check logistics files link.")
+        if "LOGISTICS_CONCEPTS_PENDING" in blocker_codes:
+            pending = len(logistics_contract.get("blocking_concepts", []))
+            missing_items.append(f"Confirm {pluralize_count(pending, 'logistics concept')}.")
+    elif logistics_status == "in_progress":
+        pending = len(logistics_contract.get("blocking_concepts", []))
+        missing_items.append(f"Confirm {pluralize_count(pending, 'logistics concept')}.")
+    elif logistics_status == "confirmed":
+        blocker_codes = {blocker["code"] for blocker in logistics_contract.get("blockers", [])}
+        if "LOGISTICS_FILES_URL_MISSING" in blocker_codes:
+            missing_items.append("Add the Check logistics files link.")
+
+    if not missing_items:
+        missing_items.append("Confirm every staff assignment and logistics concept.")
+    return "Missing for Confirmed:\n- " + "\n- ".join(missing_items)
+
+
+def logistics_redirect(session_record):
+    return redirect(url_for("staff.exam_session_planner", session_year=session_record.session_date.year))
+
+
+def current_pagination_settings():
+    session_key = f"page_size:{request.endpoint}"
+    requested_size = request.args.get("page_size", "").strip().lower()
+    if requested_size in PAGE_SIZE_OPTIONS:
+        page_size = requested_size
+        session[session_key] = page_size
+    else:
+        page_size = session.get(session_key, DEFAULT_PAGE_SIZE)
+        if page_size not in PAGE_SIZE_OPTIONS:
+            page_size = DEFAULT_PAGE_SIZE
+
+    requested_page = request.args.get("page", "1").strip()
+    page = int(requested_page) if requested_page.isdigit() and int(requested_page) > 0 else 1
+    return page, page_size
+
+
+def pagination_url(page, page_size=None):
+    args = request.args.to_dict(flat=False)
+    args["page"] = [str(page)]
+    if page_size is not None:
+        args["page_size"] = [str(page_size)]
+        args["page"] = ["1"]
+    return url_for(request.endpoint, **args)
+
+
+def build_pagination(total, page, page_size):
+    if page_size == "all":
+        per_page = total or 1
+        total_pages = 1
+        page = 1
+    else:
+        per_page = int(page_size)
+        total_pages = max(1, (total + per_page - 1) // per_page)
+        page = min(max(page, 1), total_pages)
+
+    start = 0 if total == 0 else (page - 1) * per_page + 1
+    end = min(total, page * per_page)
+    shown = 0 if total == 0 else end - start + 1
+    page_size_links = [
+        {"value": value, "url": pagination_url(1, value), "active": value == page_size}
+        for value in PAGE_SIZE_OPTIONS
+    ]
+    return {
+        "page": page,
+        "page_size": page_size,
+        "per_page": per_page,
+        "total": total,
+        "total_pages": total_pages,
+        "start": start,
+        "end": end,
+        "shown": shown,
+        "previous_url": pagination_url(page - 1) if page > 1 else "",
+        "next_url": pagination_url(page + 1) if page < total_pages else "",
+        "page_size_links": page_size_links,
+    }
+
+
+def paginate_query(query):
+    page, page_size = current_pagination_settings()
+    total = query.order_by(None).count()
+    pagination = build_pagination(total, page, page_size)
+    if page_size == "all":
+        items = query.all()
+    else:
+        items = query.limit(pagination["per_page"]).offset((pagination["page"] - 1) * pagination["per_page"]).all()
+    return items, pagination
+
+
+def paginate_items(items):
+    page, page_size = current_pagination_settings()
+    total = len(items)
+    pagination = build_pagination(total, page, page_size)
+    if page_size == "all":
+        return items, pagination
+    start_index = (pagination["page"] - 1) * pagination["per_page"]
+    return items[start_index:start_index + pagination["per_page"]], pagination
+
+
+def is_valid_permanent_delete_password():
+    return request.form.get("deletion_password", "").strip() == PERMANENT_DELETE_PASSWORD
+
+
+def delete_archived_member(member):
+    for model in MEMBER_DEPENDENT_MODELS:
+        model.query.filter_by(member_id=member.id).delete(synchronize_session=False)
+    db.session.delete(member)
+
+
+def parse_exam_session_date(value):
+    value = value.strip()
+    for date_format in ("%Y-%m-%d", "%d/%m/%Y"):
+        try:
+            return datetime.strptime(value, date_format).date()
+        except ValueError:
+            continue
+    return None
+
+
+def exam_session_date_error(value):
+    value = value.strip()
+    match = re.match(r"^(\d{2})/(\d{2})/(\d{4})$", value)
+    if not match:
+        return "Date is required."
+    day = int(match.group(1))
+    month = int(match.group(2))
+    year = int(match.group(3))
+    if day < 1 or day > 31:
+        return "Day is wrong"
+    if month < 1 or month > 12:
+        return "Month is wrong"
+    if year < current_year():
+        return "Year is wrong"
+    return ""
+
+
+def valid_time_range_value(value):
+    return not value or re.match(r"^([01]\d|2[0-3]):[0-5]\d$|^24:00$", value)
+
+
+def normalize_exam_session_shifts(shifts):
+    clean_shifts = [shift for shift in shifts if shift in EXAM_SESSION_SHIFT_OPTIONS]
+    partial_shifts = ["Morning", "Afternoon", "Night"]
+    if "All day" in clean_shifts or all(shift in clean_shifts for shift in partial_shifts):
+        return ["All day"]
+    return [shift for shift in clean_shifts if shift in partial_shifts]
+
+
+def validate_exam_session_form(form):
+    errors = []
+    exam_session_name = form.get("exam_session_name", "").strip()
+    category = form.get("category", "").strip()
+    status = form.get("status", "").strip()
+    session_date_value = form.get("session_date", "")
+    session_date = parse_exam_session_date(session_date_value)
+    shifts = normalize_exam_session_shifts(form.getlist("shifts"))
+    modules = [module for module in form.getlist("modules") if module in EXAM_SESSION_MODULE_OPTIONS]
+    session_format = form.get("format", "").strip()
+    location_url = form.get("location_url", "").strip() if "location_url" in form else None
+    details_url = form.get("details_url", "").strip()
+    full_address_google_maps = form.get("full_address_google_maps", "").strip()
+    city = form.get("city", "").strip()
+    province = form.get("province", "").strip()
+
+    if not exam_session_name:
+        errors.append("Exam session name is required.")
+    if category not in EXAM_SESSION_CATEGORY_OPTIONS:
+        errors.append("Category is required.")
+    if status not in EXAM_SESSION_STATUS_OPTIONS:
+        errors.append("Status is required.")
+    date_error = exam_session_date_error(session_date_value)
+    if date_error:
+        errors.append(date_error)
+    elif not session_date:
+        errors.append("Date is required.")
+    if not modules:
+        errors.append("At least one module is required.")
+    if session_format not in EXAM_SESSION_FORMAT_OPTIONS:
+        errors.append("Format is required.")
+    if session_format == "Online":
+        location_url = ""
+        full_address_google_maps = ""
+        city = ""
+        province = ""
+    if details_url and not is_valid_url(details_url):
+        errors.append("Please enter a valid link.")
+
+    return errors, {
+        "exam_session_name": exam_session_name,
+        "category": category,
+        "status": status,
+        "session_date": session_date,
+        "shifts": shifts,
+        "modules": modules,
+        "full_address_google_maps": full_address_google_maps,
+        "city": city,
+        "province": province,
+        "format": session_format,
+        "location_url": location_url,
+        "details_url": details_url,
+    }
+
+
+def apply_exam_session_form(session_record, data):
+    session_record.exam_session_name = data["exam_session_name"]
+    session_record.category = data["category"]
+    session_record.status = data["status"]
+    session_record.session_date = data["session_date"]
+    session_record.shifts = ", ".join(data["shifts"])
+    session_record.modules = ", ".join(data["modules"])
+    session_record.full_address_google_maps = data["full_address_google_maps"]
+    session_record.city = data["city"]
+    session_record.province = data["province"]
+    session_record.format = data["format"]
+    if data["format"] == "Online":
+        session_record.rsg_enabled = False
+    if data["location_url"] is not None:
+        session_record.location_url = data["location_url"]
+    session_record.details_url = data["details_url"]
+
+
+def build_academic_staff_export(members):
+    headers = [
+        "Status",
+        "Title",
+        "Full name",
+        "Roles",
+        "Phone",
+        "Email",
+        "Has a car",
+        "Street name",
+        "Street number",
+        "City",
+        "Postcode",
+        "Province",
+        "Country",
+        "Location point",
+        "CV",
+        "History",
+        "Account ID",
+        "Account owner",
+        "Profile picture",
+        "Started in",
+        "Updated on",
+        "Seniority",
+    ]
+    rows = []
+    for member in members:
+        rows.append([
+            member.status or "",
+            member.title or "",
+            member.full_name or "",
+            ", ".join(member.roles_list()),
+            member.phone or "",
+            member.email or "",
+            member.has_car or "",
+            member.street_name or "",
+            member.street_number or "",
+            member.city or "",
+            member.postcode or "",
+            member.province or "",
+            member.country or "",
+            member.location_point or "",
+            member.cv or "",
+            member.interview or "",
+            member.account_id or "",
+            member.account_owner or "",
+            member.profile_picture or "",
+            member.started_in or "",
+            export_datetime(member.updated_on),
+            "Yes" if member.seniority else "No",
+        ])
+
+    workbook = Workbook()
+    sheet = workbook.active
+    sheet.title = "Academic Staff"
+
+    last_column = len(headers)
+    title_cell = sheet.cell(row=1, column=1, value="Academic Staff Export")
+    sheet.merge_cells(start_row=1, start_column=1, end_row=1, end_column=last_column)
+    exported_cell = sheet.cell(
+        row=2,
+        column=1,
+        value=f"Exported on {datetime.now(timezone.utc).astimezone(LOCAL_TZ).strftime('%d/%m/%Y %H:%M GMT-3')}",
+    )
+    sheet.merge_cells(start_row=2, start_column=1, end_row=2, end_column=last_column)
+
+    for column_index, header in enumerate(headers, start=1):
+        sheet.cell(row=3, column=column_index, value=header)
+
+    for row_index, row in enumerate(rows, start=4):
+        for column_index, value in enumerate(row, start=1):
+            cell = sheet.cell(row=row_index, column=column_index, value=value)
+            if column_index in {14, 15, 19} and value:
+                cell.hyperlink = value
+                cell.style = "Hyperlink"
+
+    path_blue = "00506B"
+    path_blue_dark = "003A4E"
+    path_border = "D9DFDC"
+    path_alt = "F6F8F7"
+    white = "FFFFFF"
+    thin_border = Border(
+        left=Side(style="thin", color=path_border),
+        right=Side(style="thin", color=path_border),
+        top=Side(style="thin", color=path_border),
+        bottom=Side(style="thin", color=path_border),
+    )
+
+    title_cell.font = Font(name="Skolar Sans Latin", bold=True, size=16, color=path_blue_dark)
+    title_cell.alignment = Alignment(vertical="center")
+    exported_cell.font = Font(name="Skolar Sans Latin", size=11, color="66736F")
+    exported_cell.alignment = Alignment(vertical="center")
+
+    header_fill = PatternFill("solid", fgColor=path_blue)
+    header_font = Font(name="Skolar Sans Latin", bold=True, color=white)
+    for cell in sheet[3]:
+        cell.fill = header_fill
+        cell.font = header_font
+        cell.border = thin_border
+        cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+
+    for row_index in range(4, sheet.max_row + 1):
+        fill = PatternFill("solid", fgColor=path_alt if (row_index - 4) % 2 else white)
+        for cell in sheet[row_index]:
+            cell.fill = fill
+            cell.border = thin_border
+            cell.alignment = Alignment(vertical="center", wrap_text=True)
+            if cell.hyperlink:
+                cell.font = Font(name="Skolar Sans Latin", underline="single", color="0B8FB2")
+            else:
+                cell.font = Font(name="Skolar Sans Latin", color="111115")
+
+    for column_index, header in enumerate(headers, start=1):
+        max_length = len(header)
+        for row_index in range(4, sheet.max_row + 1):
+            value = sheet.cell(row=row_index, column=column_index).value or ""
+            max_length = max(max_length, min(len(str(value)), 70))
+        sheet.column_dimensions[get_column_letter(column_index)].width = min(max(max_length + 3, 12), 46)
+
+    sheet.row_dimensions[1].height = 26
+    sheet.row_dimensions[2].height = 22
+    sheet.row_dimensions[3].height = 28
+    sheet.freeze_panes = "A4"
+    sheet.auto_filter.ref = f"A3:{get_column_letter(last_column)}{max(3, sheet.max_row)}"
+
+    output = BytesIO()
+    workbook.save(output)
+    output.seek(0)
+    return output.getvalue()
+
+
+def certification_export_value(
+    member,
+    certification,
+    certification_years,
+    fut_selections=None,
+    fut2_selections=None,
+    remote_training_selections=None,
+    annual_meeting_selections=None,
+    stage_2_selections=None,
+    stage_3_selections=None,
+):
+    if not certification_allowed(member, certification):
+        return "N/A"
+    if certification["key"] == "remote_training" and remote_training_selections is not None:
+        selection = remote_training_selections.get(member.id)
+        return selection.status if selection else "*"
+    if certification["key"] == "annual_meeting" and annual_meeting_selections is not None:
+        selection = annual_meeting_selections.get(member.id)
+        return selection.status if selection else "*"
+    if certification["key"] == "stage_2" and stage_2_selections is not None:
+        selection = stage_2_selections.get(member.id)
+        return selection.status if selection else "*"
+    if certification["key"] == "stage_3" and stage_3_selections is not None:
+        selection = stage_3_selections.get(member.id)
+        return selection.status if selection else "*"
+    if certification["key"] in {"fut", "fut_2"} and fut_selections is not None:
+        selection_map = fut2_selections if certification["key"] == "fut_2" and fut2_selections is not None else fut_selections
+        selections = selection_map.get(member.id, [])
+        if not selections:
+            return "*"
+        return ", ".join(f"{selection.option_name} ({selection.status})" for selection in selections)
+    records = certification_years.get(member.id, {}).get(certification["key"], [])
+    if records:
+        return ", ".join(str(record.year) for record in records)
+    if certification["key"] == "fut":
+        return ""
+    return "No years yet"
+
+
+def build_annual_certification_export(
+    members,
+    certification_years,
+    export_title="Annual Certification Export",
+    sheet_title="Annual Certification",
+    certification_types=None,
+    fut_selections=None,
+    fut2_selections=None,
+    remote_training_selections=None,
+    annual_meeting_selections=None,
+    stage_2_selections=None,
+    stage_3_selections=None,
+):
+    certification_types = certification_types or CERTIFICATION_TYPES
+    headers = ["Status", "Full name", "Roles", "History"] + [
+        certification["label"] for certification in certification_types
+    ]
+    rows = []
+    for member in members:
+        rows.append(
+            [
+                member.status or "",
+                member.full_name or "",
+                ", ".join(member.roles_list()),
+                member.interview or "",
+            ]
+            + [
+                certification_export_value(member, certification, certification_years)
+                if fut_selections is None
+                else certification_export_value(
+                    member,
+                    certification,
+                    certification_years,
+                    fut_selections,
+                    fut2_selections,
+                    remote_training_selections,
+                    annual_meeting_selections,
+                    stage_2_selections,
+                    stage_3_selections,
+                )
+                for certification in certification_types
+            ]
+        )
+
+    workbook = Workbook()
+    sheet = workbook.active
+    sheet.title = sheet_title
+
+    last_column = len(headers)
+    title_cell = sheet.cell(row=1, column=1, value=export_title)
+    sheet.merge_cells(start_row=1, start_column=1, end_row=1, end_column=last_column)
+    exported_cell = sheet.cell(
+        row=2,
+        column=1,
+        value=f"Exported on {datetime.now(timezone.utc).astimezone(LOCAL_TZ).strftime('%d/%m/%Y %H:%M GMT-3')}",
+    )
+    sheet.merge_cells(start_row=2, start_column=1, end_row=2, end_column=last_column)
+
+    for column_index, header in enumerate(headers, start=1):
+        sheet.cell(row=3, column=column_index, value=header)
+
+    for row_index, row in enumerate(rows, start=4):
+        for column_index, value in enumerate(row, start=1):
+            sheet.cell(row=row_index, column=column_index, value=value)
+
+    path_blue = "00506B"
+    path_blue_dark = "003A4E"
+    path_border = "D9DFDC"
+    path_alt = "F6F8F7"
+    white = "FFFFFF"
+    thin_border = Border(
+        left=Side(style="thin", color=path_border),
+        right=Side(style="thin", color=path_border),
+        top=Side(style="thin", color=path_border),
+        bottom=Side(style="thin", color=path_border),
+    )
+
+    title_cell.font = Font(name="Skolar Sans Latin", bold=True, size=16, color=path_blue_dark)
+    title_cell.alignment = Alignment(vertical="center")
+    exported_cell.font = Font(name="Skolar Sans Latin", size=11, color="66736F")
+    exported_cell.alignment = Alignment(vertical="center")
+
+    header_fill = PatternFill("solid", fgColor=path_blue)
+    header_font = Font(name="Skolar Sans Latin", bold=True, color=white)
+    for cell in sheet[3]:
+        cell.fill = header_fill
+        cell.font = header_font
+        cell.border = thin_border
+        cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+
+    for row_index in range(4, sheet.max_row + 1):
+        fill = PatternFill("solid", fgColor=path_alt if (row_index - 4) % 2 else white)
+        for cell in sheet[row_index]:
+            cell.fill = fill
+            cell.border = thin_border
+            cell.font = Font(name="Skolar Sans Latin", color="111115")
+            cell.alignment = Alignment(vertical="center", wrap_text=True)
+
+    for column_index, header in enumerate(headers, start=1):
+        max_length = len(header)
+        for row_index in range(4, sheet.max_row + 1):
+            value = sheet.cell(row=row_index, column=column_index).value or ""
+            max_length = max(max_length, min(len(str(value)), 60))
+        sheet.column_dimensions[get_column_letter(column_index)].width = min(max(max_length + 3, 12), 42)
+
+    sheet.row_dimensions[1].height = 26
+    sheet.row_dimensions[2].height = 22
+    sheet.row_dimensions[3].height = 32
+    sheet.freeze_panes = "A4"
+    sheet.auto_filter.ref = f"A3:{get_column_letter(last_column)}{max(3, sheet.max_row)}"
+
+    output = BytesIO()
+    workbook.save(output)
+    output.seek(0)
+    return output.getvalue()
+
+
+def build_annual_meetings_export(members, meeting_years):
+    return build_annual_certification_export(
+        members,
+        meeting_years,
+        export_title="Annual Meetings Export",
+        sheet_title="Annual Meetings",
+    )
+
+
+IMPORT_REQUIRED_HEADERS = {
+    "Status",
+    "Full name",
+    "Roles",
+    "Email",
+    "Has a car",
+    "City",
+    "Province",
+    "Country",
+}
+IMPORT_OPTIONAL_HEADERS = {
+    "Title",
+    "Phone",
+    "Street name",
+    "Street number",
+    "Postcode",
+    "Location point",
+    "CV",
+    "History",
+    "Account ID",
+    "Account owner",
+    "Profile picture",
+    "Started in",
+    "Updated on",
+    "Seniority",
+}
+IMPORT_HEADERS = IMPORT_REQUIRED_HEADERS | IMPORT_OPTIONAL_HEADERS
+IMPORT_STATUS_OPTIONS = set(EDIT_STATUS_OPTIONS)
+IMPORT_HAS_CAR_OPTIONS = {"Yes", "No"}
+EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
+
+
+def import_batch_dir():
+    path = os.path.join(current_app.instance_path, "import_batches")
+    os.makedirs(path, exist_ok=True)
+    return path
+
+
+def import_batch_path(token):
+    return os.path.join(import_batch_dir(), f"{token}.json")
+
+
+def cell_text(value):
+    if value is None:
+        return ""
+    return str(value).strip()
+
+
+def normalize_roles(value):
+    return [role.strip() for role in value.split(",") if role.strip()]
+
+
+def normalize_yes_no(value):
+    normalized = value.strip().lower()
+    if normalized == "yes":
+        return "Yes"
+    if normalized == "no":
+        return "No"
+    return value.strip()
+
+
+def normalize_status(value):
+    normalized = value.strip().lower()
+    for status in IMPORT_STATUS_OPTIONS:
+        if status.lower() == normalized:
+            return status
+    return value.strip()
+
+
+def normalize_role_name(value):
+    for role in ROLE_OPTIONS:
+        if role.lower() == value.strip().lower():
+            return role
+    return value.strip()
+
+
+def parse_import_workbook(file_storage, update_empty_fields):
+    workbook = load_workbook(file_storage, data_only=True)
+    sheet = workbook.active
+    header_row = None
+    headers = {}
+    for row_number in range(1, min(sheet.max_row, 10) + 1):
+        row_values = [cell_text(sheet.cell(row=row_number, column=column).value) for column in range(1, sheet.max_column + 1)]
+        if "Status" in row_values and "Full name" in row_values:
+            header_row = row_number
+            headers = {value: index + 1 for index, value in enumerate(row_values) if value}
+            break
+
+    if not header_row:
+        raise ValueError("Could not find a valid header row.")
+
+    missing_headers = sorted(IMPORT_REQUIRED_HEADERS - set(headers))
+    if missing_headers:
+        raise ValueError(f"Missing required columns: {', '.join(missing_headers)}.")
+
+    unknown_headers = sorted(set(headers) - IMPORT_HEADERS)
+    preview_rows = []
+    seen_emails = set()
+    existing_members = {
+        member.email.lower(): member
+        for member in AcademicStaff.query.filter(AcademicStaff.email.isnot(None)).all()
+        if member.email
+    }
+
+    for row_number in range(header_row + 1, sheet.max_row + 1):
+        row_data = {
+            header: cell_text(sheet.cell(row=row_number, column=column).value)
+            for header, column in headers.items()
+            if header in IMPORT_HEADERS
+        }
+        if not any(row_data.values()):
+            continue
+
+        errors = []
+        for header in IMPORT_REQUIRED_HEADERS:
+            if not row_data.get(header, "").strip():
+                errors.append(f"{header} is required.")
+
+        status = normalize_status(row_data.get("Status", ""))
+        if status and status not in IMPORT_STATUS_OPTIONS:
+            errors.append("Status must be Active, Inactive or Archived.")
+        row_data["Status"] = status
+
+        roles = [normalize_role_name(role) for role in normalize_roles(row_data.get("Roles", ""))]
+        invalid_roles = [role for role in roles if role not in ROLE_OPTIONS]
+        if invalid_roles:
+            errors.append(f"Invalid role(s): {', '.join(invalid_roles)}.")
+        row_data["Roles"] = ", ".join(roles)
+
+        email = row_data.get("Email", "").strip().lower()
+        if email and not EMAIL_RE.match(email):
+            errors.append("Email must be valid.")
+        if email in seen_emails:
+            errors.append("Duplicate email in import file.")
+        if email:
+            seen_emails.add(email)
+        row_data["Email"] = email
+
+        has_car = normalize_yes_no(row_data.get("Has a car", ""))
+        if has_car and has_car not in IMPORT_HAS_CAR_OPTIONS:
+            errors.append("Has a car must be Yes or No.")
+        row_data["Has a car"] = has_car
+
+        for url_header in ("CV", "Location point", "Profile picture"):
+            if row_data.get(url_header) and not is_valid_url(row_data[url_header]):
+                errors.append(f"{url_header} must be a valid URL.")
+
+        seniority = normalize_yes_no(row_data.get("Seniority", ""))
+        if seniority and seniority not in {"Yes", "No"}:
+            errors.append("Seniority must be Yes or No if provided.")
+        row_data["Seniority"] = seniority
+
+        action = "Update" if email in existing_members else "Create"
+        if errors:
+            action = "Error"
+        preview_rows.append(
+            {
+                "row_number": row_number,
+                "full_name": row_data.get("Full name", ""),
+                "email": email,
+                "action": action,
+                "errors": errors,
+                "data": row_data,
+            }
+        )
+
+    ready_rows = [row for row in preview_rows if row["action"] != "Error"]
+    payload = {
+        "created_on": datetime.now(timezone.utc).isoformat(),
+        "update_empty_fields": update_empty_fields,
+        "unknown_headers": unknown_headers,
+        "rows": preview_rows,
+        "summary": {
+            "total": len(preview_rows),
+            "create": sum(1 for row in preview_rows if row["action"] == "Create"),
+            "update": sum(1 for row in preview_rows if row["action"] == "Update"),
+            "errors": sum(1 for row in preview_rows if row["action"] == "Error"),
+            "ready": len(ready_rows),
+        },
+    }
+    return payload
+
+
+def save_import_batch(payload):
+    token = secrets.token_urlsafe(24)
+    with open(import_batch_path(token), "w", encoding="utf-8") as file:
+        json.dump(payload, file)
+    return token
+
+
+def load_import_batch(token):
+    path = import_batch_path(token)
+    if not token or not os.path.exists(path):
+        return None
+    with open(path, "r", encoding="utf-8") as file:
+        return json.load(file)
+
+
+def apply_import_row(member, row_data, update_empty_fields):
+    mapping = {
+        "Status": "status",
+        "Title": "title",
+        "Full name": "full_name",
+        "Roles": "roles",
+        "Phone": "phone",
+        "Email": "email",
+        "Has a car": "has_car",
+        "Street name": "street_name",
+        "Street number": "street_number",
+        "City": "city",
+        "Postcode": "postcode",
+        "Province": "province",
+        "Country": "country",
+        "Location point": "location_point",
+        "CV": "cv",
+        "History": "interview",
+        "Account ID": "account_id",
+        "Account owner": "account_owner",
+        "Profile picture": "profile_picture",
+        "Started in": "started_in",
+    }
+    for header, attr in mapping.items():
+        value = row_data.get(header, "")
+        if value or update_empty_fields or not member.id:
+            setattr(member, attr, value)
+    seniority = row_data.get("Seniority", "")
+    if seniority or update_empty_fields or not member.id:
+        member.seniority = seniority == "Yes"
+
+def display_date(value):
+    if not value:
+        return ""
+    try:
+        parsed = datetime.strptime(value, "%Y-%m-%d")
+    except ValueError:
+        return value
+    return parsed.strftime("%d/%m/%Y")
+
+
+def display_session_date(value):
+    if not value:
+        return ""
+    return value.strftime("%d/%m/%Y")
+
+
+@staff_bp.app_template_filter("session_date")
+def session_date_filter(value):
+    return display_session_date(value)
+
+
+@staff_bp.app_template_filter("long_session_date")
+def long_session_date_filter(value):
+    if not value:
+        return ""
+    return f"{value.strftime('%A')} {value.day}, {value.strftime('%B')} {value.year}"
+
+
+def display_interviewer(value):
+    if not value:
+        return ""
+    parts = [part.strip() for part in value.split("|")]
+    return " | ".join(parts[:2]) if len(parts) >= 2 else value
+
+
+def years_since(started_in):
+    if not started_in:
+        return None
+    try:
+        start_year = int(started_in)
+    except ValueError:
+        return None
+    current_year = datetime.now(LOCAL_TZ).year
+    return max(0, current_year - start_year)
+
+
+def current_year():
+    return datetime.now(LOCAL_TZ).year
+
+
+def fee_role_options():
+    return Role.query.order_by(Role.name.asc()).all()
+
+
+def provider_type_options():
+    return ProviderType.query.order_by(ProviderType.is_system.desc(), ProviderType.name.asc()).all()
+
+
+def provider_options():
+    return Provider.query.join(ProviderType).order_by(Provider.name.asc(), ProviderType.name.asc()).all()
+
+
+def logistics_available_provider_options():
+    return (
+        Provider.query.join(ProviderType)
+        .filter(Provider.available_in_logistics.is_(True))
+        .order_by(Provider.name.asc(), ProviderType.name.asc())
+        .all()
+    )
+
+
+def provider_type_color_for_name(name):
+    seed = sum(ord(char.lower()) for char in name or "")
+    return PROVIDER_TYPE_COLOR_KEYS[seed % len(PROVIDER_TYPE_COLOR_KEYS)]
+
+
+def provider_type_by_name(name):
+    return ProviderType.query.filter(db.func.lower(ProviderType.name) == name.lower()).first()
+
+
+def provider_type_payload(provider_type):
+    return {
+        "id": provider_type.id,
+        "name": provider_type.name,
+        "is_system": provider_type.is_system,
+        "color_key": provider_type.color_key,
+    }
+
+
+def provider_payload(provider):
+    provider_type = provider.provider_type
+    return {
+        "id": provider.id,
+        "provider_type_id": provider.provider_type_id,
+        "provider_type_name": provider_type.name if provider_type else "",
+        "provider_type_color_key": provider_type.color_key if provider_type else "provider-type-0",
+        "name": provider.name,
+        "full_address": provider.full_address,
+        "experience_rating": provider.experience_rating,
+        "available_in_logistics": provider.available_in_logistics,
+        "created_on": local_datetime(provider.created_on),
+        "updated_on": local_datetime(provider.updated_on),
+        "history_count": len(provider.history_entries),
+        "display_label": provider.display_label,
+    }
+
+
+def validate_provider_form(form):
+    errors = []
+    provider_type_value = form.get("provider_type_id", "").strip()
+    provider_type_id = int(provider_type_value) if provider_type_value.isdigit() else None
+    provider_type = ProviderType.query.get(provider_type_id) if provider_type_id else None
+    name = re.sub(r"\s+", " ", form.get("name", "").strip())
+    full_address = re.sub(r"\s+", " ", form.get("full_address", "").strip())
+    available_value = form.get("available_in_logistics", "").strip().lower()
+    if available_value not in {"1", "yes", "true", "on", "0", "no", "false", "off"}:
+        errors.append("Please select whether this provider is available in Logistics.")
+    available_in_logistics = available_value in {"1", "yes", "true", "on"}
+    if not provider_type:
+        errors.append("Please select a valid provider type.")
+    if not name:
+        errors.append("Name of provider is required.")
+    if not full_address:
+        errors.append("Full address is required.")
+    return errors, {
+        "provider_type": provider_type,
+        "name": name,
+        "full_address": full_address,
+        "available_in_logistics": available_in_logistics,
+    }
+
+
+def normalize_fee_value(value):
+    raw_value = (value or "").strip()
+    if not re.fullmatch(r"\d+(,\d{1,6})?", raw_value):
+        return None
+    try:
+        amount = Decimal(raw_value.replace(",", "."))
+    except InvalidOperation:
+        return None
+    if amount < 0:
+        return None
+    if "," in raw_value:
+        integer_part, decimal_part = raw_value.split(",", 1)
+        decimal_part = decimal_part.rstrip("0")
+        if not decimal_part:
+            return str(int(integer_part))
+        return f"{int(integer_part)},{decimal_part}"
+    return str(amount.quantize(Decimal("1")))
+
+
+def validate_fee_form(form, fee_id=None):
+    errors = []
+    description = form.get("fee_description", "").strip()
+    currency = form.get("currency", "").strip()
+    fee_value = normalize_fee_value(form.get("fee_value", ""))
+    unit = form.get("unit_of_measure", "").strip()
+    role_value = form.get("role_id", "").strip()
+    role_id = int(role_value) if role_value.isdigit() else None
+    requested_months = form.getlist("valid_through")
+    valid_months = []
+    for month in FEE_VALID_THROUGH_MONTHS:
+        if month in requested_months and month not in valid_months:
+            valid_months.append(month)
+
+    if not description:
+        errors.append("Fee description is required.")
+    if currency not in FEE_CURRENCY_OPTIONS:
+        errors.append("Please select a valid currency.")
+    if fee_value is None:
+        errors.append("Fee must be a valid number and may use comma decimals.")
+    if unit not in FEE_UNIT_OPTIONS:
+        errors.append("Please select a valid unit of measure.")
+    if role_id is not None and not Role.query.get(role_id):
+        errors.append("Please select a valid role.")
+    if any(month not in FEE_VALID_THROUGH_MONTHS for month in requested_months):
+        errors.append("Please select valid months for Valid through.")
+
+    if role_id is not None:
+        role_duplicate_query = Fee.query.filter(Fee.role_id == role_id)
+        if fee_id is not None:
+            role_duplicate_query = role_duplicate_query.filter(Fee.id != fee_id)
+        if role_duplicate_query.first():
+            errors.append("A fee already exists for this role. Please edit the existing fee instead.")
+
+    if not errors:
+        duplicate_query = Fee.query.filter(
+            db.func.lower(Fee.fee_description) == description.lower(),
+            Fee.currency == currency,
+            Fee.unit_of_measure == unit,
+        )
+        if role_id is None:
+            duplicate_query = duplicate_query.filter(Fee.role_id.is_(None))
+        else:
+            duplicate_query = duplicate_query.filter(Fee.role_id == role_id)
+        if fee_id is not None:
+            duplicate_query = duplicate_query.filter(Fee.id != fee_id)
+        if duplicate_query.first():
+            errors.append("A fee with the same description, currency, unit of measure and role already exists.")
+
+    return errors, {
+        "fee_description": description,
+        "currency": currency,
+        "fee_value": fee_value or "",
+        "unit_of_measure": unit,
+        "role_id": role_id,
+        "valid_through": json.dumps(valid_months),
+    }
+
+
+def decimal_from_fee_value(value):
+    try:
+        return Decimal((value or "0").replace(".", "").replace(",", "."))
+    except InvalidOperation:
+        return Decimal("0")
+
+
+def rounded_money_integer(value):
+    amount = Decimal(value)
+    is_negative = amount < 0
+    amount = abs(amount)
+    integer_part = amount.to_integral_value(rounding=ROUND_FLOOR)
+    if amount - integer_part > Decimal("0.50"):
+        integer_part += 1
+    return -integer_part if is_negative else integer_part
+
+
+def format_money_amount(value):
+    amount = rounded_money_integer(value)
+    is_negative = amount < 0
+    integer_part = str(abs(amount))
+    groups = []
+    while integer_part:
+        groups.insert(0, integer_part[-3:])
+        integer_part = integer_part[:-3]
+    formatted = ".".join(groups) if groups else "0"
+    return f"-{formatted}" if is_negative else formatted
+
+
+def format_decimal_amount(value):
+    amount = Decimal(value).quantize(Decimal("0.01"))
+    is_negative = amount < 0
+    amount = abs(amount)
+    integer_part, decimal_part = f"{amount:.2f}".split(".")
+    groups = []
+    while integer_part:
+        groups.insert(0, integer_part[-3:])
+        integer_part = integer_part[:-3]
+    formatted = ".".join(groups) if groups else "0"
+    if decimal_part != "00":
+        formatted = f"{formatted},{decimal_part.rstrip('0')}"
+    return f"-{formatted}" if is_negative else formatted
+
+
+def time_to_minutes(value):
+    match = re.match(r"^(\d{2}):(\d{2})$", value or "")
+    if not match:
+        return None
+    hours = int(match.group(1))
+    minutes = int(match.group(2))
+    if hours < 0 or hours > 24 or minutes < 0 or minutes > 59:
+        return None
+    if hours == 24 and minutes != 0:
+        return None
+    return hours * 60 + minutes
+
+
+def total_time_range_minutes(time_ranges):
+    total = 0
+    for time_range in time_ranges or []:
+        start = time_to_minutes((time_range.get("start") or "").strip())
+        end = time_to_minutes((time_range.get("end") or "").strip())
+        if start is None or end is None or end <= start:
+            continue
+        total += end - start
+    return total
+
+
+def role_fee_for_role(role_name):
+    return (
+        Fee.query.join(Role)
+        .filter(Role.name == role_name)
+        .order_by(Fee.updated_on.desc())
+        .first()
+    )
+
+
+def fee_by_exact_description(description):
+    return Fee.query.filter(Fee.fee_description == description).order_by(Fee.updated_on.desc()).first()
+
+
+def amount_from_display_value(value):
+    cleaned = re.sub(r"[^0-9,.\-]", "", value or "")
+    if not cleaned:
+        return None
+    normalized = cleaned.replace(".", "").replace(",", ".")
+    try:
+        return Decimal(normalized)
+    except InvalidOperation:
+        return None
+
+
+def currency_from_display_value(value):
+    match = re.match(r"\s*([A-Z]{3})\b", value or "")
+    return match.group(1) if match else ""
+
+
+def normalize_money_display_value(value):
+    amount = amount_from_display_value(value)
+    if amount is None:
+        return ""
+    currency = currency_from_display_value(value)
+    return f"{currency + ' ' if currency else ''}{format_money_amount(amount)}"
+
+
+def empty_currency_totals():
+    return {currency: Decimal("0") for currency in FEE_CURRENCY_OPTIONS}
+
+
+def add_currency_total(totals, currency, amount):
+    if not currency or currency not in FEE_CURRENCY_OPTIONS or amount is None:
+        return
+    totals[currency] = totals.get(currency, Decimal("0")) + amount
+
+
+def add_assignment_fee_totals(totals, assignment, include_role_currency=True):
+    fee_fields = [
+        ("role_fee", "role_fee_currency" if include_role_currency else None),
+        ("device_dep", "device_dep_currency"),
+        ("commuting", "commuting_currency"),
+        ("fuel", "fuel_currency"),
+        ("vehicle_dep", "vehicle_dep_currency"),
+        ("seniority_fee", "seniority_currency"),
+    ]
+    for value_field, currency_field in fee_fields:
+        value = getattr(assignment, value_field, "") or ""
+        amount = amount_from_display_value(value)
+        currency = getattr(assignment, currency_field, "") if currency_field else ""
+        currency = currency or currency_from_display_value(value)
+        add_currency_total(totals, currency, amount)
+
+
+def add_logistics_fee_totals(totals, concept):
+    if concept.fee is None:
+        return
+    add_currency_total(totals, concept.currency, Decimal(concept.fee))
+
+
+def merge_currency_totals(*totals_list):
+    merged = empty_currency_totals()
+    for totals in totals_list:
+        for currency, amount in totals.items():
+            add_currency_total(merged, currency, amount)
+    return merged
+
+
+def format_currency_totals(totals):
+    parts = [
+        f"{currency} {format_money_amount(totals.get(currency, Decimal('0')))}"
+        for currency in FEE_CURRENCY_OPTIONS
+        if totals.get(currency, Decimal("0")) != Decimal("0")
+    ]
+    return " / ".join(parts) if parts else "-"
+
+
+def format_integer_amount(value):
+    amount = value or Decimal("0")
+    integer_part = int(amount.to_integral_value(rounding=ROUND_FLOOR))
+    if amount - Decimal(integer_part) > Decimal("0.50"):
+        integer_part += 1
+    return str(integer_part)
+
+
+def format_staff_payment_popover_amount(currency, value):
+    integer_value = int(format_integer_amount(value))
+    return f"{currency} {integer_value:,}".replace(",", ".")
+
+
+def staff_payment_status(invoice_verified, payment_completed):
+    if invoice_verified and payment_completed:
+        return "Completed"
+    if invoice_verified:
+        return "Verified"
+    return "Pending"
+
+
+def assignment_currency_totals(assignment):
+    totals = empty_currency_totals()
+    add_assignment_fee_totals(totals, assignment)
+    return totals
+
+
+def currency_totals_have_value(totals):
+    return any(amount != Decimal("0") for amount in totals.values())
+
+
+def build_staff_payment_rows(selected_year):
+    session_records = (
+        ExamSession.query.filter(db.extract("year", ExamSession.session_date) == selected_year)
+        .order_by(ExamSession.session_date.asc(), ExamSession.exam_session_name.asc())
+        .all()
+    )
+    session_by_id = {session_record.id: session_record for session_record in session_records}
+    session_ids = list(session_by_id.keys())
+    rows_by_member = {}
+    if not session_ids:
+        return []
+
+    assignment_sources = (
+        (ExamSessionSupervisorAssignment, "Supervisor"),
+        (ExamSessionExaminerAssignment, "Examiner"),
+        (ExamSessionInternAssignment, "Intern"),
+    )
+    for assignment_model, staff_type in assignment_sources:
+        assignments = (
+            assignment_model.query.filter(
+                assignment_model.exam_session_id.in_(session_ids),
+                assignment_model.participation_status == "Confirmed",
+                assignment_model.team_member_id.isnot(None),
+            )
+            .all()
+        )
+        for assignment in assignments:
+            member = assignment.team_member
+            session_record = session_by_id.get(assignment.exam_session_id)
+            if not member or not session_record:
+                continue
+            member_roles = set(member.roles_list())
+            if staff_type == "Examiner":
+                if not member_roles.intersection({"Examiner", "RSG"}):
+                    continue
+            elif staff_type not in member_roles:
+                continue
+            fee_totals = assignment_currency_totals(assignment)
+            if not currency_totals_have_value(fee_totals):
+                continue
+            row = rows_by_member.setdefault(
+                member.id,
+                {
+                    "member": member,
+                    "total": empty_currency_totals(),
+                    "sessions": {},
+                },
+            )
+            session_entry = row["sessions"].setdefault(
+                session_record.id,
+                {
+                    "name": session_record.exam_session_name,
+                    "date": session_record.session_date,
+                    "total": empty_currency_totals(),
+                },
+            )
+            row["total"] = merge_currency_totals(row["total"], fee_totals)
+            session_entry["total"] = merge_currency_totals(session_entry["total"], fee_totals)
+
+    payment_records = {
+        record.member_id: record
+        for record in StaffPayment.query.filter(
+            StaffPayment.year == selected_year,
+            StaffPayment.member_id.in_(list(rows_by_member.keys())),
+        ).all()
+    } if rows_by_member else {}
+
+    rows = []
+    for member_id, row in rows_by_member.items():
+        if not currency_totals_have_value(row["total"]):
+            continue
+        payment_record = payment_records.get(member_id)
+        invoice_verified = bool(payment_record.invoice_verified) if payment_record else False
+        payment_completed = bool(payment_record.payment_completed) if payment_record else False
+        if payment_completed and not invoice_verified:
+            payment_completed = False
+        for currency in FEE_CURRENCY_OPTIONS:
+            currency_total = row["total"].get(currency, Decimal("0"))
+            if currency_total == Decimal("0"):
+                continue
+            sessions = []
+            for session_data in sorted(row["sessions"].values(), key=lambda item: (item["date"], item["name"])):
+                session_total = session_data["total"].get(currency, Decimal("0"))
+                if session_total == Decimal("0"):
+                    continue
+                sessions.append({
+                    **session_data,
+                    "total_label": format_staff_payment_popover_amount(currency, session_total),
+                })
+            if not sessions:
+                continue
+            rows.append(
+                {
+                    "member": row["member"],
+                    "account_id": row["member"].account_id or "",
+                    "total_label": format_integer_amount(currency_total),
+                    "popover_total_label": format_staff_payment_popover_amount(currency, currency_total),
+                    "currency_label": currency,
+                    "session_count": len(sessions),
+                    "sessions": sessions,
+                    "invoice_verified": invoice_verified,
+                    "payment_completed": payment_completed,
+                    "status": staff_payment_status(invoice_verified, payment_completed),
+                }
+            )
+    return sorted(rows, key=lambda item: (item["member"].full_name.lower(), item["currency_label"]))
+
+
+def confirmed_session_counts_by_member(member_ids):
+    counts = {member_id: 0 for member_id in member_ids}
+    session_ids_by_member = {member_id: set() for member_id in member_ids}
+    if not member_ids:
+        return counts
+    assignment_models = (
+        ExamSessionSupervisorAssignment,
+        ExamSessionExaminerAssignment,
+        ExamSessionInternAssignment,
+    )
+    for assignment_model in assignment_models:
+        rows = (
+            db.session.query(assignment_model.team_member_id, assignment_model.exam_session_id)
+            .filter(
+                assignment_model.team_member_id.in_(member_ids),
+                assignment_model.participation_status == "Confirmed",
+            )
+            .all()
+        )
+        for member_id, session_id in rows:
+            if member_id in session_ids_by_member:
+                session_ids_by_member[member_id].add(session_id)
+    return {
+        member_id: len(session_ids)
+        for member_id, session_ids in session_ids_by_member.items()
+    }
+
+
+def build_exam_session_cost_summaries(
+    session_ids,
+    supervisor_assignment_records,
+    examiner_assignment_records,
+    intern_assignment_records,
+    logistics_concept_records,
+):
+    summaries = {
+        session_id: {
+            "supervisors": empty_currency_totals(),
+            "examiners": empty_currency_totals(),
+            "interns": empty_currency_totals(),
+            "logistics": empty_currency_totals(),
+        }
+        for session_id in session_ids
+    }
+    for assignment in supervisor_assignment_records:
+        add_assignment_fee_totals(summaries.setdefault(assignment.exam_session_id, {
+            "supervisors": empty_currency_totals(),
+            "examiners": empty_currency_totals(),
+            "interns": empty_currency_totals(),
+            "logistics": empty_currency_totals(),
+        })["supervisors"], assignment)
+    for assignment in examiner_assignment_records:
+        add_assignment_fee_totals(summaries.setdefault(assignment.exam_session_id, {
+            "supervisors": empty_currency_totals(),
+            "examiners": empty_currency_totals(),
+            "interns": empty_currency_totals(),
+            "logistics": empty_currency_totals(),
+        })["examiners"], assignment)
+    for assignment in intern_assignment_records:
+        add_assignment_fee_totals(summaries.setdefault(assignment.exam_session_id, {
+            "supervisors": empty_currency_totals(),
+            "examiners": empty_currency_totals(),
+            "interns": empty_currency_totals(),
+            "logistics": empty_currency_totals(),
+        })["interns"], assignment)
+    for concept in logistics_concept_records:
+        add_logistics_fee_totals(summaries.setdefault(concept.exam_session_id, {
+            "supervisors": empty_currency_totals(),
+            "examiners": empty_currency_totals(),
+            "interns": empty_currency_totals(),
+            "logistics": empty_currency_totals(),
+        })["logistics"], concept)
+    formatted = {}
+    for session_id, totals in summaries.items():
+        total_cost = merge_currency_totals(
+            totals["supervisors"],
+            totals["examiners"],
+            totals["interns"],
+            totals["logistics"],
+        )
+        formatted[session_id] = {
+            "supervisors": format_currency_totals(totals["supervisors"]),
+            "examiners": format_currency_totals(totals["examiners"]),
+            "interns": format_currency_totals(totals["interns"]),
+            "logistics": format_currency_totals(totals["logistics"]),
+            "total": format_currency_totals(total_cost),
+        }
+    return formatted
+
+
+def build_exam_session_page_cost_totals(session_cost_summaries):
+    page_totals = {
+        "supervisors": empty_currency_totals(),
+        "examiners": empty_currency_totals(),
+        "interns": empty_currency_totals(),
+        "logistics": empty_currency_totals(),
+    }
+    for summary in session_cost_summaries.values():
+        for section_key in page_totals:
+            merge_source = parse_formatted_currency_totals(summary.get(section_key, "-"))
+            page_totals[section_key] = merge_currency_totals(page_totals[section_key], merge_source)
+    page_total_cost = merge_currency_totals(
+        page_totals["supervisors"],
+        page_totals["examiners"],
+        page_totals["interns"],
+        page_totals["logistics"],
+    )
+    return {
+        "supervisors": format_currency_totals(page_totals["supervisors"]),
+        "examiners": format_currency_totals(page_totals["examiners"]),
+        "interns": format_currency_totals(page_totals["interns"]),
+        "logistics": format_currency_totals(page_totals["logistics"]),
+        "total": format_currency_totals(page_total_cost),
+    }
+
+
+def parse_formatted_currency_totals(value):
+    totals = empty_currency_totals()
+    for part in (value or "").split("/"):
+        part = part.strip()
+        currency = currency_from_display_value(part)
+        amount = amount_from_display_value(part)
+        add_currency_total(totals, currency, amount)
+    return totals
+
+
+def same_date_assignment_groups():
+    session_records = ExamSession.query.all()
+    session_map = {session_record.id: session_record for session_record in session_records}
+    member_ids = set()
+    assignment_models = (
+        ExamSessionSupervisorAssignment,
+        ExamSessionExaminerAssignment,
+        ExamSessionInternAssignment,
+    )
+    assignment_rows = []
+    for assignment_model in assignment_models:
+        for assignment in assignment_model.query.filter(assignment_model.team_member_id.isnot(None)).all():
+            session_record = session_map.get(assignment.exam_session_id)
+            if not session_record:
+                continue
+            member_ids.add(assignment.team_member_id)
+            assignment_rows.append(assignment)
+    member_names = {
+        member.id: member.full_name
+        for member in AcademicStaff.query.filter(AcademicStaff.id.in_(member_ids)).all()
+    } if member_ids else {}
+    grouped = {}
+    for assignment in assignment_rows:
+        session_record = session_map.get(assignment.exam_session_id)
+        key = (assignment.team_member_id, session_record.session_date)
+        grouped.setdefault(key, {})
+        grouped[key][session_record.id] = session_record
+    return grouped, member_names
+
+
+def build_exam_session_same_date_conflicts(visible_session_ids):
+    grouped, member_names = same_date_assignment_groups()
+    conflicts = {session_id: [] for session_id in visible_session_ids}
+    for (member_id, session_date), sessions_for_member in grouped.items():
+        if len(sessions_for_member) < 2:
+            continue
+        member_name = member_names.get(member_id, "Staff member")
+        date_label = long_session_date_filter(session_date)
+        for session_id, session_record in sessions_for_member.items():
+            if session_id not in conflicts:
+                continue
+            other_sessions = [
+                other_session.exam_session_name
+                for other_session_id, other_session in sessions_for_member.items()
+                if other_session_id != session_id
+            ]
+            if not other_sessions:
+                continue
+            session_word = "session" if len(other_sessions) == 1 else "sessions"
+            conflicts[session_id].append(
+                f"{member_name} is also assigned on {date_label} in {session_word}: {', '.join(other_sessions)}."
+            )
+    return conflicts
+
+
+def build_exam_session_same_date_duplicate_tags(visible_session_ids):
+    grouped, member_names = same_date_assignment_groups()
+    visible_session_ids = set(visible_session_ids)
+    tags = {session_id: [] for session_id in visible_session_ids}
+    duplicate_groups = [
+        (member_id, session_date, sessions_for_member)
+        for (member_id, session_date), sessions_for_member in grouped.items()
+        if len(sessions_for_member) >= 2
+    ]
+    duplicate_groups.sort(key=lambda item: (item[1], member_names.get(item[0], ""), item[0]))
+    for group_index, (member_id, session_date, sessions_for_member) in enumerate(duplicate_groups):
+        member_name = member_names.get(member_id, "Staff member")
+        session_names = ", ".join(session_record.exam_session_name for session_record in sessions_for_member.values())
+        title = f"{member_name} is assigned on {long_session_date_filter(session_date)} in: {session_names}."
+        tag = {
+            "label": "Member duplication",
+            "class": f"duplication-color-{group_index % 8}",
+            "title": title,
+        }
+        for session_id in sessions_for_member:
+            if session_id in visible_session_ids:
+                tags[session_id].append(tag)
+    return tags
+
+
+def calculate_timed_fee_from_ranges(time_ranges, fee):
+    if not fee:
+        return None
+    minutes = total_time_range_minutes(time_ranges)
+    if minutes <= 0:
+        return None
+    base_value = decimal_from_fee_value(fee.fee_value)
+    if fee.unit_of_measure == "per hour":
+        amount = (Decimal(minutes) / Decimal(60)) * base_value
+    elif fee.unit_of_measure == "per minute":
+        amount = Decimal(minutes) * base_value
+    else:
+        return None
+    display_value = f"{fee.currency} {format_money_amount(amount)}"
+    duration_label = f"{format_decimal_amount(Decimal(minutes) / Decimal(60))} hours" if fee.unit_of_measure == "per hour" else f"{minutes} minutes"
+    tooltip = f"Calculation: {duration_label} × {fee.currency} {fee.fee_value} = {display_value}"
+    return {
+        "value": display_value,
+        "currency": fee.currency,
+        "base_value": fee.fee_value,
+        "unit": fee.unit_of_measure,
+        "tooltip": tooltip,
+    }
+
+
+def calculate_role_fee_from_ranges(time_ranges, fee):
+    return calculate_timed_fee_from_ranges(time_ranges, fee)
+
+
+def apply_role_fee_calculation(assignment, fee, now, *, recalculated=False):
+    result = calculate_role_fee_from_ranges(assignment.time_ranges_list(), fee)
+    if not result:
+        assignment.role_fee = ""
+        assignment.role_fee_currency = ""
+        assignment.role_fee_base_value = ""
+        assignment.role_fee_unit = ""
+        return
+    assignment.role_fee = result["value"]
+    assignment.role_fee_currency = result["currency"]
+    assignment.role_fee_base_value = result["base_value"]
+    assignment.role_fee_unit = result["unit"]
+    assignment.role_fee_last_calculated_on = assignment.role_fee_last_calculated_on or now
+    if recalculated:
+        assignment.role_fee_last_recalculated_on = now
+
+
+def recalculate_pending_intern_role_fees():
+    intern_fee = role_fee_for_role("Intern")
+    now = datetime.now(timezone.utc)
+    for assignment in ExamSessionInternAssignment.query.filter_by(participation_status="Pending").all():
+        apply_role_fee_calculation(assignment, intern_fee, now, recalculated=True)
+        apply_seniority_calculation(assignment, now, recalculated=True)
+
+
+def fee_data_is_for_role(data, role_name):
+    role_id = data.get("role_id") if data else None
+    if role_id is None:
+        return False
+    role = Role.query.get(role_id)
+    return bool(role and role.name == role_name)
+
+
+def apply_device_dep_calculation(assignment, device_dep_fee, now, *, recalculated=False):
+    result = calculate_timed_fee_from_ranges(assignment.time_ranges_list(), device_dep_fee)
+    if not result:
+        assignment.device_dep = ""
+        assignment.device_dep_currency = ""
+        assignment.device_dep_base_value = ""
+        assignment.device_dep_unit = ""
+        return
+    assignment.device_dep = result["value"]
+    assignment.device_dep_currency = result["currency"]
+    assignment.device_dep_base_value = result["base_value"]
+    assignment.device_dep_unit = result["unit"]
+    assignment.device_dep_last_calculated_on = assignment.device_dep_last_calculated_on or now
+    if recalculated:
+        assignment.device_dep_last_recalculated_on = now
+
+
+def apply_commuting_calculation(assignment, commuting_fee, now, *, recalculated=False):
+    result = calculate_km_fee(assignment.km, commuting_fee)
+    if not result:
+        assignment.commuting = ""
+        assignment.commuting_currency = ""
+        assignment.commuting_base_value = ""
+        assignment.commuting_unit = ""
+        return
+    assignment.commuting = result["value"]
+    assignment.commuting_currency = result["currency"]
+    assignment.commuting_base_value = result["base_value"]
+    assignment.commuting_unit = result["unit"]
+    assignment.commuting_last_calculated_on = assignment.commuting_last_calculated_on or now
+    if recalculated:
+        assignment.commuting_last_recalculated_on = now
+
+
+def calculate_km_fee(km, fee):
+    if not fee or fee.unit_of_measure != "per km" or km is None:
+        return None
+    base_value = decimal_from_fee_value(fee.fee_value)
+    amount = Decimal(km) * base_value
+    return {
+        "value": f"{fee.currency} {format_money_amount(amount)}",
+        "currency": fee.currency,
+        "base_value": fee.fee_value,
+        "unit": fee.unit_of_measure,
+    }
+
+
+def apply_fuel_calculation(assignment, fuel_fee, now, *, recalculated=False):
+    if (
+        not getattr(assignment, "fuel_enabled", False)
+        or not fuel_fee
+        or fuel_fee.unit_of_measure != "per km"
+        or assignment.km is None
+        or not assignment.team_member
+        or assignment.team_member.has_car != "Yes"
+    ):
+        assignment.fuel = ""
+        assignment.fuel_currency = ""
+        assignment.fuel_base_value = ""
+        assignment.fuel_unit = ""
+        return
+    result = calculate_km_fee(assignment.km, fuel_fee)
+    if not result:
+        assignment.fuel = ""
+        assignment.fuel_currency = ""
+        assignment.fuel_base_value = ""
+        assignment.fuel_unit = ""
+        return
+    assignment.fuel = result["value"]
+    assignment.fuel_currency = result["currency"]
+    assignment.fuel_base_value = result["base_value"]
+    assignment.fuel_unit = result["unit"]
+    assignment.fuel_last_calculated_on = assignment.fuel_last_calculated_on or now
+    if recalculated:
+        assignment.fuel_last_recalculated_on = now
+
+
+def apply_vehicle_dep_calculation(assignment, vehicle_dep_fee, now, *, recalculated=False):
+    if (
+        not getattr(assignment, "fuel_enabled", False)
+        or not vehicle_dep_fee
+        or vehicle_dep_fee.unit_of_measure != "per km"
+        or assignment.km is None
+        or not assignment.team_member
+        or assignment.team_member.has_car != "Yes"
+    ):
+        assignment.vehicle_dep = ""
+        assignment.vehicle_dep_currency = ""
+        assignment.vehicle_dep_base_value = ""
+        assignment.vehicle_dep_unit = ""
+        return
+    result = calculate_km_fee(assignment.km, vehicle_dep_fee)
+    if not result:
+        assignment.vehicle_dep = ""
+        assignment.vehicle_dep_currency = ""
+        assignment.vehicle_dep_base_value = ""
+        assignment.vehicle_dep_unit = ""
+        return
+    assignment.vehicle_dep = result["value"]
+    assignment.vehicle_dep_currency = result["currency"]
+    assignment.vehicle_dep_base_value = result["base_value"]
+    assignment.vehicle_dep_unit = result["unit"]
+    assignment.vehicle_dep_last_calculated_on = assignment.vehicle_dep_last_calculated_on or now
+    if recalculated:
+        assignment.vehicle_dep_last_recalculated_on = now
+
+
+def seniority_calculation_from_role_fee(team_member, role_fee):
+    if not team_member or not team_member.seniority:
+        return None
+    amount = amount_from_display_value(role_fee)
+    if amount is None:
+        return None
+    currency = currency_from_display_value(role_fee)
+    seniority_amount = amount * Decimal("0.20")
+    display_value = f"{currency + ' ' if currency else ''}{format_money_amount(seniority_amount)}"
+    return {
+        "value": display_value,
+        "currency": currency,
+        "percentage": "20%",
+    }
+
+
+def apply_seniority_calculation(assignment, now, *, recalculated=False):
+    result = seniority_calculation_from_role_fee(assignment.team_member, assignment.role_fee)
+    if not result:
+        assignment.seniority_fee = ""
+        assignment.seniority_applied = False
+        assignment.seniority_percentage = ""
+        assignment.seniority_currency = ""
+        return
+    assignment.seniority_fee = result["value"]
+    assignment.seniority_applied = True
+    assignment.seniority_percentage = result["percentage"]
+    assignment.seniority_currency = result["currency"]
+    assignment.seniority_last_calculated_on = assignment.seniority_last_calculated_on or now
+    if recalculated:
+        assignment.seniority_last_recalculated_on = now
+
+
+def active_examiner_certification_years():
+    years = (
+        ExaminerCertificationYear.query.filter_by(is_archived=False)
+        .order_by(ExaminerCertificationYear.year.asc())
+        .all()
+    )
+    if not years:
+        existing_years = [
+            item.year for item in ExaminerCertificationYear.query.order_by(ExaminerCertificationYear.year.asc()).all()
+        ]
+        default_year = ExaminerCertificationYear(
+            year=(max(existing_years) + 1) if existing_years else 2026,
+            is_archived=False,
+        )
+        db.session.add(default_year)
+        db.session.commit()
+        years = [default_year]
+    return years
+
+
+def selected_examiner_certification_year():
+    active_years = active_examiner_certification_years()
+    requested_year = request.args.get("certification_year", "").strip()
+    if not requested_year:
+        requested_year = request.form.get("certification_year", "").strip()
+    if not requested_year:
+        return_to = request.form.get("return_to", "").strip()
+        if return_to:
+            requested_year = parse_qs(urlparse(return_to).query).get("certification_year", [""])[0]
+    if requested_year.isdigit():
+        year_number = int(requested_year)
+        if any(item.year == year_number for item in active_years):
+            return year_number, active_years
+    if any(item.year == 2026 for item in active_years):
+        return 2026, active_years
+    return active_years[-1].year, active_years
+
+
+def latest_active_examiner_certification_year():
+    active_years = active_examiner_certification_years()
+    return active_years[-1].year
+
+
+def active_supervisor_certification_years():
+    years = (
+        SupervisorCertificationYear.query.filter_by(is_archived=False)
+        .order_by(SupervisorCertificationYear.year.asc())
+        .all()
+    )
+    if not years:
+        existing_years = [
+            item.year for item in SupervisorCertificationYear.query.order_by(SupervisorCertificationYear.year.asc()).all()
+        ]
+        default_year = SupervisorCertificationYear(
+            year=(max(existing_years) + 1) if existing_years else 2026,
+            is_archived=False,
+        )
+        db.session.add(default_year)
+        db.session.commit()
+        years = [default_year]
+    return years
+
+
+def selected_supervisor_certification_year():
+    active_years = active_supervisor_certification_years()
+    requested_year = request.args.get("certification_year", "").strip()
+    if not requested_year:
+        requested_year = request.form.get("certification_year", "").strip()
+    if not requested_year:
+        return_to = request.form.get("return_to", "").strip()
+        if return_to:
+            requested_year = parse_qs(urlparse(return_to).query).get("certification_year", [""])[0]
+    if requested_year.isdigit():
+        year_number = int(requested_year)
+        if any(item.year == year_number for item in active_years):
+            return year_number, active_years
+    if any(item.year == 2026 for item in active_years):
+        return 2026, active_years
+    return active_years[-1].year, active_years
+
+
+def latest_active_supervisor_certification_year():
+    active_years = active_supervisor_certification_years()
+    return active_years[-1].year
+
+
+def certification_date_value(value):
+    return value.strftime("%d/%m/%Y") if value else ""
+
+
+def certification_time_value(value):
+    return value.strftime("%H:%M") if value else ""
+
+
+def certification_remote_training_period_value(config):
+    if not config or not config.remote_training_start_date or not config.remote_training_end_date:
+        return ""
+    return f"{certification_date_value(config.remote_training_start_date)} to {certification_date_value(config.remote_training_end_date)}"
+
+
+def parse_certification_date(value, selected_year, field_label):
+    raw_value = (value or "").strip()
+    if not raw_value:
+        return None, None
+    if not re.match(r"^\d{2}/\d{2}/\d{4}$", raw_value):
+        return None, f"{field_label} must use DD/MM/YYYY."
+    try:
+        parsed = datetime.strptime(raw_value, "%d/%m/%Y").date()
+    except ValueError:
+        return None, f"{field_label} must be a valid date."
+    if parsed.year != selected_year:
+        return None, f"{field_label} must be in {selected_year}."
+    return parsed, None
+
+
+def parse_certification_time(value, field_label):
+    raw_value = (value or "").strip()
+    if not raw_value:
+        return None, None
+    if not re.match(r"^\d{2}:\d{2}$", raw_value):
+        return None, f"{field_label} must use hh:mm."
+    try:
+        parsed = datetime.strptime(raw_value, "%H:%M").time()
+    except ValueError:
+        return None, f"{field_label} must be a valid 24h time."
+    return parsed, None
+
+
+def parse_certification_remote_training_period(value, selected_year):
+    raw_value = (value or "").strip()
+    if not raw_value:
+        return None, None, None
+    parts = [part.strip() for part in raw_value.split(" to ")]
+    if len(parts) != 2:
+        return None, None, "Remote training period must use DD/MM/YYYY to DD/MM/YYYY."
+    start_date, start_error = parse_certification_date(parts[0], selected_year, "Remote training period start date")
+    if start_error:
+        return None, None, start_error
+    end_date, end_error = parse_certification_date(parts[1], selected_year, "Remote training period end date")
+    if end_error:
+        return None, None, end_error
+    if start_date == end_date:
+        return None, None, "Remote training period dates cannot be the same."
+    if start_date > end_date:
+        return None, None, "Remote training period start date cannot be after the end date."
+    return start_date, end_date, None
+
+
+def certification_year_configuration(module_key, selected_year):
+    return CertificationYearConfiguration.query.filter_by(module_key=module_key, year=selected_year).first()
+
+
+def save_certification_year_configuration(module_key, selected_year):
+    annual_date, annual_error = parse_certification_date(
+        request.form.get("annual_meeting_date", ""),
+        selected_year,
+        "Annual meeting date",
+    )
+    if annual_error:
+        flash(annual_error, "error")
+        return False
+    annual_time, annual_time_error = parse_certification_time(
+        request.form.get("annual_meeting_time", ""),
+        "Annual meeting time",
+    )
+    if annual_time_error:
+        flash(annual_time_error, "error")
+        return False
+    remote_start, remote_end, remote_error = parse_certification_remote_training_period(
+        request.form.get("remote_training_period", ""),
+        selected_year,
+    )
+    if remote_error:
+        flash(remote_error, "error")
+        return False
+    config = certification_year_configuration(module_key, selected_year)
+    if config is None:
+        config = CertificationYearConfiguration(module_key=module_key, year=selected_year)
+        db.session.add(config)
+    config.annual_meeting_date = annual_date
+    config.annual_meeting_time = annual_time
+    config.remote_training_start_date = remote_start
+    config.remote_training_end_date = remote_end
+    db.session.commit()
+    flash("Certification year settings saved successfully.", "success")
+    return True
+
+
+def latest_active_intern_stage_year():
+    active_years = active_intern_stage_years()
+    return active_years[-1].year
+
+
+def active_intern_stage_years():
+    years = (
+        InternStageYear.query.filter_by(is_archived=False)
+        .order_by(InternStageYear.year.asc())
+        .all()
+    )
+    if not years:
+        existing_years = [
+            item.year for item in InternStageYear.query.order_by(InternStageYear.year.asc()).all()
+        ]
+        default_year = InternStageYear(
+            year=(max(existing_years) + 1) if existing_years else 2026,
+            is_archived=False,
+        )
+        db.session.add(default_year)
+        db.session.commit()
+        years = [default_year]
+    return years
+
+
+def selected_intern_stage_year():
+    active_years = active_intern_stage_years()
+    requested_year = request.args.get("certification_year", "").strip()
+    if not requested_year:
+        requested_year = request.form.get("certification_year", "").strip()
+    if not requested_year:
+        return_to = request.form.get("return_to", "").strip()
+        if return_to:
+            requested_year = parse_qs(urlparse(return_to).query).get("certification_year", [""])[0]
+    if requested_year.isdigit():
+        year_number = int(requested_year)
+        if any(item.year == year_number for item in active_years):
+            return year_number, active_years
+    if any(item.year == 2026 for item in active_years):
+        return 2026, active_years
+    return active_years[-1].year, active_years
+
+
+def active_exam_session_years():
+    years = (
+        ExamSessionYear.query.filter_by(is_archived=False)
+        .order_by(ExamSessionYear.year.asc())
+        .all()
+    )
+    if not years:
+        existing_years = [
+            item.year for item in ExamSessionYear.query.order_by(ExamSessionYear.year.asc()).all()
+        ]
+        default_year = ExamSessionYear(
+            year=(max(existing_years) + 1) if existing_years else 2026,
+            is_archived=False,
+        )
+        db.session.add(default_year)
+        db.session.commit()
+        years = [default_year]
+    return years
+
+
+def selected_exam_session_year():
+    active_years = active_exam_session_years()
+    requested_year = request.args.get("session_year", "").strip()
+    if not requested_year:
+        requested_year = request.form.get("session_year", "").strip()
+    if requested_year.isdigit():
+        year_number = int(requested_year)
+        if any(item.year == year_number for item in active_years):
+            return year_number, active_years
+    if any(item.year == 2026 for item in active_years):
+        return 2026, active_years
+    return active_years[-1].year, active_years
+
+
+def ensure_exam_session_year(year):
+    year_record = ExamSessionYear.query.filter_by(year=year).first()
+    if year_record:
+        year_record.is_archived = False
+    else:
+        db.session.add(ExamSessionYear(year=year, is_archived=False))
+
+
+def next_exam_session_year():
+    all_years = [item.year for item in ExamSessionYear.query.order_by(ExamSessionYear.year.asc()).all()]
+    return (max(all_years) + 1) if all_years else 2026
+
+
+def latest_available_exam_session_year():
+    session_years = [
+        item.session_date.year
+        for item in ExamSession.query.order_by(ExamSession.session_date.desc()).all()
+        if item.session_date
+    ]
+    if session_years:
+        return max(session_years)
+    year_record = ExamSessionYear.query.order_by(ExamSessionYear.year.desc()).first()
+    return year_record.year if year_record else None
+
+
+def exam_session_year_redirect(year=None):
+    endpoint = request.form.get("return_to_endpoint", "").strip()
+    if endpoint in {"staff.exam_session_planner", "staff.monthly_exam_session_registrations", "staff.pre_session_control_tower"}:
+        return redirect(url_for(endpoint, session_year=year) if year else url_for(endpoint))
+    return_to = request.form.get("return_to", "").strip()
+    if return_to.startswith(url_for("staff.monthly_exam_session_registrations")):
+        return redirect(return_to)
+    return redirect(url_for("staff.exam_session_planner", session_year=year) if year else url_for("staff.exam_session_planner"))
+
+
+def schedule_workflow_status(workflow):
+    return workflow.status if workflow else "Not started"
+
+
+def schedule_workflow_next_action(status):
+    return SCHEDULE_WORKFLOW_NEXT_ACTIONS.get(status, "")
+
+
+def schedule_workflow_responsible(status):
+    return SCHEDULE_WORKFLOW_RESPONSIBLE.get(status, "")
+
+
+def schedule_workflow_review_round(workflow):
+    return workflow.review_round if workflow else 0
+
+
+def schedule_workflow_current_deadline(workflow):
+    return workflow.next_action_due_at if workflow else None
+
+
+def schedule_workflow_health(status, deadline, today=None):
+    if status == "Approved":
+        return "Completed"
+    if today is None:
+        today = datetime.now(LOCAL_TZ).date()
+    if not deadline:
+        return "Deadline missing"
+    if deadline < today:
+        return "Overdue"
+    return "On track"
+
+
+def schedule_gate_status(workflow):
+    status = schedule_workflow_status(workflow)
+    is_ready = status == "Approved"
+    if is_ready:
+        return {
+            "status": "ready",
+            "label": "Ready",
+            "message": "Schedules are approved. The session can move to the next pre-session stages.",
+            "is_ready": True,
+        }
+    return {
+        "status": "blocked",
+        "label": "Blocked",
+        "message": "This session cannot move to the next pre-session stages until the schedules are approved.",
+        "is_ready": False,
+    }
+
+
+def pluralize_phrase(count, singular, plural=None):
+    return f"{count} {singular if count == 1 else (plural or f'{singular}s')}"
+
+
+def staffing_contract_status_label(status):
+    return {
+        "not_configured": "Not configured",
+        "open_positions": "Open positions",
+        "awaiting_confirmations": "Awaiting confirmations",
+        "confirmed": "Ready",
+        "invalid": "Needs review",
+    }.get(status, "Needs review")
+
+
+def staffing_contract_blocker_messages(contract):
+    totals = contract.get("totals", {})
+    status = contract.get("status")
+    if status == "not_configured":
+        return ["Staff roles have not been configured for this session."]
+    if status == "invalid":
+        return ["Staffing data needs to be reviewed before the session can be considered ready."]
+    messages = []
+    open_positions = totals.get("open_positions", 0)
+    awaiting = totals.get("pending_assigned", 0) + totals.get("sent", 0)
+    if open_positions:
+        for detail in contract.get("open_position_details", []):
+            role = detail.get("role") or "Staff"
+            messages.append(f"1 {role} position still needs to be filled.")
+        if not messages:
+            messages.append(f"{pluralize_phrase(open_positions, 'staff position')} still need to be filled.")
+    if awaiting:
+        verb = "is" if awaiting == 1 else "are"
+        messages.append(f"{pluralize_phrase(awaiting, 'staff member')} {verb} awaiting confirmation.")
+    return messages
+
+
+def staffing_presentation_from_contract(contract):
+    totals = contract.get("totals", empty_staffing_counts())
+    required = totals.get("required", 0)
+    confirmed = totals.get("confirmed", 0)
+    open_positions = totals.get("open_positions", 0)
+    awaiting = totals.get("pending_assigned", 0) + totals.get("sent", 0)
+    status = contract.get("status", "not_configured")
+    role_rows = []
+    for role in ("Supervisor", "Examiner", "Intern"):
+        counts = contract.get("by_role", {}).get(role, empty_staffing_counts())
+        if counts.get("required", 0) == 0:
+            continue
+        role_rows.append({
+            "role": role,
+            "required": counts.get("required", 0),
+            "assigned": counts.get("assigned", 0),
+            "pending": counts.get("pending_assigned", 0),
+            "sent": counts.get("sent", 0),
+            "confirmed": counts.get("confirmed", 0),
+            "open": counts.get("open_positions", 0),
+        })
+    secondary_lines = []
+    if open_positions:
+        secondary_lines.append(f"{pluralize_phrase(open_positions, 'role')} to cover")
+    if awaiting:
+        secondary_lines.append(f"{pluralize_phrase(awaiting, 'awaiting confirmation', 'awaiting confirmations')}")
+    if required == 0:
+        summary = "Staffing has not been configured for this session."
+        table_summary = "No staff roles configured"
+    else:
+        summary = f"{confirmed} of {required} required positions are confirmed."
+        table_summary = f"{confirmed} / {required} confirmed"
+    tooltip_lines = []
+    for row in role_rows:
+        parts = [
+            f"{row['required']} required",
+            f"{row['confirmed']} confirmed",
+        ]
+        if row["open"]:
+            parts.append(f"{row['open']} open")
+        if row["pending"]:
+            parts.append(f"{row['pending']} pending")
+        if row["sent"]:
+            parts.append(f"{row['sent']} sent")
+        tooltip_lines.append(f"{row['role']}: {' · '.join(parts)}")
+    return {
+        "status": status,
+        "label": staffing_contract_status_label(status),
+        "summary": summary,
+        "table_summary": table_summary,
+        "secondary_lines": secondary_lines,
+        "required": required,
+        "assigned": totals.get("assigned", 0),
+        "open_positions": open_positions,
+        "pending": totals.get("pending_assigned", 0),
+        "sent": totals.get("sent", 0),
+        "confirmed": confirmed,
+        "awaiting": awaiting,
+        "role_rows": role_rows,
+        "blockers": staffing_contract_blocker_messages(contract),
+        "tooltip": "\n".join(tooltip_lines) if tooltip_lines else "Staffing has not been configured for this session.",
+        "ready": contract.get("ready", False),
+    }
+
+
+def staffing_control_contract(staffing_control=None, staffing_contract=None, today=None):
+    if today is None:
+        today = datetime.now(LOCAL_TZ).date()
+    staffing_ready = bool((staffing_contract or {}).get("ready"))
+    deadline = staffing_control.staffing_due_at if staffing_control else None
+    note = (staffing_control.note or "").strip() if staffing_control and staffing_control.note else ""
+    if staffing_ready:
+        deadline_status = "completed"
+        deadline_label = "Completed"
+        is_overdue = False
+    elif not deadline:
+        deadline_status = "not_set"
+        deadline_label = "Not set"
+        is_overdue = False
+    elif deadline < today:
+        deadline_status = "overdue"
+        deadline_label = "Overdue"
+        is_overdue = True
+    elif deadline == today:
+        deadline_status = "due_today"
+        deadline_label = "Due today"
+        is_overdue = False
+    else:
+        deadline_status = "upcoming"
+        deadline_label = ""
+        is_overdue = False
+    return {
+        "department": "ADMIN",
+        "responsible_user": None,
+        "responsible_label": "ADMIN",
+        "responsible_person_label": "Not assigned",
+        "deadline": deadline,
+        "deadline_label": deadline_label,
+        "deadline_status": deadline_status,
+        "note": note,
+        "updated_by": staffing_control.updated_by if staffing_control else "",
+        "is_overdue": is_overdue,
+    }
+
+
+def logistics_control_contract(logistics_control=None, logistics_contract=None, today=None):
+    if today is None:
+        today = datetime.now(LOCAL_TZ).date()
+    logistics_ready = bool((logistics_contract or {}).get("final_email_ready"))
+    deadline = logistics_control.logistics_due_at if logistics_control else None
+    note = (logistics_control.note or "").strip() if logistics_control and logistics_control.note else ""
+    if logistics_ready:
+        deadline_status = "completed"
+        deadline_label = "Completed"
+        is_overdue = False
+    elif not deadline:
+        deadline_status = "not_set"
+        deadline_label = "Not set"
+        is_overdue = False
+    elif deadline < today:
+        deadline_status = "overdue"
+        deadline_label = "Overdue"
+        is_overdue = True
+    elif deadline == today:
+        deadline_status = "due_today"
+        deadline_label = "Due today"
+        is_overdue = False
+    else:
+        deadline_status = "upcoming"
+        deadline_label = ""
+        is_overdue = False
+    return {
+        "department": "ADMIN",
+        "responsible_user": None,
+        "responsible_label": "ADMIN",
+        "responsible_person_label": "Not assigned",
+        "deadline": deadline,
+        "deadline_label": deadline_label,
+        "deadline_status": deadline_status,
+        "note": note,
+        "updated_by": logistics_control.updated_by if logistics_control else "",
+        "is_overdue": is_overdue,
+    }
+
+
+def finance_status_slug(status):
+    return FINANCE_STATUS_SLUGS.get(status, "not_reviewed")
+
+
+def finance_deadline_state(deadline, requires_action, today=None):
+    if today is None:
+        today = datetime.now(LOCAL_TZ).date()
+    if not deadline:
+        return "not_set", "Not set", False
+    if not requires_action:
+        return "complete", "Completed", False
+    if deadline < today:
+        return "overdue", "Overdue", True
+    if deadline == today:
+        return "due_today", "Due today", False
+    return "upcoming", "", False
+
+
+def finance_readiness_contract(finance_control=None, today=None):
+    status = finance_control.status if finance_control else "Not reviewed"
+    if status not in FINANCE_STATUS_OPTIONS:
+        status = "Not reviewed"
+    deadline = finance_control.finance_due_at if finance_control else None
+    note = (finance_control.note or "").strip() if finance_control and finance_control.note else ""
+    evidence_url = (finance_control.evidence_url or "").strip() if finance_control and finance_control.evidence_url else ""
+    can_proceed = status in FINANCE_CAN_PROCEED_STATUSES
+    requires_action = status in FINANCE_ACTION_STATUSES
+    deadline_status, deadline_label, is_overdue = finance_deadline_state(deadline, requires_action, today=today)
+    messages = {
+        "Not reviewed": "Finance has not reviewed this session yet.",
+        "Payment follow-up required": "Payment follow-up or financial communication is required.",
+        "Conditional clearance": "Finance allows this session to proceed with a condition pending.",
+        "Finance hold": "Finance has placed this session on hold.",
+        "Exception approved": "Finance approved an exception for this session.",
+        "Cleared": "Finance confirmed this session can proceed.",
+    }
+    blocker_map = {
+        "Not reviewed": ("FINANCE_NOT_REVIEWED", "Finance has not reviewed this session yet."),
+        "Payment follow-up required": ("FINANCE_PAYMENT_FOLLOW_UP_REQUIRED", "Payment follow-up or financial communication is required."),
+        "Finance hold": ("FINANCE_HOLD", "Finance has placed this session on hold."),
+    }
+    blockers = []
+    if status in blocker_map:
+        code, message = blocker_map[status]
+        blockers.append({"code": code, "message": message})
+    return {
+        "status": finance_status_slug(status),
+        "raw_status": status,
+        "label": status,
+        "can_proceed": can_proceed,
+        "requires_action": requires_action,
+        "responsible": "FINANCE",
+        "responsible_label": "FINANCE",
+        "deadline": deadline,
+        "deadline_label": deadline_label,
+        "deadline_status": deadline_status,
+        "is_overdue": is_overdue,
+        "evidence_url": evidence_url,
+        "note": note,
+        "message": messages[status],
+        "blockers": blockers,
+        "control": finance_control,
+        "reviewed_at": finance_control.reviewed_at if finance_control else None,
+        "cleared_at": finance_control.cleared_at if finance_control else None,
+        "hold_at": finance_control.hold_at if finance_control else None,
+        "exception_approved_at": finance_control.exception_approved_at if finance_control else None,
+        "updated_by": finance_control.updated_by if finance_control else "",
+    }
+
+
+def finance_action_contract(finance_contract):
+    if not finance_contract or not finance_contract.get("requires_action"):
+        return None
+    status = finance_contract.get("raw_status", "Not reviewed")
+    labels = {
+        "Not reviewed": "Review finance readiness",
+        "Payment follow-up required": "Follow up finance payment",
+        "Conditional clearance": "Review conditional finance clearance",
+        "Finance hold": "Resolve finance hold",
+    }
+    return {
+        "action_key": f"finance_{finance_contract.get('status', 'not_reviewed')}",
+        "label": labels.get(status, "Review finance readiness"),
+        "source": "finance",
+        "source_label": "Finance",
+        "status": "action_required",
+        "description": finance_contract.get("message", ""),
+        "responsible": "FINANCE",
+        "deadline": finance_contract.get("deadline"),
+        "deadline_label": finance_contract.get("deadline_label") or "Not set",
+        "deadline_status": finance_contract.get("deadline_status", "not_set"),
+        "target": "finance",
+        "is_complete": False,
+    }
+
+
+def sinapsis_status_slug(status):
+    return SINAPSIS_STATUS_SLUGS.get(status, "not_reviewed")
+
+
+def ensure_sinapsis_checklist_items(sinapsis_control):
+    existing_by_key = {
+        item.item_key: item
+        for item in list(sinapsis_control.checklist_items or [])
+    }
+    for index, item_config in enumerate(SINAPSIS_CHECKLIST_ITEMS, start=1):
+        if item_config["key"] in existing_by_key:
+            continue
+        db.session.add(ExamSessionSinapsisChecklistItem(
+            sinapsis_control=sinapsis_control,
+            item_key=item_config["key"],
+            label=item_config["label"],
+            description=item_config["description"],
+            is_required=True,
+            display_order=index,
+        ))
+
+
+def sinapsis_checklist_counts(items):
+    checklist_items = list(items or [])
+    required_items = [item for item in checklist_items if item.is_required]
+    total = len(required_items) if required_items else len(SINAPSIS_CHECKLIST_ITEMS)
+    checked = sum(1 for item in required_items if item.is_checked)
+    return total, checked
+
+
+def sinapsis_readiness_contract(session_record, sinapsis_control=None, checklist_items=None, today=None):
+    status = sinapsis_control.status if sinapsis_control else "Not reviewed"
+    if status not in SINAPSIS_STATUS_OPTIONS:
+        status = "Not reviewed"
+    items = list(checklist_items if checklist_items is not None else (sinapsis_control.checklist_items if sinapsis_control else []))
+    checklist_total, checklist_checked = sinapsis_checklist_counts(items)
+    checklist_complete = checklist_total > 0 and checklist_checked == checklist_total
+    raw_status = status
+    if status == "Ready" and not checklist_complete:
+        status = "Needs correction"
+    deadline = sinapsis_control.sinapsis_due_at if sinapsis_control else None
+    note = (sinapsis_control.note or "").strip() if sinapsis_control and sinapsis_control.note else ""
+    evidence_url = (sinapsis_control.evidence_url or "").strip() if sinapsis_control and sinapsis_control.evidence_url else ""
+    details_url = (session_record.details_url or "").strip() if session_record and session_record.details_url else ""
+    details_url_available = bool(details_url and is_valid_url(details_url))
+    ready = status == "Ready" and checklist_complete
+    requires_action = status in SINAPSIS_ACTION_STATUSES
+    deadline_status, deadline_label, is_overdue = finance_deadline_state(deadline, requires_action, today=today)
+    messages = {
+        "Not reviewed": "Sinapsis has not been reviewed for this session yet.",
+        "In progress": "Sinapsis verification is in progress.",
+        "Needs correction": "Sinapsis setup needs correction before the session.",
+        "Ready": "Sinapsis has been verified and is ready for this session.",
+    }
+    blocker_map = {
+        "Not reviewed": ("SINAPSIS_NOT_REVIEWED", "Sinapsis has not been reviewed for this session yet."),
+        "In progress": ("SINAPSIS_IN_PROGRESS", "Sinapsis verification is in progress."),
+        "Needs correction": ("SINAPSIS_NEEDS_CORRECTION", "Sinapsis setup needs correction before the session."),
+    }
+    blockers = []
+    if status in blocker_map:
+        code, message = blocker_map[status]
+        blockers.append({"code": code, "message": message})
+    if raw_status == "Ready" and not checklist_complete:
+        blockers.append({
+            "code": "SINAPSIS_CHECKLIST_INCOMPLETE",
+            "message": "All required Sinapsis checklist items must be completed before marking Ready.",
+        })
+    if not details_url_available:
+        blockers.append({
+            "code": "SINAPSIS_DETAILS_URL_MISSING",
+            "message": "Session details link is not available.",
+        })
+    return {
+        "status": sinapsis_status_slug(status),
+        "raw_status": raw_status,
+        "label": status,
+        "ready": ready,
+        "requires_action": requires_action,
+        "responsible": "ADMIN",
+        "responsible_label": "ADMIN",
+        "deadline": deadline,
+        "deadline_label": deadline_label,
+        "deadline_status": deadline_status,
+        "is_overdue": is_overdue,
+        "evidence_url": evidence_url,
+        "note": note,
+        "checklist_total": checklist_total,
+        "checklist_checked": checklist_checked,
+        "details_url": details_url if details_url_available else "",
+        "details_url_available": details_url_available,
+        "message": messages[status],
+        "blockers": blockers,
+        "control": sinapsis_control,
+        "reviewed_at": sinapsis_control.reviewed_at if sinapsis_control else None,
+        "ready_at": sinapsis_control.ready_at if sinapsis_control else None,
+        "needs_correction_at": sinapsis_control.needs_correction_at if sinapsis_control else None,
+        "updated_by": sinapsis_control.updated_by if sinapsis_control else "",
+    }
+
+
+def sinapsis_action_contract(sinapsis_contract):
+    if not sinapsis_contract or not sinapsis_contract.get("requires_action"):
+        return None
+    status = sinapsis_contract.get("label", "Not reviewed")
+    labels = {
+        "Not reviewed": "Review Sinapsis readiness",
+        "In progress": "Complete Sinapsis verification",
+        "Needs correction": "Correct Sinapsis setup",
+    }
+    return {
+        "action_key": f"sinapsis_{sinapsis_contract.get('status', 'not_reviewed')}",
+        "label": labels.get(status, "Review Sinapsis readiness"),
+        "source": "sinapsis",
+        "source_label": "Sinapsis",
+        "status": "action_required",
+        "description": sinapsis_contract.get("message", ""),
+        "responsible": "ADMIN",
+        "deadline": sinapsis_contract.get("deadline"),
+        "deadline_label": sinapsis_contract.get("deadline_label") or "Not set",
+        "deadline_status": sinapsis_contract.get("deadline_status", "not_set"),
+        "target": "sinapsis",
+        "is_complete": False,
+    }
+
+
+def validate_sinapsis_transition(previous_status, new_status, note, checklist_complete=False):
+    if new_status not in SINAPSIS_STATUS_OPTIONS:
+        return "Please select a valid Sinapsis status."
+    if previous_status not in SINAPSIS_STATUS_OPTIONS:
+        previous_status = "Not reviewed"
+    if new_status != previous_status and new_status not in SINAPSIS_TRANSITIONS.get(previous_status, set()):
+        return "This Sinapsis status transition is not allowed."
+    note = (note or "").strip()
+    if new_status == "Needs correction" and not note:
+        return "A note is required when Sinapsis needs correction."
+    if previous_status == "Ready" and new_status != previous_status and not note:
+        return "A note is required when reopening a Ready Sinapsis status."
+    if new_status == "Ready" and not checklist_complete:
+        return "All required Sinapsis checklist items must be completed before marking Ready."
+    return None
+
+
+def apply_sinapsis_status_update(control_record, new_status, sinapsis_due_at=None, evidence_url="", note="", updated_by=None):
+    ensure_sinapsis_checklist_items(control_record)
+    checklist_total, checklist_checked = sinapsis_checklist_counts(control_record.checklist_items)
+    checklist_complete = checklist_total > 0 and checklist_checked == checklist_total
+    is_new_control = control_record.id is None
+    previous_status = control_record.status or "Not reviewed"
+    note = (note or "").strip()
+    evidence_url = (evidence_url or "").strip()
+    error = validate_sinapsis_transition(previous_status, new_status, note, checklist_complete=checklist_complete)
+    if error:
+        return error
+
+    previous_due_at = control_record.sinapsis_due_at
+    previous_evidence_url = (control_record.evidence_url or "").strip()
+    previous_note = (control_record.note or "").strip()
+    status_changed = previous_status != new_status
+    due_changed = previous_due_at != sinapsis_due_at
+    evidence_changed = previous_evidence_url != evidence_url
+    note_changed = previous_note != note
+    control_record.status = new_status
+    control_record.sinapsis_due_at = sinapsis_due_at
+    control_record.evidence_url = evidence_url or None
+    control_record.note = note or None
+    control_record.responsible_department = "ADMIN"
+    control_record.updated_by = updated_by
+
+    now = datetime.now(timezone.utc)
+    if new_status in {"In progress", "Ready", "Needs correction"} and not control_record.reviewed_at:
+        control_record.reviewed_at = now
+    if new_status == "Ready":
+        control_record.ready_at = now
+        control_record.needs_correction_at = None
+    elif new_status == "Needs correction":
+        control_record.needs_correction_at = now
+        control_record.ready_at = None
+    elif new_status == "Not reviewed":
+        control_record.ready_at = None
+        control_record.needs_correction_at = None
+    else:
+        control_record.ready_at = None
+        control_record.needs_correction_at = None
+
+    if is_new_control or status_changed or due_changed or evidence_changed or note_changed:
+        event_type = "created" if is_new_control else "updated"
+        if status_changed and not is_new_control:
+            event_type = "status_changed"
+        elif due_changed and not is_new_control:
+            event_type = "deadline_changed"
+        elif evidence_changed and not is_new_control:
+            event_type = "evidence_changed"
+        db.session.add(ExamSessionSinapsisEvent(
+            sinapsis_control=control_record,
+            event_type=event_type,
+            previous_status=previous_status,
+            new_status=new_status,
+            note=note or None,
+            evidence_url=evidence_url or None,
+            created_by=updated_by,
+        ))
+    return None
+
+
+def communications_status_slug(status):
+    return COMMUNICATIONS_STATUS_SLUGS.get(status, "not_started")
+
+
+def ensure_communications_checklist_items(communications_control):
+    existing = {
+        (item.group_key, item.item_key): item
+        for item in list(communications_control.checklist_items or [])
+    }
+    for index, item_config in enumerate(COMMUNICATIONS_CHECKLIST_ITEMS, start=1):
+        key = (item_config["group_key"], item_config["key"])
+        if key in existing:
+            continue
+        db.session.add(ExamSessionCommunicationsChecklistItem(
+            communications_control=communications_control,
+            group_key=item_config["group_key"],
+            item_key=item_config["key"],
+            label=item_config["label"],
+            description=item_config["description"],
+            is_required=True,
+            display_order=index,
+        ))
+
+
+def communications_checklist_counts(items):
+    checklist_items = list(items or [])
+    required_items = [item for item in checklist_items if item.is_required]
+    total = len(required_items) if required_items else len(COMMUNICATIONS_CHECKLIST_ITEMS)
+    checked = sum(1 for item in required_items if item.is_checked)
+    group_counts = {}
+    for group_key, _label in COMMUNICATIONS_GROUPS:
+        group_items = [item for item in required_items if item.group_key == group_key]
+        default_total = sum(1 for item in COMMUNICATIONS_CHECKLIST_ITEMS if item["group_key"] == group_key)
+        group_counts[group_key] = {
+            "total": len(group_items) if group_items else default_total,
+            "checked": sum(1 for item in group_items if item.is_checked),
+        }
+    return total, checked, group_counts
+
+
+def communications_readiness_contract(communications_control=None, checklist_items=None, today=None):
+    status = communications_control.status if communications_control else "Not started"
+    if status not in COMMUNICATIONS_STATUS_OPTIONS:
+        status = "Not started"
+    items = list(checklist_items if checklist_items is not None else (communications_control.checklist_items if communications_control else []))
+    checklist_total, checklist_checked, group_counts = communications_checklist_counts(items)
+    checklist_complete = checklist_total > 0 and checklist_checked == checklist_total
+    raw_status = status
+    if status == "Completed" and not checklist_complete:
+        status = "Needs follow-up"
+    deadline = communications_control.communications_due_at if communications_control else None
+    note = (communications_control.note or "").strip() if communications_control and communications_control.note else ""
+    evidence_url = (communications_control.evidence_url or "").strip() if communications_control and communications_control.evidence_url else ""
+    ready = status == "Completed" and checklist_complete
+    requires_action = status in COMMUNICATIONS_ACTION_STATUSES
+    deadline_status, deadline_label, is_overdue = finance_deadline_state(deadline, requires_action, today=today)
+    messages = {
+        "Not started": "Communications have not been started for this session yet.",
+        "In progress": "Communications are in progress.",
+        "Needs follow-up": "Communications need follow-up before they can be completed.",
+        "Completed": "Communications have been completed for this session.",
+    }
+    blocker_map = {
+        "Not started": ("COMMUNICATIONS_NOT_STARTED", "Communications have not been started for this session yet."),
+        "In progress": ("COMMUNICATIONS_IN_PROGRESS", "Communications are in progress."),
+        "Needs follow-up": ("COMMUNICATIONS_NEEDS_FOLLOW_UP", "Communications need follow-up before they can be completed."),
+    }
+    blockers = []
+    if status in blocker_map:
+        code, message = blocker_map[status]
+        blockers.append({"code": code, "message": message})
+    if raw_status == "Completed" and not checklist_complete:
+        blockers.append({
+            "code": "COMMUNICATIONS_CHECKLIST_INCOMPLETE",
+            "message": "All required communications checklist items must be completed before marking Completed.",
+        })
+    staff_counts = group_counts.get("STAFF_COMMUNICATIONS", {"total": 4, "checked": 0})
+    exam_centre_counts = group_counts.get("EXAM_CENTRE_COMMUNICATIONS", {"total": 4, "checked": 0})
+    return {
+        "status": communications_status_slug(status),
+        "raw_status": raw_status,
+        "label": status,
+        "ready": ready,
+        "requires_action": requires_action,
+        "responsible": "ADMIN",
+        "responsible_label": "ADMIN",
+        "deadline": deadline,
+        "deadline_label": deadline_label,
+        "deadline_status": deadline_status,
+        "is_overdue": is_overdue,
+        "evidence_url": evidence_url,
+        "note": note,
+        "checklist_total": checklist_total,
+        "checklist_checked": checklist_checked,
+        "staff_checklist_total": staff_counts["total"],
+        "staff_checklist_checked": staff_counts["checked"],
+        "exam_centre_checklist_total": exam_centre_counts["total"],
+        "exam_centre_checklist_checked": exam_centre_counts["checked"],
+        "message": messages[status],
+        "blockers": blockers,
+        "control": communications_control,
+        "started_at": communications_control.started_at if communications_control else None,
+        "needs_follow_up_at": communications_control.needs_follow_up_at if communications_control else None,
+        "completed_at": communications_control.completed_at if communications_control else None,
+        "updated_by": communications_control.updated_by if communications_control else "",
+    }
+
+
+def communications_action_contract(communications_contract):
+    if not communications_contract or not communications_contract.get("requires_action"):
+        return None
+    status = communications_contract.get("label", "Not started")
+    labels = {
+        "Not started": "Prepare communications",
+        "In progress": "Complete communications checklist",
+        "Needs follow-up": "Follow up communications",
+    }
+    return {
+        "action_key": f"communications_{communications_contract.get('status', 'not_started')}",
+        "label": labels.get(status, "Prepare communications"),
+        "source": "communications",
+        "source_label": "Communications",
+        "status": "action_required",
+        "description": communications_contract.get("message", ""),
+        "responsible": "ADMIN",
+        "deadline": communications_contract.get("deadline"),
+        "deadline_label": communications_contract.get("deadline_label") or "Not set",
+        "deadline_status": communications_contract.get("deadline_status", "not_set"),
+        "target": "communications",
+        "is_complete": False,
+    }
+
+
+def incident_default_department(incident_type):
+    return INCIDENT_TYPE_DEFAULT_DEPARTMENT.get(incident_type, "ADMIN")
+
+
+def incident_checklist_template(incident_type):
+    return INCIDENT_PLAYBOOKS.get(incident_type, INCIDENT_PLAYBOOKS["Other"])
+
+
+def ensure_incident_checklist_items(incident):
+    existing_by_key = {item.item_key: item for item in list(incident.checklist_items or [])}
+    for index, label in enumerate(incident_checklist_template(incident.incident_type), start=1):
+        item_key = f"{incident_type_key(incident.incident_type)}_{index}"
+        if item_key in existing_by_key:
+            continue
+        db.session.add(ExamSessionIncidentChecklistItem(
+            incident=incident,
+            item_key=item_key,
+            label=label,
+            description=label,
+            is_required=True,
+            display_order=index,
+        ))
+
+
+def incident_checklist_counts(items):
+    checklist_items = list(items or [])
+    required_items = [item for item in checklist_items if item.is_required]
+    total = len(required_items)
+    checked = sum(1 for item in required_items if item.is_checked)
+    return total, checked
+
+
+def incident_impact_matrix_for_type(incident_type):
+    return INCIDENT_IMPACT_MATRIX.get(incident_type) or INCIDENT_IMPACT_MATRIX["Other"]
+
+
+def incident_auto_review_flags_feedback(summary):
+    summary = summary or {}
+    skipped_reason = summary.get("skipped_reason")
+    if skipped_reason:
+        return None
+    created = summary.get("created", 0) or 0
+    reopened = summary.get("reopened", 0) or 0
+    skipped_existing = summary.get("skipped_existing", 0) or 0
+    parts = []
+    if created:
+        parts.append(f"{created} review {'flag was' if created == 1 else 'flags were'} automatically created")
+    if reopened:
+        parts.append(f"{reopened} review {'flag was' if reopened == 1 else 'flags were'} automatically reopened")
+    if parts:
+        return f"{' and '.join(parts)} because this incident is {summary.get('severity')} severity."
+    if skipped_existing:
+        return "Review flags for this incident were already active."
+    return None
+
+
+def ensure_incident_review_flags_for_high_priority_incident(incident, actor=None):
+    summary = {
+        "created": 0,
+        "reopened": 0,
+        "skipped_existing": 0,
+        "skipped_invalid": 0,
+        "skipped_reason": None,
+        "severity": incident.severity if incident else None,
+    }
+    if not incident:
+        summary["skipped_reason"] = "missing_incident"
+        return summary
+    if incident.severity not in {"High", "Critical"}:
+        summary["skipped_reason"] = "severity_not_high_priority"
+        return summary
+    if incident.incident_type == "Other":
+        summary["skipped_reason"] = "other_incident_type"
+        return summary
+
+    impact_configs = incident_impact_matrix_for_type(incident.incident_type)
+    if not impact_configs:
+        summary["skipped_reason"] = "no_impacts"
+        return summary
+
+    impact_reviews_by_key = {
+        review.impact_key: review
+        for review in ExamSessionIncidentImpactReview.query.filter_by(incident_id=incident.id).all()
+    }
+    existing_flags = {
+        (flag.impact_key, flag.affected_area): flag
+        for flag in ExamSessionIncidentReviewFlag.query.filter_by(incident_id=incident.id).all()
+    }
+    now = datetime.now(timezone.utc)
+    for impact in impact_configs:
+        impact_key = impact.get("impact_key")
+        affected_area = impact.get("affected_area")
+        if not impact_key or affected_area not in INCIDENT_REVIEW_FLAG_AREAS:
+            summary["skipped_invalid"] += 1
+            continue
+        flag_key = (impact_key, affected_area)
+        flag = existing_flags.get(flag_key)
+        event_type = None
+        if flag and flag.status == "Needs review":
+            summary["skipped_existing"] += 1
+            continue
+        if flag:
+            flag.status = "Needs review"
+            flag.reviewed_at = None
+            flag.reviewed_by = None
+            flag.dismissed_at = None
+            flag.dismissed_by = None
+            flag.updated_at = now
+            summary["reopened"] += 1
+            event_type = "review_flag_auto_reopened"
+        else:
+            flag = ExamSessionIncidentReviewFlag(
+                exam_session_id=incident.exam_session_id,
+                incident=incident,
+                impact_review=impact_reviews_by_key.get(impact_key),
+                impact_key=impact_key,
+                affected_area=affected_area,
+                created_by=actor,
+            )
+            db.session.add(flag)
+            existing_flags[flag_key] = flag
+            summary["created"] += 1
+            event_type = "review_flag_auto_created"
+        flag.reason = impact.get("reason")
+        area_label = impact.get("affected_area_label") or INCIDENT_REVIEW_FLAG_AREAS.get(affected_area, affected_area)
+        action = "created" if event_type == "review_flag_auto_created" else "reopened"
+        flag.note = f"Automatically {action} because this incident is {incident.severity} severity."
+        db.session.add(ExamSessionIncidentEvent(
+            incident=incident,
+            event_type=event_type,
+            previous_status=incident.status,
+            new_status=incident.status,
+            previous_severity=incident.severity,
+            new_severity=incident.severity,
+            note=f"Review flag automatically {action} for {area_label} because the incident severity is {incident.severity}.",
+            evidence_url=incident.evidence_url,
+            created_by=actor,
+        ))
+    return summary
+
+
+def _assisted_action(action_key, label, description, **kwargs):
+    return {
+        "action_key": action_key,
+        "label": label,
+        "description": description,
+        "requires_note": kwargs.get("requires_note", False),
+        "requires_due_at": kwargs.get("requires_due_at", False),
+        "danger_level": kwargs.get("danger_level", "low"),
+        "available": kwargs.get("available", True),
+        "is_navigation": kwargs.get("is_navigation", False),
+        "target_anchor": kwargs.get("target_anchor", ""),
+        "submit_label": kwargs.get("submit_label", f"Confirm {label.lower()}"),
+        "warning": kwargs.get("warning", ""),
+        "details": kwargs.get("details", []),
+    }
+
+
+def _finance_control_for_session(session_record):
+    return ExamSessionFinanceControl.query.filter_by(exam_session_id=session_record.id).first()
+
+
+def _sinapsis_control_for_session(session_record):
+    return ExamSessionSinapsisControl.query.filter_by(exam_session_id=session_record.id).first()
+
+
+def _communications_control_for_session(session_record):
+    return ExamSessionCommunicationsControl.query.filter_by(exam_session_id=session_record.id).first()
+
+
+def incident_review_flag_assisted_actions(flag):
+    if not flag or flag.status != "Needs review" or not flag.exam_session:
+        return {"review_flag_id": flag.id if flag else None, "affected_area": flag.affected_area if flag else "", "actions": []}
+    session_record = flag.exam_session
+    area = flag.affected_area
+    actions = []
+    if area == "schedule":
+        workflow = ExamSessionScheduleWorkflow.query.filter_by(exam_session_id=session_record.id).first()
+        if workflow and workflow.status == "Approved" and schedule_transition_by_key("reopen"):
+            actions.append(_assisted_action(
+                "assisted_reopen_schedule",
+                "Reopen schedule workflow",
+                "Use this if the incident may affect an approved schedule.",
+                requires_note=True,
+                requires_due_at=True,
+                danger_level="medium",
+                submit_label="Confirm and reopen schedule workflow",
+                warning="This will reopen the schedule workflow. It will not automatically update packages, Sinapsis or communications.",
+            ))
+        else:
+            actions.append(_assisted_action(
+                "assisted_open_schedule",
+                "Open schedule workflow",
+                "Schedule is not approved, so there is no approved workflow to reopen.",
+                is_navigation=True,
+                target_anchor="schedule",
+            ))
+    elif area == "staffing":
+        actions.append(_assisted_action(
+            "assisted_open_staffing",
+            "Open staff assignments in Exam session planner",
+            "Staffing is derived from Exam session planner. This action opens the affected section without changing assignments.",
+            is_navigation=True,
+            target_anchor="staffing",
+        ))
+    elif area == "logistics":
+        actions.append(_assisted_action(
+            "assisted_open_logistics",
+            "Open logistics section in Exam session planner",
+            "Logistics readiness is derived from logistics data. This action opens the affected section without changing concepts or statuses.",
+            is_navigation=True,
+            target_anchor="logistics",
+        ))
+    elif area == "packages":
+        package_units = ExamSessionPackageUnit.query.filter_by(exam_session_id=session_record.id).order_by(ExamSessionPackageUnit.room_name.asc(), ExamSessionPackageUnit.module_name.asc()).all()
+        if "Needs review" in PACKAGE_UNIT_STATUSES and package_units:
+            actions.append(_assisted_action(
+                "assisted_mark_packages_needs_review",
+                "Mark packages as Needs review",
+                "Use this if the incident may affect package preparation or personalization.",
+                requires_note=True,
+                danger_level="medium",
+                submit_label="Confirm and mark packages as Needs review",
+                warning="This will mark package units for this session as Needs review. It will not modify checklist items.",
+                details=[f"{unit.room_name} - {unit.module_name} ({unit.status})" for unit in package_units],
+            ))
+        else:
+            actions.append(_assisted_action(
+                "assisted_open_packages",
+                "Open Packages section",
+                "No package unit can be safely marked as Needs review yet.",
+                is_navigation=True,
+                target_anchor="packages",
+            ))
+    elif area == "shipments":
+        actions.append(_assisted_action(
+            "assisted_open_shipments",
+            "Open shipment follow-up",
+            "Shipments do not have a dedicated review status here. This action opens the affected section without changing bundle status.",
+            is_navigation=True,
+            target_anchor="shipments",
+        ))
+    elif area == "finance":
+        control = _finance_control_for_session(session_record)
+        current_status = control.status if control else "Not reviewed"
+        if current_status != "Payment follow-up required" and "Payment follow-up required" in FINANCE_TRANSITIONS.get(current_status, set()):
+            actions.append(_assisted_action(
+                "assisted_finance_payment_follow_up",
+                "Mark as Payment follow-up required",
+                "Use this if the incident requires finance payment follow-up before the session can proceed.",
+                requires_note=True,
+                danger_level="medium",
+                submit_label="Confirm finance update",
+            ))
+        if current_status != "Finance hold" and "Finance hold" in FINANCE_TRANSITIONS.get(current_status, set()):
+            actions.append(_assisted_action(
+                "assisted_finance_hold",
+                "Mark as Finance hold",
+                "Use this if the incident should block the session from a finance point of view.",
+                requires_note=True,
+                danger_level="high",
+                submit_label="Confirm finance update",
+                warning="This will mark the session as Finance hold.",
+            ))
+    elif area == "sinapsis":
+        control = _sinapsis_control_for_session(session_record)
+        current_status = control.status if control else "Not reviewed"
+        if current_status != "Needs correction" and "Needs correction" in SINAPSIS_TRANSITIONS.get(current_status, set()):
+            actions.append(_assisted_action(
+                "assisted_sinapsis_needs_correction",
+                "Mark Sinapsis as Needs correction",
+                "Use this if the incident may affect operational setup in Sinapsis.",
+                requires_note=True,
+                danger_level="medium",
+                submit_label="Confirm Sinapsis needs correction",
+            ))
+    elif area == "communications":
+        control = _communications_control_for_session(session_record)
+        current_status = control.status if control else "Not started"
+        if current_status != "Needs follow-up" and "Needs follow-up" in COMMUNICATIONS_TRANSITIONS.get(current_status, set()):
+            actions.append(_assisted_action(
+                "assisted_communications_needs_follow_up",
+                "Mark Communications as Needs follow-up",
+                "Use this if the incident may require updated staff or exam centre communication.",
+                requires_note=True,
+                danger_level="medium",
+                submit_label="Confirm Communications needs follow-up",
+            ))
+    return {
+        "review_flag_id": flag.id,
+        "affected_area": area,
+        "actions": actions,
+    }
+
+
+def incident_review_flag_view(flag):
+    incident = flag.incident
+    area_label = INCIDENT_REVIEW_FLAG_AREAS.get(flag.affected_area, flag.affected_area.replace("_", " ").title())
+    responsible = INCIDENT_REVIEW_FLAG_AREA_RESPONSIBLE.get(flag.affected_area, "ADMIN")
+    if incident and incident.incident_type == "Finance hold escalation" and flag.affected_area == "communications":
+        responsible = "FINANCE"
+    return {
+        "id": flag.id,
+        "status": flag.status,
+        "incident_id": flag.incident_id,
+        "incident_title": incident.title if incident else "Related incident",
+        "incident_type": incident.incident_type if incident else "",
+        "severity": incident.severity if incident else "",
+        "impact_key": flag.impact_key,
+        "affected_area": flag.affected_area,
+        "affected_area_label": area_label,
+        "responsible_department": responsible,
+        "reason": flag.reason or "",
+        "note": flag.note or "",
+        "created_at": flag.created_at,
+        "created_by": flag.created_by or "",
+        "reviewed_at": flag.reviewed_at,
+        "reviewed_by": flag.reviewed_by or "",
+        "dismissed_at": flag.dismissed_at,
+        "dismissed_by": flag.dismissed_by or "",
+        "is_active": flag.status == "Needs review",
+        "assisted_actions": incident_review_flag_assisted_actions(flag),
+        "record": flag,
+    }
+
+
+def incident_review_flags_contract(session_record, flags=None):
+    flag_records = list(flags if flags is not None else (session_record.incident_review_flags if session_record else []))
+    views = [incident_review_flag_view(flag) for flag in flag_records]
+    invalid_flags = [
+        view for view in views
+        if (
+            view["status"] not in INCIDENT_REVIEW_FLAG_STATUSES
+            or view["affected_area"] not in INCIDENT_REVIEW_FLAG_AREAS
+            or not view["incident_id"]
+            or not view["record"].exam_session_id
+        )
+    ]
+    active_flags = [view for view in views if view["is_active"]]
+    resolved_flags = [view for view in views if not view["is_active"]]
+    by_area = {}
+    resolved_by_area = {}
+    for view in active_flags:
+        by_area.setdefault(view["affected_area"], []).append(view)
+    for view in resolved_flags:
+        resolved_by_area.setdefault(view["affected_area"], []).append(view)
+    return {
+        "status": "needs_review" if invalid_flags else ("active" if active_flags else "ready"),
+        "label": "Needs review" if invalid_flags else ("Review required" if active_flags else "No active review flags"),
+        "ready": not active_flags and not invalid_flags,
+        "data_needs_review": bool(invalid_flags),
+        "active_flags_count": len(active_flags),
+        "resolved_flags_count": len(resolved_flags),
+        "invalid_flags_count": len(invalid_flags),
+        "by_area": by_area,
+        "resolved_by_area": resolved_by_area,
+        "invalid_flags": invalid_flags,
+        "flags": views,
+    }
+
+
+def review_flags_for_area(review_flags_contract, affected_area):
+    return (review_flags_contract or {}).get("by_area", {}).get(affected_area, [])
+
+
+def incident_review_flag_action_contract(flag, today=None):
+    if not flag or flag.status != "Needs review":
+        return None
+    incident = flag.incident
+    if not incident:
+        return None
+    known_area = flag.affected_area in INCIDENT_REVIEW_FLAG_AREAS
+    area_label = INCIDENT_REVIEW_FLAG_AREAS.get(flag.affected_area, "incident flag data")
+    responsible = INCIDENT_REVIEW_FLAG_AREA_RESPONSIBLE.get(flag.affected_area, "Not assigned")
+    deadline_status, deadline_label, _ = incident_deadline_state(incident, today=today)
+    if known_area:
+        label = f"Review {area_label} due to incident"
+        reason = f"{incident.incident_type}"
+        if incident.title:
+            reason = f"{reason} - {incident.title}"
+        reason = f"{reason}: {flag.reason or 'Incident review flag data needs review.'}"
+    else:
+        label = "Review incident flag data"
+        reason = "Incident review flag data needs review."
+    if incident.severity == "Critical":
+        reason = f"Critical incident. {reason}"
+    return {
+        "action_key": f"incident_review:{flag.id}",
+        "label": label,
+        "source": "incident_review",
+        "source_label": "Incident review",
+        "status": "action_required",
+        "description": reason,
+        "responsible": responsible,
+        "deadline": incident.due_at,
+        "deadline_label": deadline_label,
+        "deadline_status": deadline_status,
+        "target": flag.affected_area if known_area else "incidents",
+        "is_complete": False,
+        "incident_id": incident.id,
+        "review_flag_id": flag.id,
+        "severity": incident.severity,
+        "display_date": flag.exam_session.session_date if flag.exam_session else None,
+    }
+
+
+def incident_impact_assessment_contract(incident, impact_reviews=None, review_flags=None):
+    reviews_by_key = {
+        review.impact_key: review
+        for review in list(impact_reviews if impact_reviews is not None else (incident.impact_reviews or []))
+    }
+    flags_by_key_area = {
+        (flag.impact_key, flag.affected_area): flag
+        for flag in list(review_flags if review_flags is not None else (incident.review_flags or []))
+        if flag.status in INCIDENT_REVIEW_FLAG_STATUSES
+    }
+    impacts = []
+    for impact_config in incident_impact_matrix_for_type(incident.incident_type):
+        review = reviews_by_key.get(impact_config["impact_key"])
+        status = review.status if review and review.status in INCIDENT_IMPACT_REVIEW_STATUSES else "Review suggested"
+        flag = flags_by_key_area.get((impact_config["impact_key"], impact_config["affected_area"]))
+        flag_view = incident_review_flag_view(flag) if flag else None
+        impacts.append({
+            **impact_config,
+            "status": status,
+            "note": review.note if review and review.note else "",
+            "reviewed_at": review.reviewed_at if review else None,
+            "reviewed_by": review.reviewed_by if review and review.reviewed_by else "",
+            "record": review,
+            "review_flag": flag_view,
+            "can_flag_for_review": (
+                status != "Not applicable"
+                and impact_config["affected_area"] in INCIDENT_REVIEW_FLAG_AREAS
+                and (not flag_view or not flag_view["is_active"])
+                and incident.status not in INCIDENT_INACTIVE_STATUSES
+            ),
+        })
+    return {
+        "incident_id": incident.id,
+        "incident_type": incident.incident_type,
+        "impacts": impacts,
+        "summary": {
+            "total": len(impacts),
+            "review_suggested": sum(1 for impact in impacts if impact["status"] == "Review suggested"),
+            "reviewed": sum(1 for impact in impacts if impact["status"] == "Reviewed"),
+            "not_applicable": sum(1 for impact in impacts if impact["status"] == "Not applicable"),
+        },
+    }
+
+
+def incident_deadline_state(incident, today=None):
+    requires_action = incident.status in INCIDENT_ACTIVE_STATUSES
+    return finance_deadline_state(incident.due_at, requires_action, today=today)
+
+
+def incident_view(incident, checklist_items=None, events=None, impact_reviews=None, review_flags=None, today=None):
+    items = list(checklist_items if checklist_items is not None else (incident.checklist_items or []))
+    checklist_total, checklist_checked = incident_checklist_counts(items)
+    deadline_status, deadline_label, is_overdue = incident_deadline_state(incident, today=today)
+    impact_assessment = incident_impact_assessment_contract(incident, impact_reviews=impact_reviews, review_flags=review_flags)
+    return {
+        "record": incident,
+        "id": incident.id,
+        "type": incident.incident_type,
+        "title": incident.title,
+        "description": incident.description or "",
+        "severity": incident.severity,
+        "severity_key": incident_status_slug(incident.severity),
+        "status": incident.status,
+        "status_key": incident_status_slug(incident.status),
+        "responsible_department": incident.responsible_department or incident_default_department(incident.incident_type),
+        "due_at": incident.due_at,
+        "deadline_label": deadline_label,
+        "deadline_status": deadline_status,
+        "is_overdue": is_overdue,
+        "evidence_url": incident.evidence_url or "",
+        "resolution_note": incident.resolution_note or "",
+        "checklist_items": items,
+        "checklist_total": checklist_total,
+        "checklist_checked": checklist_checked,
+        "checklist_complete": checklist_total > 0 and checklist_checked == checklist_total,
+        "events": list(events or []),
+        "impact_assessment": impact_assessment,
+        "is_active": incident.status in INCIDENT_ACTIVE_STATUSES,
+        "is_inactive": incident.status in INCIDENT_INACTIVE_STATUSES,
+        "created_at": incident.created_at,
+        "updated_at": incident.updated_at,
+        "resolved_at": incident.resolved_at,
+        "cancelled_at": incident.cancelled_at,
+    }
+
+
+def incidents_readiness_contract(session_record, incidents=None, checklist_items_by_incident=None, events_by_incident=None, impact_reviews_by_incident=None, review_flags_by_incident=None, today=None):
+    incident_records = list(incidents if incidents is not None else (session_record.incidents if session_record else []))
+    checklist_items_by_incident = checklist_items_by_incident or {}
+    events_by_incident = events_by_incident or {}
+    impact_reviews_by_incident = impact_reviews_by_incident or {}
+    review_flags_by_incident = review_flags_by_incident or {}
+    total_count = len(incident_records)
+    if not incident_records:
+        return {
+            "status": "none",
+            "label": "No active incidents",
+            "active_count": 0,
+            "critical_count": 0,
+            "high_count": 0,
+            "overdue_count": 0,
+            "resolved_count": 0,
+            "cancelled_count": 0,
+            "requires_action": False,
+            "message": "No active incidents.",
+            "summary": "No active incidents",
+            "incidents": [],
+            "active_incidents": [],
+            "inactive_incidents": [],
+            "blockers": [],
+            "tooltip": "No active incidents.",
+            "impact_summary": {"total": 0, "review_suggested": 0, "reviewed": 0, "not_applicable": 0},
+        }
+
+    views = [
+        incident_view(
+            incident,
+            checklist_items=checklist_items_by_incident.get(incident.id, []),
+            events=events_by_incident.get(incident.id, []),
+            impact_reviews=impact_reviews_by_incident.get(incident.id, []),
+            review_flags=review_flags_by_incident.get(incident.id, []),
+            today=today,
+        )
+        for incident in incident_records
+    ]
+    if any(
+        view["type"] not in INCIDENT_TYPES
+        or view["severity"] not in INCIDENT_SEVERITIES
+        or view["status"] not in INCIDENT_STATUSES
+        or view["responsible_department"] not in INCIDENT_RESPONSIBLE_DEPARTMENTS
+        for view in views
+    ):
+        return {
+            "status": "needs_review",
+            "label": "Needs review",
+            "active_count": 0,
+            "critical_count": 0,
+            "high_count": 0,
+            "overdue_count": 0,
+            "resolved_count": 0,
+            "cancelled_count": 0,
+            "requires_action": True,
+            "message": "Incident data needs review.",
+            "summary": "Incident data needs review",
+            "incidents": views,
+            "active_incidents": [],
+            "inactive_incidents": [],
+            "blockers": [{"source": "incidents", "code": "INCIDENT_DATA_NEEDS_REVIEW", "message": "Incident data needs review."}],
+            "tooltip": "Incident data needs review.",
+            "impact_summary": {"total": 0, "review_suggested": 0, "reviewed": 0, "not_applicable": 0},
+        }
+    active_incidents = [view for view in views if view["is_active"]]
+    inactive_incidents = [view for view in views if view["is_inactive"]]
+    critical_count = sum(1 for view in active_incidents if view["severity"] == "Critical")
+    high_count = sum(1 for view in active_incidents if view["severity"] == "High")
+    overdue_count = sum(1 for view in active_incidents if view["is_overdue"])
+    resolved_count = sum(1 for view in views if view["status"] == "Resolved")
+    cancelled_count = sum(1 for view in views if view["status"] == "Cancelled")
+    if critical_count:
+        status = "critical"
+        label = "Critical incident"
+        message = f"{len(active_incidents)} active incidents, {critical_count} critical."
+    elif active_incidents:
+        status = "active"
+        label = "Active incidents"
+        message = f"{len(active_incidents)} active incidents."
+    else:
+        status = "resolved"
+        label = "No active incidents"
+        message = "All incidents are resolved or cancelled."
+    summary = "No active incidents" if not active_incidents else f"{len(active_incidents)} active incidents"
+    tooltip = "\n".join(f"{view['title']} - {view['status']} - {view['severity']}" for view in views)
+    impact_summary = {
+        "total": sum(view["impact_assessment"]["summary"]["total"] for view in views),
+        "review_suggested": sum(view["impact_assessment"]["summary"]["review_suggested"] for view in views),
+        "reviewed": sum(view["impact_assessment"]["summary"]["reviewed"] for view in views),
+        "not_applicable": sum(view["impact_assessment"]["summary"]["not_applicable"] for view in views),
+    }
+    return {
+        "status": status,
+        "label": label,
+        "active_count": len(active_incidents),
+        "critical_count": critical_count,
+        "high_count": high_count,
+        "overdue_count": overdue_count,
+        "resolved_count": resolved_count,
+        "cancelled_count": cancelled_count,
+        "requires_action": bool(active_incidents),
+        "message": message,
+        "summary": summary,
+        "incidents": views,
+        "active_incidents": active_incidents,
+        "inactive_incidents": inactive_incidents,
+        "blockers": [
+            {"source": "incidents", "code": "CRITICAL_INCIDENT", "message": view["title"]}
+            for view in active_incidents if view["severity"] == "Critical"
+        ],
+        "tooltip": tooltip or message,
+        "total_count": total_count,
+        "impact_summary": impact_summary,
+    }
+
+
+def incident_action_contracts(incidents_contract):
+    actions = []
+    if not incidents_contract:
+        return actions
+    for incident in incidents_contract.get("active_incidents", []):
+        if incident["severity"] == "Critical":
+            label = "Resolve critical incident"
+        elif incident["status"] == "Open":
+            label = "Review incident"
+        elif incident["status"] == "In progress":
+            label = "Continue incident resolution"
+        elif incident["status"] == "Waiting external":
+            label = "Follow up incident"
+        else:
+            continue
+        actions.append({
+            "action_key": f"incident:{incident['id']}:{incident['status']}",
+            "label": label,
+            "source": "incidents",
+            "source_label": "Incidents",
+            "status": "action_required",
+            "description": incident["title"],
+            "responsible": incident["responsible_department"],
+            "deadline": incident["due_at"],
+            "deadline_label": incident["deadline_label"],
+            "deadline_status": incident["deadline_status"],
+            "target": "incidents",
+            "is_complete": False,
+            "incident_id": incident["id"],
+            "severity": incident["severity"],
+        })
+    return actions
+
+
+def validate_incident_change(previous_status, new_status, previous_severity, new_severity, note, checklist_complete=True, is_create=False):
+    note = (note or "").strip()
+    if new_status not in INCIDENT_STATUSES:
+        return "Please select a valid incident status."
+    if new_severity not in INCIDENT_SEVERITIES:
+        return "Please select a valid incident severity."
+    if previous_status and previous_status not in INCIDENT_STATUSES:
+        return "Please select a valid incident status."
+    if previous_severity and previous_severity not in INCIDENT_SEVERITIES:
+        return "Please select a valid incident severity."
+    if not is_create and new_status != previous_status and new_status not in INCIDENT_TRANSITIONS.get(previous_status, set()):
+        return "This incident status transition is not allowed."
+    if new_status == "Resolved":
+        if not note:
+            return "A resolution note is required before resolving an incident."
+        if not checklist_complete:
+            return "Complete the incident checklist before resolving this incident."
+    if new_status == "Waiting external" and not note:
+        return "A note is required for this incident change."
+    if new_status == "Cancelled" and not note:
+        return "A note is required for this incident change."
+    if new_severity == "Critical" and (is_create or new_severity != previous_severity) and not note:
+        return "A note is required for this incident change."
+    if new_severity == "High" and previous_severity and new_severity != previous_severity and not note:
+        return "A note is required for this incident change."
+    if previous_status == "Resolved" and new_status != "Resolved" and not note:
+        return "A note is required when reopening a resolved incident."
+    if previous_status == "Cancelled" and new_status != "Cancelled" and not note:
+        return "A note is required for this incident change."
+    return None
+
+
+def create_incident_record(session_record, incident_type, title, description, severity, responsible_department, due_at=None, evidence_url="", note="", created_by=None):
+    if incident_type not in INCIDENT_TYPES:
+        return None, "Please select a valid incident type."
+    if not (title or "").strip():
+        return None, "Incident title is required."
+    if severity not in INCIDENT_SEVERITIES:
+        return None, "Please select a valid incident severity."
+    if responsible_department not in INCIDENT_RESPONSIBLE_DEPARTMENTS:
+        return None, "Please select a valid responsible department."
+    if evidence_url and not is_valid_url(evidence_url):
+        return None, "Please enter a valid evidence URL."
+    error = validate_incident_change(None, "Open", None, severity, note, is_create=True)
+    if error:
+        return None, error
+    incident = ExamSessionIncident(
+        exam_session_id=session_record.id,
+        incident_type=incident_type,
+        title=title.strip(),
+        description=(description or "").strip() or None,
+        severity=severity,
+        status="Open",
+        responsible_department=responsible_department,
+        due_at=due_at,
+        evidence_url=(evidence_url or "").strip() or None,
+        resolution_note=(note or "").strip() or None,
+        created_by=created_by,
+        updated_by=created_by,
+    )
+    db.session.add(incident)
+    ensure_incident_checklist_items(incident)
+    db.session.add(ExamSessionIncidentEvent(
+        incident=incident,
+        event_type="created",
+        previous_status=None,
+        new_status="Open",
+        previous_severity=None,
+        new_severity=severity,
+        note=(note or "").strip() or None,
+        evidence_url=(evidence_url or "").strip() or None,
+        created_by=created_by,
+    ))
+    return incident, None
+
+
+def apply_incident_update(incident, new_status, new_severity, responsible_department, due_at=None, evidence_url="", note="", updated_by=None):
+    checklist_total, checklist_checked = incident_checklist_counts(incident.checklist_items)
+    checklist_complete = checklist_total > 0 and checklist_checked == checklist_total
+    previous_status = incident.status
+    previous_severity = incident.severity
+    previous_department = incident.responsible_department
+    previous_due_at = incident.due_at
+    note = (note or "").strip()
+    evidence_url = (evidence_url or "").strip()
+    if responsible_department not in INCIDENT_RESPONSIBLE_DEPARTMENTS:
+        return "Please select a valid responsible department."
+    if evidence_url and not is_valid_url(evidence_url):
+        return "Please enter a valid evidence URL."
+    error = validate_incident_change(previous_status, new_status, previous_severity, new_severity, note, checklist_complete=checklist_complete)
+    if error:
+        return error
+    incident.status = new_status
+    incident.severity = new_severity
+    incident.responsible_department = responsible_department
+    incident.due_at = due_at
+    incident.evidence_url = evidence_url or None
+    if note:
+        incident.resolution_note = note
+    incident.updated_by = updated_by
+    now = datetime.now(timezone.utc)
+    event_type = "updated"
+    if new_status != previous_status:
+        event_type = "status_changed"
+        if new_status == "Resolved":
+            incident.resolved_at = now
+            incident.cancelled_at = None
+            event_type = "resolved"
+        elif new_status == "Cancelled":
+            incident.cancelled_at = now
+            incident.resolved_at = None
+            event_type = "cancelled"
+        elif previous_status == "Resolved":
+            incident.resolved_at = None
+            event_type = "reopened"
+        elif previous_status == "Cancelled":
+            incident.cancelled_at = None
+            event_type = "reopened"
+    elif new_severity != previous_severity:
+        event_type = "severity_changed"
+    elif responsible_department != previous_department:
+        event_type = "responsible_changed"
+    elif due_at != previous_due_at:
+        event_type = "deadline_changed"
+    db.session.add(ExamSessionIncidentEvent(
+        incident=incident,
+        event_type=event_type,
+        previous_status=previous_status,
+        new_status=new_status,
+        previous_severity=previous_severity,
+        new_severity=new_severity,
+        note=note or None,
+        evidence_url=evidence_url or None,
+        created_by=updated_by,
+    ))
+    return None
+
+
+def validate_communications_transition(previous_status, new_status, note, checklist_complete=False):
+    if new_status not in COMMUNICATIONS_STATUS_OPTIONS:
+        return "Please select a valid communications status."
+    if previous_status not in COMMUNICATIONS_STATUS_OPTIONS:
+        previous_status = "Not started"
+    if new_status != previous_status and new_status not in COMMUNICATIONS_TRANSITIONS.get(previous_status, set()):
+        return "This communications status transition is not allowed."
+    note = (note or "").strip()
+    if new_status == "Needs follow-up" and not note:
+        return "A note is required when communications need follow-up."
+    if previous_status == "Completed" and new_status != previous_status and not note:
+        return "A note is required when reopening a Completed communications status."
+    if new_status == "Completed" and not checklist_complete:
+        return "All required communications checklist items must be completed before marking Completed."
+    return None
+
+
+def apply_communications_status_update(control_record, new_status, communications_due_at=None, evidence_url="", note="", updated_by=None):
+    ensure_communications_checklist_items(control_record)
+    checklist_total, checklist_checked, _group_counts = communications_checklist_counts(control_record.checklist_items)
+    checklist_complete = checklist_total > 0 and checklist_checked == checklist_total
+    is_new_control = control_record.id is None
+    previous_status = control_record.status or "Not started"
+    note = (note or "").strip()
+    evidence_url = (evidence_url or "").strip()
+    error = validate_communications_transition(previous_status, new_status, note, checklist_complete=checklist_complete)
+    if error:
+        return error
+
+    previous_due_at = control_record.communications_due_at
+    previous_evidence_url = (control_record.evidence_url or "").strip()
+    previous_note = (control_record.note or "").strip()
+    status_changed = previous_status != new_status
+    due_changed = previous_due_at != communications_due_at
+    evidence_changed = previous_evidence_url != evidence_url
+    note_changed = previous_note != note
+    control_record.status = new_status
+    control_record.communications_due_at = communications_due_at
+    control_record.evidence_url = evidence_url or None
+    control_record.note = note or None
+    control_record.responsible_department = "ADMIN"
+    control_record.updated_by = updated_by
+
+    now = datetime.now(timezone.utc)
+    if new_status in {"In progress", "Needs follow-up", "Completed"} and not control_record.started_at:
+        control_record.started_at = now
+    if new_status == "Completed":
+        control_record.completed_at = now
+        control_record.needs_follow_up_at = None
+    elif new_status == "Needs follow-up":
+        control_record.needs_follow_up_at = now
+        control_record.completed_at = None
+    elif new_status == "Not started":
+        control_record.completed_at = None
+        control_record.needs_follow_up_at = None
+    else:
+        control_record.completed_at = None
+        control_record.needs_follow_up_at = None
+
+    if is_new_control or status_changed or due_changed or evidence_changed or note_changed:
+        event_type = "created" if is_new_control else "updated"
+        if status_changed and not is_new_control:
+            event_type = "status_changed"
+        elif due_changed and not is_new_control:
+            event_type = "deadline_changed"
+        elif evidence_changed and not is_new_control:
+            event_type = "evidence_changed"
+        db.session.add(ExamSessionCommunicationsEvent(
+            communications_control=control_record,
+            event_type=event_type,
+            previous_status=previous_status,
+            new_status=new_status,
+            note=note or None,
+            evidence_url=evidence_url or None,
+            created_by=updated_by,
+        ))
+    return None
+
+
+def validate_finance_transition(previous_status, new_status, note):
+    if new_status not in FINANCE_STATUS_OPTIONS:
+        return "Please select a valid finance status."
+    if previous_status not in FINANCE_STATUS_OPTIONS:
+        previous_status = "Not reviewed"
+    if new_status != previous_status and new_status not in FINANCE_TRANSITIONS.get(previous_status, set()):
+        return "This finance status transition is not allowed."
+    note = (note or "").strip()
+    if new_status in FINANCE_NOTE_REQUIRED_STATUSES and not note:
+        return "A note is required for this finance status."
+    if previous_status == "Finance hold" and new_status != previous_status and not note:
+        return "A note is required when changing a Finance hold."
+    if previous_status == "Cleared" and new_status != previous_status and not note:
+        return "A note is required when reopening a Cleared finance status."
+    return None
+
+
+def apply_finance_status_update(control_record, new_status, finance_due_at=None, evidence_url="", note="", updated_by=None):
+    is_new_control = control_record.id is None
+    previous_status = control_record.status or "Not reviewed"
+    previous_due_at = control_record.finance_due_at
+    previous_evidence_url = (control_record.evidence_url or "").strip()
+    previous_note = (control_record.note or "").strip()
+    note = (note or "").strip()
+    evidence_url = (evidence_url or "").strip()
+    error = validate_finance_transition(previous_status, new_status, note)
+    if error:
+        return error
+
+    status_changed = previous_status != new_status
+    due_changed = previous_due_at != finance_due_at
+    evidence_changed = previous_evidence_url != evidence_url
+    note_changed = previous_note != note
+    control_record.status = new_status
+    control_record.finance_due_at = finance_due_at
+    control_record.evidence_url = evidence_url or None
+    control_record.note = note or None
+    control_record.responsible_department = "FINANCE"
+    control_record.updated_by = updated_by
+
+    now = datetime.now(timezone.utc)
+    if new_status != "Not reviewed" and not control_record.reviewed_at:
+        control_record.reviewed_at = now
+    if new_status == "Cleared":
+        control_record.cleared_at = now
+        control_record.hold_at = None
+        control_record.exception_approved_at = None
+    elif new_status == "Finance hold":
+        control_record.hold_at = now
+        control_record.cleared_at = None
+        control_record.exception_approved_at = None
+    elif new_status == "Exception approved":
+        control_record.exception_approved_at = now
+        control_record.cleared_at = None
+        control_record.hold_at = None
+    elif new_status == "Not reviewed":
+        control_record.cleared_at = None
+        control_record.hold_at = None
+        control_record.exception_approved_at = None
+    else:
+        control_record.cleared_at = None
+        control_record.hold_at = None
+        control_record.exception_approved_at = None
+
+    if is_new_control or status_changed or due_changed or evidence_changed or note_changed:
+        event_type = "created" if is_new_control else "updated"
+        if status_changed and not is_new_control:
+            event_type = "status_changed"
+        elif due_changed and not is_new_control:
+            event_type = "deadline_changed"
+        elif evidence_changed and not is_new_control:
+            event_type = "evidence_changed"
+        db.session.add(ExamSessionFinanceEvent(
+            finance_control=control_record,
+            event_type=event_type,
+            previous_status=previous_status,
+            new_status=new_status,
+            previous_finance_due_at=previous_due_at,
+            new_finance_due_at=finance_due_at,
+            note=note or None,
+            evidence_url=evidence_url or None,
+            created_by=updated_by,
+        ))
+    return None
+
+
+def logistics_contract_blocker_messages(contract, concepts=None):
+    blocker_codes = {blocker.get("code") for blocker in contract.get("blockers", [])}
+    concept_by_id = {concept.id: concept for concept in (concepts or [])}
+    messages = []
+    if "LOGISTICS_CONCEPTS_MISSING" in blocker_codes:
+        required_count = len(contract.get("required_member_ids", []))
+        if required_count:
+            messages.append(
+                f"Logistics is enabled for {pluralize_phrase(required_count, 'member')}, but no concepts have been configured."
+            )
+        else:
+            messages.append("Logistics requirements need to be configured.")
+    if "LOGISTICS_CONCEPTS_PENDING" in blocker_codes:
+        for blocker in contract.get("blocking_concepts", []):
+            concept = concept_by_id.get(blocker.get("id"))
+            concept_label = (getattr(concept, "provider", "") or "").strip()
+            if not concept_label:
+                concept_label = "A logistics concept"
+            status = blocker.get("status") or "Pending"
+            messages.append(f"{concept_label} is still {status}.")
+    if "LOGISTICS_FILES_URL_MISSING" in blocker_codes:
+        messages.append("All concepts are confirmed, but the logistics files link is missing.")
+    if not messages:
+        messages = [
+            blocker.get("message")
+            for blocker in contract.get("blockers", [])
+            if blocker.get("message")
+        ]
+    return list(dict.fromkeys(messages))
+
+
+def logistics_presentation_state(contract):
+    status = contract.get("status")
+    total = contract.get("total_concepts", 0)
+    confirmed = contract.get("confirmed_concepts", 0)
+    applies = contract.get("applies", False)
+    ready = contract.get("ready", False)
+    final_email_ready_value = contract.get("final_email_ready", False)
+    has_files_url = contract.get("has_files_url", False)
+    blocker_codes = {blocker.get("code") for blocker in contract.get("blockers", [])}
+
+    if not applies and total == 0:
+        return "not_applicable"
+    if status == "configuration_required" and "LOGISTICS_CONCEPTS_MISSING" in blocker_codes:
+        return "configuration_required"
+    if total > 0 and confirmed < total and not ready:
+        return "in_progress"
+    if total > 0 and confirmed == total and ready and final_email_ready_value:
+        return "ready"
+    if (
+        total > 0
+        and confirmed == total
+        and ready
+        and not final_email_ready_value
+        and not has_files_url
+    ):
+        return "files_link_missing"
+    return "needs_review"
+
+
+def logistics_presentation_from_contract(contract, assignments_by_role=None, concepts=None, logistics_config=None):
+    assignments_by_role = assignments_by_role or {}
+    concepts = concepts or []
+    total = contract.get("total_concepts", 0)
+    confirmed = contract.get("confirmed_concepts", 0)
+    required_count = len(contract.get("required_member_ids", []))
+    state = logistics_presentation_state(contract)
+    labels = {
+        "not_applicable": "Not applicable",
+        "configuration_required": "Configuration required",
+        "in_progress": "In progress",
+        "ready": "Ready",
+        "files_link_missing": "Files link missing",
+        "needs_review": "Needs review",
+    }
+    descriptions = {
+        "not_applicable": "No logistics required",
+        "configuration_required": "Logistics is required but its concepts have not been configured.",
+        "in_progress": f"{confirmed} / {total} concepts confirmed",
+        "ready": "All applicable logistics concepts are confirmed.",
+        "files_link_missing": "All logistics concepts are confirmed, but the logistics files link is missing.",
+        "needs_review": "Logistics data needs to be reviewed.",
+    }
+    if state == "ready" and total:
+        table_summary = f"{confirmed} / {total} concepts confirmed"
+    elif state == "files_link_missing":
+        table_summary = "All concepts confirmed"
+    else:
+        table_summary = descriptions[state]
+    secondary_lines = []
+    if required_count:
+        secondary_lines.append(f"{pluralize_phrase(required_count, 'member')} require{'s' if required_count == 1 else ''} logistics")
+    if total and state not in {"ready", "in_progress"}:
+        secondary_lines.append(f"{confirmed} / {total} concepts confirmed")
+
+    member_rows = []
+    for role, assignments in assignments_by_role.items():
+        for assignment in assignments:
+            member = getattr(assignment, "team_member", None)
+            if (
+                getattr(assignment, "logistics_enabled", False)
+                and getattr(assignment, "team_member_id", None) is not None
+                and member
+                and member.status == "Active"
+            ):
+                member_rows.append({
+                    "name": member.full_name,
+                    "role": role,
+                })
+
+    concept_rows = []
+    for index, concept in enumerate(concepts, start=1):
+        label = (concept.provider or "").strip() or f"Logistics concept {index}"
+        concept_rows.append({
+            "label": label,
+            "status": concept.status,
+        })
+
+    files_url = (logistics_config.logistics_files_url or "").strip() if logistics_config else ""
+    has_files_url = bool(files_url and contract.get("has_files_url"))
+    tooltip_lines = [
+        f"Status: {labels[state]}",
+        f"Members requiring logistics: {required_count}",
+    ]
+    if total:
+        tooltip_lines.append(f"Concepts confirmed: {confirmed} / {total}")
+    else:
+        tooltip_lines.append("Concepts: none")
+    tooltip_lines.append(f"Files: {'Available' if has_files_url else 'Missing'}")
+
+    return {
+        "status": state,
+        "label": labels[state],
+        "description": descriptions[state],
+        "table_summary": table_summary,
+        "secondary_lines": secondary_lines,
+        "required_members": required_count,
+        "total_concepts": total,
+        "confirmed_concepts": confirmed,
+        "member_rows": member_rows,
+        "concept_rows": concept_rows,
+        "blockers": logistics_contract_blocker_messages(contract, concepts),
+        "has_files_url": has_files_url,
+        "files_url": files_url if has_files_url else "",
+        "tooltip": "\n".join(tooltip_lines),
+        "ready": contract.get("ready", False),
+        "final_email_ready": contract.get("final_email_ready", False),
+    }
+
+
+def normalize_package_text(value):
+    return re.sub(r"\s+", " ", (value or "").strip())
+
+
+def parse_optional_non_negative_int(value, field_label):
+    value = (value or "").strip()
+    if value == "":
+        return None, None
+    if not value.isdigit():
+        return None, f"{field_label} must be a non-negative whole number."
+    return int(value), None
+
+
+def package_unit_has_label_mismatch(package_unit):
+    return (
+        package_unit.expected_candidate_count is not None
+        and package_unit.actual_label_count is not None
+        and package_unit.expected_candidate_count != package_unit.actual_label_count
+    )
+
+
+def package_event(package_unit, event_type, previous_status=None, new_status=None, note=None):
+    db.session.add(ExamSessionPackageEvent(
+        package_unit=package_unit,
+        event_type=event_type,
+        previous_status=previous_status,
+        new_status=new_status,
+        note=(note or "").strip() or None,
+        created_by=session.get("user"),
+    ))
+
+
+def ensure_package_unit_checklist_items(package_unit):
+    existing = {
+        (item.phase, item.item_key)
+        for item in package_unit.checklist_items
+    }
+    for phase, templates in PACKAGE_UNIT_CHECKLIST_TEMPLATES.items():
+        for template in templates:
+            key = (phase, template["item_key"])
+            if key in existing:
+                continue
+            db.session.add(ExamSessionPackageChecklistItem(
+                package_unit=package_unit,
+                scope="UNIT",
+                phase=phase,
+                item_key=template["item_key"],
+                label=template["label"],
+                description=template.get("description") or None,
+                is_required=template["is_required"],
+                display_order=template["display_order"],
+            ))
+
+
+def ensure_package_session_checklist_items(session_id):
+    existing_items = ExamSessionPackageChecklistItem.query.filter_by(
+        exam_session_id=session_id,
+        scope="SESSION",
+    ).all()
+    existing = {
+        (item.phase, item.item_key)
+        for item in existing_items
+    }
+    for phase, templates in PACKAGE_SESSION_CHECKLIST_TEMPLATES.items():
+        for template in templates:
+            key = (phase, template["item_key"])
+            if key in existing:
+                continue
+            db.session.add(ExamSessionPackageChecklistItem(
+                exam_session_id=session_id,
+                scope="SESSION",
+                phase=phase,
+                item_key=template["item_key"],
+                label=template["label"],
+                description=template.get("description") or None,
+                is_required=template["is_required"],
+                display_order=template["display_order"],
+            ))
+
+
+def package_item_required(item, package_unit=None):
+    if item.item_key == "add_nep_label" and package_unit and not package_unit.has_nep_candidates:
+        return False
+    return bool(item.is_required)
+
+
+def package_checklist_complete(items, package_unit=None, phase=None):
+    relevant_items = [
+        item for item in items
+        if phase is None or item.phase == phase
+    ]
+    required_items = [
+        item for item in relevant_items
+        if package_item_required(item, package_unit)
+    ]
+    return bool(required_items) and all(item.is_checked for item in required_items)
+
+
+def package_items_by_phase(items):
+    phases = {
+        PACKAGE_PRE_PACKING_PHASE: [],
+        PACKAGE_FINAL_ASSEMBLY_PHASE: [],
+    }
+    for item in sorted(items, key=lambda item: (item.phase, item.display_order, item.id or 0)):
+        phases.setdefault(item.phase, []).append(item)
+    return phases
+
+
+def package_session_checklist_complete(session_items, phase):
+    return package_checklist_complete(session_items, phase=phase)
+
+
+def package_unit_pre_packing_complete(package_unit):
+    return (
+        not package_unit_has_label_mismatch(package_unit)
+        and package_checklist_complete(package_unit.checklist_items, package_unit, PACKAGE_PRE_PACKING_PHASE)
+    )
+
+
+def package_unit_final_assembly_complete(package_unit):
+    return package_checklist_complete(package_unit.checklist_items, package_unit, PACKAGE_FINAL_ASSEMBLY_PHASE)
+
+
+def package_unit_deadline_status(package_unit, today=None):
+    if package_unit.status == "Quality checked":
+        return "completed"
+    if not package_unit.package_deadline:
+        return "not_set"
+    today = today or datetime.now(LOCAL_TZ).date()
+    if package_unit.package_deadline < today:
+        return "overdue"
+    if package_unit.package_deadline == today:
+        return "due_today"
+    return "upcoming"
+
+
+def package_unit_deadline_label(package_unit, today=None):
+    status = package_unit_deadline_status(package_unit, today=today)
+    if status == "completed":
+        return "Completed"
+    if status == "not_set":
+        return "Not set"
+    if status == "overdue":
+        return "Overdue"
+    if status == "due_today":
+        return "Due today"
+    return display_session_date(package_unit.package_deadline)
+
+
+def earliest_package_unit_deadline(package_units, predicate=None):
+    relevant_deadlines = [
+        unit.package_deadline
+        for unit in package_units or []
+        if unit.package_deadline and unit.status != "Quality checked" and (predicate is None or predicate(unit))
+    ]
+    if not relevant_deadlines:
+        return None
+    return min(relevant_deadlines)
+
+
+def package_status_label(status):
+    return {
+        "not_configured": "Not configured",
+        "blocked_schedule": "Blocked",
+        "pre_packing_not_started": "Pre-packing not started",
+        "pre_packing_in_progress": "Pre-packing in progress",
+        "blocked_discrepancy": "Blocked",
+        "impersonal_ready": "Impersonal ready",
+        "ready_for_final_assembly": "Ready for final assembly",
+        "final_assembly_in_progress": "Final assembly in progress",
+        "personalized": "Personalized",
+        "quality_checked": "Quality checked",
+        "needs_review": "Needs review",
+    }.get(status, "Needs review")
+
+
+def packages_readiness_contract(session_record=None, package_units=None, session_items=None, schedule_gate=None, staffing_contract=None):
+    package_units = list(package_units or [])
+    session_items = list(session_items or [])
+    if not package_units:
+        return {
+            "status": "not_configured",
+            "label": "Not configured",
+            "ready": False,
+            "total_package_units": 0,
+            "package_units_by_status": {},
+            "pre_packing_complete_units": 0,
+            "final_complete_units": 0,
+            "quality_checked_units": 0,
+            "summary": "No package units configured",
+            "blockers": ["No package units configured."],
+        }
+
+    known_statuses = set(PACKAGE_UNIT_STATUSES)
+    if any(unit.status not in known_statuses for unit in package_units):
+        status = "needs_review"
+    else:
+        status = ""
+
+    schedule_ready = bool((schedule_gate or {}).get("is_ready"))
+    staffing_ready = bool((staffing_contract or {}).get("ready"))
+    blockers = []
+    mismatch_units = [unit for unit in package_units if package_unit_has_label_mismatch(unit)]
+    status_counts = {}
+    for unit in package_units:
+        status_counts[unit.status] = status_counts.get(unit.status, 0) + 1
+    total_units = len(package_units)
+    pre_complete_units = sum(1 for unit in package_units if package_unit_pre_packing_complete(unit))
+    final_complete_units = sum(1 for unit in package_units if package_unit_final_assembly_complete(unit))
+    quality_checked_units = sum(1 for unit in package_units if unit.status == "Quality checked")
+    session_pre_complete = package_session_checklist_complete(session_items, PACKAGE_PRE_PACKING_PHASE)
+    session_final_complete = package_session_checklist_complete(session_items, PACKAGE_FINAL_ASSEMBLY_PHASE)
+    all_pre_complete = pre_complete_units == total_units and session_pre_complete
+
+    if mismatch_units:
+        status = "blocked_discrepancy"
+        blockers.append("Label count mismatch. Report the issue to MANAGEMENT/ADMIN before continuing.")
+    elif not schedule_ready:
+        status = "blocked_schedule"
+        blockers.append("Schedule approval is required before package pre-packing can begin.")
+    elif status == "needs_review":
+        blockers.append("Packages data needs to be reviewed.")
+    elif quality_checked_units == total_units and session_final_complete:
+        status = "quality_checked"
+    elif all(unit.status in {"Personalized", "Quality checked"} for unit in package_units):
+        status = "personalized"
+    elif any(unit.status == "Final assembly" for unit in package_units):
+        status = "final_assembly_in_progress"
+    elif all_pre_complete and staffing_ready and all(unit.status == "Ready to personalize" for unit in package_units):
+        status = "ready_for_final_assembly"
+    elif all_pre_complete:
+        status = "impersonal_ready"
+        if not staffing_ready:
+            blockers.append("Staffing must be ready before final package assembly can begin.")
+    elif all(unit.status == "Not started" for unit in package_units):
+        status = "pre_packing_not_started"
+    else:
+        status = "pre_packing_in_progress"
+
+    if status not in {"blocked_schedule", "blocked_discrepancy", "not_configured", "quality_checked"}:
+        incomplete_session_pre = not session_pre_complete and any(
+            unit.status in {"Pre-packing", "Impersonal package ready", "Ready to personalize", "Final assembly", "Personalized", "Quality checked"}
+            for unit in package_units
+        )
+        if incomplete_session_pre:
+            blockers.append("Session-level pre-packing checklist is incomplete.")
+        if any(unit.status in {"Final assembly", "Personalized", "Quality checked"} for unit in package_units) and not staffing_ready:
+            blockers.append("Staffing must be ready before final package assembly can begin.")
+    if status in {"personalized", "final_assembly_in_progress"} and not session_final_complete:
+        blockers.append("Session-level final assembly checklist is incomplete.")
+
+    if status == "quality_checked":
+        summary = f"{quality_checked_units} / {total_units} packages checked"
+    elif status == "blocked_discrepancy":
+        summary = f"{len(mismatch_units)} label count mismatch"
+    elif status in {"impersonal_ready", "ready_for_final_assembly"}:
+        summary = f"{pre_complete_units} / {total_units} packages impersonal ready"
+    elif status == "not_configured":
+        summary = "No package units configured"
+    else:
+        summary = f"{pre_complete_units} / {total_units} packages impersonal ready"
+
+    return {
+        "status": status,
+        "label": package_status_label(status),
+        "ready": status == "quality_checked",
+        "total_package_units": total_units,
+        "package_units_by_status": status_counts,
+        "pre_packing_complete_units": pre_complete_units,
+        "final_complete_units": final_complete_units,
+        "quality_checked_units": quality_checked_units,
+        "session_pre_packing_complete": session_pre_complete,
+        "session_final_assembly_complete": session_final_complete,
+        "summary": summary,
+        "blockers": list(dict.fromkeys(blockers)),
+    }
+
+
+def packages_action_contract(session_record, packages_contract=None, schedule_gate=None, staffing_contract=None, package_units=None):
+    packages_contract = packages_contract or {}
+    package_units = list(package_units or [])
+    status = packages_contract.get("status")
+    schedule_ready = bool((schedule_gate or {}).get("is_ready"))
+    staffing_ready = bool((staffing_contract or {}).get("ready"))
+
+    def action(action_key, label, description, deadline=None):
+        return {
+            "action_key": action_key,
+            "label": label,
+            "source": "packages",
+            "source_label": "Packages",
+            "status": "action_required",
+            "description": description,
+            "responsible": "LOGISTICS",
+            "deadline": deadline,
+            "deadline_label": None,
+            "deadline_status": "not_set" if not deadline else None,
+            "target": "packages",
+            "manage_target": "packages",
+            "is_complete": False,
+        }
+
+    if status == "blocked_schedule" or not schedule_ready:
+        return None
+    if status in {"needs_review"}:
+        return action(
+            "review_package_data",
+            "Review package data",
+            "Package data is inconsistent and needs to be reviewed.",
+        )
+    if status == "not_configured":
+        return action(
+            "configure_package_units",
+            "Configure package units",
+            "Package units have not been configured for this session.",
+        )
+    if status == "blocked_discrepancy":
+        return action(
+            "resolve_package_discrepancy",
+            "Resolve package discrepancy",
+            "A label count mismatch must be reported to MANAGEMENT/ADMIN before the process can continue.",
+            earliest_package_unit_deadline(package_units, package_unit_has_label_mismatch),
+        )
+    if status == "pre_packing_not_started":
+        return action(
+            "start_package_pre_packing",
+            "Start package pre-packing",
+            "Package units are configured and pre-packing has not started yet.",
+            earliest_package_unit_deadline(package_units, lambda unit: unit.status != "Quality checked"),
+        )
+    if status == "pre_packing_in_progress":
+        completed = packages_contract.get("pre_packing_complete_units")
+        total = packages_contract.get("total_package_units")
+        if isinstance(completed, int) and isinstance(total, int) and total > 0:
+            description = f"{completed} of {total} package units have completed pre-packing."
+        else:
+            description = "Package pre-packing is in progress."
+        return action(
+            "continue_package_pre_packing",
+            "Continue package pre-packing",
+            description,
+            earliest_package_unit_deadline(package_units, lambda unit: not package_unit_pre_packing_complete(unit)),
+        )
+    if status == "impersonal_ready" and not staffing_ready:
+        return None
+    if status == "ready_for_final_assembly" and staffing_ready:
+        return action(
+            "start_final_package_assembly",
+            "Start final package assembly",
+            "Pre-packing is complete and staffing is ready. Final package assembly can begin.",
+            earliest_package_unit_deadline(package_units, lambda unit: unit.status not in {"Personalized", "Quality checked"}),
+        )
+    if status == "final_assembly_in_progress":
+        return action(
+            "complete_final_package_assembly",
+            "Complete final package assembly",
+            "Final package assembly is in progress.",
+            earliest_package_unit_deadline(package_units, lambda unit: unit.status not in {"Personalized", "Quality checked"}),
+        )
+    if status == "personalized":
+        return action(
+            "complete_package_quality_check",
+            "Complete package quality check",
+            "Packages are personalized and need to be quality checked.",
+            earliest_package_unit_deadline(package_units, lambda unit: unit.status != "Quality checked"),
+        )
+    if status == "quality_checked":
+        return None
+    return action(
+        "review_package_data",
+        "Review package data",
+        "Package readiness could not be determined safely.",
+    )
+
+
+def package_unit_view(package_unit, today=None):
+    phases = package_items_by_phase(package_unit.checklist_items)
+    mismatch = package_unit_has_label_mismatch(package_unit)
+    return {
+        "record": package_unit,
+        "id": package_unit.id,
+        "room_name": package_unit.room_name,
+        "module_name": package_unit.module_name,
+        "expected_candidate_count": package_unit.expected_candidate_count,
+        "actual_label_count": package_unit.actual_label_count,
+        "has_nep_candidates": package_unit.has_nep_candidates,
+        "status": package_unit.status,
+        "responsible_department": package_unit.responsible_department,
+        "deadline": package_unit.package_deadline,
+        "deadline_label": package_unit_deadline_label(package_unit, today=today),
+        "deadline_status": package_unit_deadline_status(package_unit, today=today),
+        "note": package_unit.note or "",
+        "has_label_mismatch": mismatch,
+        "pre_packing_complete": package_unit_pre_packing_complete(package_unit),
+        "final_assembly_complete": package_unit_final_assembly_complete(package_unit),
+        "pre_packing_items": phases.get(PACKAGE_PRE_PACKING_PHASE, []),
+        "final_assembly_items": phases.get(PACKAGE_FINAL_ASSEMBLY_PHASE, []),
+        "events": sorted(package_unit.events, key=lambda event: (event.created_at, event.id or 0), reverse=True),
+    }
+
+
+def package_session_item_views(session_items, phase):
+    return [
+        item for item in sorted(session_items, key=lambda item: (item.display_order, item.id or 0))
+        if item.phase == phase
+    ]
+
+
+def package_transition_allowed(package_unit, new_status, schedule_gate=None, staffing_contract=None, note=""):
+    old_status = package_unit.status
+    allowed = {
+        "Not started": {"Pre-packing"},
+        "Pre-packing": {"Pre-packing blocked", "Impersonal package ready"},
+        "Pre-packing blocked": {"Pre-packing"},
+        "Impersonal package ready": {"Ready to personalize", "Pre-packing"},
+        "Ready to personalize": {"Final assembly", "Pre-packing"},
+        "Final assembly": {"Personalized", "Ready to personalize"},
+        "Personalized": {"Quality checked", "Final assembly"},
+        "Quality checked": {"Personalized"},
+        "Needs review": {"Pre-packing"},
+    }
+    if new_status not in PACKAGE_UNIT_STATUSES:
+        return "Please select a valid package status."
+    if new_status == "Needs review" and old_status != "Needs review":
+        if not (note or "").strip():
+            return "A note is required when marking packages as Needs review."
+        return ""
+    if new_status not in allowed.get(old_status, set()):
+        return "This package status transition is not allowed."
+    reopening_transitions = {
+        ("Impersonal package ready", "Pre-packing"),
+        ("Ready to personalize", "Pre-packing"),
+        ("Final assembly", "Ready to personalize"),
+        ("Personalized", "Final assembly"),
+        ("Quality checked", "Personalized"),
+    }
+    is_reopening_transition = (old_status, new_status) in reopening_transitions
+    if is_reopening_transition and not (note or "").strip():
+        return "A note is required when reopening or moving a package backwards."
+    if new_status in {"Pre-packing", "Pre-packing blocked", "Impersonal package ready", "Ready to personalize", "Final assembly", "Personalized", "Quality checked"}:
+        if not (schedule_gate or {}).get("is_ready"):
+            return "Schedule approval is required before package pre-packing can begin."
+    if new_status in {"Final assembly", "Personalized", "Quality checked"} and not (staffing_contract or {}).get("ready"):
+        return "Staffing must be ready before final package assembly can begin."
+    if package_unit_has_label_mismatch(package_unit) and new_status not in {"Pre-packing blocked", "Pre-packing"}:
+        return "Label count mismatch. Report the issue to MANAGEMENT/ADMIN before continuing."
+    if new_status == "Impersonal package ready" and not package_unit_pre_packing_complete(package_unit):
+        return "Complete the required pre-packing checklist before marking this package impersonal ready."
+    if new_status == "Final assembly" and not package_unit_pre_packing_complete(package_unit):
+        return "Pre-packing must be complete before final package assembly can begin."
+    if new_status == "Personalized" and not is_reopening_transition and not package_unit_final_assembly_complete(package_unit):
+        return "Complete the required final assembly checklist before marking this package personalized."
+    if new_status == "Quality checked":
+        if not package_unit_final_assembly_complete(package_unit):
+            return "Complete the required final assembly checklist before quality check."
+        if package_unit_has_label_mismatch(package_unit):
+            return "Label count mismatch. Report the issue to MANAGEMENT/ADMIN before continuing."
+    return ""
+
+
+def shipment_event(bundle, event_type, previous_status=None, new_status=None, note="", tracking_number=None):
+    db.session.add(ExamSessionShipmentEvent(
+        bundle=bundle,
+        event_type=event_type,
+        previous_status=previous_status,
+        new_status=new_status,
+        note=(note or "").strip() or None,
+        tracking_number=(tracking_number or "").strip() or None,
+        created_by=session.get("user") if has_request_context() else "system",
+    ))
+
+
+def ensure_shipment_checklist_items(bundle):
+    existing = {item.item_key for item in bundle.checklist_items}
+    for template in SHIPMENT_CHECKLIST_TEMPLATES:
+        if template["item_key"] in existing:
+            continue
+        db.session.add(ExamSessionShipmentChecklistItem(
+            bundle=bundle,
+            item_key=template["item_key"],
+            label=template["label"],
+            description=template["description"],
+            is_required=template["is_required"],
+            display_order=template["display_order"],
+        ))
+
+
+def shipment_checklist_complete(bundle):
+    required_items = [item for item in bundle.checklist_items if item.is_required]
+    return bool(required_items) and all(item.is_checked for item in required_items)
+
+
+def shipment_bundle_sessions(bundle):
+    return [
+        link.exam_session
+        for link in sorted(bundle.session_links, key=lambda link: ((link.exam_session.session_date if link.exam_session else None) or datetime.max.date(), link.exam_session_id))
+        if link.exam_session
+    ]
+
+
+def session_packages_quality_checked(session_record):
+    package_units = list(getattr(session_record, "package_units", []) or [])
+    session_items = list(getattr(session_record, "package_session_checklist_items", []) or [])
+    if not package_units:
+        return False
+    if any(unit.status != "Quality checked" for unit in package_units):
+        return False
+    contract = packages_readiness_contract(
+        session_record,
+        package_units,
+        session_items,
+        schedule_gate={"is_ready": True},
+        staffing_contract={"ready": True},
+    )
+    return bool(contract.get("ready"))
+
+
+def shipment_bundle_readiness_contract(bundle):
+    included_sessions = shipment_bundle_sessions(bundle)
+    sessions_count = len(included_sessions)
+    packages_ready_count = sum(1 for session_record in included_sessions if session_packages_quality_checked(session_record))
+    packages_missing_count = sessions_count - packages_ready_count
+    checklist_items = sorted(bundle.checklist_items, key=lambda item: (item.display_order, item.id or 0))
+    checklist_total = sum(1 for item in checklist_items if item.is_required)
+    checklist_checked = sum(1 for item in checklist_items if item.is_required and item.is_checked)
+    tracking_available = bool((bundle.tracking_number or "").strip())
+    courier = (bundle.courier or "").strip() or SHIPMENT_DEFAULT_COURIER
+    delivery_address_available = bool((bundle.delivery_address or "").strip())
+    supervisor_available = bool(bundle.supervisor_staff_id)
+    blockers = []
+    if sessions_count == 0:
+        blockers.append({"code": "NO_SESSIONS", "message": "Add at least one session to this shipment bundle."})
+    if packages_missing_count:
+        blockers.append({
+            "code": "PACKAGES_NOT_READY",
+            "message": "All included sessions must have packages quality checked before dispatch.",
+        })
+    if checklist_checked < checklist_total:
+        blockers.append({"code": "CHECKLIST_INCOMPLETE", "message": "Complete the shipment pre-dispatch checklist."})
+    if not delivery_address_available:
+        blockers.append({"code": "DELIVERY_ADDRESS_MISSING", "message": "Delivery address is required."})
+    if not supervisor_available:
+        blockers.append({"code": "SUPERVISOR_MISSING", "message": "Supervisor recipient is required."})
+    ready_to_dispatch = (
+        sessions_count > 0
+        and packages_missing_count == 0
+        and checklist_total > 0
+        and checklist_checked == checklist_total
+        and delivery_address_available
+        and supervisor_available
+    )
+    return {
+        "status": bundle.status,
+        "sessions_count": sessions_count,
+        "packages_ready_count": packages_ready_count,
+        "packages_missing_count": packages_missing_count,
+        "checklist_total": checklist_total,
+        "checklist_checked": checklist_checked,
+        "tracking_available": tracking_available,
+        "courier": courier,
+        "delivery_address_available": delivery_address_available,
+        "ready_to_dispatch": ready_to_dispatch,
+        "delivered": bundle.status in {"Delivered successfully", "Recipient review successful", "Recipient review with discrepancy"},
+        "recipient_review_completed": bundle.status in {"Recipient review successful", "Recipient review with discrepancy"},
+        "blockers": blockers,
+    }
+
+
+def shipment_status_label(status):
+    if status in SHIPMENT_COMPLETED_STATUSES:
+        return status
+    return status if status in SHIPMENT_BUNDLE_STATUSES else "Needs review"
+
+
+def is_shipment_bundle_completed(bundle):
+    if not bundle:
+        return False
+    return (bundle.status or "").strip() in SHIPMENT_COMPLETED_STATUSES
+
+
+def session_shipment_contract(session_record, shipment_link=None):
+    if not shipment_link or not shipment_link.bundle:
+        return {
+            "status": "not_bundled",
+            "label": "Not bundled",
+            "summary": "No shipment bundle assigned",
+            "bundle": None,
+            "bundle_id": None,
+            "bundle_number": "",
+            "blocked": False,
+            "secondary_lines": ["Supervisor required"],
+            "readiness": None,
+        }
+    bundle = shipment_link.bundle
+    readiness = shipment_bundle_readiness_contract(bundle)
+    supervisor_name = bundle.supervisor.full_name if bundle.supervisor else "Supervisor not set"
+    status = bundle.status
+    completed = is_shipment_bundle_completed(bundle)
+    sessions_count = readiness["sessions_count"]
+    packages_ready_count = readiness["packages_ready_count"]
+    packages_missing_count = readiness["packages_missing_count"]
+    blocked = packages_missing_count > 0 and not completed
+    session_packages_ready = session_packages_quality_checked(session_record)
+    bundle_number = shipment_bundle_display_number(bundle)
+    secondary_lines = [f"Bundle of {sessions_count} session{'s' if sessions_count != 1 else ''}"]
+    if completed:
+        label = shipment_status_label(status)
+        summary = "Bundle completed"
+        secondary_lines = ["Bundle completed", shipment_status_label(status)]
+    elif blocked:
+        label = "BLOCKED"
+        summary = "Blocked until all packages are confirmed."
+        secondary_lines.append(f"{packages_ready_count}/{sessions_count} packages confirmed")
+        if session_packages_ready:
+            secondary_lines.append("Waiting for other sessions")
+        else:
+            secondary_lines.append("Blocking bundle - Packages pending")
+    else:
+        label = shipment_status_label(status)
+        secondary_lines.append(f"{packages_ready_count}/{sessions_count} packages confirmed")
+    if completed:
+        summary = "Bundle completed"
+    elif status == "Preparing bundle":
+        summary = summary if blocked else f"Bundle with {supervisor_name}. {packages_ready_count}/{sessions_count} packages confirmed"
+    elif status == "Ready to dispatch":
+        summary = summary if blocked else ("Checklist complete" if readiness["ready_to_dispatch"] else "Ready status needs review")
+    elif status in {"Dispatched", "Recipient notified", "In transit to recipient", "In transit to post office", "Delayed"}:
+        summary = summary if blocked else (f"Tracking: {bundle.tracking_number}" if bundle.tracking_number else "Tracking not set")
+    elif status == "Delivered successfully":
+        summary = summary if blocked else "Pending recipient review"
+    elif status == "Recipient review successful":
+        summary = summary if blocked else "Recipient review complete"
+    elif status == "Recipient review with discrepancy":
+        summary = summary if blocked else "Review required"
+    else:
+        summary = summary if blocked else "Shipment data needs review"
+    return {
+        "status": status,
+        "label": label,
+        "summary": summary,
+        "bundle": bundle,
+        "bundle_id": bundle.id,
+        "bundle_number": bundle_number,
+        "blocked": blocked,
+        "completed": completed,
+        "session_packages_ready": session_packages_ready,
+        "secondary_lines": secondary_lines,
+        "readiness": readiness,
+    }
+
+
+def shipments_action_contract(session_record, shipment_contract=None, packages_contract=None):
+    shipment_contract = shipment_contract or {}
+    packages_contract = packages_contract or {}
+    status = shipment_contract.get("status")
+    bundle = shipment_contract.get("bundle")
+    readiness = shipment_contract.get("readiness") or {}
+
+    def action(action_key, label, description, deadline=None):
+        sessions_count = readiness.get("sessions_count") or 0
+        supervisor_name = bundle.supervisor.full_name if bundle and bundle.supervisor else "Supervisor not set"
+        return {
+            "action_key": action_key,
+            "label": label,
+            "source": "shipments",
+            "source_label": "Shipments",
+            "status": "action_required",
+            "description": description,
+            "responsible": "LOGISTICS",
+            "deadline": deadline,
+            "deadline_label": None,
+            "deadline_status": "not_set" if not deadline else None,
+            "target": "shipments",
+            "manage_target": "shipments",
+            "bundle_id": bundle.id if bundle else None,
+            "bundle_label": f"Bundle: {supervisor_name} · {sessions_count} sessions" if bundle and sessions_count > 1 else "",
+            "bundle_sessions_count": sessions_count,
+            "is_complete": False,
+        }
+
+    if status == "not_bundled":
+        if packages_contract.get("ready"):
+            return action(
+                "create_shipment_bundle",
+                "Create shipment bundle",
+                "Packages are quality checked and the session is not included in a shipment bundle yet.",
+            )
+        return None
+
+    if not bundle:
+        return action(
+            "review_shipment_data",
+            "Review shipment data",
+            "Shipment data is inconsistent and needs to be reviewed.",
+        )
+
+    dispatch_due_at = bundle.dispatch_due_at
+    known_statuses = set(SHIPMENT_BUNDLE_STATUSES)
+    if status not in known_statuses:
+        return action(
+            "review_shipment_data",
+            "Review shipment data",
+            "Shipment readiness could not be determined safely.",
+            dispatch_due_at,
+        )
+
+    blocker_codes = {blocker.get("code") for blocker in readiness.get("blockers", []) if isinstance(blocker, dict)}
+    if status == "Preparing bundle":
+        only_packages_missing = blocker_codes == {"PACKAGES_NOT_READY"}
+        if only_packages_missing:
+            return None
+        if "SUPERVISOR_MISSING" in blocker_codes:
+            return action(
+                "review_shipment_data",
+                "Review shipment data",
+                "Shipment data is inconsistent and needs to be reviewed.",
+                dispatch_due_at,
+            )
+        if "CHECKLIST_INCOMPLETE" in blocker_codes:
+            description = "The shipment bundle checklist is not complete."
+        elif "PACKAGES_NOT_READY" in blocker_codes:
+            description = "All included sessions must have packages quality checked before dispatch."
+        elif "DELIVERY_ADDRESS_MISSING" in blocker_codes:
+            description = "Delivery address must be completed before dispatch."
+        elif readiness.get("ready_to_dispatch"):
+            description = "The shipment bundle can be marked as ready to dispatch."
+        else:
+            description = "Shipment data is inconsistent and needs to be reviewed."
+            return action("review_shipment_data", "Review shipment data", description, dispatch_due_at)
+        return action(
+            "complete_shipment_bundle_preparation",
+            "Complete shipment bundle preparation",
+            description,
+            dispatch_due_at,
+        )
+    if status == "Ready to dispatch":
+        return action(
+            "dispatch_shipment_bundle",
+            "Dispatch shipment bundle",
+            "The shipment bundle is ready to dispatch.",
+            dispatch_due_at,
+        )
+    if status == "In transit to post office":
+        return action(
+            "confirm_shipment_dispatch",
+            "Confirm shipment dispatch",
+            "Confirm that the shipment bundle was dispatched and add the tracking number.",
+            dispatch_due_at,
+        )
+    if status == "Dispatched":
+        return action(
+            "notify_shipment_recipient",
+            "Notify recipient",
+            "The shipment has been dispatched. Notify the recipient and share the tracking information.",
+            dispatch_due_at,
+        )
+    if status == "Recipient notified":
+        return action(
+            "track_shipment_to_recipient",
+            "Track shipment to recipient",
+            "The recipient has been notified. Track the shipment until it reaches destination.",
+            dispatch_due_at,
+        )
+    if status == "In transit to recipient":
+        return action(
+            "monitor_shipment_delivery",
+            "Monitor shipment delivery",
+            "The shipment is in transit to the recipient.",
+            dispatch_due_at,
+        )
+    if status == "Delayed":
+        return action(
+            "resolve_shipment_delay",
+            "Resolve shipment delay",
+            "The shipment is currently marked as delayed and requires follow-up.",
+            dispatch_due_at,
+        )
+    if status == "Delivered successfully":
+        return action(
+            "complete_recipient_review",
+            "Complete recipient review",
+            "The shipment was delivered successfully and is awaiting recipient review.",
+        )
+    if status == "Recipient review with discrepancy":
+        return action(
+            "resolve_recipient_review_discrepancy",
+            "Resolve recipient review discrepancy",
+            "The recipient review reported a discrepancy that needs to be resolved.",
+        )
+    if status == "Recipient review successful":
+        return None
+    return action(
+        "review_shipment_data",
+        "Review shipment data",
+        "Shipment readiness could not be determined safely.",
+        dispatch_due_at,
+    )
+
+
+def normalize_shipment_address(value):
+    return re.sub(r"\s+", " ", (value or "").strip()).casefold()
+
+
+def supervisor_delivery_address(supervisor):
+    if not supervisor:
+        return ""
+    return normalize_package_text(supervisor.full_address_google_maps or "")
+
+
+def shipment_dispatch_deadline(earliest_session_date):
+    if not earliest_session_date:
+        return None
+    return earliest_session_date - timedelta(days=SHIPMENT_TRANSIT_DAYS + SHIPMENT_RECEPTION_BUFFER_DAYS)
+
+
+def shipment_bundle_year_from_sessions(bundle):
+    session_dates = [session_record.session_date for session_record in shipment_bundle_sessions(bundle) if session_record.session_date]
+    if session_dates:
+        return min(session_dates).year
+    if bundle.dispatch_due_at:
+        return bundle.dispatch_due_at.year
+    return datetime.now(LOCAL_TZ).date().year
+
+
+def shipment_bundle_display_number(bundle):
+    if not bundle:
+        return ""
+    return bundle.bundle_number or f"#{bundle.id}"
+
+
+def next_shipment_bundle_sequence(bundle_year):
+    max_sequence = (
+        db.session.query(db.func.max(ExamSessionShipmentBundle.bundle_sequence))
+        .filter(ExamSessionShipmentBundle.bundle_year == bundle_year)
+        .scalar()
+    )
+    if max_sequence:
+        return max_sequence + 1
+    max_from_number = 0
+    suffix = f"-{str(bundle_year)[-2:]}"
+    existing_numbers = (
+        ExamSessionShipmentBundle.query
+        .filter(ExamSessionShipmentBundle.bundle_number.like(f"%{suffix}"))
+        .with_entities(ExamSessionShipmentBundle.bundle_number)
+        .all()
+    )
+    for (number,) in existing_numbers:
+        match = re.match(r"^(\d+)-\d{2}$", number or "")
+        if match:
+            max_from_number = max(max_from_number, int(match.group(1)))
+    return max_from_number + 1
+
+
+def assign_shipment_bundle_number(bundle, bundle_year=None):
+    if bundle.bundle_number and bundle.bundle_sequence and bundle.bundle_year:
+        return False
+    bundle_year = bundle_year or bundle.bundle_year or shipment_bundle_year_from_sessions(bundle)
+    if not bundle.bundle_sequence:
+        bundle.bundle_sequence = next_shipment_bundle_sequence(bundle_year)
+    bundle.bundle_year = bundle_year
+    bundle.bundle_number = f"{bundle.bundle_sequence}-{str(bundle_year)[-2:]}"
+    return True
+
+
+def backfill_shipment_bundle_numbers():
+    changed = False
+    bundles = ExamSessionShipmentBundle.query.order_by(ExamSessionShipmentBundle.created_at.asc(), ExamSessionShipmentBundle.id.asc()).all()
+    for bundle in bundles:
+        if bundle.auto_managed is None:
+            bundle.auto_managed = False
+            changed = True
+        if not bundle.bundle_number or not bundle.bundle_sequence or not bundle.bundle_year:
+            changed = assign_shipment_bundle_number(bundle) or changed
+    return changed
+
+
+def shipment_bundle_event_exists(bundle, event_type, note=""):
+    query = ExamSessionShipmentEvent.query.filter_by(bundle_id=bundle.id, event_type=event_type)
+    if note:
+        query = query.filter(ExamSessionShipmentEvent.note == note)
+    return db.session.query(query.exists()).scalar()
+
+
+def shipment_event_once(bundle, event_type, previous_status=None, new_status=None, note="", tracking_number=None):
+    if shipment_bundle_event_exists(bundle, event_type, (note or "").strip() or None):
+        return
+    shipment_event(bundle, event_type, previous_status, new_status, note, tracking_number)
+
+
+def shipment_recipient_supervisor_assignment(assignments):
+    assigned = [assignment for assignment in assignments or [] if assignment.team_member_id]
+    if not assigned:
+        return None
+    return sorted(assigned, key=lambda item: (item.created_on or datetime.min, item.id or 0))[0]
+
+
+def get_exam_session_shipment_recipient_supervisor(assignments):
+    assignment = shipment_recipient_supervisor_assignment(assignments)
+    if not assignment:
+        return None
+    if assignment.team_member:
+        return assignment.team_member
+    return AcademicStaff.query.get(assignment.team_member_id)
+
+
+def auto_bundle_supervisor_for_session(session_record, supervisor_assignments_by_session):
+    if not session_record.session_date:
+        return None, "Session date missing"
+    supervisor = get_exam_session_shipment_recipient_supervisor(supervisor_assignments_by_session.get(session_record.id, []))
+    if not supervisor:
+        return None, "Supervisor required"
+    return supervisor, ""
+
+
+def shipment_bundle_deadline_for_sessions(sessions):
+    dates = [session_record.session_date for session_record in sessions if session_record.session_date]
+    if not dates:
+        return None
+    return shipment_dispatch_deadline(min(dates))
+
+
+def create_auto_shipment_bundle(supervisor, sessions, bundle_year, split_from_bundle=None, event_note="Bundle automatically created."):
+    sessions = sorted(sessions, key=lambda item: (item.session_date or datetime.max.date(), item.exam_session_name.lower(), item.id or 0))
+    bundle = ExamSessionShipmentBundle(
+        supervisor_staff_id=supervisor.id,
+        delivery_address=supervisor_delivery_address(supervisor) or "Supervisor address required",
+        delivery_city=supervisor.city or None,
+        delivery_province=supervisor.province or None,
+        courier=SHIPMENT_DEFAULT_COURIER,
+        status="Preparing bundle",
+        dispatch_due_at=shipment_bundle_deadline_for_sessions(sessions),
+        responsible_department="LOGISTICS",
+        auto_managed=True,
+        split_from_bundle_id=split_from_bundle.id if split_from_bundle else None,
+        created_by="system",
+        updated_by="system",
+    )
+    assign_shipment_bundle_number(bundle, bundle_year)
+    db.session.add(bundle)
+    db.session.flush()
+    for session_record in sessions:
+        db.session.add(ExamSessionShipmentBundleSession(bundle=bundle, exam_session_id=session_record.id))
+    ensure_shipment_checklist_items(bundle)
+    shipment_event(bundle, "AUTO_BUNDLE_CREATED", None, bundle.status, event_note)
+    return bundle
+
+
+def update_auto_bundle_deadline(bundle):
+    if is_shipment_bundle_completed(bundle) or bundle.status in SHIPMENT_PROTECTED_STATUSES:
+        return False
+    deadline = shipment_bundle_deadline_for_sessions(shipment_bundle_sessions(bundle))
+    if bundle.dispatch_due_at != deadline:
+        previous = bundle.dispatch_due_at.isoformat() if bundle.dispatch_due_at else "not set"
+        bundle.dispatch_due_at = deadline
+        bundle.updated_by = "system"
+        shipment_event(bundle, "AUTO_BUNDLE_DEADLINE_RECALCULATED", bundle.status, bundle.status, f"Bundle deadline recalculated from {previous}.")
+        return True
+    return False
+
+
+def split_overdue_auto_bundle_if_needed(bundle, today=None):
+    today = today or datetime.now(LOCAL_TZ).date()
+    if is_shipment_bundle_completed(bundle) or not bundle.auto_managed or bundle.status not in SHIPMENT_AUTO_MANAGED_STATUSES:
+        return False
+    included_sessions = shipment_bundle_sessions(bundle)
+    if len(included_sessions) <= 1 or not bundle.dispatch_due_at or today <= bundle.dispatch_due_at:
+        return False
+    confirmed_sessions = [session_record for session_record in included_sessions if session_packages_quality_checked(session_record)]
+    if len(confirmed_sessions) == len(included_sessions):
+        return False
+    pending_sessions = [session_record for session_record in included_sessions if session_record not in confirmed_sessions]
+    if not pending_sessions:
+        return False
+    original_keep = confirmed_sessions if confirmed_sessions else pending_sessions[:1]
+    sessions_to_move = pending_sessions if confirmed_sessions else pending_sessions[1:]
+    if not sessions_to_move:
+        update_auto_bundle_deadline(bundle)
+        return False
+    existing_links = {link.exam_session_id: link for link in list(bundle.session_links)}
+    for session_record in sessions_to_move:
+        link = existing_links.get(session_record.id)
+        if link:
+            db.session.delete(link)
+    bundle.auto_split_at = bundle.auto_split_at or datetime.now(timezone.utc)
+    bundle.updated_by = "system"
+    update_auto_bundle_deadline(bundle)
+    split_note = "Bundle automatically split because the unified deadline had expired and not all packages were confirmed."
+    shipment_event_once(bundle, "AUTO_BUNDLE_SPLIT", bundle.status, bundle.status, split_note)
+    supervisor = bundle.supervisor
+    bundle_year = bundle.bundle_year or shipment_bundle_year_from_sessions(bundle)
+    for session_record in sessions_to_move:
+        new_bundle = create_auto_shipment_bundle(
+            supervisor,
+            [session_record],
+            bundle_year,
+            split_from_bundle=bundle,
+            event_note="Session moved to split bundle after the unified deadline expired.",
+        )
+        new_bundle.auto_split_at = datetime.now(timezone.utc)
+        shipment_event(new_bundle, "SESSION_MOVED_TO_SPLIT_BUNDLE", None, new_bundle.status, session_record.exam_session_name)
+    return True
+
+
+def reconcile_auto_shipment_bundles(year_or_sessions, today=None):
+    today = today or datetime.now(LOCAL_TZ).date()
+    if isinstance(year_or_sessions, int):
+        selected_year = year_or_sessions
+        sessions = (
+            ExamSession.query.filter(db.extract("year", ExamSession.session_date) == selected_year)
+            .order_by(ExamSession.session_date.asc(), ExamSession.exam_session_name.asc())
+            .all()
+        )
+    else:
+        sessions = list(year_or_sessions or [])
+        selected_year = min([session_record.session_date.year for session_record in sessions if session_record.session_date], default=today.year)
+    backfill_shipment_bundle_numbers()
+    session_ids = [session_record.id for session_record in sessions]
+    supervisor_records = (
+        ExamSessionSupervisorAssignment.query.filter(ExamSessionSupervisorAssignment.exam_session_id.in_(session_ids))
+        .options(joinedload(ExamSessionSupervisorAssignment.team_member))
+        .order_by(ExamSessionSupervisorAssignment.created_on.asc(), ExamSessionSupervisorAssignment.id.asc())
+        .all()
+        if session_ids else []
+    )
+    supervisor_assignments_by_session = {}
+    for assignment in supervisor_records:
+        supervisor_assignments_by_session.setdefault(assignment.exam_session_id, []).append(assignment)
+    shipment_links = (
+        ExamSessionShipmentBundleSession.query.filter(ExamSessionShipmentBundleSession.exam_session_id.in_(session_ids))
+        .options(joinedload(ExamSessionShipmentBundleSession.bundle).joinedload(ExamSessionShipmentBundle.supervisor))
+        .all()
+        if session_ids else []
+    )
+    links_by_session = {link.exam_session_id: link for link in shipment_links}
+    auto_bundles = {
+        link.bundle for link in shipment_links
+        if link.bundle and link.bundle.auto_managed and link.bundle.status in SHIPMENT_AUTO_MANAGED_STATUSES
+    }
+    changed = False
+    for bundle in sorted(auto_bundles, key=lambda item: (item.dispatch_due_at or datetime.max.date(), item.id or 0)):
+        changed = split_overdue_auto_bundle_if_needed(bundle, today=today) or changed
+    if changed:
+        db.session.flush()
+        shipment_links = (
+            ExamSessionShipmentBundleSession.query.filter(ExamSessionShipmentBundleSession.exam_session_id.in_(session_ids))
+            .options(joinedload(ExamSessionShipmentBundleSession.bundle).joinedload(ExamSessionShipmentBundle.supervisor))
+            .all()
+            if session_ids else []
+        )
+        links_by_session = {link.exam_session_id: link for link in shipment_links}
+    eligible_by_supervisor = {}
+    for session_record in sessions:
+        supervisor, reason = auto_bundle_supervisor_for_session(session_record, supervisor_assignments_by_session)
+        if reason or not supervisor:
+            continue
+        current_link = links_by_session.get(session_record.id)
+        if current_link and current_link.bundle:
+            bundle = current_link.bundle
+            if is_shipment_bundle_completed(bundle) or bundle.status in SHIPMENT_PROTECTED_STATUSES or not bundle.auto_managed:
+                continue
+            if bundle.split_from_bundle_id:
+                update_auto_bundle_deadline(bundle)
+                continue
+            if bundle.supervisor_staff_id == supervisor.id:
+                update_auto_bundle_deadline(bundle)
+                continue
+            db.session.delete(current_link)
+            shipment_event(bundle, "SESSION_REMOVED_FROM_AUTO_BUNDLE", bundle.status, bundle.status, session_record.exam_session_name)
+            changed = True
+        eligible_by_supervisor.setdefault(supervisor.id, {"supervisor": supervisor, "sessions": []})["sessions"].append(session_record)
+    for group in eligible_by_supervisor.values():
+        supervisor = group["supervisor"]
+        group_sessions = sorted(group["sessions"], key=lambda item: (item.session_date or datetime.max.date(), item.exam_session_name.lower(), item.id or 0))
+        if not group_sessions:
+            continue
+        existing_bundle = (
+            ExamSessionShipmentBundle.query
+            .filter_by(auto_managed=True, supervisor_staff_id=supervisor.id, bundle_year=selected_year, split_from_bundle_id=None)
+            .filter(ExamSessionShipmentBundle.status.in_(list(SHIPMENT_AUTO_MANAGED_STATUSES)))
+            .order_by(ExamSessionShipmentBundle.dispatch_due_at.asc(), ExamSessionShipmentBundle.id.asc())
+            .first()
+        )
+        if existing_bundle:
+            existing_ids = {link.exam_session_id for link in existing_bundle.session_links}
+            for session_record in group_sessions:
+                if session_record.id not in existing_ids:
+                    db.session.add(ExamSessionShipmentBundleSession(bundle=existing_bundle, exam_session_id=session_record.id))
+                    shipment_event(existing_bundle, "SESSION_ADDED_TO_AUTO_BUNDLE", existing_bundle.status, existing_bundle.status, session_record.exam_session_name)
+                    changed = True
+            update_auto_bundle_deadline(existing_bundle)
+        else:
+            new_bundle = create_auto_shipment_bundle(supervisor, group_sessions, selected_year)
+            db.session.flush()
+            split_overdue_auto_bundle_if_needed(new_bundle, today=today)
+            changed = True
+    if changed:
+        db.session.commit()
+    else:
+        db.session.flush()
+    return changed
+
+
+def shipment_planning_label(status):
+    return {
+        "needs_review": "Needs review",
+        "delivery_address_needed": "Delivery address needed",
+        "waiting_for_packages": "Waiting for packages",
+        "bundle_recommended": "Bundle recommended",
+        "bundle_possible": "Bundle possible",
+        "split_required": "Split shipment required",
+        "dispatch_overdue": "Dispatch overdue",
+        "delivery_at_risk": "Delivery at risk",
+        "on_track": "On track",
+        "completed": "Completed",
+    }.get(status, "Needs review")
+
+
+def shipment_planning_severity(status):
+    return {
+        "needs_review": "warning",
+        "delivery_address_needed": "warning",
+        "waiting_for_packages": "info",
+        "bundle_recommended": "info",
+        "bundle_possible": "info",
+        "split_required": "danger",
+        "dispatch_overdue": "danger",
+        "delivery_at_risk": "danger",
+        "on_track": "success",
+        "completed": "success",
+    }.get(status, "warning")
+
+
+def shipment_planning_contract(
+    session_record,
+    all_year_sessions=None,
+    supervisor_assignments_by_session=None,
+    shipment_links_by_session=None,
+    packages_contracts_by_session=None,
+    today=None,
+):
+    all_year_sessions = list(all_year_sessions or [])
+    supervisor_assignments_by_session = supervisor_assignments_by_session or {}
+    shipment_links_by_session = shipment_links_by_session or {}
+    packages_contracts_by_session = packages_contracts_by_session or {}
+    today = today or datetime.now(LOCAL_TZ).date()
+    current_link = shipment_links_by_session.get(session_record.id)
+    current_bundle = current_link.bundle if current_link and current_link.bundle else None
+    supervisor = get_exam_session_shipment_recipient_supervisor(
+        supervisor_assignments_by_session.get(session_record.id, [])
+    )
+
+    def base(status, reason, supervisor=None, delivery_address="", earliest_session_date=None, candidate_sessions=None, suggested_action="", current_bundle=None):
+        dispatch_deadline = shipment_dispatch_deadline(earliest_session_date)
+        return {
+            "status": status,
+            "label": shipment_planning_label(status),
+            "severity": shipment_planning_severity(status),
+            "reason": reason,
+            "supervisor": {
+                "id": supervisor.id if supervisor else None,
+                "name": supervisor.full_name if supervisor else "",
+            },
+            "delivery_address": delivery_address or "",
+            "earliest_session_date": earliest_session_date,
+            "dispatch_deadline": dispatch_deadline,
+            "candidate_sessions": candidate_sessions or [],
+            "current_bundle": current_bundle,
+            "suggested_action": suggested_action,
+        }
+
+    if not supervisor and not current_bundle:
+        return base(
+            "needs_review",
+            "A shipment recipient supervisor is required before shipment planning can be evaluated.",
+        )
+
+    if current_bundle and current_bundle.status not in set(SHIPMENT_BUNDLE_STATUSES):
+        return base(
+            "needs_review",
+            "Shipment planning data is incomplete or inconsistent and needs to be reviewed.",
+            supervisor=current_bundle.supervisor,
+            delivery_address=current_bundle.delivery_address,
+            current_bundle=current_bundle,
+        )
+
+    if current_bundle:
+        supervisor = current_bundle.supervisor
+        delivery_address = current_bundle.delivery_address or ""
+        included_sessions = shipment_bundle_sessions(current_bundle)
+        earliest_session_date = min([included.session_date for included in included_sessions if included.session_date], default=session_record.session_date)
+        candidate_sessions = [
+            {
+                "id": included.id,
+                "name": included.exam_session_name,
+                "date": included.session_date,
+                "packages_ready": bool((packages_contracts_by_session.get(included.id) or {}).get("ready")),
+                "bundle_id": current_bundle.id,
+            }
+            for included in included_sessions
+        ]
+        dispatch_deadline = shipment_dispatch_deadline(earliest_session_date)
+        dispatched_or_later = current_bundle.status in {
+            "Dispatched",
+            "Recipient notified",
+            "In transit to recipient",
+            "Delayed",
+            "Delivered successfully",
+            "Recipient review successful",
+            "Recipient review with discrepancy",
+        }
+        delivered_or_reviewed = current_bundle.status in {
+            "Delivered successfully",
+            "Recipient review successful",
+            "Recipient review with discrepancy",
+        }
+        if current_bundle.status == "Recipient review successful":
+            return base(
+                "completed",
+                "Shipment delivery and recipient review are complete.",
+                supervisor=supervisor,
+                delivery_address=delivery_address,
+                earliest_session_date=earliest_session_date,
+                candidate_sessions=candidate_sessions,
+                current_bundle=current_bundle,
+            )
+        if dispatched_or_later and not delivered_or_reviewed:
+            days_to_session = (earliest_session_date - today).days if earliest_session_date else None
+            if current_bundle.status == "Delayed" or (days_to_session is not None and days_to_session <= SHIPMENT_DELIVERY_RISK_DAYS):
+                return base(
+                    "delivery_at_risk",
+                    "The shipment has not been delivered and the earliest session date is approaching.",
+                    supervisor=supervisor,
+                    delivery_address=delivery_address,
+                    earliest_session_date=earliest_session_date,
+                    candidate_sessions=candidate_sessions,
+                    suggested_action="Follow up the shipment until delivery is confirmed.",
+                    current_bundle=current_bundle,
+                )
+        if not dispatched_or_later and dispatch_deadline and today > dispatch_deadline:
+            return base(
+                "dispatch_overdue",
+                "The safe dispatch deadline has passed.",
+                supervisor=supervisor,
+                delivery_address=delivery_address,
+                earliest_session_date=earliest_session_date,
+                candidate_sessions=candidate_sessions,
+                suggested_action="Dispatch the shipment bundle as soon as possible.",
+                current_bundle=current_bundle,
+            )
+        if any(not item["packages_ready"] for item in candidate_sessions):
+            return base(
+                "waiting_for_packages",
+                "Packages must be quality checked before shipment can be planned.",
+                supervisor=supervisor,
+                delivery_address=delivery_address,
+                earliest_session_date=earliest_session_date,
+                candidate_sessions=candidate_sessions,
+                current_bundle=current_bundle,
+            )
+        return base(
+            "on_track",
+            "Shipment planning is on track.",
+            supervisor=supervisor,
+            delivery_address=delivery_address,
+            earliest_session_date=earliest_session_date,
+            candidate_sessions=candidate_sessions,
+            current_bundle=current_bundle,
+        )
+
+    delivery_address = supervisor_delivery_address(supervisor)
+    if not delivery_address:
+        return base(
+            "delivery_address_needed",
+            "A delivery address is required before shipment grouping can be evaluated.",
+            supervisor=supervisor,
+        )
+    normalized_address = normalize_shipment_address(delivery_address)
+    candidates = []
+    for candidate in all_year_sessions:
+        candidate_link = shipment_links_by_session.get(candidate.id)
+        if candidate_link and candidate_link.bundle:
+            continue
+        candidate_supervisor = get_exam_session_shipment_recipient_supervisor(
+            supervisor_assignments_by_session.get(candidate.id, [])
+        )
+        if not candidate_supervisor or candidate_supervisor.id != supervisor.id:
+            continue
+        candidate_address = supervisor_delivery_address(candidate_supervisor)
+        if not candidate_address or normalize_shipment_address(candidate_address) != normalized_address:
+            continue
+        candidates.append(candidate)
+    if session_record not in candidates:
+        candidates.append(session_record)
+    candidates.sort(key=lambda candidate: (candidate.session_date, candidate.exam_session_name.lower()))
+    candidate_sessions = [
+        {
+            "id": candidate.id,
+            "name": candidate.exam_session_name,
+            "date": candidate.session_date,
+            "packages_ready": bool((packages_contracts_by_session.get(candidate.id) or {}).get("ready")),
+            "bundle_id": None,
+        }
+        for candidate in candidates
+    ]
+    earliest_session_date = min([candidate.session_date for candidate in candidates if candidate.session_date], default=session_record.session_date)
+    dispatch_deadline = shipment_dispatch_deadline(earliest_session_date)
+    current_ready = bool((packages_contracts_by_session.get(session_record.id) or {}).get("ready"))
+    any_ready = any(item["packages_ready"] for item in candidate_sessions)
+    any_waiting = any(not item["packages_ready"] for item in candidate_sessions)
+    if current_ready and dispatch_deadline and today > dispatch_deadline:
+        return base(
+            "dispatch_overdue",
+            "The safe dispatch deadline has passed.",
+            supervisor=supervisor,
+            delivery_address=delivery_address,
+            earliest_session_date=earliest_session_date,
+            candidate_sessions=candidate_sessions,
+            suggested_action="Create a separate shipment for the earliest session.",
+        )
+    if current_ready and any_waiting and len(candidate_sessions) > 1 and dispatch_deadline and today >= dispatch_deadline - timedelta(days=1):
+        return base(
+            "split_required",
+            "Waiting for later session packages would put the earliest session delivery deadline at risk.",
+            supervisor=supervisor,
+            delivery_address=delivery_address,
+            earliest_session_date=earliest_session_date,
+            candidate_sessions=candidate_sessions,
+            suggested_action="Create a separate shipment for the earliest session.",
+        )
+    if not current_ready:
+        return base(
+            "waiting_for_packages",
+            "Packages must be quality checked before shipment can be planned.",
+            supervisor=supervisor,
+            delivery_address=delivery_address,
+            earliest_session_date=earliest_session_date,
+            candidate_sessions=candidate_sessions,
+        )
+    if len(candidate_sessions) >= 2 and all(item["packages_ready"] for item in candidate_sessions):
+        return base(
+            "bundle_recommended",
+            "Multiple sessions for the same supervisor and delivery address can be bundled without compromising the earliest dispatch deadline.",
+            supervisor=supervisor,
+            delivery_address=delivery_address,
+            earliest_session_date=earliest_session_date,
+            candidate_sessions=candidate_sessions,
+            suggested_action="Create a shipment bundle for these sessions.",
+        )
+    if len(candidate_sessions) >= 2 and any_ready and any_waiting:
+        return base(
+            "bundle_possible",
+            "Additional sessions for the same supervisor may be bundled if their packages are completed before the dispatch deadline.",
+            supervisor=supervisor,
+            delivery_address=delivery_address,
+            earliest_session_date=earliest_session_date,
+            candidate_sessions=candidate_sessions,
+            suggested_action="Monitor package completion before deciding whether to bundle or split.",
+        )
+    return base(
+        "on_track",
+        "Shipment planning is on track.",
+        supervisor=supervisor,
+        delivery_address=delivery_address,
+        earliest_session_date=earliest_session_date,
+        candidate_sessions=candidate_sessions,
+    )
+
+
+def shipment_planning_action_contract(session_record, planning_contract=None, packages_action=None, shipments_action=None):
+    planning_contract = planning_contract or {}
+    status = planning_contract.get("status")
+    current_bundle = planning_contract.get("current_bundle")
+    candidate_sessions = list(planning_contract.get("candidate_sessions") or [])
+    dispatch_deadline = planning_contract.get("dispatch_deadline")
+    supervisor = planning_contract.get("supervisor") or {}
+    delivery_address = planning_contract.get("delivery_address") or ""
+
+    def group_key(action_key):
+        if current_bundle:
+            return f"planning:{action_key}:bundle:{current_bundle.id}"
+        earliest_id = ""
+        if candidate_sessions:
+            first_candidate = sorted(candidate_sessions, key=lambda item: (item.get("date") or datetime.max.date(), item.get("id") or 0))[0]
+            earliest_id = first_candidate.get("id") or ""
+        return (
+            f"planning:{action_key}:supervisor:{supervisor.get('id') or ''}:"
+            f"address:{normalize_shipment_address(delivery_address)}:earliest:{earliest_id}"
+        )
+
+    def display_label():
+        count = len(candidate_sessions)
+        supervisor_name = supervisor.get("name") or "Supervisor not set"
+        if current_bundle and count > 1:
+            return f"Bundle: {supervisor_name} · {count} sessions"
+        if count > 1:
+            return f"Shipment planning: {supervisor_name} · {count} sessions"
+        return ""
+
+    def action(action_key, label, description, deadline=None):
+        return {
+            "action_key": action_key,
+            "label": label,
+            "source": "shipment_planning",
+            "source_label": "Shipment planning",
+            "status": "action_required",
+            "description": description,
+            "responsible": "LOGISTICS",
+            "deadline": deadline,
+            "deadline_label": None,
+            "deadline_status": "not_set" if not deadline else None,
+            "target": "shipments",
+            "manage_target": "shipments",
+            "bundle_id": current_bundle.id if current_bundle else None,
+            "planning_group_key": group_key(action_key),
+            "bundle_label": display_label(),
+            "display_date": planning_contract.get("earliest_session_date") or session_record.session_date,
+            "is_complete": False,
+        }
+
+    if status == "needs_review":
+        return action(
+            "review_shipment_planning_data",
+            "Review shipment planning data",
+            "Shipment planning data is incomplete or inconsistent and needs to be reviewed.",
+            dispatch_deadline,
+        )
+    if status == "delivery_address_needed":
+        return action(
+            "add_shipment_delivery_address",
+            "Add shipment delivery address",
+            "A delivery address is required before shipment grouping can be evaluated.",
+            dispatch_deadline,
+        )
+    if status == "waiting_for_packages":
+        if packages_action or shipments_action:
+            return None
+        return action(
+            "wait_for_packages_before_shipment",
+            "Wait for packages before shipment planning",
+            "Packages must be quality checked before shipment can be planned.",
+            dispatch_deadline,
+        )
+    if status == "bundle_recommended":
+        return action(
+            "review_bundle_recommendation",
+            "Review bundle recommendation",
+            "Multiple sessions for the same supervisor and delivery address can be bundled without compromising the earliest dispatch deadline.",
+            dispatch_deadline,
+        )
+    if status == "bundle_possible":
+        return action(
+            "monitor_possible_bundle",
+            "Monitor possible bundle",
+            "Additional sessions for the same supervisor may be bundled if their packages are completed before the dispatch deadline.",
+            dispatch_deadline,
+        )
+    if status == "split_required":
+        return action(
+            "review_split_shipment_requirement",
+            "Review split shipment requirement",
+            "Waiting for later session packages would put the earliest session delivery deadline at risk.",
+            dispatch_deadline,
+        )
+    if status == "dispatch_overdue":
+        if (
+            shipments_action
+            and shipments_action.get("source") == "shipments"
+            and shipments_action.get("deadline") == dispatch_deadline
+            and (
+                not current_bundle
+                or not shipments_action.get("bundle_id")
+                or shipments_action.get("bundle_id") == current_bundle.id
+            )
+        ):
+            return None
+        return action(
+            "resolve_overdue_dispatch",
+            "Resolve overdue dispatch",
+            "The safe dispatch deadline has passed.",
+            dispatch_deadline,
+        )
+    if status == "delivery_at_risk":
+        if shipments_action and shipments_action.get("action_key") == "resolve_shipment_delay":
+            return None
+        return action(
+            "follow_up_delivery_risk",
+            "Follow up delivery risk",
+            "The shipment has not been delivered and the earliest session date is approaching.",
+            dispatch_deadline,
+        )
+    if status in {"on_track", "completed"}:
+        return None
+    return action(
+        "review_shipment_planning_data",
+        "Review shipment planning data",
+        "Shipment planning status could not be determined safely.",
+        dispatch_deadline,
+    )
+
+
+def shipment_planning_assisted_action_contract(session_record, planning_contract=None):
+    planning_contract = planning_contract or {}
+    status = planning_contract.get("status")
+    current_bundle = planning_contract.get("current_bundle")
+    candidate_sessions = sorted(
+        list(planning_contract.get("candidate_sessions") or []),
+        key=lambda item: (item.get("date") or datetime.max.date(), item.get("id") or 0),
+    )
+    supervisor = planning_contract.get("supervisor") or {}
+    dispatch_deadline = planning_contract.get("dispatch_deadline")
+    ready_candidates = [candidate for candidate in candidate_sessions if candidate.get("packages_ready")]
+    waiting_candidates = [candidate for candidate in candidate_sessions if not candidate.get("packages_ready")]
+    earliest_candidate = candidate_sessions[0] if candidate_sessions else {
+        "id": session_record.id,
+        "name": session_record.exam_session_name,
+        "date": session_record.session_date,
+        "packages_ready": False,
+    }
+    delivery_address = planning_contract.get("delivery_address") or ""
+
+    def base(action_key, label, description, submit_label=None, form_kind=None, selected_session_ids=None, note="", warning="", blocker="", focus_bundle=False):
+        return {
+            "action_key": action_key,
+            "label": label,
+            "description": description,
+            "submit_label": submit_label or label,
+            "form_kind": form_kind,
+            "supervisor_id": supervisor.get("id"),
+            "supervisor_name": supervisor.get("name") or "Supervisor not set",
+            "delivery_address": delivery_address,
+            "delivery_city": "",
+            "delivery_province": "",
+            "courier": SHIPMENT_DEFAULT_COURIER,
+            "dispatch_due_at": dispatch_deadline,
+            "selected_session_ids": selected_session_ids or [],
+            "candidate_sessions": candidate_sessions,
+            "ready_candidates": ready_candidates,
+            "waiting_candidates": waiting_candidates,
+            "earliest_candidate": earliest_candidate,
+            "reason": planning_contract.get("reason") or description,
+            "note": note,
+            "warning": warning,
+            "blocker": blocker,
+            "current_bundle": current_bundle,
+            "focus_bundle": focus_bundle,
+        }
+
+    if status == "delivery_address_needed":
+        return base(
+            "assisted_add_delivery_address",
+            "Add delivery address",
+            "Create a shipment bundle after confirming a manual delivery address.",
+            submit_label="Create shipment bundle",
+            form_kind="create_bundle",
+            selected_session_ids=[session_record.id],
+        )
+    if status == "bundle_recommended":
+        return base(
+            "assisted_create_recommended_bundle",
+            "Create recommended bundle",
+            "Multiple sessions for the same supervisor and delivery address can be bundled without compromising the earliest dispatch deadline.",
+            submit_label="Create recommended bundle",
+            form_kind="create_bundle",
+            selected_session_ids=[candidate["id"] for candidate in candidate_sessions],
+        )
+    if status == "bundle_possible":
+        blocker = ""
+        form_kind = None
+        selected_session_ids = []
+        if ready_candidates:
+            form_kind = "create_bundle"
+            selected_session_ids = [candidate["id"] for candidate in ready_candidates]
+        else:
+            blocker = "Packages must be completed before creating a shipment bundle."
+        return base(
+            "assisted_create_ready_bundle",
+            "Review possible bundle",
+            "Additional sessions for the same supervisor may be bundled if their packages are completed before the dispatch deadline.",
+            submit_label="Create bundle with ready sessions",
+            form_kind=form_kind,
+            selected_session_ids=selected_session_ids,
+            warning="Sessions still waiting for packages will need a separate shipment or a later bundle." if ready_candidates and waiting_candidates else "",
+            blocker=blocker,
+        )
+    if status == "split_required":
+        selected = [earliest_candidate["id"]] if earliest_candidate.get("id") and earliest_candidate.get("packages_ready") else []
+        if earliest_candidate.get("id") != session_record.id:
+            selected = []
+        return base(
+            "assisted_create_separate_shipment",
+            "Create separate shipment for earliest session",
+            "Waiting for later session packages would put the earliest session delivery deadline at risk.",
+            submit_label="Create separate shipment",
+            form_kind="create_bundle" if selected else None,
+            selected_session_ids=selected,
+            note="Separate shipment created because waiting for later session packages would put the earliest session delivery deadline at risk.",
+            blocker="" if selected else "Open the earliest ready session in this planning group before creating a separate shipment.",
+        )
+    if status == "dispatch_overdue":
+        if current_bundle:
+            return base(
+                "assisted_open_overdue_bundle",
+                "Open shipment bundle",
+                "The safe dispatch deadline has passed. Review the shipment bundle and use the available shipment action.",
+                focus_bundle=True,
+            )
+        selected = [earliest_candidate["id"]] if earliest_candidate.get("id") and earliest_candidate.get("packages_ready") else []
+        if earliest_candidate.get("id") != session_record.id:
+            selected = []
+        return base(
+            "assisted_create_urgent_shipment",
+            "Create urgent shipment",
+            "The safe dispatch deadline has passed. Please review the shipment details before creating this urgent bundle.",
+            submit_label="Create urgent shipment",
+            form_kind="create_bundle" if selected else None,
+            selected_session_ids=selected,
+            note="Urgent shipment created after the safe dispatch deadline.",
+            warning="The safe dispatch deadline has passed. Please review the shipment details before creating this urgent bundle.",
+            blocker="" if selected else "Open the earliest ready session in this planning group before creating an urgent shipment.",
+        )
+    if status == "delivery_at_risk":
+        return base(
+            "assisted_open_shipment_follow_up",
+            "Open shipment follow-up",
+            "The shipment has not been delivered and the earliest session date is approaching.",
+            focus_bundle=True,
+        )
+    if status == "needs_review":
+        return base(
+            "assisted_review_shipment_planning_data",
+            "Review shipment planning data",
+            "Shipment planning data is incomplete or inconsistent and needs to be reviewed.",
+            blocker=planning_contract.get("reason") or "Review confirmed supervisor, delivery address, bundle data, and session links before creating shipment bundles.",
+        )
+    if status == "waiting_for_packages":
+        return base(
+            "assisted_waiting_for_packages",
+            "Waiting for packages",
+            "Packages must be quality checked before shipment can be created.",
+            blocker="Packages must be quality checked before shipment can be created.",
+        )
+    return None
+
+
+def shipment_bundle_view(bundle):
+    if not bundle:
+        return None
+    readiness = shipment_bundle_readiness_contract(bundle)
+    completed = is_shipment_bundle_completed(bundle)
+    blocked = readiness["packages_missing_count"] > 0 and not completed
+    return {
+        "record": bundle,
+        "id": bundle.id,
+        "number": shipment_bundle_display_number(bundle),
+        "label": f"Bundle {shipment_bundle_display_number(bundle)}",
+        "status": bundle.status,
+        "display_status": "Bundle completed" if completed else ("BLOCKED" if blocked else shipment_status_label(bundle.status)),
+        "blocked": blocked,
+        "completed": completed,
+        "supervisor_name": bundle.supervisor.full_name if bundle.supervisor else "Supervisor not set",
+        "delivery_address": bundle.delivery_address,
+        "delivery_city": bundle.delivery_city or "",
+        "delivery_province": bundle.delivery_province or "",
+        "courier": bundle.courier or SHIPMENT_DEFAULT_COURIER,
+        "tracking_number": bundle.tracking_number or "",
+        "dispatch_due_at": bundle.dispatch_due_at,
+        "responsible_department": bundle.responsible_department or "LOGISTICS",
+        "note": bundle.note or "",
+        "included_sessions": shipment_bundle_sessions(bundle),
+        "included_session_ids": [session_record.id for session_record in shipment_bundle_sessions(bundle)],
+        "checklist_items": sorted(bundle.checklist_items, key=lambda item: (item.display_order, item.id or 0)),
+        "events": sorted(bundle.events, key=lambda event: (event.created_at, event.id or 0), reverse=True),
+        "packages_label": f"{readiness['packages_ready_count']}/{readiness['sessions_count']} confirmed" if readiness["sessions_count"] else "Packages pending",
+        "readiness": readiness,
+        "transition_options": shipment_bundle_transition_options(bundle),
+    }
+
+
+def shipment_bundle_transition_options(bundle):
+    primary = {
+        "Preparing bundle": [("Ready to dispatch", "Mark as ready to dispatch")],
+        "Ready to dispatch": [("In transit to post office", "Mark as in transit to post office")],
+        "In transit to post office": [("Dispatched", "Mark as dispatched")],
+        "Dispatched": [("Recipient notified", "Mark recipient as notified")],
+        "Recipient notified": [("In transit to recipient", "Mark as in transit to recipient")],
+        "In transit to recipient": [("Delayed", "Mark as delayed"), ("Delivered successfully", "Mark as delivered successfully")],
+        "Delayed": [("In transit to recipient", "Mark as in transit to recipient")],
+        "Delivered successfully": [
+            ("Recipient review successful", "Mark recipient review successful"),
+            ("Recipient review with discrepancy", "Mark recipient review with discrepancy"),
+        ],
+    }
+    reopen = {
+        "Ready to dispatch": [("Preparing bundle", "Reopen bundle preparation")],
+        "Dispatched": [("In transit to post office", "Reopen post office transit")],
+        "Recipient notified": [("Dispatched", "Reopen dispatched status")],
+        "Delivered successfully": [("In transit to recipient", "Reopen recipient transit")],
+        "Recipient review successful": [("Delivered successfully", "Reopen recipient review")],
+        "Recipient review with discrepancy": [("Delivered successfully", "Reopen recipient review")],
+    }
+    return {
+        "primary": [{"status": status, "label": label} for status, label in primary.get(bundle.status, [])],
+        "other": [{"status": status, "label": label} for status, label in reopen.get(bundle.status, [])],
+    }
+
+
+def shipment_transition_allowed(bundle, new_status, note="", tracking_number=None):
+    old_status = bundle.status
+    allowed = {
+        "Preparing bundle": {"Ready to dispatch"},
+        "Ready to dispatch": {"In transit to post office", "Preparing bundle"},
+        "In transit to post office": {"Dispatched"},
+        "Dispatched": {"Recipient notified", "In transit to post office"},
+        "Recipient notified": {"In transit to recipient", "Dispatched"},
+        "In transit to recipient": {"Delayed", "Delivered successfully"},
+        "Delayed": {"In transit to recipient"},
+        "Delivered successfully": {"Recipient review successful", "Recipient review with discrepancy", "In transit to recipient"},
+        "Recipient review successful": {"Delivered successfully"},
+        "Recipient review with discrepancy": {"Delivered successfully"},
+    }
+    reopen_transitions = {
+        ("Ready to dispatch", "Preparing bundle"),
+        ("Dispatched", "In transit to post office"),
+        ("Recipient notified", "Dispatched"),
+        ("Delivered successfully", "In transit to recipient"),
+        ("Recipient review successful", "Delivered successfully"),
+        ("Recipient review with discrepancy", "Delivered successfully"),
+    }
+    if new_status not in SHIPMENT_BUNDLE_STATUSES:
+        return "Please select a valid shipment status."
+    if new_status not in allowed.get(old_status, set()):
+        return "This shipment status transition is not allowed."
+    if (old_status, new_status) in reopen_transitions and not (note or "").strip():
+        return "A note is required when reopening or correcting a shipment status."
+    if new_status == "Ready to dispatch":
+        readiness = shipment_bundle_readiness_contract(bundle)
+        if not readiness["ready_to_dispatch"]:
+            if any(blocker["code"] == "PACKAGES_NOT_READY" for blocker in readiness["blockers"]):
+                return "All included sessions must have packages quality checked before the bundle can be marked as ready to dispatch."
+            return "Complete shipment bundle requirements before marking it ready to dispatch."
+    if new_status == "Dispatched":
+        if not ((tracking_number or bundle.tracking_number or "").strip()):
+            return "Tracking number is required before marking the shipment as dispatched."
+        if not ((bundle.courier or SHIPMENT_DEFAULT_COURIER).strip()):
+            return "Courier is required before marking the shipment as dispatched."
+    if new_status == "Recipient review with discrepancy" and not (note or "").strip():
+        return "A note is required when recording a recipient review discrepancy."
+    return ""
+
+
+def core_readiness_requirement_message(source, ready, status_label, presentation=None):
+    if source == "schedule":
+        if ready:
+            return "Schedules are approved."
+        return "Schedules have not been approved yet."
+    if source == "staffing":
+        if ready:
+            return "All required staff positions are confirmed."
+        blockers = (presentation or {}).get("blockers", [])
+        if blockers:
+            return blockers[0]
+        return "Staffing requires attention."
+    if source == "logistics":
+        if ready and status_label == "Not applicable":
+            return "No logistics required for this session."
+        if ready:
+            return "Logistics is ready for the final staff communication."
+        blockers = (presentation or {}).get("blockers", [])
+        if blockers:
+            return blockers[0]
+        return "Logistics requires attention."
+    return "Readiness data needs review."
+
+
+def core_readiness_contract(schedule_gate, staffing_contract, logistics_contract, staffing=None, logistics=None):
+    labels = {
+        "needs_review": "Needs review",
+        "blocked": "Blocked",
+        "in_progress": "In progress",
+        "ready_for_next_stage": "Ready for next stage",
+    }
+    messages = {
+        "needs_review": "Some readiness data is inconsistent or incomplete and needs to be reviewed.",
+        "blocked": "Schedule approval is required before the session can move to the next pre-session stages.",
+        "in_progress": "Schedule approval is complete, but staffing or logistics still require attention.",
+        "ready_for_next_stage": "Schedule approval, staffing and logistics are complete.",
+    }
+    total_requirements = 3
+
+    def needs_review_contract():
+        return {
+            "status": "needs_review",
+            "label": labels["needs_review"],
+            "is_ready": False,
+            "ready_requirements": 0,
+            "total_requirements": total_requirements,
+            "summary": "Readiness data needs review",
+            "message": messages["needs_review"],
+            "requirements": [
+                {
+                    "key": "schedule",
+                    "label": "Schedule approval",
+                    "ready": False,
+                    "status": "Needs review",
+                    "message": "Schedule approval data needs review.",
+                },
+                {
+                    "key": "staffing",
+                    "label": "Staffing",
+                    "ready": False,
+                    "status": "Needs review",
+                    "message": "Staffing readiness data needs review.",
+                },
+                {
+                    "key": "logistics",
+                    "label": "Logistics",
+                    "ready": False,
+                    "status": "Needs review",
+                    "message": "Logistics readiness data needs review.",
+                },
+            ],
+            "blockers": [
+                {
+                    "source": "core",
+                    "code": "CORE_READINESS_NEEDS_REVIEW",
+                    "message": messages["needs_review"],
+                }
+            ],
+            "tooltip": "Core readiness data needs review.",
+        }
+
+    if not schedule_gate or staffing_contract is None or logistics_contract is None:
+        return needs_review_contract()
+
+    schedule_status = schedule_gate.get("status")
+    staffing_status = staffing_contract.get("status")
+    logistics_status = logistics_contract.get("status")
+    if schedule_status not in {"ready", "blocked"}:
+        return needs_review_contract()
+    if staffing_status not in {"not_configured", "open_positions", "awaiting_confirmations", "confirmed", "invalid"}:
+        return needs_review_contract()
+    if logistics_status not in {"not_applicable", "configuration_required", "in_progress", "confirmed"}:
+        return needs_review_contract()
+    if staffing_status == "invalid":
+        return needs_review_contract()
+
+    staffing = staffing or staffing_presentation_from_contract(staffing_contract)
+    logistics = logistics or logistics_presentation_from_contract(logistics_contract)
+    if staffing.get("status") == "invalid" or logistics.get("status") == "needs_review":
+        return needs_review_contract()
+
+    schedule_ready = bool(schedule_gate.get("is_ready"))
+    staffing_ready = bool(staffing_contract.get("ready"))
+    logistics_ready = bool(logistics_contract.get("final_email_ready"))
+    requirements = [
+        {
+            "key": "schedule",
+            "label": "Schedule approval",
+            "ready": schedule_ready,
+            "status": "Ready" if schedule_ready else "Blocked",
+            "message": core_readiness_requirement_message("schedule", schedule_ready, "Ready" if schedule_ready else "Blocked"),
+        },
+        {
+            "key": "staffing",
+            "label": "Staffing",
+            "ready": staffing_ready,
+            "status": staffing.get("label", "Needs review"),
+            "message": core_readiness_requirement_message("staffing", staffing_ready, staffing.get("label", ""), staffing),
+        },
+        {
+            "key": "logistics",
+            "label": "Logistics",
+            "ready": logistics_ready,
+            "status": logistics.get("label", "Needs review"),
+            "message": core_readiness_requirement_message("logistics", logistics_ready, logistics.get("label", ""), logistics),
+        },
+    ]
+    ready_requirements = sum(1 for requirement in requirements if requirement["ready"])
+    blockers = []
+    if not schedule_ready:
+        blockers.append({
+            "source": "schedule",
+            "code": "SCHEDULE_APPROVAL_REQUIRED",
+            "message": "Schedule approval is still pending.",
+        })
+    for blocker in staffing.get("blockers", []):
+        blockers.append({
+            "source": "staffing",
+            "code": "STAFFING_NOT_READY",
+            "message": blocker,
+        })
+    for blocker in logistics.get("blockers", []):
+        blockers.append({
+            "source": "logistics",
+            "code": "LOGISTICS_NOT_READY",
+            "message": blocker,
+        })
+    deduped_blockers = []
+    seen_messages = set()
+    for blocker in blockers:
+        message = blocker.get("message")
+        if not message or message in seen_messages:
+            continue
+        seen_messages.add(message)
+        deduped_blockers.append(blocker)
+
+    if not schedule_ready:
+        status = "blocked"
+    elif not staffing_ready or not logistics_ready:
+        status = "in_progress"
+    else:
+        status = "ready_for_next_stage"
+    summary = f"{ready_requirements} / {total_requirements} requirements ready"
+    tooltip = "\n".join(
+        f"{requirement['label']} - {requirement['status']}"
+        for requirement in requirements
+    )
+    return {
+        "status": status,
+        "label": labels[status],
+        "is_ready": status == "ready_for_next_stage",
+        "ready_requirements": ready_requirements,
+        "total_requirements": total_requirements,
+        "summary": summary,
+        "message": messages[status],
+        "requirements": requirements,
+        "blockers": deduped_blockers,
+        "tooltip": tooltip,
+        "scope_note": "This status only covers schedule approval, staffing and logistics.",
+    }
+
+
+OPERATIONAL_READINESS_SCOPE_NOTE = (
+    "This status covers schedule approval, staffing, staff logistics, packages and shipments. "
+    "It does not include Finance, Sinapsis readiness, Communications, Incidents or Incident review flags."
+)
+
+
+def operational_readiness_contract(
+    schedule_gate,
+    staffing_contract,
+    logistics_contract,
+    packages_contract,
+    shipment_contract,
+    staffing=None,
+    logistics=None,
+):
+    labels = {
+        "needs_review": "Needs review",
+        "blocked": "Blocked",
+        "in_progress": "In progress",
+        "operationally_ready": "Operationally ready",
+    }
+    messages = {
+        "needs_review": "Some operational readiness data is inconsistent or requires review.",
+        "blocked": "Schedule approval is required before the session can move through the operational pre-session flow.",
+        "in_progress": "Schedule approval is complete, but one or more operational requirements still need attention.",
+        "operationally_ready": "Schedule approval, staffing, staff logistics, packages and shipments are complete.",
+    }
+    total_requirements = 5
+
+    def needs_review_contract():
+        return {
+            "status": "needs_review",
+            "label": labels["needs_review"],
+            "is_ready": False,
+            "ready_requirements": 0,
+            "total_requirements": total_requirements,
+            "summary": "Operational data needs review",
+            "message": messages["needs_review"],
+            "requirements": [
+                {"key": "schedule", "label": "Schedule approval", "ready": False, "status": "Needs review", "message": "Schedule approval data needs review."},
+                {"key": "staffing", "label": "Staffing", "ready": False, "status": "Needs review", "message": "Staffing readiness data needs review."},
+                {"key": "logistics", "label": "Staff logistics", "ready": False, "status": "Needs review", "message": "Staff logistics readiness data needs review."},
+                {"key": "packages", "label": "Packages", "ready": False, "status": "Needs review", "message": "Packages readiness data needs review."},
+                {"key": "shipments", "label": "Shipments", "ready": False, "status": "Needs review", "message": "Shipment readiness data needs review."},
+            ],
+            "blockers": [{
+                "source": "operational_readiness",
+                "code": "OPERATIONAL_READINESS_NEEDS_REVIEW",
+                "message": messages["needs_review"],
+            }],
+            "tooltip": "Operational readiness data needs review.",
+            "scope_note": OPERATIONAL_READINESS_SCOPE_NOTE,
+        }
+
+    if (
+        not schedule_gate
+        or staffing_contract is None
+        or logistics_contract is None
+        or packages_contract is None
+        or shipment_contract is None
+    ):
+        return needs_review_contract()
+
+    staffing = staffing or staffing_presentation_from_contract(staffing_contract)
+    logistics = logistics or logistics_presentation_from_contract(logistics_contract)
+
+    schedule_status = schedule_gate.get("status")
+    staffing_status = staffing_contract.get("status")
+    logistics_status = logistics_contract.get("status")
+    packages_status = packages_contract.get("status")
+    shipment_status = shipment_contract.get("status")
+    if schedule_status not in {"ready", "blocked"}:
+        return needs_review_contract()
+    if staffing_status not in {"not_configured", "open_positions", "awaiting_confirmations", "confirmed", "invalid"}:
+        return needs_review_contract()
+    if logistics_status not in {"not_applicable", "configuration_required", "in_progress", "confirmed"}:
+        return needs_review_contract()
+    if packages_status not in {
+        "not_configured",
+        "blocked_schedule",
+        "pre_packing_not_started",
+        "pre_packing_in_progress",
+        "blocked_discrepancy",
+        "impersonal_ready",
+        "ready_for_final_assembly",
+        "final_assembly_in_progress",
+        "personalized",
+        "quality_checked",
+        "needs_review",
+    }:
+        return needs_review_contract()
+    if shipment_status not in {"not_bundled", *SHIPMENT_BUNDLE_STATUSES}:
+        return needs_review_contract()
+    if (
+        staffing_status == "invalid"
+        or staffing.get("status") == "invalid"
+        or logistics.get("status") == "needs_review"
+        or packages_status in {"needs_review", "blocked_discrepancy"}
+        or shipment_status == "Recipient review with discrepancy"
+    ):
+        status = "needs_review"
+    else:
+        status = ""
+
+    schedule_ready = bool(schedule_gate.get("is_ready"))
+    staffing_ready = bool(staffing_contract.get("ready"))
+    logistics_ready = bool(logistics_contract.get("final_email_ready"))
+    packages_ready = bool(packages_contract.get("ready"))
+    shipments_ready = shipment_status == "Recipient review successful"
+
+    def package_requirement_message():
+        if packages_ready:
+            return "Packages are quality checked."
+        blockers = packages_contract.get("blockers") or []
+        if blockers:
+            return blockers[0]
+        return "Packages must be quality checked."
+
+    def shipment_requirement_message():
+        if shipments_ready:
+            return "Shipment delivery and recipient review are complete."
+        if shipment_status == "not_bundled":
+            return "Session is not included in a shipment bundle."
+        if shipment_status == "Delivered successfully":
+            return "Shipment was delivered successfully, but recipient review is still pending."
+        if shipment_status == "Recipient review with discrepancy":
+            return "Recipient review reported a discrepancy that needs to be resolved."
+        if shipment_status in {"Ready to dispatch", "Dispatched", "Recipient notified", "In transit to post office", "In transit to recipient", "Delayed"}:
+            return "Shipment is not fully delivered and recipient-reviewed yet."
+        if shipment_status == "Preparing bundle":
+            return "Shipment bundle preparation is still in progress."
+        return "Shipment readiness data needs review."
+
+    requirements = [
+        {
+            "key": "schedule",
+            "label": "Schedule approval",
+            "ready": schedule_ready,
+            "status": "Ready" if schedule_ready else "Blocked",
+            "message": core_readiness_requirement_message("schedule", schedule_ready, "Ready" if schedule_ready else "Blocked"),
+        },
+        {
+            "key": "staffing",
+            "label": "Staffing",
+            "ready": staffing_ready,
+            "status": staffing.get("label", "Needs review"),
+            "message": core_readiness_requirement_message("staffing", staffing_ready, staffing.get("label", ""), staffing),
+        },
+        {
+            "key": "logistics",
+            "label": "Staff logistics",
+            "ready": logistics_ready,
+            "status": logistics.get("label", "Needs review"),
+            "message": core_readiness_requirement_message("logistics", logistics_ready, logistics.get("label", ""), logistics),
+        },
+        {
+            "key": "packages",
+            "label": "Packages",
+            "ready": packages_ready,
+            "status": packages_contract.get("label", "Needs review"),
+            "message": package_requirement_message(),
+        },
+        {
+            "key": "shipments",
+            "label": "Shipments",
+            "ready": shipments_ready,
+            "status": shipment_contract.get("label", "Needs review"),
+            "message": shipment_requirement_message(),
+        },
+    ]
+    ready_requirements = sum(1 for requirement in requirements if requirement["ready"])
+    blockers = []
+    if not schedule_ready:
+        blockers.append({"source": "schedule", "code": "SCHEDULE_APPROVAL_REQUIRED", "message": "Schedule approval is still pending."})
+    for blocker in staffing.get("blockers", []):
+        blockers.append({"source": "staffing", "code": "STAFFING_NOT_READY", "message": blocker})
+    for blocker in logistics.get("blockers", []):
+        blockers.append({"source": "logistics", "code": "LOGISTICS_NOT_READY", "message": blocker})
+    for blocker in packages_contract.get("blockers", []):
+        blockers.append({"source": "packages", "code": "PACKAGES_NOT_READY", "message": blocker})
+    if not shipments_ready:
+        code = "SHIPMENT_RECIPIENT_REVIEW_DISCREPANCY" if shipment_status == "Recipient review with discrepancy" else "SHIPMENT_NOT_COMPLETE"
+        blockers.append({"source": "shipments", "code": code, "message": shipment_requirement_message()})
+
+    deduped_blockers = []
+    seen_messages = set()
+    for blocker in blockers:
+        message = blocker.get("message")
+        if not message or message in seen_messages:
+            continue
+        seen_messages.add(message)
+        deduped_blockers.append(blocker)
+
+    if not status:
+        if not schedule_ready:
+            status = "blocked"
+        elif not (staffing_ready and logistics_ready and packages_ready and shipments_ready):
+            status = "in_progress"
+        else:
+            status = "operationally_ready"
+    summary = f"{ready_requirements} / {total_requirements} requirements ready"
+    tooltip = "\n".join(f"{requirement['label']} - {requirement['status']}" for requirement in requirements)
+    return {
+        "status": status,
+        "label": labels[status],
+        "is_ready": status == "operationally_ready",
+        "ready_requirements": ready_requirements,
+        "total_requirements": total_requirements,
+        "summary": summary,
+        "message": messages[status],
+        "requirements": requirements,
+        "blockers": deduped_blockers,
+        "tooltip": tooltip,
+        "scope_note": OPERATIONAL_READINESS_SCOPE_NOTE,
+    }
+
+
+def priority_action_contract(
+    schedule_status=None,
+    schedule_gate=None,
+    schedule_responsible=None,
+    schedule_deadline=None,
+    staffing_contract=None,
+    logistics_contract=None,
+    core_readiness=None,
+    staffing_control=None,
+    logistics_control=None,
+):
+    review_action = {
+        "action_key": "review_readiness_data",
+        "label": "Review readiness data",
+        "source": "readiness",
+        "source_label": "Readiness",
+        "status": "action_required",
+        "description": "Some readiness data is inconsistent or incomplete and needs to be reviewed.",
+        "responsible": "Not assigned",
+        "deadline": None,
+        "deadline_label": "Not set",
+        "target": "readiness",
+        "is_complete": False,
+    }
+    if not schedule_gate or staffing_contract is None or logistics_contract is None or not core_readiness:
+        return review_action
+
+    schedule_gate_status_value = schedule_gate.get("status")
+    staffing_status = staffing_contract.get("status")
+    logistics_status = logistics_contract.get("status")
+    core_status = core_readiness.get("status")
+    if (
+        schedule_gate_status_value not in {"ready", "blocked"}
+        or staffing_status not in {"not_configured", "open_positions", "awaiting_confirmations", "confirmed", "invalid"}
+        or logistics_status not in {"not_applicable", "configuration_required", "in_progress", "confirmed"}
+        or core_status not in {"needs_review", "blocked", "in_progress", "ready_for_next_stage"}
+        or staffing_status == "invalid"
+        or core_status == "needs_review"
+    ):
+        return review_action
+
+    if schedule_gate_status_value == "blocked":
+        schedule_labels = {
+            "Not started": "Start schedule preparation",
+            "In progress": "Complete schedules in Sinapsis",
+            "Ready to send": "Send schedules for review",
+            "Sent for review": "Follow up schedule approval",
+            "Changes requested": "Update schedules in Sinapsis",
+        }
+        schedule_keys = {
+            "Not started": "start_schedule_preparation",
+            "In progress": "complete_schedules_in_sinapsis",
+            "Ready to send": "send_schedules_for_review",
+            "Sent for review": "follow_up_schedule_approval",
+            "Changes requested": "update_schedules_in_sinapsis",
+        }
+        if schedule_status not in schedule_labels:
+            return review_action
+        return {
+            "action_key": schedule_keys[schedule_status],
+            "label": schedule_labels[schedule_status],
+            "source": "schedule",
+            "source_label": "Schedule",
+            "status": "action_required",
+            "description": "Schedule approval is required before the session can move to the next pre-session stages.",
+            "responsible": schedule_responsible or "Not assigned",
+            "deadline": schedule_deadline,
+            "deadline_label": None,
+            "target": "schedule",
+            "is_complete": False,
+        }
+
+    if staffing_status == "not_configured":
+        return {
+            "action_key": "configure_staff_roles",
+            "label": "Configure staff roles",
+            "source": "staffing",
+            "source_label": "Staffing",
+            "status": "action_required",
+            "description": "Staff roles have not been configured for this session.",
+            "responsible": (staffing_control or {}).get("responsible_label", "ADMIN"),
+            "deadline": (staffing_control or {}).get("deadline"),
+            "deadline_label": (staffing_control or {}).get("deadline_label") or "Not set",
+            "deadline_status": (staffing_control or {}).get("deadline_status", "not_set"),
+            "target": "staffing",
+            "is_complete": False,
+        }
+    if staffing_status == "open_positions":
+        open_positions = staffing_contract.get("totals", {}).get("open_positions", 0)
+        open_details = staffing_contract.get("open_position_details", [])
+        if open_positions <= 0:
+            return review_action
+        if open_positions == 1 and open_details:
+            role = open_details[0].get("role") or "Staff"
+            description = f"1 {role} position still needs to be filled."
+        else:
+            verb = "needs" if open_positions == 1 else "need"
+            description = f"{pluralize_phrase(open_positions, 'staff role')} still {verb} to be filled."
+        return {
+            "action_key": "assign_open_staff_roles",
+            "label": "Assign staff to open roles",
+            "source": "staffing",
+            "source_label": "Staffing",
+            "status": "action_required",
+            "description": description,
+            "responsible": (staffing_control or {}).get("responsible_label", "ADMIN"),
+            "deadline": (staffing_control or {}).get("deadline"),
+            "deadline_label": (staffing_control or {}).get("deadline_label") or "Not set",
+            "deadline_status": (staffing_control or {}).get("deadline_status", "not_set"),
+            "target": "staffing",
+            "is_complete": False,
+        }
+    if staffing_status == "awaiting_confirmations":
+        totals = staffing_contract.get("totals", {})
+        awaiting = totals.get("pending_assigned", 0) + totals.get("sent", 0)
+        if awaiting <= 0:
+            return review_action
+        verb = "is" if awaiting == 1 else "are"
+        return {
+            "action_key": "follow_up_staff_confirmations",
+            "label": "Follow up staff confirmations",
+            "source": "staffing",
+            "source_label": "Staffing",
+            "status": "action_required",
+            "description": f"{pluralize_phrase(awaiting, 'staff member')} {verb} awaiting confirmation.",
+            "responsible": (staffing_control or {}).get("responsible_label", "ADMIN"),
+            "deadline": (staffing_control or {}).get("deadline"),
+            "deadline_label": (staffing_control or {}).get("deadline_label") or "Not set",
+            "deadline_status": (staffing_control or {}).get("deadline_status", "not_set"),
+            "target": "staffing",
+            "is_complete": False,
+        }
+
+    if logistics_status == "configuration_required":
+        return {
+            "action_key": "configure_logistics_requirements",
+            "label": "Configure logistics requirements",
+            "source": "logistics",
+            "source_label": "Logistics",
+            "status": "action_required",
+            "description": "Logistics is required, but its concepts have not been configured.",
+            "responsible": (logistics_control or {}).get("responsible_label", "ADMIN"),
+            "deadline": (logistics_control or {}).get("deadline"),
+            "deadline_label": (logistics_control or {}).get("deadline_label") or "Not set",
+            "deadline_status": (logistics_control or {}).get("deadline_status", "not_set"),
+            "target": "logistics",
+            "is_complete": False,
+        }
+    if logistics_status == "in_progress":
+        confirmed = logistics_contract.get("confirmed_concepts", 0)
+        total = logistics_contract.get("total_concepts", 0)
+        if total <= 0 or confirmed >= total:
+            return review_action
+        return {
+            "action_key": "complete_logistics_arrangements",
+            "label": "Complete pending logistics arrangements",
+            "source": "logistics",
+            "source_label": "Logistics",
+            "status": "action_required",
+            "description": f"{confirmed} of {total} logistics concepts are confirmed.",
+            "responsible": (logistics_control or {}).get("responsible_label", "ADMIN"),
+            "deadline": (logistics_control or {}).get("deadline"),
+            "deadline_label": (logistics_control or {}).get("deadline_label") or "Not set",
+            "deadline_status": (logistics_control or {}).get("deadline_status", "not_set"),
+            "target": "logistics",
+            "is_complete": False,
+        }
+    if logistics_status == "confirmed" and not logistics_contract.get("final_email_ready"):
+        blocker_codes = {blocker.get("code") for blocker in logistics_contract.get("blockers", [])}
+        if "LOGISTICS_FILES_URL_MISSING" not in blocker_codes:
+            return review_action
+        return {
+            "action_key": "add_logistics_files_link",
+            "label": "Add logistics files link",
+            "source": "logistics",
+            "source_label": "Logistics",
+            "status": "action_required",
+            "description": "All logistics concepts are confirmed, but the logistics files link is missing.",
+            "responsible": (logistics_control or {}).get("responsible_label", "ADMIN"),
+            "deadline": (logistics_control or {}).get("deadline"),
+            "deadline_label": (logistics_control or {}).get("deadline_label") or "Not set",
+            "deadline_status": (logistics_control or {}).get("deadline_status", "not_set"),
+            "target": "logistics",
+            "is_complete": False,
+        }
+
+    if core_status == "ready_for_next_stage":
+        return {
+            "action_key": "ready_for_next_stage",
+            "label": "Ready for next stage",
+            "source": "core_readiness",
+            "source_label": "Core readiness",
+            "status": "complete",
+            "description": "Schedule approval, staffing and logistics are complete.",
+            "responsible": "",
+            "deadline": None,
+            "deadline_label": "-",
+            "target": "core_readiness",
+            "is_complete": True,
+        }
+
+    return review_action
+
+
+MY_ACTION_STATUS_ORDER = {
+    "needs_review": 0,
+    "overdue": 1,
+    "due_today": 2,
+    "upcoming": 3,
+    "not_set": 4,
+}
+
+
+def priority_action_deadline_status(priority_action, today=None):
+    if not priority_action or priority_action.get("is_complete"):
+        return "complete"
+    if priority_action.get("source") == "readiness" or priority_action.get("action_key") == "review_readiness_data":
+        return "needs_review"
+    deadline_status = priority_action.get("deadline_status")
+    if deadline_status in {"overdue", "due_today", "upcoming", "not_set"}:
+        return deadline_status
+    deadline = priority_action.get("deadline")
+    if not deadline:
+        return "not_set"
+    today = today or datetime.now(LOCAL_TZ).date()
+    if deadline < today:
+        return "overdue"
+    if deadline == today:
+        return "due_today"
+    return "upcoming"
+
+
+def my_action_status_label(status):
+    return {
+        "needs_review": "Needs review",
+        "overdue": "Overdue",
+        "due_today": "Due today",
+        "upcoming": "Upcoming",
+        "not_set": "Not set",
+        "complete": "Complete",
+    }.get(status, "Needs review")
+
+
+def priority_action_deadline_display(priority_action, today=None):
+    if not priority_action or priority_action.get("is_complete"):
+        return "-"
+    deadline_status = priority_action_deadline_status(priority_action, today=today)
+    if deadline_status == "overdue":
+        return "Overdue"
+    if deadline_status == "due_today":
+        return "Due today"
+    deadline_label = priority_action.get("deadline_label")
+    if deadline_label in {"Due today", "Overdue", "Not set"}:
+        return deadline_label
+    deadline = priority_action.get("deadline")
+    if deadline:
+        return display_session_date(deadline)
+    return deadline_label or "Not set"
+
+
+def my_action_row_from_schedule_view(view, today=None):
+    priority_action = view.get("priority_action") or {}
+    if priority_action.get("is_complete") or priority_action.get("action_key") == "ready_for_next_stage":
+        return None
+    status = priority_action_deadline_status(priority_action, today=today)
+    session_record = view["session"]
+    return {
+        "session": session_record,
+        "priority_action": priority_action,
+        "action_label": priority_action.get("label", ""),
+        "source": priority_action.get("source", ""),
+        "source_label": priority_action.get("source_label", ""),
+        "responsible": priority_action.get("responsible") or "Not assigned",
+        "deadline": priority_action.get("deadline"),
+        "deadline_display": priority_action_deadline_display(priority_action, today=today),
+        "status": status,
+        "status_label": my_action_status_label(status),
+        "reason": priority_action.get("description", ""),
+    }
+
+
+def my_action_row_from_action(view, action_contract, today=None):
+    if not action_contract or action_contract.get("is_complete") or action_contract.get("action_key") == "ready_for_next_stage":
+        return None
+    status = priority_action_deadline_status(action_contract, today=today)
+    session_record = view["session"]
+    identity = f"{session_record.id}:{action_contract.get('source', '')}:{action_contract.get('action_key', '')}"
+    if action_contract.get("source") == "incidents" and action_contract.get("incident_id"):
+        identity = action_contract.get("action_key") or f"incident:{action_contract.get('incident_id')}:{action_contract.get('status', '')}"
+    if action_contract.get("source") == "incident_review" and action_contract.get("review_flag_id"):
+        identity = action_contract.get("action_key") or f"incident_review:{action_contract.get('review_flag_id')}"
+    if action_contract.get("source") == "shipments" and action_contract.get("bundle_id"):
+        identity = f"bundle:{action_contract.get('bundle_id')}:shipments:{action_contract.get('action_key', '')}"
+    if action_contract.get("source") == "shipment_planning":
+        identity = action_contract.get("planning_group_key") or identity
+    display_label = action_contract.get("bundle_label") or session_record.exam_session_name
+    return {
+        "id": identity,
+        "session": session_record,
+        "priority_action": action_contract,
+        "action_label": action_contract.get("label", ""),
+        "source": action_contract.get("source", ""),
+        "source_label": action_contract.get("source_label", ""),
+        "responsible": action_contract.get("responsible") or "Not assigned",
+        "deadline": action_contract.get("deadline"),
+        "deadline_display": priority_action_deadline_display(action_contract, today=today),
+        "status": status,
+        "status_label": my_action_status_label(status),
+        "reason": action_contract.get("description", ""),
+        "display_label": display_label,
+        "display_date": action_contract.get("display_date") or session_record.session_date,
+        "manage_target": action_contract.get("target") or "",
+        "severity": action_contract.get("severity") or "",
+    }
+
+
+def my_action_rows_from_schedule_view(view, today=None):
+    rows = []
+    seen = set()
+    action_contracts = [
+        view.get("priority_action"),
+        finance_action_contract(view.get("finance")),
+        sinapsis_action_contract(view.get("sinapsis")),
+        communications_action_contract(view.get("communications")),
+        (view.get("packages") or {}).get("action"),
+        (view.get("shipments") or {}).get("action"),
+        (view.get("shipments") or {}).get("planning_action"),
+    ]
+    action_contracts.extend(incident_action_contracts(view.get("incidents")))
+    action_contracts.extend(
+        incident_review_flag_action_contract(flag_view.get("record"), today=today)
+        for flag_view in (view.get("review_flags") or {}).get("flags", [])
+    )
+    for action_contract in action_contracts:
+        row = my_action_row_from_action(view, action_contract, today=today)
+        if not row:
+            continue
+        identity = row["id"]
+        if identity in seen:
+            continue
+        seen.add(identity)
+        rows.append(row)
+    return rows
+
+
+def my_actions_summary(actions):
+    summary = {
+        "Needs review": 0,
+        "Overdue": 0,
+        "Due today": 0,
+        "Upcoming": 0,
+        "Not set": 0,
+    }
+    for action in actions:
+        label = action["status_label"]
+        if label in summary:
+            summary[label] += 1
+    return summary
+
+
+def my_actions_responsible_options(actions):
+    values = []
+    seen = set()
+    for action in actions:
+        responsible = action["responsible"] or "Not assigned"
+        if responsible not in seen:
+            seen.add(responsible)
+            values.append(responsible)
+    return sorted(values, key=lambda value: (value == "Not assigned", value.lower()))
+
+
+def filter_my_actions(actions, source_filter="", responsible_filter="", status_filter=""):
+    filtered = actions
+    if source_filter:
+        filtered = [action for action in filtered if action["source_label"] == source_filter]
+    if responsible_filter:
+        filtered = [action for action in filtered if action["responsible"] == responsible_filter]
+    if status_filter:
+        filtered = [action for action in filtered if action["status_label"] == status_filter]
+    return filtered
+
+
+def sort_my_actions(actions):
+    max_date = datetime.max.date()
+    return sorted(actions, key=lambda action: (
+        MY_ACTION_STATUS_ORDER.get(action["status"], 99),
+        action["deadline"] or max_date,
+        0 if action.get("severity") == "Critical" else 1,
+        action["session"].session_date or max_date,
+        (action.get("display_label") or action["session"].exam_session_name).lower(),
+        action.get("source_label", "").lower(),
+    ))
+
+
+def available_schedule_transitions(status):
+    return [
+        {"key": key, **config}
+        for key, config in SCHEDULE_WORKFLOW_ACTIONS.items()
+        if config.get("from") == status or status in config.get("from_any", [])
+    ]
+
+
+def schedule_transition_by_key(action_key):
+    return SCHEDULE_WORKFLOW_ACTIONS.get(action_key)
+
+
+def session_readiness_contract(operational_readiness, finance, sinapsis, communications, incidents, incident_review_flags):
+    labels = {
+        "needs_review": "Needs review",
+        "blocked": "Blocked",
+        "in_progress": "In progress",
+        "session_ready": "Session ready",
+    }
+    messages = {
+        "needs_review": "Some session readiness data is inconsistent or requires review.",
+        "blocked": "A critical readiness requirement is blocking this session.",
+        "in_progress": "One or more readiness requirements still need attention.",
+        "session_ready": "Operational readiness, Finance, Sinapsis readiness, Communications, Incidents and Incident review flags are complete or cleared.",
+    }
+    total_requirements = 6
+    scope_note = "This status covers Operational readiness, Finance, Sinapsis readiness, Communications, Incidents and Incident review flags."
+
+    def needs_review_contract():
+        return {
+            "status": "needs_review",
+            "label": labels["needs_review"],
+            "is_ready": False,
+            "ready_requirements": 0,
+            "total_requirements": total_requirements,
+            "summary": "Session readiness data needs review",
+            "message": messages["needs_review"],
+            "requirements": [
+                {"key": "operational", "label": "Operational readiness", "ready": False, "status": "Needs review", "message": "Operational readiness data needs review."},
+                {"key": "finance", "label": "Finance", "ready": False, "status": "Needs review", "message": "Finance readiness data needs review."},
+                {"key": "sinapsis", "label": "Sinapsis readiness", "ready": False, "status": "Needs review", "message": "Sinapsis readiness data needs review."},
+                {"key": "communications", "label": "Communications", "ready": False, "status": "Needs review", "message": "Communications readiness data needs review."},
+                {"key": "incidents", "label": "Incidents", "ready": False, "status": "Needs review", "message": "Incident data needs review."},
+                {"key": "incident_review_flags", "label": "Incident review flags", "ready": False, "status": "Needs review", "message": "Incident review flag data needs review."},
+            ],
+            "blockers": [{
+                "source": "session_readiness",
+                "code": "SESSION_READINESS_NEEDS_REVIEW",
+                "message": messages["needs_review"],
+            }],
+            "tooltip": "Session readiness data needs review.",
+            "scope_note": scope_note,
+        }
+
+    if not operational_readiness or not finance or not sinapsis or not communications or not incidents or not incident_review_flags:
+        return needs_review_contract()
+
+    operational_status = operational_readiness.get("status")
+    finance_status = finance.get("raw_status")
+    sinapsis_status = sinapsis.get("label")
+    communications_status = communications.get("label")
+    incidents_status = incidents.get("status")
+    review_flags_status = incident_review_flags.get("status")
+    finance_control_status = getattr(finance.get("control"), "status", None)
+    sinapsis_control_status = getattr(sinapsis.get("control"), "status", None)
+    communications_control_status = getattr(communications.get("control"), "status", None)
+    if operational_status not in {"needs_review", "blocked", "in_progress", "operationally_ready"}:
+        return needs_review_contract()
+    if finance.get("status") == "needs_review" or sinapsis.get("status") == "needs_review" or communications.get("status") == "needs_review":
+        return needs_review_contract()
+    if finance_control_status is not None and finance_control_status not in FINANCE_STATUS_OPTIONS:
+        return needs_review_contract()
+    if sinapsis_control_status is not None and sinapsis_control_status not in SINAPSIS_STATUS_OPTIONS:
+        return needs_review_contract()
+    if communications_control_status is not None and communications_control_status not in COMMUNICATIONS_STATUS_OPTIONS:
+        return needs_review_contract()
+    if finance_status not in FINANCE_STATUS_OPTIONS:
+        return needs_review_contract()
+    if sinapsis_status not in SINAPSIS_STATUS_OPTIONS:
+        return needs_review_contract()
+    if communications_status not in COMMUNICATIONS_STATUS_OPTIONS:
+        return needs_review_contract()
+    if incidents_status not in {"none", "active", "critical", "needs_review", "resolved"}:
+        return needs_review_contract()
+    if review_flags_status not in {"ready", "active", "needs_review"}:
+        return needs_review_contract()
+
+    operational_ready = bool(operational_readiness.get("is_ready")) or operational_status == "operationally_ready"
+    finance_ready = bool(finance.get("can_proceed"))
+    sinapsis_ready = bool(sinapsis.get("ready"))
+    communications_ready = bool(communications.get("ready"))
+    incidents_ready = incidents_status in {"none", "resolved"} and not incidents.get("active_count", 0)
+    review_flags_active_count = incident_review_flags.get("active_flags_count", 0) or 0
+    review_flags_ready = bool(incident_review_flags.get("ready"))
+
+    def incidents_requirement_status():
+        if incidents_status == "needs_review":
+            return "Needs review"
+        if incidents.get("critical_count", 0):
+            return "Critical active incident"
+        if incidents.get("high_count", 0):
+            return "High active incident"
+        if incidents.get("active_count", 0):
+            return "Active incident"
+        return "No active incidents"
+
+    def incidents_requirement_message():
+        if incidents_status == "needs_review":
+            return "Incident data needs review."
+        critical_count = incidents.get("critical_count", 0)
+        if critical_count:
+            return "There is 1 critical active incident." if critical_count == 1 else f"There are {critical_count} critical active incidents."
+        high_count = incidents.get("high_count", 0)
+        if high_count:
+            return "There is 1 high-severity active incident." if high_count == 1 else f"There are {high_count} high-severity active incidents."
+        active_count = incidents.get("active_count", 0)
+        if active_count:
+            return "There is 1 active incident." if active_count == 1 else f"There are {active_count} active incidents."
+        return "No active incidents."
+
+    def review_flags_requirement_status():
+        if incident_review_flags.get("data_needs_review") or review_flags_status == "needs_review":
+            return "Needs review"
+        if review_flags_active_count:
+            return "Needs review"
+        return "No active incident review flags"
+
+    def review_flags_requirement_message():
+        if incident_review_flags.get("data_needs_review") or review_flags_status == "needs_review":
+            return "Incident review flag data needs review."
+        if review_flags_active_count == 1:
+            return "There is 1 incident review flag requiring attention."
+        if review_flags_active_count:
+            return f"There are {review_flags_active_count} incident review flags requiring attention."
+        return "No active incident review flags."
+
+    requirements = [
+        {
+            "key": "operational",
+            "label": "Operational readiness",
+            "ready": operational_ready,
+            "status": operational_readiness.get("label", "Needs review"),
+            "message": operational_readiness.get("message") or "Operational readiness requires attention.",
+        },
+        {
+            "key": "finance",
+            "label": "Finance",
+            "ready": finance_ready,
+            "status": finance.get("label", "Needs review"),
+            "message": "This session is currently under Finance hold." if finance_status == "Finance hold" else finance.get("message", "Finance requires attention."),
+        },
+        {
+            "key": "sinapsis",
+            "label": "Sinapsis readiness",
+            "ready": sinapsis_ready,
+            "status": sinapsis.get("label", "Needs review"),
+            "message": sinapsis.get("message") or "Sinapsis readiness requires attention.",
+        },
+        {
+            "key": "communications",
+            "label": "Communications",
+            "ready": communications_ready,
+            "status": communications.get("label", "Needs review"),
+            "message": communications.get("message") or "Communications require attention.",
+        },
+        {
+            "key": "incidents",
+            "label": "Incidents",
+            "ready": incidents_ready,
+            "status": incidents_requirement_status(),
+            "message": incidents_requirement_message(),
+        },
+        {
+            "key": "incident_review_flags",
+            "label": "Incident review flags",
+            "ready": review_flags_ready,
+            "status": review_flags_requirement_status(),
+            "message": review_flags_requirement_message(),
+        },
+    ]
+    ready_requirements = sum(1 for requirement in requirements if requirement["ready"])
+    blockers = []
+    if operational_status == "blocked":
+        blockers.append({
+            "source": "operational_readiness",
+            "code": "OPERATIONAL_READINESS_BLOCKED",
+            "message": operational_readiness.get("message") or "Operational readiness is blocked.",
+        })
+    if finance_status == "Finance hold":
+        blockers.append({
+            "source": "finance",
+            "code": "FINANCE_HOLD",
+            "message": "This session is currently under Finance hold.",
+        })
+    if incidents.get("critical_count", 0):
+        blockers.append({
+            "source": "incidents",
+            "code": "CRITICAL_ACTIVE_INCIDENT",
+            "message": "This session has a critical active incident.",
+        })
+    if review_flags_active_count:
+        blockers.append({
+            "source": "incident_review_flags",
+            "code": "ACTIVE_INCIDENT_REVIEW_FLAG",
+            "message": review_flags_requirement_message(),
+        })
+    for source, contract in (
+        ("operational_readiness", operational_readiness),
+        ("finance", finance),
+        ("sinapsis", sinapsis),
+        ("communications", communications),
+        ("incidents", incidents),
+        ("incident_review_flags", incident_review_flags),
+    ):
+        for blocker in contract.get("blockers", []) or []:
+            if isinstance(blocker, dict):
+                message = blocker.get("message")
+                code = blocker.get("code") or f"{source.upper()}_NOT_READY"
+            else:
+                message = str(blocker)
+                code = f"{source.upper()}_NOT_READY"
+            if message:
+                blockers.append({"source": source, "code": code, "message": message})
+    deduped_blockers = []
+    seen = set()
+    for blocker in blockers:
+        key = (blocker.get("source"), blocker.get("code"), blocker.get("message"))
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped_blockers.append(blocker)
+
+    if (
+        operational_status == "needs_review"
+        or incidents_status == "needs_review"
+        or review_flags_status == "needs_review"
+        or incident_review_flags.get("data_needs_review")
+        or sinapsis_status not in SINAPSIS_STATUS_OPTIONS
+        or communications_status not in COMMUNICATIONS_STATUS_OPTIONS
+    ):
+        status = "needs_review"
+    elif finance_status == "Finance hold" or operational_status == "blocked" or incidents.get("critical_count", 0):
+        status = "blocked"
+    elif ready_requirements < total_requirements:
+        status = "in_progress"
+    else:
+        status = "session_ready"
+    if status == "blocked" and incidents.get("critical_count", 0):
+        message = "This session has a critical active incident."
+    elif status == "blocked" and finance_status == "Finance hold":
+        message = "This session is currently under Finance hold."
+    else:
+        message = messages[status]
+    tooltip = "\n".join(f"{requirement['label']} - {requirement['status']}" for requirement in requirements)
+    return {
+        "status": status,
+        "label": labels[status],
+        "is_ready": status == "session_ready",
+        "ready_requirements": ready_requirements,
+        "total_requirements": total_requirements,
+        "summary": f"{ready_requirements} / {total_requirements} requirements ready",
+        "message": message,
+        "requirements": requirements,
+        "blockers": deduped_blockers,
+        "tooltip": tooltip,
+        "scope_note": scope_note,
+    }
+
+
+JOURNEY_AUDIENCES = {"institution", "public"}
+JOURNEY_TITLES = {
+    "institution": "Path Session Journey \u2014 for institutions",
+    "public": "Path Session Journey \u2014 for families and candidates",
+}
+JOURNEY_FINANCE_READINESS = {
+    "Cleared": (
+        "Ready",
+        "Payment and administrative requirements are complete.",
+        "completed",
+    ),
+    "Conditional clearance": (
+        "Conditionally cleared",
+        "The session can move forward under an approved administrative condition.",
+        "completed",
+    ),
+    "Exception approved": (
+        "Exception approved",
+        "Path has approved an administrative exception for this session.",
+        "completed",
+    ),
+    "Not reviewed": (
+        "Pending review",
+        "Administrative and payment readiness is being reviewed by Path.",
+        "in_progress",
+    ),
+    "Payment follow-up required": (
+        "Action required",
+        "There is a pending administrative/payment item that needs to be resolved before the session can be fully confirmed.",
+        "attention_needed",
+    ),
+    "Finance hold": (
+        "On hold",
+        "The session requires administrative/payment clearance before moving forward.",
+        "attention_needed",
+    ),
+}
+
+
+def journey_clean_text(value):
+    value = (value or "").strip()
+    if not value or value.lower() in {"none", "null", "undefined"}:
+        return ""
+    return value
+
+
+def journey_countdown(session_date, today=None):
+    today = today or datetime.now(LOCAL_TZ).date()
+    if not session_date:
+        return {
+            "days_to_go": None,
+            "label": "Exam date to be confirmed",
+            "is_today": False,
+            "has_passed": False,
+        }
+    days_to_go = (session_date - today).days
+    if days_to_go < 0:
+        return {
+            "days_to_go": 0,
+            "label": "This Path exam session has taken place.",
+            "is_today": False,
+            "has_passed": True,
+        }
+    if days_to_go == 0:
+        return {
+            "days_to_go": 0,
+            "label": "Exam day is today",
+            "is_today": True,
+            "has_passed": False,
+        }
+    label = "1 day to go" if days_to_go == 1 else f"{days_to_go} days to go"
+    return {
+        "days_to_go": days_to_go,
+        "label": label,
+        "is_today": False,
+        "has_passed": False,
+    }
+
+
+def journey_safe_location(session_record):
+    parts = [journey_clean_text(session_record.city), journey_clean_text(session_record.province)]
+    return ", ".join(part for part in parts if part)
+
+
+def journey_milestone(key, label, completed, message, in_progress_message=None, upcoming_message=None):
+    return {
+        "key": key,
+        "label": label,
+        "status": "completed" if completed else "upcoming",
+        "message": message if completed else (upcoming_message or in_progress_message or message),
+    }
+
+
+def mark_journey_milestone_progress(milestones):
+    first_open_seen = False
+    for milestone in milestones:
+        if milestone["status"] == "completed":
+            continue
+        if not first_open_seen:
+            milestone["status"] = "in_progress"
+            first_open_seen = True
+        else:
+            milestone["status"] = "upcoming"
+    return milestones
+
+
+def journey_milestone_status_label(status, audience):
+    if audience == "public":
+        return {
+            "completed": "Completed",
+            "in_progress": "In progress",
+            "upcoming": "Coming soon",
+        }.get(status, "Coming soon")
+    return {
+        "completed": "Completed",
+        "in_progress": "In progress",
+        "upcoming": "Upcoming",
+    }.get(status, "Upcoming")
+
+
+def finalize_journey_milestones(milestones, audience):
+    milestones = mark_journey_milestone_progress(milestones)
+    for milestone in milestones:
+        milestone["status_label"] = journey_milestone_status_label(milestone["status"], audience)
+    return milestones
+
+
+def journey_finance_readiness(finance):
+    raw_status = (finance or {}).get("raw_status") or "Not reviewed"
+    status, message, milestone_status = JOURNEY_FINANCE_READINESS.get(
+        raw_status,
+        JOURNEY_FINANCE_READINESS["Not reviewed"],
+    )
+    return {
+        "visible": True,
+        "label": "Administrative & payment readiness",
+        "status": status,
+        "milestone_status": milestone_status,
+        "message": message,
+    }
+
+
+def journey_last_updated(session_record, *records):
+    candidates = [
+        getattr(session_record, "updated_on", None),
+        getattr(session_record, "created_on", None),
+    ]
+    for record in records:
+        if not record:
+            continue
+        if isinstance(record, (list, tuple)):
+            for item in record:
+                candidates.extend([getattr(item, "updated_at", None), getattr(item, "created_at", None)])
+            continue
+        candidates.extend([
+            getattr(record, "updated_at", None),
+            getattr(record, "created_at", None),
+            getattr(record, "updated_on", None),
+            getattr(record, "created_on", None),
+        ])
+    return max([candidate for candidate in candidates if candidate], default=None)
+
+
+def path_session_journey_sources(session_record, today=None):
+    today = today or datetime.now(LOCAL_TZ).date()
+    workflow = ExamSessionScheduleWorkflow.query.filter_by(exam_session_id=session_record.id).first()
+    supervisor_assignments = (
+        ExamSessionSupervisorAssignment.query
+        .filter_by(exam_session_id=session_record.id)
+        .options(joinedload(ExamSessionSupervisorAssignment.team_member))
+        .all()
+    )
+    examiner_assignments = (
+        ExamSessionExaminerAssignment.query
+        .filter_by(exam_session_id=session_record.id)
+        .options(joinedload(ExamSessionExaminerAssignment.team_member))
+        .all()
+    )
+    intern_assignments = (
+        ExamSessionInternAssignment.query
+        .filter_by(exam_session_id=session_record.id)
+        .options(joinedload(ExamSessionInternAssignment.team_member))
+        .all()
+    )
+    session_assignments = supervisor_assignments + examiner_assignments + intern_assignments
+    logistics_config = ExamSessionLogistics.query.filter_by(exam_session_id=session_record.id).first()
+    logistics_concepts = ExamSessionLogisticsConcept.query.filter_by(exam_session_id=session_record.id).all()
+    package_units = ExamSessionPackageUnit.query.filter_by(exam_session_id=session_record.id).all()
+    package_session_items = ExamSessionPackageChecklistItem.query.filter_by(
+        exam_session_id=session_record.id,
+        scope="SESSION",
+    ).all()
+    shipment_link = (
+        ExamSessionShipmentBundleSession.query
+        .options(joinedload(ExamSessionShipmentBundleSession.bundle))
+        .filter_by(exam_session_id=session_record.id)
+        .first()
+    )
+    finance_control = ExamSessionFinanceControl.query.filter_by(exam_session_id=session_record.id).first()
+    sinapsis_control = ExamSessionSinapsisControl.query.filter_by(exam_session_id=session_record.id).first()
+    sinapsis_items = sinapsis_control.checklist_items if sinapsis_control else []
+    communications_control = ExamSessionCommunicationsControl.query.filter_by(exam_session_id=session_record.id).first()
+    communications_items = communications_control.checklist_items if communications_control else []
+
+    staffing = staffing_readiness_contract(supervisor_assignments, examiner_assignments, intern_assignments)
+    logistics = logistics_readiness_contract(session_assignments, logistics_concepts, logistics_config)
+    schedule_gate = schedule_gate_status(workflow)
+    packages = packages_readiness_contract(
+        session_record,
+        package_units=package_units,
+        session_items=package_session_items,
+        schedule_gate=schedule_gate,
+        staffing_contract=staffing,
+    )
+    shipment = session_shipment_contract(session_record, shipment_link)
+    finance = finance_readiness_contract(finance_control, today=today)
+    sinapsis = sinapsis_readiness_contract(session_record, sinapsis_control, checklist_items=sinapsis_items, today=today)
+    communications = communications_readiness_contract(communications_control, checklist_items=communications_items, today=today)
+    operational = operational_readiness_contract(schedule_gate, staffing, logistics, packages, shipment)
+    no_incidents = incidents_readiness_contract(session_record, incidents=[], today=today)
+    no_review_flags = incident_review_flags_contract(session_record, flags=[])
+    session_ready = session_readiness_contract(
+        operational,
+        finance,
+        sinapsis,
+        communications,
+        no_incidents,
+        no_review_flags,
+    )
+    return {
+        "workflow": workflow,
+        "staffing": staffing,
+        "logistics": logistics,
+        "logistics_config": logistics_config,
+        "logistics_concepts": logistics_concepts,
+        "packages": packages,
+        "package_units": package_units,
+        "shipment": shipment,
+        "shipment_bundle": shipment.get("bundle"),
+        "finance": finance,
+        "finance_control": finance_control,
+        "sinapsis": sinapsis,
+        "sinapsis_control": sinapsis_control,
+        "communications": communications,
+        "communications_control": communications_control,
+        "operational": operational,
+        "session_readiness": session_ready,
+    }
+
+
+def path_session_journey_contract(session_record, audience, today=None, sources=None):
+    audience = journey_clean_text(audience)
+    if audience not in JOURNEY_AUDIENCES:
+        audience = "public"
+    today = today or datetime.now(LOCAL_TZ).date()
+    sources = sources or path_session_journey_sources(session_record, today=today)
+    countdown = journey_countdown(session_record.session_date, today=today)
+    schedule_ready = bool(schedule_gate_status(sources.get("workflow")).get("is_ready"))
+    staffing_ready = bool((sources.get("staffing") or {}).get("ready"))
+    logistics = sources.get("logistics") or {}
+    logistics_ready = bool(logistics.get("final_email_ready")) or logistics.get("status") == "not_applicable"
+    logistics_applicable = logistics.get("status") != "not_applicable"
+    packages_ready = bool((sources.get("packages") or {}).get("ready"))
+    shipment_status = (sources.get("shipment") or {}).get("status")
+    shipment_dispatched = shipment_status in {
+        "Dispatched",
+        "Recipient notified",
+        "In transit to recipient",
+        "In transit to post office",
+        "Delayed",
+        "Delivered successfully",
+        "Recipient review successful",
+        "Recipient review with discrepancy",
+    }
+    shipment_delivered = shipment_status in {
+        "Delivered successfully",
+        "Recipient review successful",
+    }
+    sinapsis_ready = bool((sources.get("sinapsis") or {}).get("ready"))
+    communications_ready = bool((sources.get("communications") or {}).get("ready"))
+    operational_ready = bool((sources.get("operational") or {}).get("is_ready"))
+    session_ready = bool((sources.get("session_readiness") or {}).get("is_ready"))
+
+    if audience == "institution":
+        milestones = [
+            journey_milestone("confirmed", "Exam session confirmed", True, "The exam session has been created in Path."),
+            journey_milestone("schedule", "Exam session schedules approved", schedule_ready, "The exam session schedules have been confirmed.", "Schedule preparation is in progress."),
+            journey_milestone("staffing", "Path team assigned and confirmed", staffing_ready, "The Path team is assigned and confirmed.", "Path is confirming the session team."),
+        ]
+        if logistics_applicable:
+            milestones.append(journey_milestone("logistics", "Staff logistics completed", logistics_ready, "Staff logistics are complete.", "Staff logistics are being completed."))
+        else:
+            milestones.append(journey_milestone("logistics", "Staff logistics completed", True, "No additional staff logistics are required for this session."))
+        milestones.extend([
+            journey_milestone("materials_prepared", "Session materials prepared", packages_ready, "Session materials are prepared.", "Session materials are being prepared."),
+            journey_milestone("materials_dispatched", "Session materials dispatched", shipment_dispatched, "Session materials have been dispatched.", "Materials dispatch is being coordinated."),
+            journey_milestone("materials_delivered", "Session materials delivered", shipment_delivered, "Session materials have been delivered.", "Materials delivery is in progress."),
+            journey_milestone("digital", "Digital readiness checked", sinapsis_ready, "Digital readiness has been checked.", "Digital readiness checks are in progress."),
+            journey_milestone("communications", "Final session details shared", communications_ready, "Final session details have been shared.", "Final session details are being prepared."),
+            journey_milestone("session_ready", "Session ready", session_ready, "The session is ready.", "Final readiness checks are in progress."),
+        ])
+        hero_message = "Follow the key milestones as we prepare your upcoming Path exam session."
+        final_message = "The session is ready." if session_ready else "Final readiness checks are in progress."
+        if countdown.get("has_passed"):
+            final_message = "This Path exam session has taken place."
+        next_steps = [] if session_ready else ["Final readiness checks are in progress."]
+    else:
+        milestones = [
+            journey_milestone("confirmed", "Your Path exam session is confirmed", True, "Your Path exam session is confirmed."),
+            journey_milestone("schedule", "Schedules are being organised", schedule_ready, "Schedules are organised for exam day.", "Schedules are being organised with care."),
+            journey_milestone("team", "Path team getting ready", staffing_ready, "The Path team is getting ready for the session.", "The Path team is getting ready."),
+            journey_milestone("materials", "Session materials being prepared", packages_ready, "Session materials are being prepared with care.", "Session materials are being prepared with care."),
+            journey_milestone("arrangements", "Final arrangements in progress", operational_ready, "Final arrangements are in place.", "Final arrangements are in progress."),
+            journey_milestone("digital", "Digital readiness checked", sinapsis_ready, "Digital readiness has been checked.", "Digital readiness checks are in progress."),
+            journey_milestone("communications", "Final session details shared", communications_ready, "Final session details have been shared.", "Final session details are being prepared."),
+            journey_milestone("ready", "Everything is ready for exam day", session_ready, "Everything is ready for exam day.", "We\u2019re getting everything ready for exam day."),
+        ]
+        if countdown.get("has_passed"):
+            hero_message = "Thank you for being part of the Path experience \U0001f499"
+            supporting_message = "Thank you for sharing this Path exam session with us."
+            final_message = "This Path exam session has taken place. Thank you for being part of the Path experience."
+            next_steps = []
+        else:
+            hero_message = (
+                "Everything is ready for exam day \U0001f499"
+                if session_ready else
+                "Your Path exam day is getting closer \U0001f499"
+            )
+            final_message = (
+                "We\u2019re looking forward to sharing this Path experience with you."
+                if session_ready else
+                "Every Path session is carefully prepared so students can feel confident, supported and ready to show what they can do in English."
+            )
+            supporting_message = "We\u2019re getting everything ready to make this a meaningful, organised and memorable experience for students and the school team."
+            next_steps = [] if session_ready else ["We\u2019re getting everything ready to make this a meaningful, organised and memorable experience for students and the school team."]
+    milestones = finalize_journey_milestones(milestones, audience)
+    last_updated = journey_last_updated(
+        session_record,
+        sources.get("workflow"),
+        sources.get("logistics_config"),
+        sources.get("logistics_concepts"),
+        sources.get("package_units"),
+        sources.get("shipment_bundle"),
+        sources.get("finance_control"),
+        sources.get("sinapsis_control"),
+        sources.get("communications_control"),
+    )
+    return {
+        "audience": audience,
+        "title": JOURNEY_TITLES[audience],
+        "session_name": session_record.exam_session_name,
+        "session_date": session_record.session_date,
+        "format": session_record.format,
+        "venue": journey_safe_location(session_record),
+        "countdown": countdown,
+        "hero_message": hero_message,
+        "supporting_message": supporting_message if audience == "public" else "",
+        "overall_label": "Everything ready" if session_ready else "Getting ready",
+        "last_updated": last_updated,
+        "milestones": milestones,
+        "administrative_readiness": journey_finance_readiness(sources.get("finance")) if audience == "institution" else {"visible": False},
+        "next_steps": next_steps,
+        "final_message": final_message,
+        "visibility_note": "This journey shows selected milestones for external visibility. Internal operational details are not displayed." if audience == "institution" else "",
+    }
+
+
+def journey_share_for_session(session_id, audience):
+    return (
+        ExamSessionJourneyShare.query
+        .filter_by(exam_session_id=session_id, audience=audience)
+        .order_by(ExamSessionJourneyShare.created_at.desc(), ExamSessionJourneyShare.id.desc())
+        .first()
+    )
+
+
+def generate_unique_journey_token():
+    while True:
+        token = secrets.token_urlsafe(32)
+        if not ExamSessionJourneyShare.query.filter_by(token=token).first():
+            return token
+
+
+def ensure_journey_share_token(session_record, audience, created_by=None):
+    share = journey_share_for_session(session_record.id, audience)
+    now = datetime.now(timezone.utc)
+    if share:
+        if share.revoked_at:
+            share.token = generate_unique_journey_token()
+            share.revoked_at = None
+            share.revoked_by = None
+            share.regenerated_at = now
+            share.regenerated_by = created_by
+        share.is_enabled = True
+        db.session.commit()
+        return share
+    share = ExamSessionJourneyShare(
+        exam_session_id=session_record.id,
+        audience=audience,
+        token=generate_unique_journey_token(),
+        created_by=created_by,
+        is_enabled=True,
+    )
+    db.session.add(share)
+    db.session.commit()
+    return share
+
+
+def disable_journey_share(session_record, audience, updated_by=None):
+    share = journey_share_for_session(session_record.id, audience)
+    if not share:
+        return None
+    share.is_enabled = False
+    db.session.commit()
+    return share
+
+
+def regenerate_journey_share(session_record, audience, regenerated_by=None):
+    now = datetime.now(timezone.utc)
+    share = journey_share_for_session(session_record.id, audience)
+    if not share:
+        share = ExamSessionJourneyShare(
+            exam_session_id=session_record.id,
+            audience=audience,
+            token=generate_unique_journey_token(),
+            is_enabled=True,
+            created_by=regenerated_by,
+            regenerated_at=now,
+            regenerated_by=regenerated_by,
+        )
+        db.session.add(share)
+    else:
+        share.token = generate_unique_journey_token()
+        share.is_enabled = True
+        share.revoked_at = None
+        share.revoked_by = None
+        share.regenerated_at = now
+        share.regenerated_by = regenerated_by
+    db.session.commit()
+    return share
+
+
+def journey_share_status(share):
+    if not share:
+        return "Link not generated"
+    if share.is_enabled and not share.revoked_at:
+        return "Enabled"
+    return "Disabled"
+
+
+def journey_share_view(session_record, audience, share=None):
+    share = share if share is not None else journey_share_for_session(session_record.id, audience)
+    return {
+        "audience": audience,
+        "share": share,
+        "status": journey_share_status(share),
+        "enabled": bool(share and share.is_enabled and not share.revoked_at),
+        "exists": bool(share),
+        "url": url_for("staff.shared_path_session_journey", token=share.token, audience=audience, _external=True) if share else "",
+        "last_copied_at": share.last_copied_at if share else None,
+    }
+
+
+def journey_share_views(session_record, shares_by_audience=None):
+    shares_by_audience = shares_by_audience or {}
+    return {
+        audience: journey_share_view(session_record, audience, shares_by_audience.get(audience))
+        for audience in sorted(JOURNEY_AUDIENCES)
+    }
+
+
+def render_journey_unavailable(status_code=404):
+    return render_template(
+        "pre_session_control_tower/session_journey.html",
+        journey=None,
+        share=None,
+        is_preview=False,
+        unavailable=True,
+        unavailable_title="This journey link is no longer available.",
+        unavailable_message="Please contact Path Examinations if you need an updated link.",
+    ), status_code
+
+
+def schedule_workflow_view(session_record, workflow=None, today=None, staffing=None, logistics=None, core_readiness=None, operational_readiness=None, session_readiness=None, incidents=None, review_flags=None, priority_action=None, staffing_control=None, logistics_control=None, finance=None, finance_events=None, sinapsis=None, sinapsis_checklist_items=None, sinapsis_events=None, communications=None, communications_checklist_items=None, communications_events=None, schedule_gate=None, packages=None, shipments=None, activity_timeline=None, journey_shares=None):
+    status = schedule_workflow_status(workflow)
+    deadline = schedule_workflow_current_deadline(workflow)
+    sinapsis_url = (session_record.details_url or "").strip()
+    gate = schedule_gate or schedule_gate_status(workflow)
+    fallback_staffing_contract = staffing_readiness_contract([], [], [])
+    staffing_control_view = staffing_control or staffing_control_contract(None, fallback_staffing_contract, today=today)
+    fallback_logistics_contract = logistics_readiness_contract([], [], None)
+    logistics_control_view = logistics_control or logistics_control_contract(None, fallback_logistics_contract, today=today)
+    finance_view = finance or finance_readiness_contract(None, today=today)
+    sinapsis_view = sinapsis or sinapsis_readiness_contract(session_record, None, today=today)
+    communications_view = communications or communications_readiness_contract(None, today=today)
+    incidents_view = incidents or incidents_readiness_contract(session_record, [], today=today)
+    review_flags_view = review_flags or incident_review_flags_contract(session_record, [])
+    operational_readiness_view = operational_readiness or operational_readiness_contract(
+        gate,
+        staffing_readiness_contract([], [], []),
+        logistics_readiness_contract([], [], None),
+        packages_readiness_contract(session_record, [], [], gate, staffing_readiness_contract([], [], [])),
+        session_shipment_contract(session_record),
+    )
+    return {
+        "session": session_record,
+        "workflow": workflow,
+        "status": status,
+        "next_action": schedule_workflow_next_action(status),
+        "responsible": schedule_workflow_responsible(status),
+        "deadline": deadline,
+        "review_round": schedule_workflow_review_round(workflow),
+        "health": schedule_workflow_health(status, deadline, today=today),
+        "schedule_gate": gate,
+        "staffing": staffing,
+        "staffing_control": staffing_control_view,
+        "logistics": logistics or logistics_presentation_from_contract(logistics_readiness_contract([], [], None)),
+        "logistics_control": logistics_control_view,
+        "finance": finance_view,
+        "finance_events": finance_events or [],
+        "sinapsis": sinapsis_view,
+        "sinapsis_checklist_items": sinapsis_checklist_items or [],
+        "sinapsis_events": sinapsis_events or [],
+        "communications": communications_view,
+        "communications_checklist_items": communications_checklist_items or [],
+        "communications_events": communications_events or [],
+        "packages": packages or {
+            "contract": packages_readiness_contract(session_record, [], [], schedule_gate=gate, staffing_contract=fallback_staffing_contract),
+            "action": None,
+            "unit_views": [],
+            "session_pre_packing_items": [],
+            "session_final_assembly_items": [],
+            "schedule_ready": bool(gate.get("is_ready")),
+            "staffing_ready": False,
+        },
+        "shipments": shipments or {
+            "contract": session_shipment_contract(session_record),
+            "planning": None,
+            "planning_action": None,
+            "assisted_action": None,
+            "action": None,
+            "bundle_view": None,
+            "available_supervisors": [],
+            "available_sessions": [],
+        },
+        "core_readiness": core_readiness or core_readiness_contract(
+            gate,
+            staffing_readiness_contract([], [], []),
+            logistics_readiness_contract([], [], None),
+        ),
+        "operational_readiness": operational_readiness_view,
+        "session_readiness": session_readiness or session_readiness_contract(
+            operational_readiness_view,
+            finance_view,
+            sinapsis_view,
+            communications_view,
+            incidents_view,
+            review_flags_view,
+        ),
+        "incidents": incidents_view,
+        "review_flags": review_flags_view,
+        "priority_action": priority_action or priority_action_contract(
+            schedule_status=status,
+            schedule_gate=gate,
+            schedule_responsible=schedule_workflow_responsible(status),
+            schedule_deadline=deadline,
+            staffing_contract=fallback_staffing_contract,
+            staffing_control=staffing_control_view,
+            logistics_contract=logistics_readiness_contract([], [], None),
+            core_readiness=core_readiness_contract(
+                gate,
+                staffing_readiness_contract([], [], []),
+                logistics_readiness_contract([], [], None),
+            ),
+            logistics_control=logistics_control_view,
+        ),
+        "activity_timeline": activity_timeline or session_activity_timeline_contract(session_record, schedule_events=list(workflow.events or []) if workflow else []),
+        "journey_shares": journey_shares or journey_share_views(session_record),
+        "available_transitions": available_schedule_transitions(status),
+        "sinapsis_url": sinapsis_url,
+        "sinapsis_available": bool(sinapsis_url and is_valid_url(sinapsis_url)),
+    }
+
+
+ACTIVITY_SOURCE_LABELS = {
+    "schedule": "Schedule",
+    "packages": "Packages",
+    "shipments": "Shipments",
+    "finance": "Finance",
+    "sinapsis": "Sinapsis readiness",
+    "communications": "Communications",
+    "incidents": "Incidents",
+    "incident_review": "Incident review",
+}
+
+
+INCIDENT_ACTIVITY_TITLES = {
+    "created": "Incident created",
+    "updated": "Incident updated",
+    "impact_reviewed": "Incident impact reviewed",
+    "impact_marked_not_applicable": "Incident impact marked not applicable",
+    "review_flag_created": "Incident review flag created",
+    "review_flag_auto_created": "Incident review flag created",
+    "review_flag_reviewed": "Incident review flag reviewed",
+    "review_flag_reopened": "Incident review flag reopened",
+    "review_flag_auto_reopened": "Incident review flag reopened",
+    "review_flag_dismissed": "Incident review flag dismissed",
+    "assisted_impact_action_executed": "Assisted impact action executed",
+}
+
+
+def clean_activity_text(value):
+    value = (value or "").strip()
+    if not value or value.lower() in {"none", "null", "undefined"}:
+        return ""
+    return value
+
+
+def activity_transition(previous_status, new_status):
+    previous_status = clean_activity_text(previous_status)
+    new_status = clean_activity_text(new_status)
+    if previous_status and new_status:
+        return f"{previous_status} \u2192 {new_status}"
+    if new_status:
+        return f"Updated to {new_status}"
+    if previous_status:
+        return f"Previous status: {previous_status}"
+    return ""
+
+
+def activity_fallback_description(source_label):
+    return f"{source_label} activity was recorded."
+
+
+def normalized_activity_event(
+    source,
+    raw_id,
+    event_type,
+    title,
+    description,
+    created_at,
+    created_by=None,
+    note=None,
+    previous_status=None,
+    new_status=None,
+    metadata=None,
+):
+    source_label = ACTIVITY_SOURCE_LABELS.get(source, source.replace("_", " ").title())
+    description = clean_activity_text(description) or activity_fallback_description(source_label)
+    note = clean_activity_text(note)
+    metadata = {
+        clean_activity_text(key): clean_activity_text(value)
+        for key, value in (metadata or {}).items()
+        if clean_activity_text(key) and clean_activity_text(value)
+    }
+    return {
+        "id": f"{source}:{raw_id}",
+        "raw_id": raw_id or 0,
+        "source": source,
+        "source_label": source_label,
+        "event_type": clean_activity_text(event_type) or "activity",
+        "title": clean_activity_text(title) or f"{source_label} event",
+        "description": description,
+        "created_at": created_at,
+        "created_by": clean_activity_text(created_by) or "Unknown user",
+        "note": note,
+        "previous_status": clean_activity_text(previous_status),
+        "new_status": clean_activity_text(new_status),
+        "metadata": metadata,
+        "_created_at": created_at or datetime.min.replace(tzinfo=timezone.utc),
+    }
+
+
+def schedule_activity_events(events):
+    timeline = []
+    for event in events or []:
+        transition = activity_transition(event.previous_status, event.new_status)
+        metadata = {}
+        if event.due_at:
+            metadata["Deadline"] = event.due_at.strftime("%d/%m/%Y")
+        timeline.append(normalized_activity_event(
+            "schedule",
+            event.id,
+            "status_changed",
+            "Schedule status changed",
+            transition,
+            event.created_at,
+            created_by=event.created_by,
+            note=event.note,
+            previous_status=event.previous_status,
+            new_status=event.new_status,
+            metadata=metadata,
+        ))
+    return timeline
+
+
+def package_activity_events(package_units):
+    timeline = []
+    for unit in package_units or []:
+        context = " \u00b7 ".join(filter(None, [clean_activity_text(unit.room_name), clean_activity_text(unit.module_name)]))
+        for event in unit.events or []:
+            transition = activity_transition(event.previous_status, event.new_status)
+            description_parts = [context, transition]
+            timeline.append(normalized_activity_event(
+                "packages",
+                event.id,
+                event.event_type,
+                "Package status changed" if transition else "Package activity recorded",
+                " \u00b7 ".join(part for part in description_parts if part),
+                event.created_at,
+                created_by=event.created_by,
+                note=event.note,
+                previous_status=event.previous_status,
+                new_status=event.new_status,
+            ))
+    return timeline
+
+
+def shipment_activity_events(shipment_bundle):
+    timeline = []
+    if not shipment_bundle:
+        return timeline
+    for event in shipment_bundle.events or []:
+        transition = activity_transition(event.previous_status, event.new_status)
+        metadata = {}
+        if event.tracking_number:
+            metadata["Tracking"] = event.tracking_number
+        timeline.append(normalized_activity_event(
+            "shipments",
+            event.id,
+            event.event_type,
+            "Shipment status changed" if transition else "Shipment activity recorded",
+            transition,
+            event.created_at,
+            created_by=event.created_by,
+            note=event.note,
+            previous_status=event.previous_status,
+            new_status=event.new_status,
+            metadata=metadata,
+        ))
+    return timeline
+
+
+def status_activity_events(source, events, title, fallback_title):
+    timeline = []
+    for event in events or []:
+        transition = activity_transition(event.previous_status, event.new_status)
+        timeline.append(normalized_activity_event(
+            source,
+            event.id,
+            event.event_type,
+            title if transition else fallback_title,
+            transition,
+            event.created_at,
+            created_by=event.created_by,
+            note=event.note,
+            previous_status=event.previous_status,
+            new_status=event.new_status,
+        ))
+    return timeline
+
+
+def incident_activity_events(incidents, incident_events_by_incident=None):
+    timeline = []
+    incident_events_by_incident = incident_events_by_incident or {}
+    for incident in incidents or []:
+        incident_context = " \u00b7 ".join(filter(None, [
+            clean_activity_text(incident.incident_type),
+            clean_activity_text(incident.title),
+        ]))
+        for event in incident_events_by_incident.get(incident.id, list(incident.events or [])):
+            source = "incident_review" if "review_flag" in (event.event_type or "") else "incidents"
+            title = INCIDENT_ACTIVITY_TITLES.get(event.event_type, "Incident updated")
+            transition = activity_transition(event.previous_status, event.new_status)
+            severity_transition = activity_transition(event.previous_severity, event.new_severity)
+            description_parts = [incident_context, transition or severity_transition]
+            description = " \u00b7 ".join(part for part in description_parts if part)
+            timeline.append(normalized_activity_event(
+                source,
+                event.id,
+                event.event_type,
+                title,
+                description,
+                event.created_at,
+                created_by=event.created_by,
+                note=event.note,
+                previous_status=event.previous_status,
+                new_status=event.new_status,
+            ))
+    return timeline
+
+
+def session_activity_timeline_contract(
+    session_record,
+    schedule_events=None,
+    package_units=None,
+    shipment_bundle=None,
+    finance_events=None,
+    sinapsis_events=None,
+    communications_events=None,
+    incidents=None,
+    incident_events_by_incident=None,
+    limit=30,
+):
+    if not session_record:
+        return {"total_events": 0, "shown_events": 0, "events": [], "sources": [], "last_event_at": None, "limit": limit}
+    if schedule_events is None:
+        workflow = ExamSessionScheduleWorkflow.query.filter_by(exam_session_id=session_record.id).first()
+        schedule_events = list(workflow.events or []) if workflow else []
+    if package_units is None:
+        package_units = (
+            ExamSessionPackageUnit.query
+            .options(joinedload(ExamSessionPackageUnit.events))
+            .filter_by(exam_session_id=session_record.id)
+            .all()
+        )
+    if shipment_bundle is None:
+        shipment_link = (
+            ExamSessionShipmentBundleSession.query
+            .options(joinedload(ExamSessionShipmentBundleSession.bundle).joinedload(ExamSessionShipmentBundle.events))
+            .filter_by(exam_session_id=session_record.id)
+            .first()
+        )
+        shipment_bundle = shipment_link.bundle if shipment_link else None
+    if finance_events is None:
+        finance_control = ExamSessionFinanceControl.query.filter_by(exam_session_id=session_record.id).first()
+        finance_events = list(finance_control.events or []) if finance_control else []
+    if sinapsis_events is None:
+        sinapsis_control = ExamSessionSinapsisControl.query.filter_by(exam_session_id=session_record.id).first()
+        sinapsis_events = list(sinapsis_control.events or []) if sinapsis_control else []
+    if communications_events is None:
+        communications_control = ExamSessionCommunicationsControl.query.filter_by(exam_session_id=session_record.id).first()
+        communications_events = list(communications_control.events or []) if communications_control else []
+    if incidents is None:
+        incidents = (
+            ExamSessionIncident.query
+            .options(joinedload(ExamSessionIncident.events))
+            .filter_by(exam_session_id=session_record.id)
+            .all()
+        )
+
+    events = []
+    events.extend(schedule_activity_events(schedule_events))
+    events.extend(package_activity_events(package_units))
+    events.extend(shipment_activity_events(shipment_bundle))
+    events.extend(status_activity_events("finance", finance_events, "Finance status changed", "Finance event"))
+    events.extend(status_activity_events("sinapsis", sinapsis_events, "Sinapsis readiness updated", "Sinapsis readiness event"))
+    events.extend(status_activity_events("communications", communications_events, "Communications status changed", "Communications event"))
+    events.extend(incident_activity_events(incidents, incident_events_by_incident=incident_events_by_incident))
+    events.sort(key=lambda item: (item["source"], item["raw_id"]))
+    events.sort(key=lambda item: item["_created_at"], reverse=True)
+    total_events = len(events)
+    shown_events = events[:limit] if limit else events
+    for event in shown_events:
+        event.pop("_created_at", None)
+        event.pop("raw_id", None)
+    sources = []
+    for event in events:
+        label = event["source_label"]
+        if label not in sources:
+            sources.append(label)
+    return {
+        "total_events": total_events,
+        "shown_events": len(shown_events),
+        "events": shown_events,
+        "sources": sources,
+        "last_event_at": shown_events[0]["created_at"] if shown_events else None,
+        "limit": limit,
+    }
+
+
+def parse_schedule_deadline(value):
+    value = (value or "").strip()
+    if not value:
+        return None
+    for date_format in ("%Y-%m-%d", "%d/%m/%Y"):
+        try:
+            return datetime.strptime(value, date_format).date()
+        except ValueError:
+            continue
+    return None
+
+
+def schedule_workflow_redirect(session_record, status_filter="", action_key=""):
+    args = {
+        "session_year": session_record.session_date.year,
+        "open_schedule_modal": session_record.id,
+        "open_modal_target": "schedule-actions",
+    }
+    if status_filter in SCHEDULE_WORKFLOW_STATUSES:
+        args["schedule_status"] = status_filter
+    if action_key in SCHEDULE_WORKFLOW_ACTIONS:
+        args["open_schedule_action"] = action_key
+    return redirect(url_for("staff.pre_session_control_tower", **args))
+
+
+def staffing_control_redirect(session_record, status_filter="", edit=False):
+    args = {
+        "session_year": session_record.session_date.year,
+        "open_schedule_modal": session_record.id,
+        "open_modal_target": "staffing",
+    }
+    if status_filter in SCHEDULE_WORKFLOW_STATUSES:
+        args["schedule_status"] = status_filter
+    if edit:
+        args["open_staffing_control"] = "1"
+    return redirect(url_for("staff.pre_session_control_tower", **args))
+
+
+def logistics_control_redirect(session_record, status_filter="", edit=False):
+    args = {
+        "session_year": session_record.session_date.year,
+        "open_schedule_modal": session_record.id,
+        "open_modal_target": "logistics",
+    }
+    if status_filter in SCHEDULE_WORKFLOW_STATUSES:
+        args["schedule_status"] = status_filter
+    if edit:
+        args["open_logistics_control"] = "1"
+    return redirect(url_for("staff.pre_session_control_tower", **args))
+
+
+def finance_control_redirect(session_record, status_filter="", edit=False):
+    args = {
+        "session_year": session_record.session_date.year,
+        "open_schedule_modal": session_record.id,
+        "open_modal_target": "finance",
+    }
+    if status_filter in SCHEDULE_WORKFLOW_STATUSES:
+        args["schedule_status"] = status_filter
+    if edit:
+        args["open_finance_control"] = "1"
+    return redirect(url_for("staff.pre_session_control_tower", **args))
+
+
+def sinapsis_control_redirect(session_record, status_filter="", edit=False):
+    args = {
+        "session_year": session_record.session_date.year,
+        "open_schedule_modal": session_record.id,
+        "open_modal_target": "sinapsis",
+    }
+    if status_filter in SCHEDULE_WORKFLOW_STATUSES:
+        args["schedule_status"] = status_filter
+    if edit:
+        args["open_sinapsis_control"] = "1"
+    return redirect(url_for("staff.pre_session_control_tower", **args))
+
+
+def communications_control_redirect(session_record, status_filter="", edit=False):
+    args = {
+        "session_year": session_record.session_date.year,
+        "open_schedule_modal": session_record.id,
+        "open_modal_target": "communications",
+    }
+    if status_filter in SCHEDULE_WORKFLOW_STATUSES:
+        args["schedule_status"] = status_filter
+    if edit:
+        args["open_communications_control"] = "1"
+    return redirect(url_for("staff.pre_session_control_tower", **args))
+
+
+def incidents_control_redirect(session_record, status_filter="", incident_id=None, view="sessions", assisted_flag_id=None, assisted_action_key=""):
+    args = {
+        "session_year": session_record.session_date.year,
+        "view": view or request.form.get("view", "sessions") or "sessions",
+        "open_schedule_modal": session_record.id,
+        "open_modal_target": "incidents",
+    }
+    if status_filter in SCHEDULE_WORKFLOW_STATUSES:
+        args["schedule_status"] = status_filter
+    if incident_id:
+        args["incident"] = incident_id
+    if assisted_flag_id:
+        args["open_assisted_flag"] = assisted_flag_id
+    if assisted_action_key:
+        args["open_assisted_action"] = assisted_action_key
+    return redirect(url_for("staff.pre_session_control_tower", **args))
+
+
+def package_control_redirect(session_record, status_filter="", unit_id=None):
+    args = {
+        "session_year": session_record.session_date.year,
+        "view": request.form.get("view", "sessions") or "sessions",
+        "open_schedule_modal": session_record.id,
+        "open_modal_target": "packages",
+    }
+    if status_filter in SCHEDULE_WORKFLOW_STATUSES:
+        args["schedule_status"] = status_filter
+    if unit_id:
+        args["package_unit"] = unit_id
+    return redirect(url_for("staff.pre_session_control_tower", **args))
+
+
+def shipment_control_redirect(session_record, status_filter="", bundle_id=None, assisted_action_key=""):
+    requested_view = request.form.get("view", "sessions") or "sessions"
+    if requested_view not in {"bundles", "sessions", "bundle", "my-actions"}:
+        requested_view = "sessions"
+    args = {
+        "session_year": session_record.session_date.year,
+        "view": requested_view,
+        "open_schedule_modal": session_record.id,
+        "open_modal_target": "shipments",
+    }
+    if status_filter in SCHEDULE_WORKFLOW_STATUSES:
+        args["schedule_status"] = status_filter
+    if bundle_id:
+        args["shipment_bundle"] = bundle_id
+        if requested_view == "bundle":
+            args["bundle_id"] = bundle_id
+    if assisted_action_key:
+        args["open_shipment_assisted_action"] = assisted_action_key
+    return redirect(url_for("staff.pre_session_control_tower", **args))
+
+
+def get_or_create_schedule_workflow(session_record):
+    workflow = ExamSessionScheduleWorkflow.query.filter_by(exam_session_id=session_record.id).first()
+    if workflow:
+        return workflow
+    workflow = ExamSessionScheduleWorkflow(
+        exam_session_id=session_record.id,
+        status="Not started",
+        review_round=0,
+    )
+    db.session.add(workflow)
+    return workflow
+
+
+def apply_schedule_workflow_transition(session_record, action_key, due_at=None, note="", created_by=None):
+    action = schedule_transition_by_key(action_key)
+    if not action:
+        return None, "Please select a valid schedule workflow action."
+    workflow = get_or_create_schedule_workflow(session_record)
+    previous_status = workflow.status
+    if previous_status not in SCHEDULE_WORKFLOW_STATUSES:
+        return None, "The current schedule workflow status is invalid."
+    if previous_status != action.get("from") and previous_status not in action.get("from_any", []):
+        return None, "This schedule workflow action is not allowed from the current status."
+    clean_note = (note or "").strip()
+    if action.get("deadline_required") and due_at is None:
+        return None, "Please enter the next action deadline."
+    if action.get("note_required") and not clean_note:
+        return None, "Please add a note for this schedule workflow action."
+
+    now = datetime.now(timezone.utc)
+    workflow.status = previous_status if action.get("same_status") else action["to"]
+    workflow.next_action_due_at = None if action["to"] == "Approved" else due_at
+    if action.get("sent"):
+        workflow.review_round = (workflow.review_round or 0) + 1
+        workflow.last_sent_at = now
+    if action.get("changes_requested"):
+        workflow.changes_requested_at = now
+    if action.get("approved"):
+        workflow.approved_at = now
+    if action.get("reopen"):
+        workflow.approved_at = None
+    workflow.updated_at = now
+
+    event = ExamSessionScheduleEvent(
+        workflow=workflow,
+        previous_status=previous_status,
+        new_status=workflow.status,
+        note=clean_note or None,
+        due_at=workflow.next_action_due_at,
+        created_by=created_by,
+    )
+    db.session.add(event)
+    return workflow, None
+
+
+def same_day_in_year(value, year):
+    last_day = calendar.monthrange(year, value.month)[1]
+    return value.replace(year=year, day=min(value.day, last_day))
+
+
+def latest_monthly_registration_counts(session_ids):
+    if not session_ids:
+        return {}
+    records = (
+        ExamSessionMonthlyRegistration.query.filter(
+            ExamSessionMonthlyRegistration.exam_session_id.in_(session_ids)
+        )
+        .order_by(ExamSessionMonthlyRegistration.exam_session_id.asc(), ExamSessionMonthlyRegistration.month.asc())
+        .all()
+    )
+    latest_month_by_session = {}
+    for record in records:
+        latest_month_by_session[record.exam_session_id] = max(
+            latest_month_by_session.get(record.exam_session_id, 0),
+            record.month,
+        )
+
+    counts = {}
+    for record in records:
+        if latest_month_by_session.get(record.exam_session_id) != record.month:
+            continue
+        counts.setdefault(record.exam_session_id, {})[record.module] = record.registration_number
+    return counts
+
+
+def monthly_candidate_total_trends(candidate_totals):
+    trend_map = {}
+    for session_id, month_values in candidate_totals.items():
+        previous_value = None
+        for month in range(1, 13):
+            if month not in month_values:
+                continue
+            current_value = month_values[month]
+            if previous_value is None:
+                trend = "neutral"
+                tooltip = "First recorded month"
+            elif current_value > previous_value:
+                trend = "increase"
+                tooltip = f"Increase of {current_value - previous_value} candidates compared to previous recorded month"
+            elif current_value < previous_value:
+                trend = "decrease"
+                tooltip = f"Decrease of {previous_value - current_value} candidates compared to previous recorded month"
+            else:
+                trend = "neutral"
+                tooltip = "No change compared to previous recorded month"
+            trend_map.setdefault(session_id, {})[month] = {
+                "trend": trend,
+                "tooltip": tooltip,
+            }
+            previous_value = current_value
+    return trend_map
+
+
+def monthly_candidate_total_sums(session_ids):
+    totals = {
+        month_number: {"value": 0, "has_data": False, "trend": "inactive", "tooltip": "Month not enabled"}
+        for month_number, _ in MONTHLY_REGISTRATION_MONTHS
+    }
+    if not session_ids:
+        return totals
+    rows = (
+        db.session.query(
+            ExamSessionMonthlyCandidateTotal.month,
+            db.func.sum(ExamSessionMonthlyCandidateTotal.total_candidates),
+        )
+        .filter(ExamSessionMonthlyCandidateTotal.exam_session_id.in_(session_ids))
+        .group_by(ExamSessionMonthlyCandidateTotal.month)
+        .all()
+    )
+    for month, total in rows:
+        totals[month] = {
+            "value": total or 0,
+            "has_data": True,
+            "trend": "neutral",
+            "tooltip": "First recorded month",
+        }
+    previous_value = None
+    for month_number, _ in MONTHLY_REGISTRATION_MONTHS:
+        total_data = totals[month_number]
+        if not total_data["has_data"]:
+            continue
+        current_value = total_data["value"]
+        if previous_value is None:
+            total_data["trend"] = "neutral"
+            total_data["tooltip"] = "First recorded month"
+        elif current_value > previous_value:
+            total_data["trend"] = "increase"
+            total_data["tooltip"] = f"Increase of {current_value - previous_value} candidates compared to previous recorded month"
+        elif current_value < previous_value:
+            total_data["trend"] = "decrease"
+            total_data["tooltip"] = f"Decrease of {previous_value - current_value} candidates compared to previous recorded month"
+        else:
+            total_data["trend"] = "neutral"
+            total_data["tooltip"] = "No change compared to previous recorded month"
+        previous_value = current_value
+    return totals
+
+
+def supervisor_certification_state(member_id, year):
+    annual = SupervisorCertificationAnnualMeetingSelection.query.filter_by(
+        member_id=member_id,
+        year=year,
+    ).first()
+    remote = SupervisorCertificationRemoteTrainingSelection.query.filter_by(
+        member_id=member_id,
+        year=year,
+    ).first()
+    if annual and annual.status == "Attended" and remote and remote.status == "Certified":
+        return "completed"
+    return "warning"
+
+
+def examiner_certification_state(member_id, year):
+    annual = ExaminerCertificationAnnualMeetingSelection.query.filter_by(
+        member_id=member_id,
+        year=year,
+    ).first()
+    remote = ExaminerCertificationRemoteTrainingSelection.query.filter_by(
+        member_id=member_id,
+        year=year,
+    ).first()
+    if annual and annual.status == "Attended" and remote and remote.status == "Certified":
+        return "completed"
+    return "warning"
+
+
+def certification_status_label(member_id, remote_training_selections, annual_meeting_selections, fut_selections, fut2_selections=None):
+    annual = annual_meeting_selections.get(member_id)
+    remote = remote_training_selections.get(member_id)
+    annual_status = annual.status if annual else "Absent"
+    remote_status = remote.status if remote else "Pending"
+    futures = list(fut_selections.get(member_id, []))
+    if fut2_selections is not None:
+        futures.extend(fut2_selections.get(member_id, []))
+    futures_are_complete = not futures or all(selection.status == "completed" for selection in futures)
+    if (
+        annual_status in {"Attended", "Certified"}
+        and remote_status == "Certified"
+        and futures_are_complete
+    ):
+        return "Certified"
+    if annual_status != "Absent" or remote_status != "Pending":
+        return "In progress"
+    return "Pending"
+
+
+def intern_stage_is_completed(status):
+    return status in {"Completed", "Certified"}
+
+
+def intern_stage_status_label(member_id, remote_training_selections, stage_2_selections, stage_3_selections):
+    stage_1 = remote_training_selections.get(member_id)
+    stage_2 = stage_3_selections.get(member_id)
+    stage_3 = stage_2_selections.get(member_id)
+    stage_1_status = stage_1.status if stage_1 else "Pending"
+    stage_2_status = stage_2.status if stage_2 else "Pending"
+    stage_3_status = stage_3.status if stage_3 else "Pending"
+    if (
+        intern_stage_is_completed(stage_1_status)
+        and intern_stage_is_completed(stage_2_status)
+        and intern_stage_is_completed(stage_3_status)
+    ):
+        return "Completed"
+    if stage_1_status != "Pending":
+        return "In progress"
+    return "Pending"
+
+
+def intern_stage_state(member_id, year):
+    stage_3 = InternStage3Selection.query.filter_by(
+        member_id=member_id,
+        year=year,
+    ).first()
+    if stage_3 and intern_stage_is_completed(stage_3.status):
+        return "completed"
+    return "warning"
+
+
+def supervisor_member_options():
+    return [
+        member
+        for member in AcademicStaff.query.filter(
+            AcademicStaff.status == "Active",
+            AcademicStaff.roles.ilike("%Supervisor%"),
+        ).order_by(AcademicStaff.full_name.asc()).all()
+        if "Supervisor" in member.roles_list()
+    ]
+
+
+def examiner_session_member_options():
+    return [
+        member
+        for member in AcademicStaff.query.filter(
+            AcademicStaff.status == "Active",
+            db.or_(
+                AcademicStaff.roles.ilike("%Examiner%"),
+                AcademicStaff.roles.ilike("%RSG%"),
+            ),
+        ).order_by(AcademicStaff.full_name.asc()).all()
+        if "Examiner" in member.roles_list() or "RSG" in member.roles_list()
+    ]
+
+
+def intern_session_member_options():
+    return [
+        member
+        for member in AcademicStaff.query.filter(
+            AcademicStaff.status == "Active",
+            AcademicStaff.roles.ilike("%Intern%"),
+        ).order_by(AcademicStaff.full_name.asc()).all()
+        if "Intern" in member.roles_list()
+    ]
+
+
+def normalized_location_value(value):
+    return (value or "").strip().casefold()
+
+
+def session_supervisor_member_order(session_record, supervisor_members):
+    if session_record.format == "Online":
+        return supervisor_members
+    session_city = normalized_location_value(session_record.city)
+    session_province = normalized_location_value(session_record.province)
+    return sorted(
+        supervisor_members,
+        key=lambda member: (
+            not session_city or normalized_location_value(member.city) != session_city,
+            not session_province or normalized_location_value(member.province) != session_province,
+            member.full_name.lower(),
+        ),
+    )
+
+
+def session_staff_member_order(session_record, members):
+    if session_record.format == "Online":
+        return members
+    session_city = normalized_location_value(session_record.city)
+    session_province = normalized_location_value(session_record.province)
+    return sorted(
+        members,
+        key=lambda member: (
+            not session_city or normalized_location_value(member.city) != session_city,
+            not session_province or normalized_location_value(member.province) != session_province,
+            member.full_name.lower(),
+        ),
+    )
+
+
+def year_color_class(year):
+    palette_size = 7
+    try:
+        year_number = int(year)
+    except (TypeError, ValueError):
+        year_number = 0
+    return f"year-color-{(year_number - 2024) % palette_size}"
+
+
+def certification_allowed(member, certification):
+    required_roles = certification["roles"]
+    if not required_roles:
+        return True
+    member_roles = set(member.roles_list())
+    return bool(member_roles.intersection(required_roles))
+
+
+def has_pending_certification(
+    member,
+    certification_years,
+    certification_types=None,
+    fut_selections=None,
+    fut2_selections=None,
+    remote_training_selections=None,
+    annual_meeting_selections=None,
+):
+    certification_types = certification_types or CERTIFICATION_TYPES
+    member_records = certification_years.get(member.id, {})
+    for certification in certification_types:
+        if certification["key"] == "remote_training" and remote_training_selections is not None:
+            if not remote_training_selections.get(member.id):
+                return True
+            continue
+        if certification["key"] == "annual_meeting" and annual_meeting_selections is not None:
+            if not annual_meeting_selections.get(member.id):
+                return True
+            continue
+        if certification["key"] == "fut" and fut_selections is not None:
+            if not fut_selections.get(member.id):
+                return True
+            continue
+        if certification["key"] == "fut_2" and fut2_selections is not None:
+            if not fut2_selections.get(member.id):
+                return True
+            continue
+        if certification_allowed(member, certification) and not member_records.get(certification["key"]):
+            return True
+    return False
+
+
+def certification_redirect():
+    return_to = request.form.get("return_to", "")
+    if return_to.startswith("/annual-certification-programme"):
+        return redirect(return_to)
+    return redirect(url_for("staff.annual_certification_programme"))
+
+
+def sync_remote_training_from_fut(member_id, year):
+    fut_selections = ExaminerCertificationFut1Selection.query.filter_by(
+        member_id=member_id,
+        year=year,
+    ).all()
+    remote_training = ExaminerCertificationRemoteTrainingSelection.query.filter_by(
+        member_id=member_id,
+        year=year,
+    ).first()
+
+    if not fut_selections:
+        if remote_training:
+            db.session.delete(remote_training)
+        return
+
+    status = "Certified" if all(selection.status == "completed" for selection in fut_selections) else "With FUT"
+    if remote_training:
+        remote_training.status = status
+    else:
+        db.session.add(
+            ExaminerCertificationRemoteTrainingSelection(
+                member_id=member_id,
+                year=year,
+                status=status,
+            )
+        )
+
+
+def supervisor_certification_redirect():
+    return_to = request.form.get("return_to", "")
+    if return_to.startswith("/supervisor-certification"):
+        return redirect(return_to)
+    return redirect(url_for("staff.supervisor_certification"))
+
+
+def sync_supervisor_remote_training_from_fut(member_id, year):
+    fut_selections = SupervisorCertificationFutSelection.query.filter_by(
+        member_id=member_id,
+        year=year,
+    ).all()
+    remote_training = SupervisorCertificationRemoteTrainingSelection.query.filter_by(
+        member_id=member_id,
+        year=year,
+    ).first()
+
+    if not fut_selections:
+        if remote_training:
+            db.session.delete(remote_training)
+        return
+
+    status = "Certified" if all(selection.status == "completed" for selection in fut_selections) else "With FUT"
+    if remote_training:
+        remote_training.status = status
+    else:
+        db.session.add(
+            SupervisorCertificationRemoteTrainingSelection(
+                member_id=member_id,
+                year=year,
+                status=status,
+            )
+        )
+
+
+def intern_stage_redirect():
+    return_to = request.form.get("return_to", "")
+    if return_to.startswith("/intern-stages"):
+        return redirect(return_to)
+    return redirect(url_for("staff.intern_stages"))
+
+
+def sync_intern_stage_2_from_fut(member_id, year):
+    fut_selections = InternStageFutSelection.query.filter_by(
+        member_id=member_id,
+        year=year,
+    ).all()
+    stage_2 = InternStage3Selection.query.filter_by(
+        member_id=member_id,
+        year=year,
+    ).first()
+
+    if not fut_selections:
+        status = "Pending"
+    elif all(selection.status == "completed" for selection in fut_selections):
+        status = "Completed"
+    else:
+        status = "With FUT"
+
+    if stage_2:
+        stage_2.status = status
+    else:
+        db.session.add(
+            InternStage3Selection(
+                member_id=member_id,
+                year=year,
+                status=status,
+            )
+        )
+
+
+def intern_fut_is_available(member_id, year):
+    stage_1 = InternStageRemoteTrainingSelection.query.filter_by(
+        member_id=member_id,
+        year=year,
+    ).first()
+    stage_2 = InternStage3Selection.query.filter_by(
+        member_id=member_id,
+        year=year,
+    ).first()
+    return (
+        stage_1
+        and intern_stage_is_completed(stage_1.status)
+        and stage_2
+        and stage_2.status in {"Attended meeting", "With FUT", "Completed", "Certified"}
+    )
+
+
+def clear_intern_stage_after_stage_1(member_id, year):
+    InternStage2Selection.query.filter_by(member_id=member_id, year=year).delete(synchronize_session=False)
+    InternStage3Selection.query.filter_by(member_id=member_id, year=year).delete(synchronize_session=False)
+    InternStageFutSelection.query.filter_by(member_id=member_id, year=year).delete(synchronize_session=False)
+
+
+def clear_intern_stage_after_stage_2(member_id, year):
+    InternStage2Selection.query.filter_by(member_id=member_id, year=year).delete(synchronize_session=False)
+    InternStageFutSelection.query.filter_by(member_id=member_id, year=year).delete(synchronize_session=False)
+
+
+def clear_intern_stage_3_after_stage_2(member_id, year):
+    InternStage2Selection.query.filter_by(member_id=member_id, year=year).delete(synchronize_session=False)
+
+
+def clear_intern_fut_after_stage_2(member_id, year):
+    InternStageFutSelection.query.filter_by(member_id=member_id, year=year).delete(synchronize_session=False)
+
+
+def meetings_redirect():
+    return_to = request.form.get("return_to", "")
+    if return_to.startswith("/annual-meetings"):
+        return redirect(return_to)
+    return redirect(url_for("staff.annual_meetings"))
+
+
+def format_interview_entry(note):
+    timestamp = datetime.now(timezone.utc).astimezone(LOCAL_TZ).strftime("%d/%m/%Y %H")
+    return f"{timestamp}\n{note.strip()}"
+
+
+def append_interview_note(member, form):
+    note = form.get("interview", "").strip()
+    if not note:
+        return
+    entry = format_interview_entry(note)
+    if member.interview:
+        member.interview = f"{member.interview.strip()}\n\n{entry}"
+    else:
+        member.interview = entry
+
+
+def append_potential_interview_note(entry, form):
+    note = form.get("interview", "").strip()
+    if not note:
+        return
+    history_entry = format_interview_entry(note)
+    if entry.interview:
+        entry.interview = f"{entry.interview.strip()}\n\n{history_entry}"
+    else:
+        entry.interview = history_entry
+
+
+def interview_history_entries(history):
+    if not history:
+        return []
+    entries = []
+    for block in history.strip().split("\n\n"):
+        lines = [line for line in block.splitlines() if line.strip()]
+        if not lines:
+            continue
+        if len(lines) == 1:
+            entries.append({"date": "Legacy note", "note": lines[0]})
+        else:
+            entries.append({"date": lines[0], "note": "\n".join(lines[1:])})
+    return entries
+
+
+def apply_form(member, form):
+    member.status = form.get("status", "").strip()
+    member.title = form.get("title", "").strip()
+    member.full_name = form.get("full_name", "").strip()
+    member.seniority = form.get("seniority") == "on"
+    member.roles = ",".join(form.getlist("roles"))
+    member.phone = form.get("phone", "").strip()
+    member.email = form.get("email", "").strip()
+    member.has_car = form.get("has_car", "").strip()
+    member.started_in = form.get("started_in", "").strip()
+    member.full_address_google_maps = form.get("full_address_google_maps", "").strip()
+    if "street_name" in form:
+        member.street_name = form.get("street_name", "").strip()
+    if "street_number" in form:
+        member.street_number = form.get("street_number", "").strip()
+    member.city = form.get("city", "").strip()
+    if "postcode" in form:
+        member.postcode = form.get("postcode", "").strip()
+    member.province = form.get("province", "").strip()
+    if "location_point" in form:
+        member.location_point = form.get("location_point", "").strip()
+    member.country = form.get("country", "").strip()
+    member.cv = form.get("cv", "").strip()
+    append_interview_note(member, form)
+    member.account_id = form.get("account_id", "").strip()
+    member.account_owner = form.get("account_owner", "").strip()
+    member.profile_picture = form.get("profile_picture", "").strip()
+
+
+def apply_potential_form(entry, form):
+    entry.status = form.get("status", "").strip()
+    entry.full_name = form.get("full_name", "").strip()
+    entry.phone = form.get("phone", "").strip()
+    entry.email = form.get("email", "").strip()
+    entry.city = form.get("city", "").strip()
+    entry.province = form.get("province", "").strip()
+    entry.cv = form.get("cv", "").strip()
+    entry.interview_date = form.get("interview_date", "").strip()
+    entry.interview_time = form.get("interview_time", "").strip()
+    entry.platform = form.get("platform", "").strip()
+    entry.interviewer = form.get("interviewer", "").strip()
+
+
+@staff_bp.app_template_filter("localdt")
+def localdt_filter(value):
+    return local_datetime(value)
+
+
+@staff_bp.app_template_filter("display_date")
+def display_date_filter(value):
+    return display_date(value)
+
+
+@staff_bp.app_template_filter("display_interviewer")
+def display_interviewer_filter(value):
+    return display_interviewer(value)
+
+
+@staff_bp.app_template_filter("tenure_label")
+def tenure_label_filter(value):
+    years = years_since(value)
+    if years is None:
+        return ""
+    label = "year" if years == 1 else "years"
+    return f"{years} {label}"
+
+
+@staff_bp.app_template_filter("interview_entries")
+def interview_entries_filter(value):
+    return interview_history_entries(value)
+
+
+@staff_bp.app_template_filter("year_color")
+def year_color_filter(value):
+    return year_color_class(value)
+
+
+@staff_bp.route("/fees")
+@login_required
+def fees():
+    query = Fee.query.order_by(Fee.created_on.desc(), Fee.id.desc())
+    fee_records, pagination = paginate_query(query)
+    return render_template(
+        "fees/index.html",
+        fees=fee_records,
+        pagination=pagination,
+        roles=fee_role_options(),
+        currency_options=FEE_CURRENCY_OPTIONS,
+        unit_options=FEE_UNIT_OPTIONS,
+        valid_through_months=FEE_VALID_THROUGH_MONTHS,
+        csrf_token=session.get("csrf_token"),
+    )
+
+
+@staff_bp.route("/fees", methods=["POST"])
+@login_required
+def create_fee():
+    if not validate_csrf():
+        flash("Security token expired. Please try again.", "error")
+        return redirect(url_for("staff.fees"))
+    errors, data = validate_fee_form(request.form)
+    if errors:
+        for error in errors:
+            flash(error, "error")
+        return redirect(url_for("staff.fees"))
+    db.session.add(Fee(**data))
+    if fee_data_is_for_role(data, "Intern"):
+        recalculate_pending_intern_role_fees()
+    db.session.commit()
+    flash("Fee created successfully.", "success")
+    return redirect(url_for("staff.fees"))
+
+
+@staff_bp.route("/fees/<int:fee_id>", methods=["POST"])
+@login_required
+def update_fee(fee_id):
+    if not validate_csrf():
+        flash("Security token expired. Please try again.", "error")
+        return redirect(url_for("staff.fees"))
+    fee = Fee.query.get_or_404(fee_id)
+    errors, data = validate_fee_form(request.form, fee_id=fee.id)
+    if errors:
+        for error in errors:
+            flash(error, "error")
+        return redirect(url_for("staff.fees"))
+    recalculates_interns = (fee.role and fee.role.name == "Intern") or fee_data_is_for_role(data, "Intern")
+    fee.fee_description = data["fee_description"]
+    fee.currency = data["currency"]
+    fee.fee_value = data["fee_value"]
+    fee.unit_of_measure = data["unit_of_measure"]
+    fee.role_id = data["role_id"]
+    fee.valid_through = data["valid_through"]
+    if recalculates_interns:
+        recalculate_pending_intern_role_fees()
+    db.session.commit()
+    flash("Fee updated successfully.", "success")
+    return redirect(url_for("staff.fees"))
+
+
+@staff_bp.route("/fees/<int:fee_id>/delete", methods=["POST"])
+@login_required
+def delete_fee(fee_id):
+    if not validate_csrf():
+        flash("Security token expired. Please try again.", "error")
+        return redirect(url_for("staff.fees"))
+    fee = Fee.query.get_or_404(fee_id)
+    recalculates_interns = fee.role and fee.role.name == "Intern"
+    db.session.delete(fee)
+    if recalculates_interns:
+        recalculate_pending_intern_role_fees()
+    db.session.commit()
+    flash("Fee deleted successfully.", "success")
+    return redirect(url_for("staff.fees"))
+
+
+@staff_bp.route("/providers")
+@login_required
+def providers():
+    provider_records = Provider.query.order_by(Provider.created_on.desc(), Provider.id.desc()).all()
+    provider_type_records = provider_type_options()
+    provider_history_records = ProviderHistory.query.filter(
+        ProviderHistory.provider_id.in_([provider.id for provider in provider_records])
+    ).order_by(ProviderHistory.created_on.asc()).all() if provider_records else []
+    provider_history = {}
+    for entry in provider_history_records:
+        provider_history.setdefault(entry.provider_id, []).append(entry)
+    return render_template(
+        "providers.html",
+        providers=provider_records,
+        provider_types=provider_type_records,
+        provider_history=provider_history,
+        csrf_token=session.get("csrf_token"),
+    )
+
+
+@staff_bp.route("/providers/types", methods=["POST"])
+@login_required
+def create_provider_type():
+    if not validate_csrf():
+        return jsonify({"ok": False, "message": "Security token expired. Please try again."}), 400
+    name = re.sub(r"\s+", " ", request.form.get("type_name", "").strip())
+    if not name:
+        return jsonify({"ok": False, "message": "Type name is required."}), 400
+    if provider_type_by_name(name):
+        return jsonify({"ok": False, "message": "A provider type with this name already exists."}), 400
+    provider_type = ProviderType(
+        name=name,
+        is_system=False,
+        color_key=provider_type_color_for_name(name),
+    )
+    db.session.add(provider_type)
+    db.session.commit()
+    return jsonify({
+        "ok": True,
+        "message": "Provider type created successfully.",
+        "provider_type": provider_type_payload(provider_type),
+    })
+
+
+@staff_bp.route("/providers/types/<int:type_id>/delete", methods=["POST"])
+@login_required
+def delete_provider_type(type_id):
+    if not validate_csrf():
+        return jsonify({"ok": False, "message": "Security token expired. Please try again."}), 400
+    provider_type = ProviderType.query.get_or_404(type_id)
+    if provider_type.is_system:
+        return jsonify({"ok": False, "message": "System provider types cannot be deleted."}), 400
+    if Provider.query.filter_by(provider_type_id=provider_type.id).first():
+        return jsonify({"ok": False, "message": "This provider type cannot be deleted because it is currently assigned to one or more providers."}), 400
+    db.session.delete(provider_type)
+    db.session.commit()
+    return jsonify({"ok": True, "message": "Provider type deleted successfully.", "type_id": type_id})
+
+
+@staff_bp.route("/providers", methods=["POST"])
+@login_required
+def create_provider():
+    if not validate_csrf():
+        return jsonify({"ok": False, "message": "Security token expired. Please try again."}), 400
+    errors, data = validate_provider_form(request.form)
+    if errors:
+        return jsonify({"ok": False, "message": errors[0]}), 400
+    provider = Provider(
+        provider_type_id=data["provider_type"].id,
+        name=data["name"],
+        full_address=data["full_address"],
+        available_in_logistics=data["available_in_logistics"],
+        experience_rating=0,
+    )
+    db.session.add(provider)
+    db.session.commit()
+    return jsonify({
+        "ok": True,
+        "message": "Provider created successfully.",
+        "provider": provider_payload(provider),
+    })
+
+
+@staff_bp.route("/providers/<int:provider_id>", methods=["POST"])
+@login_required
+def update_provider(provider_id):
+    if not validate_csrf():
+        return jsonify({"ok": False, "message": "Security token expired. Please try again."}), 400
+    provider = Provider.query.get_or_404(provider_id)
+    errors, data = validate_provider_form(request.form)
+    if errors:
+        return jsonify({"ok": False, "message": errors[0]}), 400
+    provider.provider_type_id = data["provider_type"].id
+    provider.name = data["name"]
+    provider.full_address = data["full_address"]
+    provider.available_in_logistics = data["available_in_logistics"]
+    db.session.commit()
+    return jsonify({
+        "ok": True,
+        "message": "Provider updated successfully.",
+        "provider": provider_payload(provider),
+    })
+
+
+@staff_bp.route("/providers/<int:provider_id>/experience", methods=["POST"])
+@login_required
+def update_provider_experience(provider_id):
+    if not validate_csrf():
+        return jsonify({"ok": False, "message": "Security token expired. Please try again."}), 400
+    provider = Provider.query.get_or_404(provider_id)
+    rating_value = request.form.get("experience_rating", "").strip()
+    if not rating_value.isdigit():
+        return jsonify({"ok": False, "message": "Experience rating must be between 0 and 5."}), 400
+    rating = int(rating_value)
+    if rating < 0 or rating > 5:
+        return jsonify({"ok": False, "message": "Experience rating must be between 0 and 5."}), 400
+    provider.experience_rating = rating
+    db.session.commit()
+    return jsonify({
+        "ok": True,
+        "message": "Experience rating updated.",
+        "provider": provider_payload(provider),
+    })
+
+
+@staff_bp.route("/providers/<int:provider_id>/notes", methods=["POST"])
+@login_required
+def add_provider_note(provider_id):
+    if not validate_csrf():
+        return jsonify({"ok": False, "message": "Security token expired. Please try again."}), 400
+    provider = Provider.query.get_or_404(provider_id)
+    note = request.form.get("interview", "").strip()
+    if not note:
+        return jsonify({"ok": False, "message": "History note cannot be empty."}), 400
+    entry = ProviderHistory(
+        provider_id=provider.id,
+        comment=note,
+        created_by=session.get("user"),
+    )
+    db.session.add(entry)
+    db.session.commit()
+    return jsonify({
+        "ok": True,
+        "message": "History note added successfully.",
+        "note": {
+            "comment": entry.comment,
+            "created_by": entry.created_by or "",
+            "created_on": local_datetime(entry.created_on),
+        },
+        "provider": provider_payload(provider),
+    })
+
+
+@staff_bp.route("/providers/<int:provider_id>/delete", methods=["POST"])
+@login_required
+def delete_provider(provider_id):
+    if not validate_csrf():
+        return jsonify({"ok": False, "message": "Security token expired. Please try again."}), 400
+    provider = Provider.query.get_or_404(provider_id)
+    if ExamSessionLogisticsConcept.query.filter(
+        or_(
+            ExamSessionLogisticsConcept.provider_id == provider.id,
+            ExamSessionLogisticsConcept.provider == provider.display_label,
+        )
+    ).first():
+        return jsonify({
+            "ok": False,
+            "message": "This provider cannot be deleted because it is currently assigned to one or more Logistics concepts. Remove or replace those references before deleting it.",
+        }), 400
+    ProviderHistory.query.filter_by(provider_id=provider.id).delete(synchronize_session=False)
+    db.session.delete(provider)
+    db.session.commit()
+    return jsonify({"ok": True, "message": "Provider deleted successfully.", "provider_id": provider_id})
+
+
+@staff_bp.route("/staff-payments")
+@login_required
+def staff_payments():
+    selected_year, session_years = selected_exam_session_year()
+    payment_rows = build_staff_payment_rows(selected_year)
+    payment_rows, pagination = paginate_items(payment_rows)
+    return render_template(
+        "staff_payments/index.html",
+        rows=payment_rows,
+        pagination=pagination,
+        session_years=session_years,
+        archived_session_years=(
+            ExamSessionYear.query.filter_by(is_archived=True)
+            .order_by(ExamSessionYear.year.desc())
+            .all()
+        ),
+        selected_session_year=selected_year,
+        csrf_token=session.get("csrf_token"),
+    )
+
+
+@staff_bp.route("/staff-payments/<int:member_id>/<int:payment_year>", methods=["POST"])
+@login_required
+def update_staff_payment(member_id, payment_year):
+    if not validate_csrf():
+        return jsonify({"ok": False, "message": "Security token expired. Please try again."}), 400
+    member = AcademicStaff.query.get_or_404(member_id)
+    if not set(member.roles_list()).intersection({"Examiner", "RSG", "Supervisor", "Intern"}):
+        return jsonify({"ok": False, "message": "This member is not eligible for staff payments."}), 400
+    invoice_verified = request.form.get("invoice_verified", "").strip() == "1"
+    payment_completed = request.form.get("payment_completed", "").strip() == "1"
+    if payment_completed and not invoice_verified:
+        return jsonify({"ok": False, "message": "Payment can only be completed after invoice verification."}), 400
+    payment_record = StaffPayment.query.filter_by(member_id=member.id, year=payment_year).first()
+    if not payment_record:
+        payment_record = StaffPayment(member_id=member.id, year=payment_year)
+        db.session.add(payment_record)
+    payment_record.invoice_verified = invoice_verified
+    payment_record.payment_completed = payment_completed
+    payment_record.status = staff_payment_status(invoice_verified, payment_completed)
+    db.session.commit()
+    return jsonify({
+        "ok": True,
+        "status": payment_record.status,
+        "invoice_verified": payment_record.invoice_verified,
+        "payment_completed": payment_record.payment_completed,
+    })
+
+
+@staff_bp.route("/pre-session-control-tower")
+@login_required
+def pre_session_control_tower():
+    selected_year, session_years = selected_exam_session_year()
+    selected_view = request.args.get("view", "bundles").strip()
+    if selected_view not in {"bundles", "sessions", "bundle", "my-actions"}:
+        selected_view = "bundles"
+    try:
+        selected_bundle_id = int(request.args.get("bundle_id", ""))
+    except (TypeError, ValueError):
+        selected_bundle_id = None
+    status_filter = request.args.get("schedule_status", "").strip()
+    if status_filter not in SCHEDULE_WORKFLOW_STATUSES:
+        status_filter = ""
+    my_action_source_filter = request.args.get("action_source", "").strip()
+    my_action_responsible_filter = request.args.get("action_responsible", "").strip()
+    my_action_status_filter = request.args.get("action_status", "").strip()
+    sessions = (
+        ExamSession.query.filter(db.extract("year", ExamSession.session_date) == selected_year)
+        .order_by(ExamSession.session_date.asc(), ExamSession.exam_session_name.asc())
+        .all()
+    )
+    if selected_view in {"bundles", "sessions", "bundle"} and not request.args.get("open_schedule_modal"):
+        reconcile_auto_shipment_bundles(sessions)
+    session_ids = [session_record.id for session_record in sessions]
+    workflow_records = (
+        ExamSessionScheduleWorkflow.query.filter(
+            ExamSessionScheduleWorkflow.exam_session_id.in_(session_ids)
+        ).all()
+        if session_ids else []
+    )
+    workflows_by_session = {workflow.exam_session_id: workflow for workflow in workflow_records}
+    workflow_ids = [workflow.id for workflow in workflow_records]
+    event_records = (
+        ExamSessionScheduleEvent.query.filter(
+            ExamSessionScheduleEvent.workflow_id.in_(workflow_ids)
+        )
+        .order_by(ExamSessionScheduleEvent.created_at.desc(), ExamSessionScheduleEvent.id.desc())
+        .all()
+        if workflow_ids else []
+    )
+    events_by_workflow = {}
+    for event in event_records:
+        events_by_workflow.setdefault(event.workflow_id, []).append(event)
+    supervisor_assignment_records = (
+        ExamSessionSupervisorAssignment.query.filter(
+            ExamSessionSupervisorAssignment.exam_session_id.in_(session_ids)
+        )
+        .options(joinedload(ExamSessionSupervisorAssignment.team_member))
+        .order_by(ExamSessionSupervisorAssignment.created_on.asc(), ExamSessionSupervisorAssignment.id.asc())
+        .all()
+        if session_ids else []
+    )
+    examiner_assignment_records = (
+        ExamSessionExaminerAssignment.query.filter(
+            ExamSessionExaminerAssignment.exam_session_id.in_(session_ids)
+        )
+        .options(joinedload(ExamSessionExaminerAssignment.team_member))
+        .all()
+        if session_ids else []
+    )
+    intern_assignment_records = (
+        ExamSessionInternAssignment.query.filter(
+            ExamSessionInternAssignment.exam_session_id.in_(session_ids)
+        )
+        .options(joinedload(ExamSessionInternAssignment.team_member))
+        .all()
+        if session_ids else []
+    )
+    logistics_records = (
+        ExamSessionLogistics.query.filter(
+            ExamSessionLogistics.exam_session_id.in_(session_ids)
+        ).all()
+        if session_ids else []
+    )
+    staffing_control_records = (
+        ExamSessionStaffingControl.query.filter(
+            ExamSessionStaffingControl.exam_session_id.in_(session_ids)
+        ).all()
+        if session_ids else []
+    )
+    logistics_control_records = (
+        ExamSessionLogisticsControl.query.filter(
+            ExamSessionLogisticsControl.exam_session_id.in_(session_ids)
+        ).all()
+        if session_ids else []
+    )
+    finance_control_records = (
+        ExamSessionFinanceControl.query.filter(
+            ExamSessionFinanceControl.exam_session_id.in_(session_ids)
+        ).all()
+        if session_ids else []
+    )
+    sinapsis_control_records = (
+        ExamSessionSinapsisControl.query.filter(
+            ExamSessionSinapsisControl.exam_session_id.in_(session_ids)
+        ).all()
+        if session_ids else []
+    )
+    communications_control_records = (
+        ExamSessionCommunicationsControl.query.filter(
+            ExamSessionCommunicationsControl.exam_session_id.in_(session_ids)
+        ).all()
+        if session_ids else []
+    )
+    incident_records = (
+        ExamSessionIncident.query.filter(
+            ExamSessionIncident.exam_session_id.in_(session_ids)
+        )
+        .order_by(ExamSessionIncident.created_at.desc(), ExamSessionIncident.id.desc())
+        .all()
+        if session_ids else []
+    )
+    staffing_controls_by_session = {
+        record.exam_session_id: record
+        for record in staffing_control_records
+    }
+    logistics_controls_by_session = {
+        record.exam_session_id: record
+        for record in logistics_control_records
+    }
+    finance_controls_by_session = {
+        record.exam_session_id: record
+        for record in finance_control_records
+    }
+    sinapsis_controls_by_session = {
+        record.exam_session_id: record
+        for record in sinapsis_control_records
+    }
+    communications_controls_by_session = {
+        record.exam_session_id: record
+        for record in communications_control_records
+    }
+    incidents_by_session = {}
+    for incident in incident_records:
+        incidents_by_session.setdefault(incident.exam_session_id, []).append(incident)
+    finance_control_ids = [record.id for record in finance_control_records]
+    finance_event_records = (
+        ExamSessionFinanceEvent.query.filter(
+            ExamSessionFinanceEvent.finance_control_id.in_(finance_control_ids)
+        )
+        .order_by(ExamSessionFinanceEvent.created_at.desc(), ExamSessionFinanceEvent.id.desc())
+        .all()
+        if finance_control_ids else []
+    )
+    finance_events_by_control = {}
+    for event in finance_event_records:
+        finance_events_by_control.setdefault(event.finance_control_id, []).append(event)
+    sinapsis_control_ids = [record.id for record in sinapsis_control_records]
+    sinapsis_checklist_records = (
+        ExamSessionSinapsisChecklistItem.query.filter(
+            ExamSessionSinapsisChecklistItem.sinapsis_control_id.in_(sinapsis_control_ids)
+        )
+        .order_by(ExamSessionSinapsisChecklistItem.display_order.asc(), ExamSessionSinapsisChecklistItem.id.asc())
+        .all()
+        if sinapsis_control_ids else []
+    )
+    sinapsis_checklists_by_control = {}
+    for item in sinapsis_checklist_records:
+        sinapsis_checklists_by_control.setdefault(item.sinapsis_control_id, []).append(item)
+    sinapsis_event_records = (
+        ExamSessionSinapsisEvent.query.filter(
+            ExamSessionSinapsisEvent.sinapsis_control_id.in_(sinapsis_control_ids)
+        )
+        .order_by(ExamSessionSinapsisEvent.created_at.desc(), ExamSessionSinapsisEvent.id.desc())
+        .all()
+        if sinapsis_control_ids else []
+    )
+    sinapsis_events_by_control = {}
+    for event in sinapsis_event_records:
+        sinapsis_events_by_control.setdefault(event.sinapsis_control_id, []).append(event)
+    communications_control_ids = [record.id for record in communications_control_records]
+    communications_checklist_records = (
+        ExamSessionCommunicationsChecklistItem.query.filter(
+            ExamSessionCommunicationsChecklistItem.communications_control_id.in_(communications_control_ids)
+        )
+        .order_by(
+            ExamSessionCommunicationsChecklistItem.group_key.asc(),
+            ExamSessionCommunicationsChecklistItem.display_order.asc(),
+            ExamSessionCommunicationsChecklistItem.id.asc(),
+        )
+        .all()
+        if communications_control_ids else []
+    )
+    communications_checklists_by_control = {}
+    for item in communications_checklist_records:
+        communications_checklists_by_control.setdefault(item.communications_control_id, []).append(item)
+    communications_event_records = (
+        ExamSessionCommunicationsEvent.query.filter(
+            ExamSessionCommunicationsEvent.communications_control_id.in_(communications_control_ids)
+        )
+        .order_by(ExamSessionCommunicationsEvent.created_at.desc(), ExamSessionCommunicationsEvent.id.desc())
+        .all()
+        if communications_control_ids else []
+    )
+    communications_events_by_control = {}
+    for event in communications_event_records:
+        communications_events_by_control.setdefault(event.communications_control_id, []).append(event)
+    incident_ids = [record.id for record in incident_records]
+    incident_checklist_records = (
+        ExamSessionIncidentChecklistItem.query.filter(
+            ExamSessionIncidentChecklistItem.incident_id.in_(incident_ids)
+        )
+        .order_by(ExamSessionIncidentChecklistItem.display_order.asc(), ExamSessionIncidentChecklistItem.id.asc())
+        .all()
+        if incident_ids else []
+    )
+    incident_checklists_by_incident = {}
+    for item in incident_checklist_records:
+        incident_checklists_by_incident.setdefault(item.incident_id, []).append(item)
+    incident_event_records = (
+        ExamSessionIncidentEvent.query.filter(
+            ExamSessionIncidentEvent.incident_id.in_(incident_ids)
+        )
+        .order_by(ExamSessionIncidentEvent.created_at.desc(), ExamSessionIncidentEvent.id.desc())
+        .all()
+        if incident_ids else []
+    )
+    incident_events_by_incident = {}
+    for event in incident_event_records:
+        incident_events_by_incident.setdefault(event.incident_id, []).append(event)
+    incident_impact_review_records = (
+        ExamSessionIncidentImpactReview.query.filter(
+            ExamSessionIncidentImpactReview.incident_id.in_(incident_ids)
+        )
+        .order_by(ExamSessionIncidentImpactReview.id.asc())
+        .all()
+        if incident_ids else []
+    )
+    incident_impact_reviews_by_incident = {}
+    for review in incident_impact_review_records:
+        incident_impact_reviews_by_incident.setdefault(review.incident_id, []).append(review)
+    incident_review_flag_records = (
+        ExamSessionIncidentReviewFlag.query.filter(
+            ExamSessionIncidentReviewFlag.exam_session_id.in_(session_ids)
+        )
+        .options(joinedload(ExamSessionIncidentReviewFlag.incident))
+        .order_by(ExamSessionIncidentReviewFlag.created_at.desc(), ExamSessionIncidentReviewFlag.id.desc())
+        .all()
+        if session_ids else []
+    )
+    incident_review_flags_by_session = {}
+    incident_review_flags_by_incident = {}
+    for flag in incident_review_flag_records:
+        incident_review_flags_by_session.setdefault(flag.exam_session_id, []).append(flag)
+        incident_review_flags_by_incident.setdefault(flag.incident_id, []).append(flag)
+    journey_share_records = (
+        ExamSessionJourneyShare.query.filter(
+            ExamSessionJourneyShare.exam_session_id.in_(session_ids),
+        )
+        .order_by(ExamSessionJourneyShare.created_at.desc(), ExamSessionJourneyShare.id.desc())
+        .all()
+        if session_ids else []
+    )
+    journey_shares_by_session = {}
+    for share in journey_share_records:
+        journey_shares_by_session.setdefault(share.exam_session_id, {}).setdefault(share.audience, share)
+    logistics_by_session = {
+        logistics.exam_session_id: logistics
+        for logistics in logistics_records
+    }
+    logistics_concept_records = (
+        ExamSessionLogisticsConcept.query.filter(
+            ExamSessionLogisticsConcept.exam_session_id.in_(session_ids)
+        )
+        .order_by(ExamSessionLogisticsConcept.id.asc())
+        .all()
+        if session_ids else []
+    )
+    logistics_concepts_by_session = {}
+    for concept in logistics_concept_records:
+        logistics_concepts_by_session.setdefault(concept.exam_session_id, []).append(concept)
+    package_unit_records = (
+        ExamSessionPackageUnit.query.filter(
+            ExamSessionPackageUnit.exam_session_id.in_(session_ids)
+        )
+        .options(
+            joinedload(ExamSessionPackageUnit.checklist_items),
+            joinedload(ExamSessionPackageUnit.events),
+        )
+        .order_by(
+            ExamSessionPackageUnit.room_name.asc(),
+            ExamSessionPackageUnit.module_name.asc(),
+            ExamSessionPackageUnit.id.asc(),
+        )
+        .all()
+        if session_ids else []
+    )
+    package_checklist_records = (
+        ExamSessionPackageChecklistItem.query.filter(
+            ExamSessionPackageChecklistItem.exam_session_id.in_(session_ids),
+            ExamSessionPackageChecklistItem.scope == "SESSION",
+        )
+        .order_by(
+            ExamSessionPackageChecklistItem.phase.asc(),
+            ExamSessionPackageChecklistItem.display_order.asc(),
+            ExamSessionPackageChecklistItem.id.asc(),
+        )
+        .all()
+        if session_ids else []
+    )
+    package_units_by_session = {session_id: [] for session_id in session_ids}
+    for unit in package_unit_records:
+        package_units_by_session.setdefault(unit.exam_session_id, []).append(unit)
+    package_session_items_by_session = {session_id: [] for session_id in session_ids}
+    for item in package_checklist_records:
+        if item.exam_session_id:
+            package_session_items_by_session.setdefault(item.exam_session_id, []).append(item)
+    shipment_link_records = (
+        ExamSessionShipmentBundleSession.query.filter(
+            ExamSessionShipmentBundleSession.exam_session_id.in_(session_ids)
+        )
+        .options(
+            joinedload(ExamSessionShipmentBundleSession.bundle).joinedload(ExamSessionShipmentBundle.supervisor),
+            joinedload(ExamSessionShipmentBundleSession.bundle).joinedload(ExamSessionShipmentBundle.checklist_items),
+            joinedload(ExamSessionShipmentBundleSession.bundle).joinedload(ExamSessionShipmentBundle.events),
+            joinedload(ExamSessionShipmentBundleSession.bundle)
+            .joinedload(ExamSessionShipmentBundle.session_links)
+            .joinedload(ExamSessionShipmentBundleSession.exam_session),
+        )
+        .populate_existing()
+        .all()
+        if session_ids else []
+    )
+    shipment_links_by_session = {
+        link.exam_session_id: link
+        for link in shipment_link_records
+    }
+    shipment_bundles_by_id = {}
+    for link in shipment_link_records:
+        if link.bundle:
+            shipment_bundles_by_id[link.bundle.id] = link.bundle
+    all_bundle_views = [shipment_bundle_view(bundle) for bundle in shipment_bundles_by_id.values()]
+    all_bundle_views = [bundle_view for bundle_view in all_bundle_views if bundle_view]
+    for bundle_view in all_bundle_views:
+        bundle_view["session_chips"] = [
+            {
+                "id": included.id,
+                "name": included.exam_session_name,
+                "date": included.session_date,
+            }
+            for included in bundle_view["included_sessions"]
+        ]
+        bundle_view["sort_blocked"] = 0 if bundle_view["blocked"] else 1
+        bundle_view["sort_ready"] = 0 if bundle_view["status"] == "Ready to dispatch" else 1
+    bundle_views = [bundle_view for bundle_view in all_bundle_views if not bundle_view["completed"]]
+    bundle_views.sort(key=lambda bundle_view: (
+        bundle_view["dispatch_due_at"] or datetime.max.date(),
+        bundle_view["sort_blocked"],
+        bundle_view["sort_ready"],
+        bundle_view["record"].bundle_sequence or 999999,
+        bundle_view["id"],
+    ))
+    selected_bundle_view = None
+    if selected_bundle_id:
+        selected_bundle_view = next((bundle_view for bundle_view in all_bundle_views if bundle_view["id"] == selected_bundle_id), None)
+    if selected_view == "bundle" and not selected_bundle_view:
+        selected_view = "bundles"
+    supervisor_assignments_by_session = {}
+    for assignment in supervisor_assignment_records:
+        supervisor_assignments_by_session.setdefault(assignment.exam_session_id, []).append(assignment)
+    examiner_assignments_by_session = {}
+    for assignment in examiner_assignment_records:
+        examiner_assignments_by_session.setdefault(assignment.exam_session_id, []).append(assignment)
+    intern_assignments_by_session = {}
+    for assignment in intern_assignment_records:
+        intern_assignments_by_session.setdefault(assignment.exam_session_id, []).append(assignment)
+
+    today = datetime.now(LOCAL_TZ).date()
+    staffing_contracts_by_session = {}
+    schedule_gates_by_session = {}
+    packages_contracts_by_session = {}
+    for session_record in sessions:
+        supervisor_assignments = supervisor_assignments_by_session.get(session_record.id, [])
+        examiner_assignments = examiner_assignments_by_session.get(session_record.id, [])
+        intern_assignments = intern_assignments_by_session.get(session_record.id, [])
+        staffing_contract = staffing_readiness_contract(
+            supervisor_assignments,
+            examiner_assignments,
+            intern_assignments,
+        )
+        schedule_gate = schedule_gate_status(workflows_by_session.get(session_record.id))
+        staffing_contracts_by_session[session_record.id] = staffing_contract
+        schedule_gates_by_session[session_record.id] = schedule_gate
+        packages_contracts_by_session[session_record.id] = packages_readiness_contract(
+            session_record,
+            package_units=package_units_by_session.get(session_record.id, []),
+            session_items=package_session_items_by_session.get(session_record.id, []),
+            schedule_gate=schedule_gate,
+            staffing_contract=staffing_contract,
+        )
+    shipment_available_sessions = [
+        {
+            "id": option_session.id,
+            "name": option_session.exam_session_name,
+            "date": option_session.session_date,
+        }
+        for option_session in sessions
+    ]
+    schedule_views = []
+    for session_record in sessions:
+        supervisor_assignments = supervisor_assignments_by_session.get(session_record.id, [])
+        examiner_assignments = examiner_assignments_by_session.get(session_record.id, [])
+        intern_assignments = intern_assignments_by_session.get(session_record.id, [])
+        session_assignments = supervisor_assignments + examiner_assignments + intern_assignments
+        staffing_contract = staffing_contracts_by_session[session_record.id]
+        staffing_presentation = staffing_presentation_from_contract(staffing_contract)
+        staffing_control_presentation = staffing_control_contract(
+            staffing_controls_by_session.get(session_record.id),
+            staffing_contract,
+            today=today,
+        )
+        logistics_contract = logistics_readiness_contract(
+            session_assignments,
+            logistics_concepts_by_session.get(session_record.id, []),
+            logistics_by_session.get(session_record.id),
+        )
+        logistics_control_presentation = logistics_control_contract(
+            logistics_controls_by_session.get(session_record.id),
+            logistics_contract,
+            today=today,
+        )
+        logistics_presentation = logistics_presentation_from_contract(
+            logistics_contract,
+            assignments_by_role={
+                "Supervisor": supervisor_assignments,
+                "Examiner": examiner_assignments,
+                "Intern": intern_assignments,
+            },
+            concepts=logistics_concepts_by_session.get(session_record.id, []),
+            logistics_config=logistics_by_session.get(session_record.id),
+        )
+        package_units = package_units_by_session.get(session_record.id, [])
+        package_session_items = package_session_items_by_session.get(session_record.id, [])
+        schedule_gate = schedule_gates_by_session[session_record.id]
+        core_readiness = core_readiness_contract(
+            schedule_gate,
+            staffing_contract,
+            logistics_contract,
+            staffing=staffing_presentation,
+            logistics=logistics_presentation,
+        )
+        packages_contract = packages_contracts_by_session[session_record.id]
+        packages_action = packages_action_contract(
+            session_record,
+            packages_contract,
+            schedule_gate=schedule_gate,
+            staffing_contract=staffing_contract,
+            package_units=package_units,
+        )
+        shipment_link = shipment_links_by_session.get(session_record.id)
+        shipment_contract = session_shipment_contract(session_record, shipment_link)
+        shipment_bundle = shipment_contract.get("bundle")
+        shipment_planning = shipment_planning_contract(
+            session_record,
+            all_year_sessions=sessions,
+            supervisor_assignments_by_session=supervisor_assignments_by_session,
+            shipment_links_by_session=shipment_links_by_session,
+            packages_contracts_by_session=packages_contracts_by_session,
+            today=today,
+        )
+        shipments_action = shipments_action_contract(
+            session_record,
+            shipment_contract,
+            packages_contract,
+        )
+        shipment_planning_action = shipment_planning_action_contract(
+            session_record,
+            shipment_planning,
+            packages_action=packages_action,
+            shipments_action=shipments_action,
+        )
+        shipment_planning_assisted_action = shipment_planning_assisted_action_contract(
+            session_record,
+            shipment_planning,
+        )
+        finance_control = finance_controls_by_session.get(session_record.id)
+        finance_contract = finance_readiness_contract(finance_control, today=today)
+        finance_events = finance_events_by_control.get(finance_control.id, []) if finance_control else []
+        sinapsis_control = sinapsis_controls_by_session.get(session_record.id)
+        sinapsis_checklist_items = sinapsis_checklists_by_control.get(sinapsis_control.id, []) if sinapsis_control else []
+        sinapsis_contract = sinapsis_readiness_contract(
+            session_record,
+            sinapsis_control,
+            checklist_items=sinapsis_checklist_items,
+            today=today,
+        )
+        sinapsis_events = sinapsis_events_by_control.get(sinapsis_control.id, []) if sinapsis_control else []
+        communications_control = communications_controls_by_session.get(session_record.id)
+        communications_checklist_items = communications_checklists_by_control.get(communications_control.id, []) if communications_control else []
+        communications_contract = communications_readiness_contract(
+            communications_control,
+            checklist_items=communications_checklist_items,
+            today=today,
+        )
+        communications_events = communications_events_by_control.get(communications_control.id, []) if communications_control else []
+        operational_readiness = operational_readiness_contract(
+            schedule_gate,
+            staffing_contract,
+            logistics_contract,
+            packages_contract,
+            shipment_contract,
+            staffing=staffing_presentation,
+            logistics=logistics_presentation,
+        )
+        incidents_contract = incidents_readiness_contract(
+            session_record,
+            incidents=incidents_by_session.get(session_record.id, []),
+            checklist_items_by_incident=incident_checklists_by_incident,
+            events_by_incident=incident_events_by_incident,
+            impact_reviews_by_incident=incident_impact_reviews_by_incident,
+            review_flags_by_incident=incident_review_flags_by_incident,
+            today=today,
+        )
+        review_flags_contract = incident_review_flags_contract(
+            session_record,
+            flags=incident_review_flags_by_session.get(session_record.id, []),
+        )
+        session_readiness = session_readiness_contract(
+            operational_readiness,
+            finance_contract,
+            sinapsis_contract,
+            communications_contract,
+            incidents_contract,
+            review_flags_contract,
+        )
+        confirmed_supervisors = [
+            {
+                "id": assignment.team_member_id,
+                "name": assignment.team_member.full_name if assignment.team_member else "Supervisor",
+                "address": assignment.team_member.full_address_google_maps if assignment.team_member else "",
+                "city": assignment.team_member.city if assignment.team_member else "",
+                "province": assignment.team_member.province if assignment.team_member else "",
+            }
+            for assignment in supervisor_assignments
+            if assignment.team_member_id and assignment.participation_status == "Confirmed"
+        ]
+        schedule_status = schedule_workflow_status(workflows_by_session.get(session_record.id))
+        schedule_deadline = schedule_workflow_current_deadline(workflows_by_session.get(session_record.id))
+        priority_action = priority_action_contract(
+            schedule_status=schedule_status,
+            schedule_gate=schedule_gate,
+            schedule_responsible=schedule_workflow_responsible(schedule_status),
+            schedule_deadline=schedule_deadline,
+            staffing_contract=staffing_contract,
+            staffing_control=staffing_control_presentation,
+            logistics_contract=logistics_contract,
+            core_readiness=core_readiness,
+            logistics_control=logistics_control_presentation,
+        )
+        activity_timeline = session_activity_timeline_contract(
+            session_record,
+            schedule_events=events_by_workflow.get(workflows_by_session.get(session_record.id).id, []) if workflows_by_session.get(session_record.id) else [],
+            package_units=package_units,
+            shipment_bundle=shipment_bundle,
+            finance_events=finance_events,
+            sinapsis_events=sinapsis_events,
+            communications_events=communications_events,
+            incidents=incidents_by_session.get(session_record.id, []),
+            incident_events_by_incident=incident_events_by_incident,
+        )
+        schedule_views.append(schedule_workflow_view(
+            session_record,
+            workflows_by_session.get(session_record.id),
+            today=today,
+            staffing=staffing_presentation,
+            staffing_control=staffing_control_presentation,
+            logistics=logistics_presentation,
+            logistics_control=logistics_control_presentation,
+            finance=finance_contract,
+            finance_events=finance_events,
+            sinapsis=sinapsis_contract,
+            sinapsis_checklist_items=sinapsis_checklist_items,
+            sinapsis_events=sinapsis_events,
+            communications=communications_contract,
+            communications_checklist_items=communications_checklist_items,
+            communications_events=communications_events,
+            packages={
+                "contract": packages_contract,
+                "action": packages_action,
+                "unit_views": [package_unit_view(unit, today=today) for unit in package_units],
+                "session_pre_packing_items": package_session_item_views(package_session_items, PACKAGE_PRE_PACKING_PHASE),
+                "session_final_assembly_items": package_session_item_views(package_session_items, PACKAGE_FINAL_ASSEMBLY_PHASE),
+                "schedule_ready": bool(schedule_gate.get("is_ready")),
+                "staffing_ready": bool(staffing_contract.get("ready")),
+            },
+            shipments={
+                "contract": shipment_contract,
+                "planning": shipment_planning,
+                "planning_action": shipment_planning_action,
+                "assisted_action": shipment_planning_assisted_action,
+                "action": shipments_action,
+                "bundle_view": shipment_bundle_view(shipment_bundle),
+                "available_supervisors": confirmed_supervisors,
+                "available_sessions": shipment_available_sessions,
+            },
+            core_readiness=core_readiness,
+            operational_readiness=operational_readiness,
+            session_readiness=session_readiness,
+            incidents=incidents_contract,
+            review_flags=review_flags_contract,
+            priority_action=priority_action,
+            schedule_gate=schedule_gate,
+            activity_timeline=activity_timeline,
+            journey_shares=journey_share_views(session_record, journey_shares_by_session.get(session_record.id, {})),
+        ))
+    summary = {
+        "Not started": 0,
+        "In progress": 0,
+        "Waiting for review": 0,
+        "Changes requested": 0,
+        "Approved": 0,
+        "Overdue": 0,
+        "Schedule blocked": 0,
+        "Schedule ready": 0,
+    }
+    for view in schedule_views:
+        status = view["status"]
+        if status in summary:
+            summary[status] += 1
+        if status == "Sent for review":
+            summary["Waiting for review"] += 1
+        if view["health"] == "Overdue":
+            summary["Overdue"] += 1
+        if view["schedule_gate"]["is_ready"]:
+            summary["Schedule ready"] += 1
+        else:
+            summary["Schedule blocked"] += 1
+    modal_views = list(schedule_views)
+    my_actions = []
+    seen_action_ids = set()
+    for view in schedule_views:
+        for action_row in my_action_rows_from_schedule_view(view, today=today):
+            if action_row["id"] in seen_action_ids:
+                continue
+            seen_action_ids.add(action_row["id"])
+            my_actions.append(action_row)
+    my_actions = sort_my_actions(my_actions)
+    my_action_source_options = [
+        "Schedule",
+        "Staffing",
+        "Logistics",
+        "Readiness",
+        "Core readiness",
+        "Finance",
+        "Sinapsis",
+        "Communications",
+        "Incidents",
+        "Incident review",
+        "Packages",
+        "Shipments",
+        "Shipment planning",
+    ]
+    if my_action_source_filter not in my_action_source_options:
+        my_action_source_filter = ""
+    my_action_responsible_filter_options = my_actions_responsible_options(my_actions)
+    if my_action_responsible_filter not in my_action_responsible_filter_options:
+        my_action_responsible_filter = ""
+    my_action_status_options = ["Needs review", "Overdue", "Due today", "Upcoming", "Not set"]
+    if my_action_status_filter not in my_action_status_options:
+        my_action_status_filter = ""
+    my_actions_summary_counts = my_actions_summary(my_actions)
+    filtered_my_actions = filter_my_actions(
+        my_actions,
+        source_filter=my_action_source_filter,
+        responsible_filter=my_action_responsible_filter,
+        status_filter=my_action_status_filter,
+    )
+    if status_filter and selected_view in {"sessions", "bundle"}:
+        schedule_views = [view for view in schedule_views if view["status"] == status_filter]
+
+    max_date = datetime.max.date()
+    if selected_view == "bundle" and selected_bundle_view:
+        selected_bundle_session_ids = set(selected_bundle_view["included_session_ids"])
+        schedule_views = [view for view in schedule_views if view["session"].id in selected_bundle_session_ids]
+    schedule_views.sort(key=lambda view: (
+        view["session"].session_date or max_date,
+        view["session"].exam_session_name.lower(),
+    ))
+    modal_views = list(schedule_views)
+
+    return render_template(
+        "pre_session_control_tower/index.html",
+        schedule_views=schedule_views,
+        modal_views=modal_views,
+        bundle_views=bundle_views,
+        selected_bundle=selected_bundle_view,
+        summary=summary,
+        selected_view=selected_view,
+        my_actions=filtered_my_actions,
+        my_actions_summary=my_actions_summary_counts,
+        my_action_source_options=my_action_source_options,
+        my_action_responsible_options=my_action_responsible_filter_options,
+        my_action_status_options=my_action_status_options,
+        package_unit_status_options=PACKAGE_UNIT_STATUSES,
+        selected_my_action_source=my_action_source_filter,
+        selected_my_action_responsible=my_action_responsible_filter,
+        selected_my_action_status=my_action_status_filter,
+        session_years=session_years,
+        archived_session_years=(
+            ExamSessionYear.query.filter_by(is_archived=True)
+            .order_by(ExamSessionYear.year.desc())
+            .all()
+        ),
+        selected_session_year=selected_year,
+        schedule_status_options=SCHEDULE_WORKFLOW_STATUSES,
+        finance_status_options=FINANCE_STATUS_OPTIONS,
+        finance_note_required_statuses=FINANCE_NOTE_REQUIRED_STATUSES,
+        sinapsis_status_options=SINAPSIS_STATUS_OPTIONS,
+        communications_status_options=COMMUNICATIONS_STATUS_OPTIONS,
+        communications_groups=COMMUNICATIONS_GROUPS,
+        incident_type_options=INCIDENT_TYPES,
+        incident_severity_options=INCIDENT_SEVERITIES,
+        incident_status_options=INCIDENT_STATUSES,
+        incident_responsible_department_options=INCIDENT_RESPONSIBLE_DEPARTMENTS,
+        incident_default_departments=INCIDENT_TYPE_DEFAULT_DEPARTMENT,
+        selected_schedule_status=status_filter,
+        events_by_workflow=events_by_workflow,
+        csrf_token=session.get("csrf_token"),
+    )
+
+
+@staff_bp.route("/pre-session-control-tower/sessions/<int:session_id>/journey/<audience>/preview")
+@login_required
+def preview_path_session_journey(session_id, audience):
+    if audience not in JOURNEY_AUDIENCES:
+        return render_journey_unavailable(404)
+    session_record = ExamSession.query.get_or_404(session_id)
+    journey = path_session_journey_contract(session_record, audience)
+    return render_template("pre_session_control_tower/session_journey.html", journey=journey, share=None, is_preview=True)
+
+
+@staff_bp.route("/path-session-journey/<token>/<audience>")
+def shared_path_session_journey(token, audience):
+    if audience not in JOURNEY_AUDIENCES:
+        return render_journey_unavailable(404)
+    share = ExamSessionJourneyShare.query.filter_by(token=token).first()
+    if not share:
+        return render_journey_unavailable(404)
+    if share.audience != audience:
+        return render_journey_unavailable(404)
+    if not share.is_enabled or share.revoked_at:
+        return render_journey_unavailable(410)
+    journey = path_session_journey_contract(share.exam_session, audience)
+    return render_template("pre_session_control_tower/session_journey.html", journey=journey, share=share, is_preview=False)
+
+
+@staff_bp.route("/pre-session-control-tower/sessions/<int:session_id>/journey-share-token", methods=["POST"])
+@staff_bp.route("/pre-session-control-tower/sessions/<int:session_id>/journey-share/<audience>/<action>", methods=["POST"])
+@login_required
+def create_path_session_journey_share_token(session_id, audience=None, action=None):
+    session_record = ExamSession.query.get_or_404(session_id)
+    status_filter = request.form.get("schedule_status", "").strip()
+    if status_filter not in SCHEDULE_WORKFLOW_STATUSES:
+        status_filter = ""
+    selected_view = request.form.get("view", "sessions").strip()
+    if selected_view not in {"sessions", "my-actions"}:
+        selected_view = "sessions"
+    if not validate_csrf():
+        flash("Security token expired. Please try again.", "error")
+        return schedule_workflow_redirect(session_record, status_filter, action_key="journey")
+    audience = audience or request.form.get("audience", "institution").strip()
+    action = action or request.form.get("action", "enable").strip()
+    if audience not in JOURNEY_AUDIENCES:
+        flash("Please select a valid Journey audience.", "error")
+        return schedule_workflow_redirect(session_record, status_filter, action_key="journey")
+    if action not in {"enable", "disable", "regenerate"}:
+        flash("Please select a valid Journey sharing action.", "error")
+        return schedule_workflow_redirect(session_record, status_filter, action_key="journey")
+    if action == "enable":
+        ensure_journey_share_token(session_record, audience, created_by=session.get("user"))
+        flash(f"{JOURNEY_TITLES[audience]} link enabled.", "success")
+    elif action == "disable":
+        disable_journey_share(session_record, audience, updated_by=session.get("user"))
+        flash(f"{JOURNEY_TITLES[audience]} link disabled.", "success")
+    elif action == "regenerate":
+        regenerate_journey_share(session_record, audience, regenerated_by=session.get("user"))
+        flash(f"{JOURNEY_TITLES[audience]} link regenerated.", "success")
+    return redirect(url_for(
+        "staff.pre_session_control_tower",
+        session_year=session_record.session_date.year,
+        schedule_status=status_filter,
+        view=selected_view,
+        open_schedule_modal=session_record.id,
+        manage_target="journey",
+    ))
+
+
+@staff_bp.route("/pre-session-control-tower/sessions/<int:session_id>/schedule", methods=["POST"])
+@login_required
+def update_schedule_workflow(session_id):
+    session_record = ExamSession.query.get_or_404(session_id)
+    status_filter = request.form.get("schedule_status", "").strip()
+    if status_filter not in SCHEDULE_WORKFLOW_STATUSES:
+        status_filter = ""
+    if not validate_csrf():
+        flash("Security token expired. Please try again.", "error")
+        return schedule_workflow_redirect(session_record, status_filter)
+    action_key = request.form.get("action_key", "").strip()
+    note = request.form.get("note", "")
+    transition = schedule_transition_by_key(action_key)
+    if not transition:
+        flash("Please select a valid schedule workflow action.", "error")
+        return schedule_workflow_redirect(session_record, status_filter)
+    due_at = parse_schedule_deadline(request.form.get("next_action_due_at", ""))
+    if transition.get("deadline_required") and due_at is None:
+        flash("Please enter the next action deadline.", "error")
+        return schedule_workflow_redirect(session_record, status_filter, action_key)
+
+    try:
+        workflow, error = apply_schedule_workflow_transition(
+            session_record,
+            action_key,
+            due_at=due_at,
+            note=note,
+            created_by=session.get("user"),
+        )
+        if error:
+            db.session.rollback()
+            flash(error, "error")
+            return schedule_workflow_redirect(session_record, status_filter, action_key)
+        else:
+            db.session.commit()
+            flash("Schedule workflow updated successfully.", "success")
+    except Exception:
+        db.session.rollback()
+        current_app.logger.exception("Schedule workflow update failed")
+        flash("The schedule workflow could not be updated. Please try again.", "error")
+        return schedule_workflow_redirect(session_record, status_filter, action_key)
+    return schedule_workflow_redirect(session_record, status_filter)
+
+
+@staff_bp.route("/pre-session-control-tower/sessions/<int:session_id>/staffing-control", methods=["POST"])
+@login_required
+def update_staffing_control(session_id):
+    session_record = ExamSession.query.get_or_404(session_id)
+    status_filter = request.form.get("schedule_status", "").strip()
+    if status_filter not in SCHEDULE_WORKFLOW_STATUSES:
+        status_filter = ""
+    if not validate_csrf():
+        flash("Security token expired. Please try again.", "error")
+        return staffing_control_redirect(session_record, status_filter, edit=True)
+
+    due_value = request.form.get("staffing_due_at", "").strip()
+    staffing_due_at = None
+    if due_value:
+        staffing_due_at = parse_schedule_deadline(due_value)
+        if staffing_due_at is None:
+            flash("Please enter a valid staffing deadline.", "error")
+            return staffing_control_redirect(session_record, status_filter, edit=True)
+    note = request.form.get("note", "").strip()
+    if len(note) > 2000:
+        flash("Operational note must be 2000 characters or fewer.", "error")
+        return staffing_control_redirect(session_record, status_filter, edit=True)
+
+    control_record = ExamSessionStaffingControl.query.filter_by(
+        exam_session_id=session_record.id
+    ).first()
+    if not control_record:
+        control_record = ExamSessionStaffingControl(exam_session_id=session_record.id)
+        db.session.add(control_record)
+    control_record.staffing_due_at = staffing_due_at
+    control_record.note = note or None
+    control_record.updated_by = session.get("user")
+    db.session.commit()
+    flash("Staffing ownership and deadline saved successfully.", "success")
+    return staffing_control_redirect(session_record, status_filter)
+
+
+@staff_bp.route("/pre-session-control-tower/sessions/<int:session_id>/logistics-control", methods=["POST"])
+@login_required
+def update_logistics_control(session_id):
+    session_record = ExamSession.query.get_or_404(session_id)
+    status_filter = request.form.get("schedule_status", "").strip()
+    if status_filter not in SCHEDULE_WORKFLOW_STATUSES:
+        status_filter = ""
+    if not validate_csrf():
+        flash("Security token expired. Please try again.", "error")
+        return logistics_control_redirect(session_record, status_filter, edit=True)
+
+    due_value = request.form.get("logistics_due_at", "").strip()
+    logistics_due_at = None
+    if due_value:
+        logistics_due_at = parse_schedule_deadline(due_value)
+        if logistics_due_at is None:
+            flash("Please enter a valid logistics deadline.", "error")
+            return logistics_control_redirect(session_record, status_filter, edit=True)
+    note = request.form.get("note", "").strip()
+    if len(note) > 2000:
+        flash("Operational note must be 2000 characters or fewer.", "error")
+        return logistics_control_redirect(session_record, status_filter, edit=True)
+
+    control_record = ExamSessionLogisticsControl.query.filter_by(
+        exam_session_id=session_record.id
+    ).first()
+    if not control_record:
+        control_record = ExamSessionLogisticsControl(exam_session_id=session_record.id)
+        db.session.add(control_record)
+    control_record.logistics_due_at = logistics_due_at
+    control_record.note = note or None
+    control_record.updated_by = session.get("user")
+    db.session.commit()
+    flash("Logistics ownership and deadline saved successfully.", "success")
+    return logistics_control_redirect(session_record, status_filter)
+
+
+@staff_bp.route("/pre-session-control-tower/sessions/<int:session_id>/finance-control", methods=["POST"])
+@login_required
+def update_finance_control(session_id):
+    session_record = ExamSession.query.get_or_404(session_id)
+    status_filter = request.form.get("schedule_status", "").strip()
+    if status_filter not in SCHEDULE_WORKFLOW_STATUSES:
+        status_filter = ""
+    if not validate_csrf():
+        flash("Security token expired. Please try again.", "error")
+        return finance_control_redirect(session_record, status_filter, edit=True)
+
+    new_status = request.form.get("finance_status", "").strip()
+    due_value = request.form.get("finance_due_at", "").strip()
+    finance_due_at = None
+    if due_value:
+        finance_due_at = parse_schedule_deadline(due_value)
+        if finance_due_at is None:
+            flash("Please enter a valid finance deadline.", "error")
+            return finance_control_redirect(session_record, status_filter, edit=True)
+    evidence_url = request.form.get("evidence_url", "").strip()
+    if evidence_url and not is_valid_url(evidence_url):
+        flash("Please enter a valid evidence URL.", "error")
+        return finance_control_redirect(session_record, status_filter, edit=True)
+    note = request.form.get("note", "").strip()
+    if len(note) > 2000:
+        flash("Finance note must be 2000 characters or fewer.", "error")
+        return finance_control_redirect(session_record, status_filter, edit=True)
+
+    control_record = ExamSessionFinanceControl.query.filter_by(
+        exam_session_id=session_record.id
+    ).first()
+    if not control_record:
+        control_record = ExamSessionFinanceControl(exam_session_id=session_record.id)
+        db.session.add(control_record)
+
+    error = apply_finance_status_update(
+        control_record,
+        new_status,
+        finance_due_at=finance_due_at,
+        evidence_url=evidence_url,
+        note=note,
+        updated_by=session.get("user"),
+    )
+    if error:
+        db.session.rollback()
+        flash(error, "error")
+        return finance_control_redirect(session_record, status_filter, edit=True)
+    try:
+        db.session.commit()
+    except Exception:
+        db.session.rollback()
+        current_app.logger.exception("Finance control update failed")
+        flash("The finance status could not be updated. Please try again.", "error")
+        return finance_control_redirect(session_record, status_filter, edit=True)
+    flash("Finance status saved successfully.", "success")
+    return finance_control_redirect(session_record, status_filter)
+
+
+@staff_bp.route("/pre-session-control-tower/sessions/<int:session_id>/sinapsis-control", methods=["POST"])
+@login_required
+def update_sinapsis_control(session_id):
+    session_record = ExamSession.query.get_or_404(session_id)
+    status_filter = request.form.get("schedule_status", "").strip()
+    if status_filter not in SCHEDULE_WORKFLOW_STATUSES:
+        status_filter = ""
+    if not validate_csrf():
+        flash("Security token expired. Please try again.", "error")
+        return sinapsis_control_redirect(session_record, status_filter, edit=True)
+
+    new_status = request.form.get("sinapsis_status", "").strip()
+    due_value = request.form.get("sinapsis_due_at", "").strip()
+    sinapsis_due_at = None
+    if due_value:
+        sinapsis_due_at = parse_schedule_deadline(due_value)
+        if sinapsis_due_at is None:
+            flash("Please enter a valid Sinapsis deadline.", "error")
+            return sinapsis_control_redirect(session_record, status_filter, edit=True)
+    evidence_url = request.form.get("evidence_url", "").strip()
+    if evidence_url and not is_valid_url(evidence_url):
+        flash("Please enter a valid evidence URL.", "error")
+        return sinapsis_control_redirect(session_record, status_filter, edit=True)
+    note = request.form.get("note", "").strip()
+    if len(note) > 2000:
+        flash("Sinapsis note must be 2000 characters or fewer.", "error")
+        return sinapsis_control_redirect(session_record, status_filter, edit=True)
+
+    control_record = ExamSessionSinapsisControl.query.filter_by(
+        exam_session_id=session_record.id
+    ).first()
+    if not control_record:
+        control_record = ExamSessionSinapsisControl(exam_session_id=session_record.id)
+        db.session.add(control_record)
+    else:
+        ensure_sinapsis_checklist_items(control_record)
+
+    error = apply_sinapsis_status_update(
+        control_record,
+        new_status,
+        sinapsis_due_at=sinapsis_due_at,
+        evidence_url=evidence_url,
+        note=note,
+        updated_by=session.get("user"),
+    )
+    if error:
+        db.session.rollback()
+        flash(error, "error")
+        return sinapsis_control_redirect(session_record, status_filter, edit=True)
+    try:
+        db.session.commit()
+    except Exception:
+        db.session.rollback()
+        current_app.logger.exception("Sinapsis control update failed")
+        flash("The Sinapsis status could not be updated. Please try again.", "error")
+        return sinapsis_control_redirect(session_record, status_filter, edit=True)
+    flash("Sinapsis status saved successfully.", "success")
+    return sinapsis_control_redirect(session_record, status_filter)
+
+
+@staff_bp.route("/pre-session-control-tower/sessions/<int:session_id>/sinapsis-checklist/<int:item_id>", methods=["POST"])
+@login_required
+def update_sinapsis_checklist_item(session_id, item_id):
+    session_record = ExamSession.query.get_or_404(session_id)
+    status_filter = request.form.get("schedule_status", "").strip()
+    if status_filter not in SCHEDULE_WORKFLOW_STATUSES:
+        status_filter = ""
+    if not validate_csrf():
+        flash("Security token expired. Please try again.", "error")
+        return sinapsis_control_redirect(session_record, status_filter)
+
+    item = (
+        ExamSessionSinapsisChecklistItem.query
+        .join(ExamSessionSinapsisControl)
+        .filter(
+            ExamSessionSinapsisChecklistItem.id == item_id,
+            ExamSessionSinapsisControl.exam_session_id == session_record.id,
+        )
+        .first_or_404()
+    )
+    note = request.form.get("checklist_note", "").strip()
+    if len(note) > 1000:
+        flash("Checklist note must be 1000 characters or fewer.", "error")
+        return sinapsis_control_redirect(session_record, status_filter)
+    is_checked = request.form.get("is_checked", "").strip() == "1"
+    previous_checked = bool(item.is_checked)
+    item.note = note or None
+    now = datetime.now(timezone.utc)
+    if is_checked and not previous_checked:
+        item.is_checked = True
+        item.checked_at = now
+        item.checked_by = session.get("user")
+        event_type = "checklist_checked"
+    elif not is_checked and previous_checked:
+        item.is_checked = False
+        item.checked_at = None
+        item.checked_by = None
+        event_type = "checklist_unchecked"
+    else:
+        event_type = "checklist_updated"
+    db.session.add(ExamSessionSinapsisEvent(
+        sinapsis_control=item.sinapsis_control,
+        event_type=event_type,
+        previous_status=item.sinapsis_control.status,
+        new_status=item.sinapsis_control.status,
+        note=f"{item.label}: {note}" if note else item.label,
+        evidence_url=item.sinapsis_control.evidence_url,
+        created_by=session.get("user"),
+    ))
+    try:
+        db.session.commit()
+    except Exception:
+        db.session.rollback()
+        current_app.logger.exception("Sinapsis checklist update failed")
+        flash("The Sinapsis checklist item could not be updated. Please try again.", "error")
+        return sinapsis_control_redirect(session_record, status_filter)
+    flash("Sinapsis checklist updated successfully.", "success")
+    return sinapsis_control_redirect(session_record, status_filter)
+
+
+@staff_bp.route("/pre-session-control-tower/sessions/<int:session_id>/communications-control", methods=["POST"])
+@login_required
+def update_communications_control(session_id):
+    session_record = ExamSession.query.get_or_404(session_id)
+    status_filter = request.form.get("schedule_status", "").strip()
+    if status_filter not in SCHEDULE_WORKFLOW_STATUSES:
+        status_filter = ""
+    if not validate_csrf():
+        flash("Security token expired. Please try again.", "error")
+        return communications_control_redirect(session_record, status_filter, edit=True)
+
+    new_status = request.form.get("communications_status", "").strip()
+    due_value = request.form.get("communications_due_at", "").strip()
+    communications_due_at = None
+    if due_value:
+        communications_due_at = parse_schedule_deadline(due_value)
+        if communications_due_at is None:
+            flash("Please enter a valid communications deadline.", "error")
+            return communications_control_redirect(session_record, status_filter, edit=True)
+    evidence_url = request.form.get("evidence_url", "").strip()
+    if evidence_url and not is_valid_url(evidence_url):
+        flash("Please enter a valid evidence URL.", "error")
+        return communications_control_redirect(session_record, status_filter, edit=True)
+    note = request.form.get("note", "").strip()
+    if len(note) > 2000:
+        flash("Communications note must be 2000 characters or fewer.", "error")
+        return communications_control_redirect(session_record, status_filter, edit=True)
+
+    control_record = ExamSessionCommunicationsControl.query.filter_by(
+        exam_session_id=session_record.id
+    ).first()
+    if not control_record:
+        control_record = ExamSessionCommunicationsControl(exam_session_id=session_record.id)
+        db.session.add(control_record)
+    else:
+        ensure_communications_checklist_items(control_record)
+
+    error = apply_communications_status_update(
+        control_record,
+        new_status,
+        communications_due_at=communications_due_at,
+        evidence_url=evidence_url,
+        note=note,
+        updated_by=session.get("user"),
+    )
+    if error:
+        db.session.rollback()
+        flash(error, "error")
+        return communications_control_redirect(session_record, status_filter, edit=True)
+    try:
+        db.session.commit()
+    except Exception:
+        db.session.rollback()
+        current_app.logger.exception("Communications control update failed")
+        flash("The communications status could not be updated. Please try again.", "error")
+        return communications_control_redirect(session_record, status_filter, edit=True)
+    flash("Communications status saved successfully.", "success")
+    return communications_control_redirect(session_record, status_filter)
+
+
+@staff_bp.route("/pre-session-control-tower/sessions/<int:session_id>/communications-checklist/<int:item_id>", methods=["POST"])
+@login_required
+def update_communications_checklist_item(session_id, item_id):
+    session_record = ExamSession.query.get_or_404(session_id)
+    status_filter = request.form.get("schedule_status", "").strip()
+    if status_filter not in SCHEDULE_WORKFLOW_STATUSES:
+        status_filter = ""
+    if not validate_csrf():
+        flash("Security token expired. Please try again.", "error")
+        return communications_control_redirect(session_record, status_filter)
+
+    item = (
+        ExamSessionCommunicationsChecklistItem.query
+        .join(ExamSessionCommunicationsControl)
+        .filter(
+            ExamSessionCommunicationsChecklistItem.id == item_id,
+            ExamSessionCommunicationsControl.exam_session_id == session_record.id,
+        )
+        .first_or_404()
+    )
+    note = request.form.get("checklist_note", "").strip()
+    if len(note) > 1000:
+        flash("Checklist note must be 1000 characters or fewer.", "error")
+        return communications_control_redirect(session_record, status_filter)
+    is_checked = request.form.get("is_checked", "").strip() == "1"
+    previous_checked = bool(item.is_checked)
+    item.note = note or None
+    now = datetime.now(timezone.utc)
+    if is_checked and not previous_checked:
+        item.is_checked = True
+        item.checked_at = now
+        item.checked_by = session.get("user")
+        event_type = "checklist_checked"
+    elif not is_checked and previous_checked:
+        item.is_checked = False
+        item.checked_at = None
+        item.checked_by = None
+        event_type = "checklist_unchecked"
+    else:
+        event_type = "checklist_updated"
+    db.session.add(ExamSessionCommunicationsEvent(
+        communications_control=item.communications_control,
+        event_type=event_type,
+        previous_status=item.communications_control.status,
+        new_status=item.communications_control.status,
+        note=f"{item.label}: {note}" if note else item.label,
+        evidence_url=item.communications_control.evidence_url,
+        created_by=session.get("user"),
+    ))
+    try:
+        db.session.commit()
+    except Exception:
+        db.session.rollback()
+        current_app.logger.exception("Communications checklist update failed")
+        flash("The communications checklist item could not be updated. Please try again.", "error")
+        return communications_control_redirect(session_record, status_filter)
+    flash("Communications checklist updated successfully.", "success")
+    return communications_control_redirect(session_record, status_filter)
+
+
+@staff_bp.route("/pre-session-control-tower/sessions/<int:session_id>/incidents", methods=["POST"])
+@login_required
+def create_incident(session_id):
+    session_record = ExamSession.query.get_or_404(session_id)
+    status_filter = request.form.get("schedule_status", "").strip()
+    if status_filter not in SCHEDULE_WORKFLOW_STATUSES:
+        status_filter = ""
+    view = request.form.get("view", "sessions").strip() or "sessions"
+    if not validate_csrf():
+        flash("Security token expired. Please try again.", "error")
+        return incidents_control_redirect(session_record, status_filter, view=view)
+    incident_type = request.form.get("incident_type", "").strip()
+    title = request.form.get("title", "").strip()
+    description = request.form.get("description", "").strip()
+    severity = request.form.get("severity", "").strip()
+    responsible_department = request.form.get("responsible_department", "").strip() or incident_default_department(incident_type)
+    due_value = request.form.get("due_at", "").strip()
+    due_at = None
+    if due_value:
+        due_at = parse_schedule_deadline(due_value)
+        if due_at is None:
+            flash("Please enter a valid incident deadline.", "error")
+            return incidents_control_redirect(session_record, status_filter, view=view)
+    evidence_url = request.form.get("evidence_url", "").strip()
+    note = request.form.get("note", "").strip()
+    if len(title) > 200:
+        flash("Incident title must be 200 characters or fewer.", "error")
+        return incidents_control_redirect(session_record, status_filter, view=view)
+    if len(note) > 2000 or len(description) > 4000:
+        flash("Incident note must be 2000 characters or fewer.", "error")
+        return incidents_control_redirect(session_record, status_filter, view=view)
+    incident, error = create_incident_record(
+        session_record,
+        incident_type,
+        title,
+        description,
+        severity,
+        responsible_department,
+        due_at=due_at,
+        evidence_url=evidence_url,
+        note=note,
+        created_by=session.get("user"),
+    )
+    if error:
+        db.session.rollback()
+        flash(error, "error")
+        return incidents_control_redirect(session_record, status_filter, view=view)
+    auto_flags_summary = ensure_incident_review_flags_for_high_priority_incident(
+        incident,
+        actor=session.get("user"),
+    )
+    try:
+        db.session.commit()
+    except Exception:
+        db.session.rollback()
+        current_app.logger.exception("Incident creation failed")
+        flash("The incident could not be created. Please try again.", "error")
+        return incidents_control_redirect(session_record, status_filter, view=view)
+    feedback = incident_auto_review_flags_feedback(auto_flags_summary)
+    flash(f"Incident created successfully. {feedback}" if feedback else "Incident created successfully.", "success")
+    return incidents_control_redirect(session_record, status_filter, incident_id=incident.id, view=view)
+
+
+@staff_bp.route("/pre-session-control-tower/sessions/<int:session_id>/incidents/<int:incident_id>", methods=["POST"])
+@login_required
+def update_incident(session_id, incident_id):
+    session_record = ExamSession.query.get_or_404(session_id)
+    status_filter = request.form.get("schedule_status", "").strip()
+    if status_filter not in SCHEDULE_WORKFLOW_STATUSES:
+        status_filter = ""
+    view = request.form.get("view", "sessions").strip() or "sessions"
+    if not validate_csrf():
+        flash("Security token expired. Please try again.", "error")
+        return incidents_control_redirect(session_record, status_filter, incident_id=incident_id, view=view)
+    incident = ExamSessionIncident.query.filter_by(id=incident_id, exam_session_id=session_record.id).first_or_404()
+    new_status = request.form.get("incident_status", "").strip()
+    new_severity = request.form.get("severity", "").strip()
+    responsible_department = request.form.get("responsible_department", "").strip()
+    due_value = request.form.get("due_at", "").strip()
+    due_at = None
+    if due_value:
+        due_at = parse_schedule_deadline(due_value)
+        if due_at is None:
+            flash("Please enter a valid incident deadline.", "error")
+            return incidents_control_redirect(session_record, status_filter, incident_id=incident_id, view=view)
+    evidence_url = request.form.get("evidence_url", "").strip()
+    note = request.form.get("note", "").strip()
+    if len(note) > 2000:
+        flash("Incident note must be 2000 characters or fewer.", "error")
+        return incidents_control_redirect(session_record, status_filter, incident_id=incident_id, view=view)
+    previous_status = incident.status
+    previous_severity = incident.severity
+    error = apply_incident_update(
+        incident,
+        new_status,
+        new_severity,
+        responsible_department,
+        due_at=due_at,
+        evidence_url=evidence_url,
+        note=note,
+        updated_by=session.get("user"),
+    )
+    if error:
+        db.session.rollback()
+        flash(error, "error")
+        return incidents_control_redirect(session_record, status_filter, incident_id=incident_id, view=view)
+    should_ensure_review_flags = (
+        new_severity in {"High", "Critical"}
+        and (
+            previous_severity not in {"High", "Critical"}
+            or previous_status in INCIDENT_INACTIVE_STATUSES and new_status not in INCIDENT_INACTIVE_STATUSES
+        )
+    )
+    auto_flags_summary = None
+    if should_ensure_review_flags:
+        auto_flags_summary = ensure_incident_review_flags_for_high_priority_incident(
+            incident,
+            actor=session.get("user"),
+        )
+    try:
+        db.session.commit()
+    except Exception:
+        db.session.rollback()
+        current_app.logger.exception("Incident update failed")
+        flash("The incident could not be updated. Please try again.", "error")
+        return incidents_control_redirect(session_record, status_filter, incident_id=incident_id, view=view)
+    feedback = incident_auto_review_flags_feedback(auto_flags_summary)
+    flash(f"Incident updated successfully. {feedback}" if feedback else "Incident updated successfully.", "success")
+    return incidents_control_redirect(session_record, status_filter, incident_id=incident_id, view=view)
+
+
+@staff_bp.route("/pre-session-control-tower/sessions/<int:session_id>/incidents/<int:incident_id>/checklist/<int:item_id>", methods=["POST"])
+@login_required
+def update_incident_checklist_item(session_id, incident_id, item_id):
+    session_record = ExamSession.query.get_or_404(session_id)
+    status_filter = request.form.get("schedule_status", "").strip()
+    if status_filter not in SCHEDULE_WORKFLOW_STATUSES:
+        status_filter = ""
+    view = request.form.get("view", "sessions").strip() or "sessions"
+    if not validate_csrf():
+        flash("Security token expired. Please try again.", "error")
+        return incidents_control_redirect(session_record, status_filter, incident_id=incident_id, view=view)
+    item = (
+        ExamSessionIncidentChecklistItem.query
+        .join(ExamSessionIncident)
+        .filter(
+            ExamSessionIncidentChecklistItem.id == item_id,
+            ExamSessionIncidentChecklistItem.incident_id == incident_id,
+            ExamSessionIncident.exam_session_id == session_record.id,
+        )
+        .first_or_404()
+    )
+    note = request.form.get("checklist_note", "").strip()
+    if len(note) > 1000:
+        flash("Checklist note must be 1000 characters or fewer.", "error")
+        return incidents_control_redirect(session_record, status_filter, incident_id=incident_id, view=view)
+    is_checked = request.form.get("is_checked", "").strip() == "1"
+    previous_checked = bool(item.is_checked)
+    item.note = note or None
+    now = datetime.now(timezone.utc)
+    if is_checked and not previous_checked:
+        item.is_checked = True
+        item.checked_at = now
+        item.checked_by = session.get("user")
+        event_type = "checklist_checked"
+    elif not is_checked and previous_checked:
+        item.is_checked = False
+        item.checked_at = None
+        item.checked_by = None
+        event_type = "checklist_unchecked"
+    else:
+        event_type = "checklist_updated"
+    db.session.add(ExamSessionIncidentEvent(
+        incident=item.incident,
+        event_type=event_type,
+        previous_status=item.incident.status,
+        new_status=item.incident.status,
+        previous_severity=item.incident.severity,
+        new_severity=item.incident.severity,
+        note=f"{item.label}: {note}" if note else item.label,
+        evidence_url=item.incident.evidence_url,
+        created_by=session.get("user"),
+    ))
+    try:
+        db.session.commit()
+    except Exception:
+        db.session.rollback()
+        current_app.logger.exception("Incident checklist update failed")
+        flash("The incident checklist item could not be updated. Please try again.", "error")
+        return incidents_control_redirect(session_record, status_filter, incident_id=incident_id, view=view)
+    flash("Incident checklist updated successfully.", "success")
+    return incidents_control_redirect(session_record, status_filter, incident_id=incident_id, view=view)
+
+
+@staff_bp.route("/pre-session-control-tower/sessions/<int:session_id>/incidents/<int:incident_id>/impact-review", methods=["POST"])
+@login_required
+def update_incident_impact_review(session_id, incident_id):
+    session_record = ExamSession.query.get_or_404(session_id)
+    status_filter = request.form.get("schedule_status", "").strip()
+    if status_filter not in SCHEDULE_WORKFLOW_STATUSES:
+        status_filter = ""
+    view = request.form.get("view", "sessions").strip() or "sessions"
+    if not validate_csrf():
+        flash("Security token expired. Please try again.", "error")
+        return incidents_control_redirect(session_record, status_filter, incident_id=incident_id, view=view)
+    incident = ExamSessionIncident.query.filter_by(id=incident_id, exam_session_id=session_record.id).first_or_404()
+    impact_key = request.form.get("impact_key", "").strip()
+    new_status = request.form.get("status", "").strip()
+    note = request.form.get("note", "").strip()
+    if new_status not in {"Reviewed", "Not applicable"}:
+        flash("Please select a valid impact review status.", "error")
+        return incidents_control_redirect(session_record, status_filter, incident_id=incident_id, view=view)
+    if len(note) > 1000:
+        flash("Impact review note must be 1000 characters or fewer.", "error")
+        return incidents_control_redirect(session_record, status_filter, incident_id=incident_id, view=view)
+    if new_status == "Not applicable" and not note:
+        flash("A reason is required when marking an impact as not applicable.", "error")
+        return incidents_control_redirect(session_record, status_filter, incident_id=incident_id, view=view)
+    impact_by_key = {
+        impact["impact_key"]: impact
+        for impact in incident_impact_matrix_for_type(incident.incident_type)
+    }
+    impact = impact_by_key.get(impact_key)
+    if not impact:
+        flash("Please select a valid incident impact.", "error")
+        return incidents_control_redirect(session_record, status_filter, incident_id=incident_id, view=view)
+    review = ExamSessionIncidentImpactReview.query.filter_by(
+        incident_id=incident.id,
+        impact_key=impact_key,
+    ).first()
+    now = datetime.now(timezone.utc)
+    if not review:
+        review = ExamSessionIncidentImpactReview(
+            incident=incident,
+            impact_key=impact_key,
+            affected_area=impact["affected_area"],
+        )
+        db.session.add(review)
+    review.status = new_status
+    review.note = note or None
+    review.reviewed_at = now
+    review.reviewed_by = session.get("user")
+    event_type = "impact_reviewed" if new_status == "Reviewed" else "impact_marked_not_applicable"
+    event_note = (
+        f"{impact['affected_area_label']} impact marked {new_status}. "
+        f"Suggested action: {impact['suggested_action']}"
+    )
+    if note:
+        event_note = f"{event_note} Note: {note}"
+    db.session.add(ExamSessionIncidentEvent(
+        incident=incident,
+        event_type=event_type,
+        previous_status=incident.status,
+        new_status=incident.status,
+        previous_severity=incident.severity,
+        new_severity=incident.severity,
+        note=event_note,
+        evidence_url=incident.evidence_url,
+        created_by=session.get("user"),
+    ))
+    try:
+        db.session.commit()
+    except Exception:
+        db.session.rollback()
+        current_app.logger.exception("Incident impact review update failed")
+        flash("The incident impact review could not be updated. Please try again.", "error")
+        return incidents_control_redirect(session_record, status_filter, incident_id=incident_id, view=view)
+    flash("Incident impact review saved successfully.", "success")
+    return incidents_control_redirect(session_record, status_filter, incident_id=incident_id, view=view)
+
+
+@staff_bp.route("/pre-session-control-tower/sessions/<int:session_id>/incidents/<int:incident_id>/review-flags", methods=["POST"])
+@login_required
+def create_incident_review_flag(session_id, incident_id):
+    session_record = ExamSession.query.get_or_404(session_id)
+    status_filter = request.form.get("schedule_status", "").strip()
+    if status_filter not in SCHEDULE_WORKFLOW_STATUSES:
+        status_filter = ""
+    view = request.form.get("view", "sessions").strip() or "sessions"
+    if not validate_csrf():
+        flash("Security token expired. Please try again.", "error")
+        return incidents_control_redirect(session_record, status_filter, incident_id=incident_id, view=view)
+    incident = ExamSessionIncident.query.filter_by(id=incident_id, exam_session_id=session_record.id).first_or_404()
+    if incident.status in INCIDENT_INACTIVE_STATUSES:
+        flash("Resolved or cancelled incidents cannot create new review flags.", "error")
+        return incidents_control_redirect(session_record, status_filter, incident_id=incident_id, view=view)
+    impact_key = request.form.get("impact_key", "").strip()
+    affected_area = request.form.get("affected_area", "").strip()
+    note = request.form.get("note", "").strip()
+    if len(note) > 1000:
+        flash("Review flag note must be 1000 characters or fewer.", "error")
+        return incidents_control_redirect(session_record, status_filter, incident_id=incident_id, view=view)
+    impact_by_key = {impact["impact_key"]: impact for impact in incident_impact_matrix_for_type(incident.incident_type)}
+    impact = impact_by_key.get(impact_key)
+    if not impact:
+        flash("Please select a valid incident impact.", "error")
+        return incidents_control_redirect(session_record, status_filter, incident_id=incident_id, view=view)
+    if affected_area not in INCIDENT_REVIEW_FLAG_AREAS or affected_area != impact["affected_area"]:
+        flash("Please select a valid affected lane.", "error")
+        return incidents_control_redirect(session_record, status_filter, incident_id=incident_id, view=view)
+    impact_review = ExamSessionIncidentImpactReview.query.filter_by(
+        incident_id=incident.id,
+        impact_key=impact_key,
+    ).first()
+    if impact_review and impact_review.status == "Not applicable":
+        flash("Not applicable impacts cannot be flagged for review.", "error")
+        return incidents_control_redirect(session_record, status_filter, incident_id=incident_id, view=view)
+    flag = ExamSessionIncidentReviewFlag.query.filter_by(
+        incident_id=incident.id,
+        impact_key=impact_key,
+        affected_area=affected_area,
+    ).first()
+    event_type = "review_flag_created"
+    now = datetime.now(timezone.utc)
+    if flag:
+        if flag.status == "Needs review":
+            flash("A review flag is already active for this impact.", "error")
+            return incidents_control_redirect(session_record, status_filter, incident_id=incident_id, view=view)
+        event_type = "review_flag_reopened"
+        flag.status = "Needs review"
+        flag.reviewed_at = None
+        flag.reviewed_by = None
+        flag.dismissed_at = None
+        flag.dismissed_by = None
+    else:
+        flag = ExamSessionIncidentReviewFlag(
+            exam_session_id=session_record.id,
+            incident=incident,
+            impact_review=impact_review,
+            impact_key=impact_key,
+            affected_area=affected_area,
+            created_by=session.get("user"),
+        )
+        db.session.add(flag)
+    flag.reason = impact["reason"]
+    flag.note = note or None
+    db.session.add(ExamSessionIncidentEvent(
+        incident=incident,
+        event_type=event_type,
+        previous_status=incident.status,
+        new_status=incident.status,
+        previous_severity=incident.severity,
+        new_severity=incident.severity,
+        note=f"{impact['affected_area_label']} review flag set to Needs review. Impact: {impact_key}. Reason: {impact['reason']}" + (f" Note: {note}" if note else ""),
+        evidence_url=incident.evidence_url,
+        created_by=session.get("user"),
+    ))
+    try:
+        db.session.commit()
+    except Exception:
+        db.session.rollback()
+        current_app.logger.exception("Incident review flag creation failed")
+        flash("The review flag could not be saved. Please try again.", "error")
+        return incidents_control_redirect(session_record, status_filter, incident_id=incident_id, view=view)
+    flash("Incident review flag saved successfully.", "success")
+    return incidents_control_redirect(session_record, status_filter, incident_id=incident_id, view=view)
+
+
+def _assisted_action_by_key(flag, action_key):
+    actions_contract = incident_review_flag_assisted_actions(flag)
+    for action in actions_contract.get("actions", []):
+        if action.get("action_key") == action_key and action.get("available"):
+            return action
+    return None
+
+
+def _add_incident_assisted_action_event(flag, action, note, actor):
+    area_label = INCIDENT_REVIEW_FLAG_AREAS.get(flag.affected_area, flag.affected_area)
+    db.session.add(ExamSessionIncidentEvent(
+        incident=flag.incident,
+        event_type="assisted_impact_action_executed",
+        previous_status=flag.incident.status,
+        new_status=flag.incident.status,
+        previous_severity=flag.incident.severity,
+        new_severity=flag.incident.severity,
+        note=(
+            f"Assisted impact action executed. Review flag #{flag.id}. "
+            f"Affected area: {area_label}. Action: {action['label']} ({action['action_key']})."
+            + (f" Note: {note}" if note else "")
+        ),
+        evidence_url=flag.incident.evidence_url,
+        created_by=actor,
+    ))
+
+
+def _execute_incident_review_flag_assisted_action(flag, action, note, due_at, actor):
+    session_record = flag.exam_session
+    action_key = action["action_key"]
+    if action.get("is_navigation"):
+        _add_incident_assisted_action_event(flag, action, note, actor)
+        return None
+    if action_key == "assisted_reopen_schedule":
+        _workflow, error = apply_schedule_workflow_transition(
+            session_record,
+            "reopen",
+            due_at=due_at,
+            note=note,
+            created_by=actor,
+        )
+        if error:
+            return error
+    elif action_key == "assisted_mark_packages_needs_review":
+        package_units = ExamSessionPackageUnit.query.filter_by(exam_session_id=session_record.id).all()
+        if not package_units:
+            return "No package units are available for this session."
+        schedule_gate, staffing_contract = package_session_dependency_context(session_record)
+        changed_units = 0
+        for package_unit in package_units:
+            if package_unit.status == "Needs review":
+                continue
+            error = package_transition_allowed(
+                package_unit,
+                "Needs review",
+                schedule_gate=schedule_gate,
+                staffing_contract=staffing_contract,
+                note=note,
+            )
+            if error:
+                return error
+            previous_status = package_unit.status
+            package_unit.status = "Needs review"
+            package_event(package_unit, "STATUS_CHANGED", previous_status, "Needs review", note)
+            changed_units += 1
+        if not changed_units:
+            return "All package units are already marked as Needs review."
+    elif action_key in {"assisted_finance_payment_follow_up", "assisted_finance_hold"}:
+        target_status = "Payment follow-up required" if action_key == "assisted_finance_payment_follow_up" else "Finance hold"
+        control = _finance_control_for_session(session_record)
+        if not control:
+            control = ExamSessionFinanceControl(exam_session_id=session_record.id)
+            db.session.add(control)
+        error = apply_finance_status_update(control, target_status, finance_due_at=control.finance_due_at, evidence_url=control.evidence_url or "", note=note, updated_by=actor)
+        if error:
+            return error
+    elif action_key == "assisted_sinapsis_needs_correction":
+        control = _sinapsis_control_for_session(session_record)
+        if not control:
+            control = ExamSessionSinapsisControl(exam_session_id=session_record.id)
+            db.session.add(control)
+        error = apply_sinapsis_status_update(control, "Needs correction", sinapsis_due_at=control.sinapsis_due_at, evidence_url=control.evidence_url or "", note=note, updated_by=actor)
+        if error:
+            return error
+    elif action_key == "assisted_communications_needs_follow_up":
+        control = _communications_control_for_session(session_record)
+        if not control:
+            control = ExamSessionCommunicationsControl(exam_session_id=session_record.id)
+            db.session.add(control)
+        error = apply_communications_status_update(control, "Needs follow-up", communications_due_at=control.communications_due_at, evidence_url=control.evidence_url or "", note=note, updated_by=actor)
+        if error:
+            return error
+    else:
+        return "Please select a valid assisted action."
+    _add_incident_assisted_action_event(flag, action, note, actor)
+    return None
+
+
+@staff_bp.route("/pre-session-control-tower/review-flags/<int:flag_id>/assisted-action", methods=["POST"])
+@login_required
+def execute_incident_review_flag_assisted_action(flag_id):
+    flag = ExamSessionIncidentReviewFlag.query.options(
+        joinedload(ExamSessionIncidentReviewFlag.exam_session),
+        joinedload(ExamSessionIncidentReviewFlag.incident),
+    ).get_or_404(flag_id)
+    session_record = flag.exam_session
+    status_filter = request.form.get("schedule_status", "").strip()
+    if status_filter not in SCHEDULE_WORKFLOW_STATUSES:
+        status_filter = ""
+    view = request.form.get("view", "sessions").strip() or "sessions"
+    action_key = request.form.get("action_key", "").strip()
+    if not validate_csrf():
+        flash("Security token expired. Please try again.", "error")
+        return incidents_control_redirect(session_record, status_filter, incident_id=flag.incident_id, view=view, assisted_flag_id=flag.id, assisted_action_key=action_key)
+    if flag.status != "Needs review":
+        flash("Assisted actions are available only for active review flags.", "error")
+        return incidents_control_redirect(session_record, status_filter, incident_id=flag.incident_id, view=view)
+    action = _assisted_action_by_key(flag, action_key)
+    if not action:
+        flash("Please select a valid assisted action for this review flag.", "error")
+        return incidents_control_redirect(session_record, status_filter, incident_id=flag.incident_id, view=view, assisted_flag_id=flag.id, assisted_action_key=action_key)
+    note = request.form.get("note", "").strip()
+    if len(note) > 2000:
+        flash("Assisted action note must be 2000 characters or fewer.", "error")
+        return incidents_control_redirect(session_record, status_filter, incident_id=flag.incident_id, view=view, assisted_flag_id=flag.id, assisted_action_key=action_key)
+    if action.get("requires_note") and not note:
+        flash("A reason is required for this assisted action.", "error")
+        return incidents_control_redirect(session_record, status_filter, incident_id=flag.incident_id, view=view, assisted_flag_id=flag.id, assisted_action_key=action_key)
+    due_at = None
+    due_value = request.form.get("due_at", "").strip()
+    if due_value:
+        due_at = parse_schedule_deadline(due_value)
+        if due_at is None:
+            flash("Please enter a valid assisted action deadline.", "error")
+            return incidents_control_redirect(session_record, status_filter, incident_id=flag.incident_id, view=view, assisted_flag_id=flag.id, assisted_action_key=action_key)
+    if action.get("requires_due_at") and due_at is None:
+        flash("A deadline is required for this assisted action.", "error")
+        return incidents_control_redirect(session_record, status_filter, incident_id=flag.incident_id, view=view, assisted_flag_id=flag.id, assisted_action_key=action_key)
+    try:
+        error = _execute_incident_review_flag_assisted_action(
+            flag,
+            action,
+            note,
+            due_at,
+            session.get("user"),
+        )
+        if error:
+            db.session.rollback()
+            flash(error, "error")
+            return incidents_control_redirect(session_record, status_filter, incident_id=flag.incident_id, view=view, assisted_flag_id=flag.id, assisted_action_key=action_key)
+        db.session.commit()
+    except Exception:
+        db.session.rollback()
+        current_app.logger.exception("Incident review flag assisted action failed")
+        flash("The assisted action could not be completed. Please try again.", "error")
+        return incidents_control_redirect(session_record, status_filter, incident_id=flag.incident_id, view=view, assisted_flag_id=flag.id, assisted_action_key=action_key)
+    flash("Assisted action completed. Review the affected lane and mark the review flag as reviewed when ready.", "success")
+    return incidents_control_redirect(session_record, status_filter, incident_id=flag.incident_id, view=view)
+
+
+def review_flag_redirect(flag, status_filter="", view="sessions"):
+    return incidents_control_redirect(flag.exam_session, status_filter, incident_id=flag.incident_id, view=view)
+
+
+@staff_bp.route("/pre-session-control-tower/review-flags/<int:flag_id>/reviewed", methods=["POST"])
+@login_required
+def mark_incident_review_flag_reviewed(flag_id):
+    flag = ExamSessionIncidentReviewFlag.query.options(joinedload(ExamSessionIncidentReviewFlag.exam_session), joinedload(ExamSessionIncidentReviewFlag.incident)).get_or_404(flag_id)
+    status_filter = request.form.get("schedule_status", "").strip()
+    if status_filter not in SCHEDULE_WORKFLOW_STATUSES:
+        status_filter = ""
+    view = request.form.get("view", "sessions").strip() or "sessions"
+    if not validate_csrf():
+        flash("Security token expired. Please try again.", "error")
+        return review_flag_redirect(flag, status_filter, view=view)
+    note = request.form.get("note", "").strip()
+    if len(note) > 1000:
+        flash("Review flag note must be 1000 characters or fewer.", "error")
+        return review_flag_redirect(flag, status_filter, view=view)
+    flag.status = "Reviewed"
+    flag.note = note or None
+    flag.reviewed_at = datetime.now(timezone.utc)
+    flag.reviewed_by = session.get("user")
+    flag.dismissed_at = None
+    flag.dismissed_by = None
+    area_label = INCIDENT_REVIEW_FLAG_AREAS.get(flag.affected_area, flag.affected_area)
+    db.session.add(ExamSessionIncidentEvent(
+        incident=flag.incident,
+        event_type="review_flag_reviewed",
+        previous_status=flag.incident.status,
+        new_status=flag.incident.status,
+        previous_severity=flag.incident.severity,
+        new_severity=flag.incident.severity,
+        note=f"{area_label} review flag marked Reviewed. Impact: {flag.impact_key}." + (f" Note: {note}" if note else ""),
+        evidence_url=flag.incident.evidence_url,
+        created_by=session.get("user"),
+    ))
+    try:
+        db.session.commit()
+    except Exception:
+        db.session.rollback()
+        current_app.logger.exception("Incident review flag reviewed update failed")
+        flash("The review flag could not be marked as reviewed. Please try again.", "error")
+        return review_flag_redirect(flag, status_filter, view=view)
+    flash("Review flag marked as reviewed.", "success")
+    return review_flag_redirect(flag, status_filter, view=view)
+
+
+@staff_bp.route("/pre-session-control-tower/review-flags/<int:flag_id>/dismiss", methods=["POST"])
+@login_required
+def dismiss_incident_review_flag(flag_id):
+    flag = ExamSessionIncidentReviewFlag.query.options(joinedload(ExamSessionIncidentReviewFlag.exam_session), joinedload(ExamSessionIncidentReviewFlag.incident)).get_or_404(flag_id)
+    status_filter = request.form.get("schedule_status", "").strip()
+    if status_filter not in SCHEDULE_WORKFLOW_STATUSES:
+        status_filter = ""
+    view = request.form.get("view", "sessions").strip() or "sessions"
+    if not validate_csrf():
+        flash("Security token expired. Please try again.", "error")
+        return review_flag_redirect(flag, status_filter, view=view)
+    note = request.form.get("note", "").strip()
+    if not note:
+        flash("A reason is required to dismiss a review flag.", "error")
+        return review_flag_redirect(flag, status_filter, view=view)
+    if len(note) > 1000:
+        flash("Review flag note must be 1000 characters or fewer.", "error")
+        return review_flag_redirect(flag, status_filter, view=view)
+    flag.status = "Dismissed"
+    flag.note = note
+    flag.dismissed_at = datetime.now(timezone.utc)
+    flag.dismissed_by = session.get("user")
+    flag.reviewed_at = None
+    flag.reviewed_by = None
+    area_label = INCIDENT_REVIEW_FLAG_AREAS.get(flag.affected_area, flag.affected_area)
+    db.session.add(ExamSessionIncidentEvent(
+        incident=flag.incident,
+        event_type="review_flag_dismissed",
+        previous_status=flag.incident.status,
+        new_status=flag.incident.status,
+        previous_severity=flag.incident.severity,
+        new_severity=flag.incident.severity,
+        note=f"{area_label} review flag dismissed. Impact: {flag.impact_key}. Reason: {note}",
+        evidence_url=flag.incident.evidence_url,
+        created_by=session.get("user"),
+    ))
+    try:
+        db.session.commit()
+    except Exception:
+        db.session.rollback()
+        current_app.logger.exception("Incident review flag dismiss update failed")
+        flash("The review flag could not be dismissed. Please try again.", "error")
+        return review_flag_redirect(flag, status_filter, view=view)
+    flash("Review flag dismissed.", "success")
+    return review_flag_redirect(flag, status_filter, view=view)
+
+
+def package_session_dependency_context(session_record):
+    workflow = ExamSessionScheduleWorkflow.query.filter_by(exam_session_id=session_record.id).first()
+    schedule_gate = schedule_gate_status(workflow)
+    supervisor_assignments = ExamSessionSupervisorAssignment.query.filter_by(exam_session_id=session_record.id).all()
+    examiner_assignments = ExamSessionExaminerAssignment.query.filter_by(exam_session_id=session_record.id).all()
+    intern_assignments = ExamSessionInternAssignment.query.filter_by(exam_session_id=session_record.id).all()
+    staffing_contract = staffing_readiness_contract(supervisor_assignments, examiner_assignments, intern_assignments)
+    return schedule_gate, staffing_contract
+
+
+def parse_form_int_ids(name):
+    ids = []
+    seen = set()
+    for raw_value in request.form.getlist(name):
+        try:
+            value = int(raw_value)
+        except (TypeError, ValueError):
+            continue
+        if value in seen:
+            continue
+        seen.add(value)
+        ids.append(value)
+    return ids
+
+
+def confirmed_supervisor_ids_for_session(session_id):
+    assignments = (
+        ExamSessionSupervisorAssignment.query.filter_by(exam_session_id=session_id)
+        .order_by(ExamSessionSupervisorAssignment.created_on.asc(), ExamSessionSupervisorAssignment.id.asc())
+        .all()
+    )
+    supervisor = get_exam_session_shipment_recipient_supervisor(assignments)
+    return {supervisor.id} if supervisor else set()
+
+
+def validate_shipment_bundle_session_selection(current_session, supervisor_id, selected_session_ids, bundle_id=None):
+    selected_ids = list(dict.fromkeys(selected_session_ids or []))
+    if current_session.id not in selected_ids:
+        selected_ids.insert(0, current_session.id)
+    selected_sessions = ExamSession.query.filter(ExamSession.id.in_(selected_ids)).all()
+    sessions_by_id = {session_record.id: session_record for session_record in selected_sessions}
+    if len(sessions_by_id) != len(selected_ids):
+        return [], "Please select valid sessions for this shipment bundle."
+    for session_id in selected_ids:
+        session_record = sessions_by_id[session_id]
+        if session_record.session_date.year != current_session.session_date.year:
+            return [], "Shipment bundles can only include sessions from the selected year."
+        if supervisor_id not in confirmed_supervisor_ids_for_session(session_id):
+            return [], "All selected sessions must have the same shipment recipient supervisor."
+    existing_query = ExamSessionShipmentBundleSession.query.filter(
+        ExamSessionShipmentBundleSession.exam_session_id.in_(selected_ids)
+    )
+    if bundle_id:
+        existing_query = existing_query.filter(ExamSessionShipmentBundleSession.bundle_id != bundle_id)
+    if existing_query.first():
+        return [], "One or more selected sessions already belong to another shipment bundle."
+    return [sessions_by_id[session_id] for session_id in selected_ids], ""
+
+
+SHIPMENT_ASSISTED_CREATE_STATUSES = {
+    "assisted_add_delivery_address": "delivery_address_needed",
+    "assisted_create_recommended_bundle": "bundle_recommended",
+    "assisted_create_ready_bundle": "bundle_possible",
+    "assisted_create_separate_shipment": "split_required",
+    "assisted_create_urgent_shipment": "dispatch_overdue",
+}
+
+
+def shipment_planning_contract_for_submit(session_record):
+    year_sessions = (
+        ExamSession.query.filter(db.extract("year", ExamSession.session_date) == session_record.session_date.year)
+        .order_by(ExamSession.session_date.asc(), ExamSession.exam_session_name.asc())
+        .all()
+    )
+    session_ids = [item.id for item in year_sessions]
+    workflow_records = (
+        ExamSessionScheduleWorkflow.query.filter(ExamSessionScheduleWorkflow.exam_session_id.in_(session_ids)).all()
+        if session_ids else []
+    )
+    workflows_by_session = {workflow.exam_session_id: workflow for workflow in workflow_records}
+    supervisor_records = (
+        ExamSessionSupervisorAssignment.query.filter(ExamSessionSupervisorAssignment.exam_session_id.in_(session_ids))
+        .options(joinedload(ExamSessionSupervisorAssignment.team_member))
+        .order_by(ExamSessionSupervisorAssignment.created_on.asc(), ExamSessionSupervisorAssignment.id.asc())
+        .all()
+        if session_ids else []
+    )
+    examiner_records = (
+        ExamSessionExaminerAssignment.query.filter(ExamSessionExaminerAssignment.exam_session_id.in_(session_ids)).all()
+        if session_ids else []
+    )
+    intern_records = (
+        ExamSessionInternAssignment.query.filter(ExamSessionInternAssignment.exam_session_id.in_(session_ids)).all()
+        if session_ids else []
+    )
+    package_units = (
+        ExamSessionPackageUnit.query.filter(ExamSessionPackageUnit.exam_session_id.in_(session_ids)).all()
+        if session_ids else []
+    )
+    package_session_items = (
+        ExamSessionPackageChecklistItem.query.filter(
+            ExamSessionPackageChecklistItem.exam_session_id.in_(session_ids),
+            ExamSessionPackageChecklistItem.scope == "SESSION",
+        ).all()
+        if session_ids else []
+    )
+    shipment_links = (
+        ExamSessionShipmentBundleSession.query.filter(ExamSessionShipmentBundleSession.exam_session_id.in_(session_ids)).all()
+        if session_ids else []
+    )
+
+    def group_by_session(records):
+        grouped = {}
+        for record in records:
+            grouped.setdefault(record.exam_session_id, []).append(record)
+        return grouped
+
+    supervisor_assignments_by_session = group_by_session(supervisor_records)
+    examiner_assignments_by_session = group_by_session(examiner_records)
+    intern_assignments_by_session = group_by_session(intern_records)
+    package_units_by_session = group_by_session(package_units)
+    package_session_items_by_session = group_by_session(package_session_items)
+    shipment_links_by_session = {link.exam_session_id: link for link in shipment_links}
+    packages_contracts_by_session = {}
+    for item in year_sessions:
+        staffing_contract = staffing_readiness_contract(
+            supervisor_assignments_by_session.get(item.id, []),
+            examiner_assignments_by_session.get(item.id, []),
+            intern_assignments_by_session.get(item.id, []),
+        )
+        packages_contracts_by_session[item.id] = packages_readiness_contract(
+            item,
+            package_units=package_units_by_session.get(item.id, []),
+            session_items=package_session_items_by_session.get(item.id, []),
+            schedule_gate=schedule_gate_status(workflows_by_session.get(item.id)),
+            staffing_contract=staffing_contract,
+        )
+    planning = shipment_planning_contract(
+        session_record,
+        all_year_sessions=year_sessions,
+        supervisor_assignments_by_session=supervisor_assignments_by_session,
+        shipment_links_by_session=shipment_links_by_session,
+        packages_contracts_by_session=packages_contracts_by_session,
+        today=datetime.now(LOCAL_TZ).date(),
+    )
+    return planning, packages_contracts_by_session
+
+
+def validate_assisted_shipment_bundle_creation(session_record, action_key, selected_session_ids):
+    if not action_key:
+        return ""
+    expected_status = SHIPMENT_ASSISTED_CREATE_STATUSES.get(action_key)
+    if not expected_status:
+        return "Please select a valid shipment planning assisted action."
+    planning, packages_contracts_by_session = shipment_planning_contract_for_submit(session_record)
+    assisted_action = shipment_planning_assisted_action_contract(session_record, planning)
+    if (
+        planning.get("status") != expected_status
+        or not assisted_action
+        or assisted_action.get("action_key") != action_key
+        or assisted_action.get("form_kind") != "create_bundle"
+    ):
+        return "Shipment planning recommendation has changed. Please review the current planning details and try again."
+    selected_ids = list(dict.fromkeys(selected_session_ids or []))
+    if session_record.id not in selected_ids:
+        selected_ids.insert(0, session_record.id)
+    if not selected_ids:
+        return "Please select at least one session for this shipment bundle."
+    candidate_ids = {candidate.get("id") for candidate in assisted_action.get("candidate_sessions", []) if candidate.get("id")}
+    ready_ids = {candidate.get("id") for candidate in assisted_action.get("ready_candidates", []) if candidate.get("id")}
+    earliest_id = (assisted_action.get("earliest_candidate") or {}).get("id")
+    selected_id_set = set(selected_ids)
+    if action_key == "assisted_add_delivery_address":
+        return ""
+    if action_key == "assisted_create_recommended_bundle":
+        if not selected_id_set.issubset(candidate_ids) or not selected_id_set:
+            return "Selected sessions no longer match the current shipment planning recommendation."
+    elif action_key == "assisted_create_ready_bundle":
+        if not selected_id_set.issubset(ready_ids) or not selected_id_set:
+            return "Only sessions with Packages ready can be included in this shipment bundle."
+    elif action_key in {"assisted_create_separate_shipment", "assisted_create_urgent_shipment"}:
+        if not earliest_id or selected_id_set != {earliest_id}:
+            return "This assisted action can only create a shipment for the earliest ready session."
+    for session_id in selected_ids:
+        if not (packages_contracts_by_session.get(session_id) or {}).get("ready"):
+            return "Selected sessions must have Packages ready before this assisted shipment bundle can be created."
+    return ""
+
+
+@staff_bp.route("/pre-session-control-tower/sessions/<int:session_id>/shipments/bundles", methods=["POST"])
+@login_required
+def create_shipment_bundle(session_id):
+    session_record = ExamSession.query.get_or_404(session_id)
+    status_filter = request.form.get("schedule_status", "").strip()
+    if status_filter not in SCHEDULE_WORKFLOW_STATUSES:
+        status_filter = ""
+    assisted_action_key = request.form.get("assisted_action_key", "").strip()
+    if not validate_csrf():
+        flash("Security token expired. Please try again.", "error")
+        return shipment_control_redirect(session_record, status_filter, assisted_action_key=assisted_action_key)
+    try:
+        supervisor_id = int(request.form.get("supervisor_staff_id", ""))
+    except (TypeError, ValueError):
+        supervisor_id = None
+    supervisor = AcademicStaff.query.get(supervisor_id) if supervisor_id else None
+    if not supervisor or supervisor_id not in confirmed_supervisor_ids_for_session(session_record.id):
+        flash("Please select the shipment recipient supervisor for this session.", "error")
+        return shipment_control_redirect(session_record, status_filter, assisted_action_key=assisted_action_key)
+    delivery_address = normalize_package_text(request.form.get("delivery_address", ""))
+    delivery_city = normalize_package_text(request.form.get("delivery_city", ""))
+    delivery_province = normalize_package_text(request.form.get("delivery_province", ""))
+    courier = normalize_package_text(request.form.get("courier", "")) or SHIPMENT_DEFAULT_COURIER
+    note = request.form.get("note", "").strip()
+    if not delivery_address:
+        flash("Delivery address is required.", "error")
+        return shipment_control_redirect(session_record, status_filter, assisted_action_key=assisted_action_key)
+    if len(delivery_address) > 500 or len(delivery_city) > 120 or len(delivery_province) > 120 or len(courier) > 120:
+        flash("Shipment delivery details are too long.", "error")
+        return shipment_control_redirect(session_record, status_filter, assisted_action_key=assisted_action_key)
+    if len(note) > 2000:
+        flash("Shipment note must be 2000 characters or fewer.", "error")
+        return shipment_control_redirect(session_record, status_filter, assisted_action_key=assisted_action_key)
+    dispatch_due_at = parse_schedule_deadline(request.form.get("dispatch_due_at", ""))
+    if request.form.get("dispatch_due_at", "").strip() and dispatch_due_at is None:
+        flash("Please enter a valid dispatch due date.", "error")
+        return shipment_control_redirect(session_record, status_filter, assisted_action_key=assisted_action_key)
+    selected_session_ids = parse_form_int_ids("included_session_ids")
+    assisted_error = validate_assisted_shipment_bundle_creation(
+        session_record,
+        assisted_action_key,
+        selected_session_ids,
+    )
+    if assisted_error:
+        flash(assisted_error, "error")
+        return shipment_control_redirect(session_record, status_filter, assisted_action_key=assisted_action_key)
+    selected_sessions, error = validate_shipment_bundle_session_selection(
+        session_record,
+        supervisor_id,
+        selected_session_ids,
+    )
+    if error:
+        flash(error, "error")
+        return shipment_control_redirect(session_record, status_filter, assisted_action_key=assisted_action_key)
+    try:
+        bundle = ExamSessionShipmentBundle(
+            supervisor_staff_id=supervisor_id,
+            delivery_address=delivery_address,
+            delivery_city=delivery_city or None,
+            delivery_province=delivery_province or None,
+            courier=courier,
+            dispatch_due_at=dispatch_due_at,
+            responsible_department="LOGISTICS",
+            note=note or None,
+            created_by=session.get("user"),
+            updated_by=session.get("user"),
+        )
+        assign_shipment_bundle_number(bundle, session_record.session_date.year)
+        db.session.add(bundle)
+        db.session.flush()
+        for included_session in selected_sessions:
+            db.session.add(ExamSessionShipmentBundleSession(
+                bundle=bundle,
+                exam_session_id=included_session.id,
+            ))
+            shipment_event(bundle, "SESSION_ADDED", bundle.status, bundle.status, included_session.exam_session_name)
+        ensure_shipment_checklist_items(bundle)
+        created_note = note
+        if assisted_action_key:
+            created_note = "Shipment bundle created from planning recommendation."
+            if note:
+                created_note = f"{created_note} {note}"
+        shipment_event(bundle, "SHIPMENT_BUNDLE_CREATED", None, bundle.status, created_note)
+        db.session.commit()
+        flash("Shipment bundle created successfully.", "success")
+        return shipment_control_redirect(session_record, status_filter, bundle.id)
+    except Exception:
+        db.session.rollback()
+        current_app.logger.exception("Shipment bundle creation failed")
+        flash("The shipment bundle could not be created. Please try again.", "error")
+        return shipment_control_redirect(session_record, status_filter, assisted_action_key=assisted_action_key)
+
+
+@staff_bp.route("/pre-session-control-tower/shipments/bundles/<int:bundle_id>", methods=["POST"])
+@login_required
+def update_shipment_bundle(bundle_id):
+    bundle = ExamSessionShipmentBundle.query.get_or_404(bundle_id)
+    try:
+        current_session_id = int(request.form.get("current_session_id", ""))
+    except (TypeError, ValueError):
+        current_session_id = bundle.session_links[0].exam_session_id if bundle.session_links else 0
+    session_record = ExamSession.query.get_or_404(current_session_id)
+    status_filter = request.form.get("schedule_status", "").strip()
+    if status_filter not in SCHEDULE_WORKFLOW_STATUSES:
+        status_filter = ""
+    if not validate_csrf():
+        flash("Security token expired. Please try again.", "error")
+        return shipment_control_redirect(session_record, status_filter, bundle.id)
+    if bundle.status != "Preparing bundle":
+        flash("Shipment bundle details can only be edited while the bundle is being prepared.", "error")
+        return shipment_control_redirect(session_record, status_filter, bundle.id)
+    try:
+        supervisor_id = int(request.form.get("supervisor_staff_id", ""))
+    except (TypeError, ValueError):
+        supervisor_id = None
+    supervisor = AcademicStaff.query.get(supervisor_id) if supervisor_id else None
+    if not supervisor:
+        flash("Please select a valid supervisor recipient.", "error")
+        return shipment_control_redirect(session_record, status_filter, bundle.id)
+    delivery_address = normalize_package_text(request.form.get("delivery_address", ""))
+    delivery_city = normalize_package_text(request.form.get("delivery_city", ""))
+    delivery_province = normalize_package_text(request.form.get("delivery_province", ""))
+    courier = normalize_package_text(request.form.get("courier", "")) or SHIPMENT_DEFAULT_COURIER
+    tracking_number = normalize_package_text(request.form.get("tracking_number", ""))
+    note = request.form.get("note", "").strip()
+    if not delivery_address:
+        flash("Delivery address is required.", "error")
+        return shipment_control_redirect(session_record, status_filter, bundle.id)
+    if len(delivery_address) > 500 or len(delivery_city) > 120 or len(delivery_province) > 120 or len(courier) > 120 or len(tracking_number) > 160:
+        flash("Shipment details are too long.", "error")
+        return shipment_control_redirect(session_record, status_filter, bundle.id)
+    if len(note) > 2000:
+        flash("Shipment note must be 2000 characters or fewer.", "error")
+        return shipment_control_redirect(session_record, status_filter, bundle.id)
+    dispatch_due_at = parse_schedule_deadline(request.form.get("dispatch_due_at", ""))
+    if request.form.get("dispatch_due_at", "").strip() and dispatch_due_at is None:
+        flash("Please enter a valid dispatch due date.", "error")
+        return shipment_control_redirect(session_record, status_filter, bundle.id)
+    selected_sessions, error = validate_shipment_bundle_session_selection(
+        session_record,
+        supervisor_id,
+        parse_form_int_ids("included_session_ids"),
+        bundle_id=bundle.id,
+    )
+    if error:
+        flash(error, "error")
+        return shipment_control_redirect(session_record, status_filter, bundle.id)
+    try:
+        if bundle.delivery_address != delivery_address or (bundle.delivery_city or "") != delivery_city or (bundle.delivery_province or "") != delivery_province:
+            shipment_event(bundle, "ADDRESS_CHANGED", bundle.status, bundle.status, note)
+        if (bundle.courier or SHIPMENT_DEFAULT_COURIER) != courier:
+            shipment_event(bundle, "COURIER_CHANGED", bundle.status, bundle.status, note)
+        if (bundle.tracking_number or "") != tracking_number:
+            shipment_event(bundle, "TRACKING_UPDATED", bundle.status, bundle.status, note, tracking_number)
+        bundle.supervisor_staff_id = supervisor_id
+        bundle.delivery_address = delivery_address
+        bundle.delivery_city = delivery_city or None
+        bundle.delivery_province = delivery_province or None
+        bundle.courier = courier
+        bundle.tracking_number = tracking_number or None
+        bundle.dispatch_due_at = dispatch_due_at
+        bundle.note = note or None
+        bundle.updated_by = session.get("user")
+        selected_ids = {session_record.id for session_record in selected_sessions}
+        existing_links = {link.exam_session_id: link for link in list(bundle.session_links)}
+        for session_id, link in existing_links.items():
+            if session_id not in selected_ids:
+                shipment_event(bundle, "SESSION_REMOVED", bundle.status, bundle.status, link.exam_session.exam_session_name if link.exam_session else "")
+                db.session.delete(link)
+        for included_session in selected_sessions:
+            if included_session.id not in existing_links:
+                db.session.add(ExamSessionShipmentBundleSession(bundle=bundle, exam_session_id=included_session.id))
+                shipment_event(bundle, "SESSION_ADDED", bundle.status, bundle.status, included_session.exam_session_name)
+        db.session.commit()
+        flash("Shipment bundle updated successfully.", "success")
+    except Exception:
+        db.session.rollback()
+        current_app.logger.exception("Shipment bundle update failed")
+        flash("The shipment bundle could not be updated. Please try again.", "error")
+    return shipment_control_redirect(session_record, status_filter, bundle.id)
+
+
+@staff_bp.route("/pre-session-control-tower/shipments/checklist-items/<int:item_id>", methods=["POST"])
+@login_required
+def update_shipment_checklist_item(item_id):
+    item = ExamSessionShipmentChecklistItem.query.get_or_404(item_id)
+    bundle = item.bundle
+    try:
+        current_session_id = int(request.form.get("current_session_id", ""))
+    except (TypeError, ValueError):
+        current_session_id = bundle.session_links[0].exam_session_id if bundle.session_links else 0
+    session_record = ExamSession.query.get_or_404(current_session_id)
+    status_filter = request.form.get("schedule_status", "").strip()
+    if status_filter not in SCHEDULE_WORKFLOW_STATUSES:
+        status_filter = ""
+    if not validate_csrf():
+        flash("Security token expired. Please try again.", "error")
+        return shipment_control_redirect(session_record, status_filter, bundle.id)
+    note = request.form.get("note", "").strip()
+    if len(note) > 1000:
+        flash("Shipment checklist note must be 1000 characters or fewer.", "error")
+        return shipment_control_redirect(session_record, status_filter, bundle.id)
+    try:
+        checked = request.form.get("is_checked") == "1"
+        item.is_checked = checked
+        item.checked_at = datetime.now(timezone.utc) if checked else None
+        item.checked_by = session.get("user") if checked else None
+        item.note = note or None
+        shipment_event(bundle, "CHECKLIST_UPDATED", bundle.status, bundle.status, item.label)
+        db.session.commit()
+        flash("Shipment checklist updated successfully.", "success")
+    except Exception:
+        db.session.rollback()
+        current_app.logger.exception("Shipment checklist update failed")
+        flash("The shipment checklist could not be updated. Please try again.", "error")
+    return shipment_control_redirect(session_record, status_filter, bundle.id)
+
+
+@staff_bp.route("/pre-session-control-tower/shipments/bundles/<int:bundle_id>/status", methods=["POST"])
+@login_required
+def update_shipment_bundle_status(bundle_id):
+    bundle = ExamSessionShipmentBundle.query.get_or_404(bundle_id)
+    try:
+        current_session_id = int(request.form.get("current_session_id", ""))
+    except (TypeError, ValueError):
+        current_session_id = bundle.session_links[0].exam_session_id if bundle.session_links else 0
+    session_record = ExamSession.query.get_or_404(current_session_id)
+    status_filter = request.form.get("schedule_status", "").strip()
+    if status_filter not in SCHEDULE_WORKFLOW_STATUSES:
+        status_filter = ""
+    if not validate_csrf():
+        flash("Security token expired. Please try again.", "error")
+        return shipment_control_redirect(session_record, status_filter, bundle.id)
+    new_status = request.form.get("new_status", "").strip()
+    note = request.form.get("note", "").strip()
+    tracking_number = normalize_package_text(request.form.get("tracking_number", ""))
+    if len(note) > 2000 or len(tracking_number) > 160:
+        flash("Shipment status details are too long.", "error")
+        return shipment_control_redirect(session_record, status_filter, bundle.id)
+    error = shipment_transition_allowed(bundle, new_status, note=note, tracking_number=tracking_number)
+    if error:
+        flash(error, "error")
+        return shipment_control_redirect(session_record, status_filter, bundle.id)
+    try:
+        previous_status = bundle.status
+        if tracking_number:
+            bundle.tracking_number = tracking_number
+        if not (bundle.courier or "").strip():
+            bundle.courier = SHIPMENT_DEFAULT_COURIER
+        now = datetime.now(timezone.utc)
+        bundle.status = new_status
+        bundle.updated_by = session.get("user")
+        if new_status == "Dispatched":
+            bundle.dispatched_at = now
+        if new_status == "Delivered successfully":
+            bundle.delivered_at = now
+        if new_status in {"Recipient review successful", "Recipient review with discrepancy"}:
+            bundle.recipient_reviewed_at = now
+        event_type = "RECIPIENT_REVIEWED" if new_status.startswith("Recipient review") else "STATUS_CHANGED"
+        shipment_event(bundle, event_type, previous_status, new_status, note, bundle.tracking_number)
+        db.session.commit()
+        flash("Shipment status updated successfully.", "success")
+    except Exception:
+        db.session.rollback()
+        current_app.logger.exception("Shipment status update failed")
+        flash("The shipment status could not be updated. Please try again.", "error")
+    return shipment_control_redirect(session_record, status_filter, bundle.id)
+
+
+@staff_bp.route("/pre-session-control-tower/sessions/<int:session_id>/packages/units", methods=["POST"])
+@login_required
+def create_package_unit(session_id):
+    session_record = ExamSession.query.get_or_404(session_id)
+    status_filter = request.form.get("schedule_status", "").strip()
+    if status_filter not in SCHEDULE_WORKFLOW_STATUSES:
+        status_filter = ""
+    if not validate_csrf():
+        flash("Security token expired. Please try again.", "error")
+        return package_control_redirect(session_record, status_filter)
+
+    room_name = normalize_package_text(request.form.get("room_name"))
+    module_name = normalize_package_text(request.form.get("module_name"))
+    expected_count, expected_error = parse_optional_non_negative_int(request.form.get("expected_candidate_count"), "Expected candidate count")
+    actual_count, actual_error = parse_optional_non_negative_int(request.form.get("actual_label_count"), "Actual label count")
+    deadline = parse_schedule_deadline(request.form.get("package_deadline", ""))
+    note = request.form.get("note", "").strip()
+    if not room_name:
+        flash("Room name is required.", "error")
+        return package_control_redirect(session_record, status_filter)
+    if not module_name:
+        flash("Module name is required.", "error")
+        return package_control_redirect(session_record, status_filter)
+    if expected_error or actual_error:
+        flash(expected_error or actual_error, "error")
+        return package_control_redirect(session_record, status_filter)
+    if request.form.get("package_deadline", "").strip() and deadline is None:
+        flash("Please enter a valid package deadline.", "error")
+        return package_control_redirect(session_record, status_filter)
+    if len(note) > 2000:
+        flash("Package note must be 2000 characters or fewer.", "error")
+        return package_control_redirect(session_record, status_filter)
+
+    duplicate = ExamSessionPackageUnit.query.filter_by(
+        exam_session_id=session_record.id,
+        room_name=room_name,
+        module_name=module_name,
+    ).first()
+    if duplicate:
+        flash("A package unit for this room and module already exists.", "error")
+        return package_control_redirect(session_record, status_filter, duplicate.id)
+
+    try:
+        ensure_package_session_checklist_items(session_record.id)
+        package_unit = ExamSessionPackageUnit(
+            exam_session_id=session_record.id,
+            room_name=room_name,
+            module_name=module_name,
+            expected_candidate_count=expected_count,
+            actual_label_count=actual_count,
+            has_nep_candidates=request.form.get("has_nep_candidates") == "1",
+            package_deadline=deadline,
+            note=note or None,
+        )
+        db.session.add(package_unit)
+        db.session.flush()
+        ensure_package_unit_checklist_items(package_unit)
+        package_event(package_unit, "PACKAGE_UNIT_CREATED", None, package_unit.status, "Package unit created.")
+        if package_unit_has_label_mismatch(package_unit):
+            package_unit.status = "Pre-packing blocked"
+            package_event(package_unit, "DISCREPANCY_DETECTED", "Not started", package_unit.status, "Label count mismatch.")
+        db.session.commit()
+        flash("Package unit created successfully.", "success")
+        return package_control_redirect(session_record, status_filter, package_unit.id)
+    except Exception:
+        db.session.rollback()
+        current_app.logger.exception("Package unit creation failed")
+        flash("The package unit could not be created. Please try again.", "error")
+        return package_control_redirect(session_record, status_filter)
+
+
+@staff_bp.route("/pre-session-control-tower/packages/units/<int:unit_id>", methods=["POST"])
+@login_required
+def update_package_unit(unit_id):
+    package_unit = ExamSessionPackageUnit.query.get_or_404(unit_id)
+    session_record = ExamSession.query.get_or_404(package_unit.exam_session_id)
+    status_filter = request.form.get("schedule_status", "").strip()
+    if status_filter not in SCHEDULE_WORKFLOW_STATUSES:
+        status_filter = ""
+    if not validate_csrf():
+        flash("Security token expired. Please try again.", "error")
+        return package_control_redirect(session_record, status_filter, package_unit.id)
+
+    room_name = normalize_package_text(request.form.get("room_name"))
+    module_name = normalize_package_text(request.form.get("module_name"))
+    expected_count, expected_error = parse_optional_non_negative_int(request.form.get("expected_candidate_count"), "Expected candidate count")
+    actual_count, actual_error = parse_optional_non_negative_int(request.form.get("actual_label_count"), "Actual label count")
+    deadline = parse_schedule_deadline(request.form.get("package_deadline", ""))
+    note = request.form.get("note", "").strip()
+    if not room_name:
+        flash("Room name is required.", "error")
+        return package_control_redirect(session_record, status_filter, package_unit.id)
+    if not module_name:
+        flash("Module name is required.", "error")
+        return package_control_redirect(session_record, status_filter, package_unit.id)
+    if expected_error or actual_error:
+        flash(expected_error or actual_error, "error")
+        return package_control_redirect(session_record, status_filter, package_unit.id)
+    if request.form.get("package_deadline", "").strip() and deadline is None:
+        flash("Please enter a valid package deadline.", "error")
+        return package_control_redirect(session_record, status_filter, package_unit.id)
+    if len(note) > 2000:
+        flash("Package note must be 2000 characters or fewer.", "error")
+        return package_control_redirect(session_record, status_filter, package_unit.id)
+
+    duplicate = ExamSessionPackageUnit.query.filter(
+        ExamSessionPackageUnit.exam_session_id == session_record.id,
+        ExamSessionPackageUnit.room_name == room_name,
+        ExamSessionPackageUnit.module_name == module_name,
+        ExamSessionPackageUnit.id != package_unit.id,
+    ).first()
+    if duplicate:
+        flash("A package unit for this room and module already exists.", "error")
+        return package_control_redirect(session_record, status_filter, package_unit.id)
+
+    try:
+        had_mismatch = package_unit_has_label_mismatch(package_unit)
+        previous_status = package_unit.status
+        package_unit.room_name = room_name
+        package_unit.module_name = module_name
+        package_unit.expected_candidate_count = expected_count
+        package_unit.actual_label_count = actual_count
+        package_unit.has_nep_candidates = request.form.get("has_nep_candidates") == "1"
+        package_unit.package_deadline = deadline
+        package_unit.note = note or None
+        has_mismatch = package_unit_has_label_mismatch(package_unit)
+        if has_mismatch and not had_mismatch:
+            package_unit.status = "Pre-packing blocked"
+            package_event(package_unit, "DISCREPANCY_DETECTED", previous_status, package_unit.status, "Label count mismatch.")
+        elif had_mismatch and not has_mismatch:
+            if package_unit.status == "Pre-packing blocked":
+                package_unit.status = "Pre-packing"
+            package_event(package_unit, "DISCREPANCY_RESOLVED", previous_status, package_unit.status, "Label count mismatch resolved.")
+        db.session.commit()
+        flash("Package unit updated successfully.", "success")
+    except Exception:
+        db.session.rollback()
+        current_app.logger.exception("Package unit update failed")
+        flash("The package unit could not be updated. Please try again.", "error")
+    return package_control_redirect(session_record, status_filter, package_unit.id)
+
+
+@staff_bp.route("/pre-session-control-tower/packages/units/<int:unit_id>/status", methods=["POST"])
+@login_required
+def update_package_unit_status(unit_id):
+    package_unit = ExamSessionPackageUnit.query.get_or_404(unit_id)
+    session_record = ExamSession.query.get_or_404(package_unit.exam_session_id)
+    status_filter = request.form.get("schedule_status", "").strip()
+    if status_filter not in SCHEDULE_WORKFLOW_STATUSES:
+        status_filter = ""
+    if not validate_csrf():
+        flash("Security token expired. Please try again.", "error")
+        return package_control_redirect(session_record, status_filter, package_unit.id)
+    new_status = request.form.get("new_status", "").strip()
+    note = request.form.get("note", "").strip()
+    schedule_gate, staffing_contract = package_session_dependency_context(session_record)
+    error = package_transition_allowed(package_unit, new_status, schedule_gate=schedule_gate, staffing_contract=staffing_contract, note=note)
+    if error:
+        flash(error, "error")
+        return package_control_redirect(session_record, status_filter, package_unit.id)
+    try:
+        previous_status = package_unit.status
+        package_unit.status = new_status
+        package_event(package_unit, "STATUS_CHANGED", previous_status, new_status, note)
+        db.session.commit()
+        flash("Package status updated successfully.", "success")
+    except Exception:
+        db.session.rollback()
+        current_app.logger.exception("Package status update failed")
+        flash("The package status could not be updated. Please try again.", "error")
+    return package_control_redirect(session_record, status_filter, package_unit.id)
+
+
+@staff_bp.route("/pre-session-control-tower/packages/checklist-items/<int:item_id>", methods=["POST"])
+@login_required
+def update_package_checklist_item(item_id):
+    item = ExamSessionPackageChecklistItem.query.get_or_404(item_id)
+    package_unit = item.package_unit
+    session_record = ExamSession.query.get_or_404(package_unit.exam_session_id if package_unit else item.exam_session_id)
+    status_filter = request.form.get("schedule_status", "").strip()
+    if status_filter not in SCHEDULE_WORKFLOW_STATUSES:
+        status_filter = ""
+    if not validate_csrf():
+        flash("Security token expired. Please try again.", "error")
+        return package_control_redirect(session_record, status_filter, package_unit.id if package_unit else None)
+    checked = request.form.get("is_checked") == "1"
+    note = request.form.get("note", "").strip()
+    if len(note) > 2000:
+        flash("Checklist note must be 2000 characters or fewer.", "error")
+        return package_control_redirect(session_record, status_filter, package_unit.id if package_unit else None)
+    if package_unit and checked:
+        schedule_gate, staffing_contract = package_session_dependency_context(session_record)
+        if item.phase == PACKAGE_PRE_PACKING_PHASE and not schedule_gate.get("is_ready"):
+            flash("Schedule approval is required before package pre-packing can begin.", "error")
+            return package_control_redirect(session_record, status_filter, package_unit.id)
+        if item.phase == PACKAGE_FINAL_ASSEMBLY_PHASE:
+            if not schedule_gate.get("is_ready") or not staffing_contract.get("ready"):
+                flash("Staffing must be ready before final package assembly can begin.", "error")
+                return package_control_redirect(session_record, status_filter, package_unit.id)
+            if not package_unit_pre_packing_complete(package_unit):
+                flash("Pre-packing must be complete before final package assembly can begin.", "error")
+                return package_control_redirect(session_record, status_filter, package_unit.id)
+        if item.item_key in {"apply_labels", "group_seal_impersonal"} and package_unit_has_label_mismatch(package_unit):
+            flash("Label count mismatch. Report the issue to MANAGEMENT/ADMIN before continuing.", "error")
+            return package_control_redirect(session_record, status_filter, package_unit.id)
+    try:
+        item.is_checked = checked
+        item.checked_at = datetime.now(timezone.utc) if checked else None
+        item.checked_by = session.get("user") if checked else None
+        item.note = note or None
+        if package_unit:
+            package_event(package_unit, "CHECKLIST_ITEM_UPDATED", package_unit.status, package_unit.status, item.label)
+        db.session.commit()
+        flash("Package checklist updated successfully.", "success")
+    except Exception:
+        db.session.rollback()
+        current_app.logger.exception("Package checklist update failed")
+        flash("The package checklist could not be updated. Please try again.", "error")
+    return package_control_redirect(session_record, status_filter, package_unit.id if package_unit else None)
+
+
+@staff_bp.route("/pre-session-control-tower/packages/units/<int:unit_id>/delete", methods=["POST"])
+@login_required
+def delete_package_unit(unit_id):
+    package_unit = ExamSessionPackageUnit.query.get_or_404(unit_id)
+    session_record = ExamSession.query.get_or_404(package_unit.exam_session_id)
+    status_filter = request.form.get("schedule_status", "").strip()
+    if status_filter not in SCHEDULE_WORKFLOW_STATUSES:
+        status_filter = ""
+    if not validate_csrf():
+        flash("Security token expired. Please try again.", "error")
+        return package_control_redirect(session_record, status_filter, package_unit.id)
+    checked_items = [item for item in package_unit.checklist_items if item.is_checked]
+    important_events = [event for event in package_unit.events if event.event_type != "PACKAGE_UNIT_CREATED"]
+    if checked_items or important_events:
+        flash("Package units with checklist progress or history cannot be deleted.", "error")
+        return package_control_redirect(session_record, status_filter, package_unit.id)
+    try:
+        db.session.delete(package_unit)
+        db.session.commit()
+        flash("Package unit deleted successfully.", "success")
+    except Exception:
+        db.session.rollback()
+        current_app.logger.exception("Package unit delete failed")
+        flash("The package unit could not be deleted. Please try again.", "error")
+    return package_control_redirect(session_record, status_filter)
+
+
+@staff_bp.route("/exam-session-planner")
+@login_required
+def exam_session_planner():
+    selected_year, session_years = selected_exam_session_year()
+    examiner_certification_year = latest_active_examiner_certification_year()
+    supervisor_certification_year = latest_active_supervisor_certification_year()
+    intern_stage_year = latest_active_intern_stage_year()
+    query = (
+        ExamSession.query.filter(
+            db.extract("year", ExamSession.session_date) == selected_year
+        )
+        .order_by(ExamSession.session_date.asc(), ExamSession.updated_on.desc())
+    )
+    sessions, pagination = paginate_query(query)
+    sync_exam_session_overall_statuses(sessions)
+    supervisor_members = supervisor_member_options()
+    examiner_members = examiner_session_member_options()
+    intern_members = intern_session_member_options()
+    supervisor_fee = role_fee_for_role("Supervisor")
+    examiner_fee = role_fee_for_role("Examiner")
+    intern_fee = role_fee_for_role("Intern")
+    intern_fee = role_fee_for_role("Intern")
+    device_dep_fee = fee_by_exact_description("Device dep.")
+    commuting_fee = fee_by_exact_description("Commuting")
+    fuel_fee = fee_by_exact_description("Fuel")
+    vehicle_dep_fee = fee_by_exact_description("Vehicle dep.")
+    session_ids = [session_record.id for session_record in sessions]
+    module_registration_counts = latest_monthly_registration_counts(session_ids)
+    year_session_ids = [
+        item.id
+        for item in ExamSession.query.with_entities(ExamSession.id)
+        .filter(db.extract("year", ExamSession.session_date) == selected_year)
+        .all()
+    ]
+    member_session_counts = {}
+    examiner_member_session_counts = {}
+    intern_member_session_counts = {}
+    if year_session_ids:
+        member_session_counts = {
+            member_id: count
+            for member_id, count in db.session.query(
+                ExamSessionSupervisorAssignment.team_member_id,
+                db.func.count(db.distinct(ExamSessionSupervisorAssignment.exam_session_id)),
+            )
+            .filter(ExamSessionSupervisorAssignment.exam_session_id.in_(year_session_ids))
+            .filter(ExamSessionSupervisorAssignment.team_member_id.isnot(None))
+            .group_by(ExamSessionSupervisorAssignment.team_member_id)
+            .all()
+        }
+        examiner_member_session_counts = {
+            member_id: count
+            for member_id, count in db.session.query(
+                ExamSessionExaminerAssignment.team_member_id,
+                db.func.count(db.distinct(ExamSessionExaminerAssignment.exam_session_id)),
+            )
+            .filter(ExamSessionExaminerAssignment.exam_session_id.in_(year_session_ids))
+            .filter(ExamSessionExaminerAssignment.team_member_id.isnot(None))
+            .group_by(ExamSessionExaminerAssignment.team_member_id)
+            .all()
+        }
+        intern_member_session_counts = {
+            member_id: count
+            for member_id, count in db.session.query(
+                ExamSessionInternAssignment.team_member_id,
+                db.func.count(db.distinct(ExamSessionInternAssignment.exam_session_id)),
+            )
+            .filter(ExamSessionInternAssignment.exam_session_id.in_(year_session_ids))
+            .filter(ExamSessionInternAssignment.team_member_id.isnot(None))
+            .group_by(ExamSessionInternAssignment.team_member_id)
+            .all()
+        }
+    assignment_records = []
+    examiner_assignment_records = []
+    intern_assignment_records = []
+    logistics_records = []
+    logistics_concept_records = []
+    logistics_note_records = []
+    if session_ids:
+        assignment_records = (
+            ExamSessionSupervisorAssignment.query.filter(
+                ExamSessionSupervisorAssignment.exam_session_id.in_(session_ids)
+            )
+            .order_by(ExamSessionSupervisorAssignment.created_on.asc(), ExamSessionSupervisorAssignment.id.asc())
+            .all()
+        )
+        examiner_assignment_records = (
+            ExamSessionExaminerAssignment.query.filter(
+                ExamSessionExaminerAssignment.exam_session_id.in_(session_ids)
+            )
+            .order_by(ExamSessionExaminerAssignment.created_on.asc())
+            .all()
+        )
+        intern_assignment_records = (
+            ExamSessionInternAssignment.query.filter(
+                ExamSessionInternAssignment.exam_session_id.in_(session_ids)
+            )
+            .order_by(ExamSessionInternAssignment.created_on.asc())
+            .all()
+        )
+        logistics_records = ExamSessionLogistics.query.filter(
+            ExamSessionLogistics.exam_session_id.in_(session_ids)
+        ).all()
+        logistics_concept_records = (
+            ExamSessionLogisticsConcept.query.filter(
+                ExamSessionLogisticsConcept.exam_session_id.in_(session_ids)
+            )
+            .order_by(ExamSessionLogisticsConcept.created_on.asc())
+            .all()
+        )
+        concept_ids = [concept.id for concept in logistics_concept_records]
+        if concept_ids:
+            logistics_note_records = (
+                ExamSessionLogisticsConceptNote.query.filter(
+                    ExamSessionLogisticsConceptNote.logistics_concept_id.in_(concept_ids)
+                )
+                .order_by(ExamSessionLogisticsConceptNote.created_on.asc())
+                .all()
+            )
+    supervisor_assignments = {}
+    for assignment in assignment_records:
+        supervisor_assignments.setdefault(assignment.exam_session_id, []).append(assignment)
+    shipment_recipient_supervisors = {
+        session_id: get_exam_session_shipment_recipient_supervisor(assignments)
+        for session_id, assignments in supervisor_assignments.items()
+    }
+    examiner_assignments = {}
+    for assignment in examiner_assignment_records:
+        examiner_assignments.setdefault(assignment.exam_session_id, []).append(assignment)
+    intern_assignments = {}
+    for assignment in intern_assignment_records:
+        intern_assignments.setdefault(assignment.exam_session_id, []).append(assignment)
+    logistics_by_session = {record.exam_session_id: record for record in logistics_records}
+    logistics_concepts = {}
+    for concept in logistics_concept_records:
+        logistics_concepts.setdefault(concept.exam_session_id, []).append(concept)
+    logistics_activity_by_session = {session_id: False for session_id in session_ids}
+    for assignment in assignment_records + examiner_assignment_records + intern_assignment_records:
+        if assignment.logistics_enabled:
+            logistics_activity_by_session[assignment.exam_session_id] = True
+    for concept in logistics_concept_records:
+        logistics_activity_by_session[concept.exam_session_id] = True
+    staffing_readiness_by_session = {}
+    logistics_readiness_by_session = {}
+    pending_status_tooltips_by_session = {}
+    persisted_staff_confirmed_by_session = {}
+    for session_id in session_ids:
+        session_supervisor_assignments = supervisor_assignments.get(session_id, [])
+        session_examiner_assignments = examiner_assignments.get(session_id, [])
+        session_intern_assignments = intern_assignments.get(session_id, [])
+        session_assignments = (
+            session_supervisor_assignments
+            + session_examiner_assignments
+            + session_intern_assignments
+        )
+        staffing_contract = staffing_readiness_contract(
+            session_supervisor_assignments,
+            session_examiner_assignments,
+            session_intern_assignments,
+        )
+        staffing_contract["email_blocker_message"] = staffing_email_blocker_message(staffing_contract)
+        staffing_readiness_by_session[session_id] = staffing_contract
+        logistics_contract = logistics_readiness_contract(
+            session_assignments,
+            logistics_concepts.get(session_id, []),
+            logistics_by_session.get(session_id),
+        )
+        logistics_contract["email_blocker_message"] = logistics_email_blocker_message(logistics_contract)
+        logistics_readiness_by_session[session_id] = logistics_contract
+        pending_status_tooltips_by_session[session_id] = exam_session_pending_status_tooltip(
+            staffing_contract,
+            logistics_contract,
+        )
+        persisted_staff_confirmed_by_session[session_id] = persisted_staff_confirmed(
+            session_supervisor_assignments,
+            session_examiner_assignments,
+            session_intern_assignments,
+        )
+    logistics_notes = {}
+    for note in logistics_note_records:
+        logistics_notes.setdefault(note.logistics_concept_id, []).append(note)
+    logistics_provider_type_records = provider_type_options()
+    logistics_provider_options = provider_options()
+    logistics_available_providers = logistics_available_provider_options()
+    logistics_provider_ids = {provider.id for provider in logistics_available_providers}
+    for concept in logistics_concept_records:
+        if concept.provider_record and concept.provider_record.id not in logistics_provider_ids:
+            logistics_available_providers.append(concept.provider_record)
+            logistics_provider_ids.add(concept.provider_record.id)
+    logistics_provider_history_records = ProviderHistory.query.filter(
+        ProviderHistory.provider_id.in_([provider.id for provider in logistics_provider_options])
+    ).order_by(ProviderHistory.created_on.asc()).all() if logistics_provider_options else []
+    logistics_provider_history = {}
+    for entry in logistics_provider_history_records:
+        logistics_provider_history.setdefault(entry.provider_id, []).append(entry)
+    session_cost_summaries = build_exam_session_cost_summaries(
+        session_ids,
+        assignment_records,
+        examiner_assignment_records,
+        intern_assignment_records,
+        logistics_concept_records,
+    )
+    session_page_cost_totals = build_exam_session_page_cost_totals(session_cost_summaries)
+    same_date_assignment_conflicts = build_exam_session_same_date_conflicts(session_ids)
+    same_date_duplicate_tags = build_exam_session_same_date_duplicate_tags(session_ids)
+    supervisor_member_map = {member.id: member for member in supervisor_members}
+    examiner_member_map = {member.id: member for member in examiner_members}
+    intern_member_map = {member.id: member for member in intern_members}
+    supervisor_states = {}
+    examiner_states = {}
+    intern_states = {}
+    session_supervisor_members = {}
+    session_examiner_members = {}
+    session_intern_members = {}
+    session_non_available_staff_members = {}
+    session_non_available_member_ids = {}
+    for session_record in sessions:
+        supervisor_states[session_record.id] = {
+            member.id: supervisor_certification_state(member.id, supervisor_certification_year)
+            for member in supervisor_members
+        }
+        examiner_states[session_record.id] = {
+            member.id: examiner_certification_state(member.id, examiner_certification_year)
+            for member in examiner_members
+        }
+        intern_states[session_record.id] = {
+            member.id: intern_stage_state(member.id, intern_stage_year)
+            for member in intern_members
+        }
+        session_supervisor_members[session_record.id] = session_staff_member_order(session_record, supervisor_members)
+        session_examiner_members[session_record.id] = session_staff_member_order(session_record, examiner_members)
+        session_intern_members[session_record.id] = session_staff_member_order(session_record, intern_members)
+        staff_options_by_id = {}
+        for member in (
+            session_supervisor_members[session_record.id]
+            + session_examiner_members[session_record.id]
+            + session_intern_members[session_record.id]
+        ):
+            staff_options_by_id.setdefault(member.id, member)
+        session_non_available_staff_members[session_record.id] = sorted(
+            staff_options_by_id.values(),
+            key=lambda member: (member.full_name or "").lower(),
+        )
+        selected_non_available_ids = set()
+        for assignment in (
+            supervisor_assignments.get(session_record.id, [])
+            + examiner_assignments.get(session_record.id, [])
+            + intern_assignments.get(session_record.id, [])
+        ):
+            selected_non_available_ids.update(assignment.non_available_ids())
+        session_non_available_member_ids[session_record.id] = selected_non_available_ids
+    return render_template(
+        "exam_sessions/index.html",
+        sessions=sessions,
+        pagination=pagination,
+        supervisor_members=supervisor_members,
+        supervisor_fee=supervisor_fee,
+        examiner_fee=examiner_fee,
+        intern_fee=intern_fee,
+        device_dep_fee=device_dep_fee,
+        commuting_fee=commuting_fee,
+        fuel_fee=fuel_fee,
+        vehicle_dep_fee=vehicle_dep_fee,
+        examiner_members=examiner_members,
+        intern_members=intern_members,
+        session_supervisor_members=session_supervisor_members,
+        session_examiner_members=session_examiner_members,
+        session_intern_members=session_intern_members,
+        session_non_available_staff_members=session_non_available_staff_members,
+        session_non_available_member_ids=session_non_available_member_ids,
+        supervisor_member_map=supervisor_member_map,
+        examiner_member_map=examiner_member_map,
+        intern_member_map=intern_member_map,
+        supervisor_assignments=supervisor_assignments,
+        shipment_recipient_supervisors=shipment_recipient_supervisors,
+        examiner_assignments=examiner_assignments,
+        intern_assignments=intern_assignments,
+        supervisor_states=supervisor_states,
+        examiner_states=examiner_states,
+        intern_states=intern_states,
+        module_registration_counts=module_registration_counts,
+        member_session_counts=member_session_counts,
+        examiner_member_session_counts=examiner_member_session_counts,
+        intern_member_session_counts=intern_member_session_counts,
+        participation_options=EXAM_SESSION_PARTICIPATION_OPTIONS,
+        logistics_type_options=EXAM_SESSION_LOGISTICS_TYPE_OPTIONS,
+        logistics_status_options=LOGISTICS_STATUS_OPTIONS,
+        logistics_provider_type_options=logistics_provider_type_records,
+        logistics_provider_options=logistics_available_providers,
+        logistics_provider_history=logistics_provider_history,
+        logistics_currency_options=FEE_CURRENCY_OPTIONS,
+        logistics_by_session=logistics_by_session,
+        logistics_concepts=logistics_concepts,
+        logistics_activity_by_session=logistics_activity_by_session,
+        staffing_readiness_by_session=staffing_readiness_by_session,
+        logistics_readiness_by_session=logistics_readiness_by_session,
+        pending_status_tooltips_by_session=pending_status_tooltips_by_session,
+        persisted_staff_confirmed_by_session=persisted_staff_confirmed_by_session,
+        logistics_notes=logistics_notes,
+        session_cost_summaries=session_cost_summaries,
+        session_page_cost_totals=session_page_cost_totals,
+        same_date_assignment_conflicts=same_date_assignment_conflicts,
+        same_date_duplicate_tags=same_date_duplicate_tags,
+        session_years=session_years,
+        archived_session_years=(
+            ExamSessionYear.query.filter_by(is_archived=True)
+            .order_by(ExamSessionYear.year.desc())
+            .all()
+        ),
+        selected_session_year=selected_year,
+        status_options=EXAM_SESSION_STATUS_OPTIONS,
+        module_options=EXAM_SESSION_MODULE_OPTIONS,
+        shift_options=EXAM_SESSION_SHIFT_OPTIONS,
+        format_options=EXAM_SESSION_FORMAT_OPTIONS,
+        category_options=EXAM_SESSION_CATEGORY_OPTIONS,
+        csrf_token=session.get("csrf_token"),
+    )
+
+
+@staff_bp.route("/monthly-exam-session-registrations")
+@login_required
+def monthly_exam_session_registrations():
+    selected_year, session_years = selected_exam_session_year()
+    query = (
+        ExamSession.query.filter(db.extract("year", ExamSession.session_date) == selected_year)
+        .order_by(ExamSession.session_date.asc(), ExamSession.exam_session_name.asc())
+    )
+    filtered_session_ids = [session_id for (session_id,) in query.with_entities(ExamSession.id).all()]
+    monthly_totals = monthly_candidate_total_sums(filtered_session_ids)
+    sessions, pagination = paginate_query(query)
+    session_ids = [session_record.id for session_record in sessions]
+    registration_records = []
+    total_records = []
+    if session_ids:
+        registration_records = (
+            ExamSessionMonthlyRegistration.query.filter(
+                ExamSessionMonthlyRegistration.exam_session_id.in_(session_ids)
+            )
+            .order_by(ExamSessionMonthlyRegistration.month.asc(), ExamSessionMonthlyRegistration.module.asc())
+            .all()
+        )
+        total_records = (
+            ExamSessionMonthlyCandidateTotal.query.filter(
+                ExamSessionMonthlyCandidateTotal.exam_session_id.in_(session_ids)
+            )
+            .order_by(ExamSessionMonthlyCandidateTotal.month.asc())
+            .all()
+        )
+    registrations = {}
+    for record in registration_records:
+        registrations.setdefault(record.exam_session_id, {}).setdefault(record.month, {})[
+            record.module
+        ] = record.registration_number
+    candidate_totals = {}
+    for record in total_records:
+        candidate_totals.setdefault(record.exam_session_id, {})[record.month] = record.total_candidates
+    return render_template(
+        "monthly_registrations/index.html",
+        sessions=sessions,
+        pagination=pagination,
+        months=MONTHLY_REGISTRATION_MONTHS,
+        registrations=registrations,
+        candidate_totals=candidate_totals,
+        candidate_total_trends=monthly_candidate_total_trends(candidate_totals),
+        monthly_totals=monthly_totals,
+        session_years=session_years,
+        archived_session_years=(
+            ExamSessionYear.query.filter_by(is_archived=True)
+            .order_by(ExamSessionYear.year.desc())
+            .all()
+        ),
+        selected_session_year=selected_year,
+        csrf_token=session.get("csrf_token"),
+    )
+
+
+@staff_bp.route("/monthly-exam-session-registrations/<int:session_id>/<int:month>", methods=["POST"])
+@login_required
+def update_monthly_exam_session_registration(session_id, month):
+    is_async = request.headers.get("X-Requested-With") == "XMLHttpRequest"
+    if not validate_csrf():
+        if is_async:
+            return Response("Security token expired. Please try again.", status=400)
+        flash("Security token expired. Please try again.", "error")
+        return redirect(url_for("staff.monthly_exam_session_registrations"))
+
+    if month < 1 or month > 12:
+        if is_async:
+            return Response("Invalid month.", status=400)
+        flash("Invalid month.", "error")
+        return redirect(url_for("staff.monthly_exam_session_registrations"))
+
+    session_record = ExamSession.query.get_or_404(session_id)
+    modules = session_record.modules_list()
+    has_errors = False
+    saved_modules = 0
+    total_value = request.form.get("total_candidates", "").strip()
+    total_record = ExamSessionMonthlyCandidateTotal.query.filter_by(
+        exam_session_id=session_record.id,
+        month=month,
+    ).first()
+    if total_value == "":
+        if total_record:
+            db.session.delete(total_record)
+    elif not total_value.isdigit():
+        flash("Total candidates must be a whole number.", "error")
+        has_errors = True
+    else:
+        if total_record is None:
+            total_record = ExamSessionMonthlyCandidateTotal(
+                exam_session_id=session_record.id,
+                month=month,
+            )
+            db.session.add(total_record)
+        total_record.total_candidates = int(total_value)
+
+    for module in modules:
+        field_name = f"registration_{module}"
+        value = request.form.get(field_name, "").strip()
+        existing = ExamSessionMonthlyRegistration.query.filter_by(
+            exam_session_id=session_record.id,
+            month=month,
+            module=module,
+        ).first()
+        if value == "":
+            if existing:
+                db.session.delete(existing)
+            continue
+        if not value.isdigit():
+            flash(f"{module} must be a whole number.", "error")
+            has_errors = True
+            continue
+        registration_number = int(value)
+        if existing is None:
+            existing = ExamSessionMonthlyRegistration(
+                exam_session_id=session_record.id,
+                month=month,
+                module=module,
+            )
+            db.session.add(existing)
+        existing.registration_number = registration_number
+        saved_modules += 1
+
+    if has_errors:
+        db.session.rollback()
+        if is_async:
+            return Response("Monthly registrations contain invalid values.", status=400)
+    else:
+        db.session.commit()
+        if is_async:
+            target_year = session_record.session_date.year
+            filtered_session_ids = [
+                session_id
+                for (session_id,) in ExamSession.query.with_entities(ExamSession.id)
+                .filter(db.extract("year", ExamSession.session_date) == target_year)
+                .all()
+            ]
+            return jsonify({"monthly_totals": monthly_candidate_total_sums(filtered_session_ids)})
+        if saved_modules or total_value:
+            flash("Monthly registrations saved successfully.", "success")
+        else:
+            flash("Monthly registrations cleared.", "success")
+    return redirect(url_for("staff.monthly_exam_session_registrations"))
+
+
+@staff_bp.route("/monthly-exam-session-registrations/<int:session_id>/reset", methods=["POST"])
+@login_required
+def reset_monthly_exam_session_registration(session_id):
+    if not validate_csrf():
+        flash("Security token expired. Please try again.", "error")
+        return redirect(url_for("staff.monthly_exam_session_registrations"))
+
+    session_record = ExamSession.query.get_or_404(session_id)
+    ExamSessionMonthlyRegistration.query.filter_by(exam_session_id=session_record.id).delete(synchronize_session=False)
+    ExamSessionMonthlyCandidateTotal.query.filter_by(exam_session_id=session_record.id).delete(synchronize_session=False)
+    db.session.commit()
+    flash("Monthly registration data has been successfully reset.", "success")
+    return redirect(url_for("staff.monthly_exam_session_registrations"))
+
+
+@staff_bp.route("/monthly-exam-session-registrations/<int:session_id>/markers/<marker>", methods=["POST"])
+@login_required
+def toggle_exam_session_marker(session_id, marker):
+    if not validate_csrf():
+        flash("Security token expired. Please try again.", "error")
+        return redirect(url_for("staff.monthly_exam_session_registrations"))
+
+    session_record = ExamSession.query.get_or_404(session_id)
+    if marker == "rsg":
+        session_record.rsg_enabled = not session_record.rsg_enabled
+    elif marker == "pen":
+        session_record.pen_enabled = not session_record.pen_enabled
+    elif marker == "pst":
+        session_record.pst_enabled = not session_record.pst_enabled
+    else:
+        flash("Invalid marker.", "error")
+        return redirect(url_for("staff.monthly_exam_session_registrations"))
+
+    db.session.commit()
+    flash(f"{marker.upper()} updated successfully.", "success")
+    return redirect(url_for("staff.monthly_exam_session_registrations"))
+
+
+@staff_bp.route("/exam-session-planner/sessions", methods=["POST"])
+@login_required
+def create_exam_session():
+    selected_year = request.form.get("session_year", "").strip()
+    if not validate_csrf():
+        flash("Security token expired. Please try again.", "error")
+        return redirect(url_for("staff.exam_session_planner", session_year=selected_year))
+
+    errors, data = validate_exam_session_form(request.form)
+    if errors:
+        for error in errors:
+            flash(error, "error")
+        return redirect(url_for("staff.exam_session_planner", session_year=selected_year))
+
+    session_record = ExamSession()
+    apply_exam_session_form(session_record, data)
+    ensure_exam_session_year(data["session_date"].year)
+    db.session.add(session_record)
+    db.session.commit()
+    flash("Exam session created successfully.", "success")
+    return redirect(url_for("staff.exam_session_planner", session_year=data["session_date"].year))
+
+
+@staff_bp.route("/exam-session-planner/sessions/<int:session_id>", methods=["POST"])
+@login_required
+def update_exam_session(session_id):
+    selected_year = request.form.get("session_year", "").strip()
+    if not validate_csrf():
+        flash("Security token expired. Please try again.", "error")
+        return redirect(url_for("staff.exam_session_planner", session_year=selected_year))
+
+    session_record = ExamSession.query.get_or_404(session_id)
+    errors, data = validate_exam_session_form(request.form)
+    if errors:
+        for error in errors:
+            flash(error, "error")
+        return redirect(url_for("staff.exam_session_planner", session_year=selected_year))
+
+    apply_exam_session_form(session_record, data)
+    ensure_exam_session_year(data["session_date"].year)
+    db.session.commit()
+    flash("Exam session updated successfully.", "success")
+    return redirect(url_for("staff.exam_session_planner", session_year=data["session_date"].year))
+
+
+@staff_bp.route("/exam-session-planner/sessions/<int:session_id>/delete", methods=["POST"])
+@login_required
+def delete_exam_session(session_id):
+    selected_year = request.form.get("session_year", "").strip()
+    if not validate_csrf():
+        flash("Security token expired. Please try again.", "error")
+        return redirect(url_for("staff.exam_session_planner", session_year=selected_year))
+    if not is_valid_permanent_delete_password():
+        flash("Permanent delete password is not valid.", "error")
+        return redirect(url_for("staff.exam_session_planner", session_year=selected_year))
+
+    session_record = ExamSession.query.get_or_404(session_id)
+    ExamSessionSupervisorAssignment.query.filter_by(exam_session_id=session_record.id).delete(synchronize_session=False)
+    ExamSessionExaminerAssignment.query.filter_by(exam_session_id=session_record.id).delete(synchronize_session=False)
+    ExamSessionInternAssignment.query.filter_by(exam_session_id=session_record.id).delete(synchronize_session=False)
+    concept_ids = [
+        concept_id for (concept_id,) in ExamSessionLogisticsConcept.query.with_entities(ExamSessionLogisticsConcept.id).filter_by(exam_session_id=session_record.id).all()
+    ]
+    if concept_ids:
+        ExamSessionLogisticsConceptNote.query.filter(
+            ExamSessionLogisticsConceptNote.logistics_concept_id.in_(concept_ids)
+        ).delete(synchronize_session=False)
+    ExamSessionLogisticsConcept.query.filter_by(exam_session_id=session_record.id).delete(synchronize_session=False)
+    ExamSessionLogistics.query.filter_by(exam_session_id=session_record.id).delete(synchronize_session=False)
+    ExamSessionMonthlyRegistration.query.filter_by(exam_session_id=session_record.id).delete(synchronize_session=False)
+    ExamSessionMonthlyCandidateTotal.query.filter_by(exam_session_id=session_record.id).delete(synchronize_session=False)
+    workflow_ids = [
+        workflow_id for (workflow_id,) in ExamSessionScheduleWorkflow.query.with_entities(ExamSessionScheduleWorkflow.id).filter_by(exam_session_id=session_record.id).all()
+    ]
+    if workflow_ids:
+        ExamSessionScheduleEvent.query.filter(
+            ExamSessionScheduleEvent.workflow_id.in_(workflow_ids)
+        ).delete(synchronize_session=False)
+    ExamSessionScheduleWorkflow.query.filter_by(exam_session_id=session_record.id).delete(synchronize_session=False)
+    db.session.delete(session_record)
+    db.session.commit()
+    flash("Exam session deleted successfully.", "success")
+    return redirect(url_for("staff.exam_session_planner", session_year=selected_year))
+
+
+def save_exam_session_assignment_section(
+    *,
+    session_record,
+    selected_year,
+    section_key,
+    assignment_model,
+    member_options,
+    section_label,
+):
+    member_map = {member.id: member for member in member_options}
+    valid_member_ids = set(member_map)
+    existing_assignments = {
+        assignment.id: assignment
+        for assignment in assignment_model.query.filter_by(exam_session_id=session_record.id).all()
+    }
+    supervisor_fee = role_fee_for_role("Supervisor")
+    examiner_fee = role_fee_for_role("Examiner")
+    intern_fee = role_fee_for_role("Intern")
+    device_dep_fee = fee_by_exact_description("Device dep.")
+    commuting_fee = fee_by_exact_description("Commuting")
+    fuel_fee = fee_by_exact_description("Fuel")
+    vehicle_dep_fee = fee_by_exact_description("Vehicle dep.")
+
+    deleted_ids = [
+        int(value) for value in request.form.getlist(f"deleted_{section_key}_assignment_ids")
+        if value.isdigit()
+    ]
+    for assignment_id in deleted_ids:
+        assignment = existing_assignments.get(assignment_id)
+        if assignment:
+            db.session.delete(assignment)
+
+    used_member_ids = []
+    prepared_rows = []
+    for row_key in request.form.getlist(f"{section_key}_row_keys"):
+        assignment_id_value = request.form.get(f"{section_key}_assignment_id_{row_key}", "").strip()
+        assignment = None
+        if assignment_id_value.isdigit():
+            assignment = existing_assignments.get(int(assignment_id_value))
+
+        non_available_field = f"{section_key}_non_available_member_ids_{row_key}"
+        non_available_submitted = non_available_field in request.form
+        non_available_ids = (
+            [
+                int(value) for value in request.form.getlist(non_available_field)
+                if value.isdigit() and int(value) in valid_member_ids
+            ]
+            if non_available_submitted else (assignment.non_available_ids() if assignment else [])
+        )
+        team_member_value = request.form.get(f"{section_key}_team_member_id_{row_key}", "").strip()
+        team_member_id = int(team_member_value) if team_member_value.isdigit() and int(team_member_value) in valid_member_ids else None
+        participation_status = normalize_participation_status(
+            request.form.get(f"{section_key}_participation_status_{row_key}", "Pending")
+        )
+        if participation_status not in EXAM_SESSION_PARTICIPATION_OPTIONS:
+            flash("Please select a valid Participation status.", "error")
+            return None
+        if team_member_id is None and participation_status != "Pending":
+            flash("A staff position without an assigned member must remain Pending.", "error")
+            return None
+        if team_member_id is None:
+            participation_status = "Pending"
+        legacy_logistics_enabled = request.form.get(f"{section_key}_logistics_enabled_{row_key}", "").strip() == "1"
+        logistics_type = normalize_assignment_logistics_type(
+            request.form.get(f"{section_key}_logistics_type_{row_key}", ""),
+            legacy_logistics_enabled,
+        )
+        logistics_enabled = logistics_type in EXAM_SESSION_LOGISTICS_ACTIVE_TYPES
+        if team_member_id is None:
+            logistics_enabled = False
+            logistics_type = "Does not apply"
+        manual_fee_override = (
+            participation_status == "Pending"
+            and request.form.get(f"{section_key}_manual_fee_override_{row_key}", "").strip() == "1"
+        )
+
+        km_value = request.form.get(f"{section_key}_km_{row_key}", "").strip()
+        km = int(km_value) if km_value.isdigit() else None
+        role_fee = request.form.get(f"{section_key}_role_fee_{row_key}", "").strip()
+        role_fee_currency = request.form.get(f"{section_key}_role_fee_currency_{row_key}", "").strip()
+        role_fee_base_value = request.form.get(f"{section_key}_role_fee_base_value_{row_key}", "").strip()
+        role_fee_unit = request.form.get(f"{section_key}_role_fee_unit_{row_key}", "").strip()
+        device_dep = request.form.get(f"{section_key}_device_dep_{row_key}", "").strip()
+        device_dep_currency = request.form.get(f"{section_key}_device_dep_currency_{row_key}", "").strip()
+        device_dep_base_value = request.form.get(f"{section_key}_device_dep_base_value_{row_key}", "").strip()
+        device_dep_unit = request.form.get(f"{section_key}_device_dep_unit_{row_key}", "").strip()
+        commuting = request.form.get(f"{section_key}_commuting_{row_key}", "").strip() if km is not None or manual_fee_override else ""
+        commuting_currency = request.form.get(f"{section_key}_commuting_currency_{row_key}", "").strip() if km is not None or manual_fee_override else ""
+        commuting_base_value = request.form.get(f"{section_key}_commuting_base_value_{row_key}", "").strip() if km is not None or manual_fee_override else ""
+        commuting_unit = request.form.get(f"{section_key}_commuting_unit_{row_key}", "").strip() if km is not None or manual_fee_override else ""
+        fuel_enabled = request.form.get(f"{section_key}_fuel_enabled_{row_key}", "").strip() == "1"
+        fuel = request.form.get(f"{section_key}_fuel_{row_key}", "").strip() if fuel_enabled else ""
+        fuel_currency = request.form.get(f"{section_key}_fuel_currency_{row_key}", "").strip() if fuel_enabled else ""
+        fuel_base_value = request.form.get(f"{section_key}_fuel_base_value_{row_key}", "").strip() if fuel_enabled else ""
+        fuel_unit = request.form.get(f"{section_key}_fuel_unit_{row_key}", "").strip() if fuel_enabled else ""
+        vehicle_dep = request.form.get(f"{section_key}_vehicle_dep_{row_key}", "").strip() if fuel_enabled else ""
+        vehicle_dep_currency = request.form.get(f"{section_key}_vehicle_dep_currency_{row_key}", "").strip() if fuel_enabled else ""
+        vehicle_dep_base_value = request.form.get(f"{section_key}_vehicle_dep_base_value_{row_key}", "").strip() if fuel_enabled else ""
+        vehicle_dep_unit = request.form.get(f"{section_key}_vehicle_dep_unit_{row_key}", "").strip() if fuel_enabled else ""
+        team_member = member_map.get(team_member_id) if team_member_id is not None else None
+        fuel_vehicle_allowed = km is not None and km >= 60 and team_member is not None and team_member.has_car == "Yes"
+        if participation_status == "Pending" and not manual_fee_override and not fuel_vehicle_allowed:
+            fuel_enabled = False
+            fuel = ""
+            fuel_currency = ""
+            fuel_base_value = ""
+            fuel_unit = ""
+            vehicle_dep = ""
+            vehicle_dep_currency = ""
+            vehicle_dep_base_value = ""
+            vehicle_dep_unit = ""
+        start_times = [value.strip() for value in request.form.getlist(f"{section_key}_start_time_{row_key}")]
+        end_times = [value.strip() for value in request.form.getlist(f"{section_key}_end_time_{row_key}")]
+        time_ranges = []
+        for start_time, end_time in zip(start_times, end_times):
+            if not start_time and not end_time:
+                continue
+            time_ranges.append({"start": start_time, "end": end_time})
+        if any(
+            not valid_time_range_value(time_range["start"]) or not valid_time_range_value(time_range["end"])
+            for time_range in time_ranges
+        ):
+            flash("Wrong time", "error")
+            return None
+
+        if participation_status == "Pending" and section_key == "intern" and not manual_fee_override:
+            if intern_fee:
+                role_fee_result = calculate_role_fee_from_ranges(time_ranges, intern_fee)
+                if role_fee_result:
+                    role_fee = role_fee_result["value"]
+                    role_fee_currency = role_fee_result["currency"]
+                    role_fee_base_value = role_fee_result["base_value"]
+                    role_fee_unit = role_fee_result["unit"]
+                else:
+                    role_fee = ""
+                    role_fee_currency = ""
+                    role_fee_base_value = ""
+                    role_fee_unit = ""
+            else:
+                role_fee = ""
+                role_fee_currency = ""
+                role_fee_base_value = ""
+                role_fee_unit = ""
+
+        if participation_status == "Pending" and not manual_fee_override:
+            role_fee_source = supervisor_fee if section_key == "supervisor" else examiner_fee if section_key == "examiner" else None
+            if role_fee_source:
+                role_fee_result = calculate_role_fee_from_ranges(time_ranges, role_fee_source)
+                if role_fee_result:
+                    role_fee = role_fee_result["value"]
+                    role_fee_currency = role_fee_result["currency"]
+                    role_fee_base_value = role_fee_result["base_value"]
+                    role_fee_unit = role_fee_result["unit"]
+                else:
+                    role_fee = ""
+                    role_fee_currency = ""
+                    role_fee_base_value = ""
+                    role_fee_unit = ""
+            if km is not None:
+                commuting_result = calculate_km_fee(km, commuting_fee)
+                if commuting_result:
+                    commuting = commuting_result["value"]
+                    commuting_currency = commuting_result["currency"]
+                    commuting_base_value = commuting_result["base_value"]
+                    commuting_unit = commuting_result["unit"]
+                else:
+                    commuting = ""
+                    commuting_currency = ""
+                    commuting_base_value = ""
+                    commuting_unit = ""
+            device_dep_result = calculate_timed_fee_from_ranges(time_ranges, device_dep_fee)
+            if device_dep_result:
+                device_dep = device_dep_result["value"]
+                device_dep_currency = device_dep_result["currency"]
+                device_dep_base_value = device_dep_result["base_value"]
+                device_dep_unit = device_dep_result["unit"]
+            else:
+                device_dep = ""
+                device_dep_currency = ""
+                device_dep_base_value = ""
+                device_dep_unit = ""
+            if fuel_vehicle_allowed and fuel_enabled:
+                fuel_result = calculate_km_fee(km, fuel_fee)
+                if fuel_result:
+                    fuel = fuel_result["value"]
+                    fuel_currency = fuel_result["currency"]
+                    fuel_base_value = fuel_result["base_value"]
+                    fuel_unit = fuel_result["unit"]
+                else:
+                    fuel = ""
+                    fuel_currency = ""
+                    fuel_base_value = ""
+                    fuel_unit = ""
+                vehicle_dep_result = calculate_km_fee(km, vehicle_dep_fee)
+                if vehicle_dep_result:
+                    vehicle_dep = vehicle_dep_result["value"]
+                    vehicle_dep_currency = vehicle_dep_result["currency"]
+                    vehicle_dep_base_value = vehicle_dep_result["base_value"]
+                    vehicle_dep_unit = vehicle_dep_result["unit"]
+                else:
+                    vehicle_dep = ""
+                    vehicle_dep_currency = ""
+                    vehicle_dep_base_value = ""
+                    vehicle_dep_unit = ""
+
+        if participation_status == "Pending" and not manual_fee_override:
+            seniority_result = seniority_calculation_from_role_fee(team_member, role_fee)
+            seniority_fee = seniority_result["value"] if seniority_result else ""
+            seniority_applied = bool(seniority_result)
+            seniority_percentage = seniority_result["percentage"] if seniority_result else ""
+            seniority_currency = seniority_result["currency"] if seniority_result else ""
+        else:
+            seniority_fee = request.form.get(f"{section_key}_seniority_fee_{row_key}", "").strip()
+            seniority_applied = request.form.get(f"{section_key}_seniority_applied_{row_key}", "").strip() == "1"
+            seniority_percentage = request.form.get(f"{section_key}_seniority_percentage_{row_key}", "").strip()
+            seniority_currency = request.form.get(f"{section_key}_seniority_currency_{row_key}", "").strip()
+
+        role_fee = normalize_money_display_value(role_fee)
+        device_dep = normalize_money_display_value(device_dep)
+        commuting = normalize_money_display_value(commuting)
+        fuel = normalize_money_display_value(fuel)
+        vehicle_dep = normalize_money_display_value(vehicle_dep)
+        seniority_fee = normalize_money_display_value(seniority_fee)
+
+        row_member_ids = list(non_available_ids) if non_available_submitted else []
+        if team_member_id is not None:
+            row_member_ids.append(team_member_id)
+        used_member_ids.extend(row_member_ids)
+        prepared_rows.append(
+            {
+                "assignment": assignment,
+                "non_available_ids": sorted(set(non_available_ids)),
+                "team_member_id": team_member_id,
+                "participation_status": participation_status,
+                "logistics_enabled": logistics_enabled,
+                "logistics_type": logistics_type,
+                "manual_fee_override": manual_fee_override,
+                "km": km,
+                "time_ranges": time_ranges,
+                "role_fee": role_fee,
+                "role_fee_currency": role_fee_currency if section_key in {"supervisor", "examiner", "intern"} and role_fee else "",
+                "role_fee_base_value": role_fee_base_value if section_key in {"supervisor", "examiner", "intern"} and role_fee else "",
+                "role_fee_unit": role_fee_unit if section_key in {"supervisor", "examiner", "intern"} and role_fee else "",
+                "device_dep": device_dep,
+                "device_dep_currency": device_dep_currency if device_dep else "",
+                "device_dep_base_value": device_dep_base_value if device_dep else "",
+                "device_dep_unit": device_dep_unit if device_dep else "",
+                "commuting": commuting,
+                "commuting_currency": commuting_currency if commuting else "",
+                "commuting_base_value": commuting_base_value if commuting else "",
+                "commuting_unit": commuting_unit if commuting else "",
+                "fuel_enabled": fuel_enabled,
+                "fuel": fuel,
+                "fuel_currency": fuel_currency if fuel else "",
+                "fuel_base_value": fuel_base_value if fuel else "",
+                "fuel_unit": fuel_unit if fuel else "",
+                "vehicle_dep": vehicle_dep,
+                "vehicle_dep_currency": vehicle_dep_currency if vehicle_dep else "",
+                "vehicle_dep_base_value": vehicle_dep_base_value if vehicle_dep else "",
+                "vehicle_dep_unit": vehicle_dep_unit if vehicle_dep else "",
+                "seniority_fee": seniority_fee,
+                "seniority_applied": seniority_applied,
+                "seniority_percentage": seniority_percentage,
+                "seniority_currency": seniority_currency,
+                "fee_frozen_on": assignment.fee_frozen_on if assignment else None,
+                "fee_frozen_status": assignment.fee_frozen_status if assignment else "",
+            }
+        )
+
+    if len(used_member_ids) != len(set(used_member_ids)):
+        flash(f"Each {section_label} member can only be selected once within this exam session.", "error")
+        return None
+
+    saved = 0
+    for row_data in prepared_rows:
+        assignment = row_data["assignment"]
+        if assignment is None:
+            assignment = assignment_model(exam_session_id=session_record.id)
+            db.session.add(assignment)
+
+        assignment.non_available_member_ids = json.dumps(row_data["non_available_ids"])
+        assignment.team_member_id = row_data["team_member_id"]
+        assignment.participation_status = row_data["participation_status"]
+        assignment.logistics_enabled = row_data["logistics_enabled"]
+        assignment.logistics_type = row_data["logistics_type"]
+        assignment.manual_fee_override = row_data["manual_fee_override"]
+        if row_data["participation_status"] == "Pending":
+            assignment.fee_frozen_on = None
+            assignment.fee_frozen_status = ""
+        elif assignment.fee_frozen_on is None or assignment.fee_frozen_status != row_data["participation_status"]:
+            assignment.fee_frozen_on = datetime.now(timezone.utc)
+            assignment.fee_frozen_status = row_data["participation_status"]
+        assignment.km = row_data["km"]
+        assignment.time_ranges = json.dumps(row_data["time_ranges"])
+        assignment.start_time = row_data["time_ranges"][0]["start"] if row_data["time_ranges"] else ""
+        assignment.end_time = row_data["time_ranges"][0]["end"] if row_data["time_ranges"] else ""
+        previous_role_fee = assignment.role_fee
+        assignment.role_fee = row_data["role_fee"]
+        if section_key in {"supervisor", "examiner", "intern"}:
+            assignment.role_fee_currency = row_data["role_fee_currency"]
+            assignment.role_fee_base_value = row_data["role_fee_base_value"]
+            assignment.role_fee_unit = row_data["role_fee_unit"]
+            if row_data["role_fee"] and row_data["role_fee"] != previous_role_fee:
+                assignment.role_fee_last_calculated_on = datetime.now(timezone.utc)
+        assignment.device_dep = row_data["device_dep"]
+        assignment.device_dep_currency = row_data["device_dep_currency"]
+        assignment.device_dep_base_value = row_data["device_dep_base_value"]
+        assignment.device_dep_unit = row_data["device_dep_unit"]
+        if row_data["device_dep"]:
+            assignment.device_dep_last_calculated_on = assignment.device_dep_last_calculated_on or datetime.now(timezone.utc)
+        assignment.commuting = row_data["commuting"]
+        assignment.commuting_currency = row_data["commuting_currency"]
+        assignment.commuting_base_value = row_data["commuting_base_value"]
+        assignment.commuting_unit = row_data["commuting_unit"]
+        if row_data["commuting"]:
+            assignment.commuting_last_calculated_on = assignment.commuting_last_calculated_on or datetime.now(timezone.utc)
+        assignment.fuel_enabled = row_data["fuel_enabled"]
+        assignment.fuel = row_data["fuel"]
+        assignment.fuel_currency = row_data["fuel_currency"]
+        assignment.fuel_base_value = row_data["fuel_base_value"]
+        assignment.fuel_unit = row_data["fuel_unit"]
+        if row_data["fuel"]:
+            assignment.fuel_last_calculated_on = assignment.fuel_last_calculated_on or datetime.now(timezone.utc)
+        assignment.vehicle_dep = row_data["vehicle_dep"]
+        assignment.vehicle_dep_currency = row_data["vehicle_dep_currency"]
+        assignment.vehicle_dep_base_value = row_data["vehicle_dep_base_value"]
+        assignment.vehicle_dep_unit = row_data["vehicle_dep_unit"]
+        if row_data["vehicle_dep"]:
+            assignment.vehicle_dep_last_calculated_on = assignment.vehicle_dep_last_calculated_on or datetime.now(timezone.utc)
+        assignment.seniority_fee = row_data["seniority_fee"]
+        assignment.seniority_applied = row_data["seniority_applied"]
+        assignment.seniority_percentage = row_data["seniority_percentage"]
+        assignment.seniority_currency = row_data["seniority_currency"]
+        if row_data["seniority_fee"]:
+            assignment.seniority_last_calculated_on = assignment.seniority_last_calculated_on or datetime.now(timezone.utc)
+        saved += 1
+    return saved
+
+
+def exam_session_staff_member_ids(session_id):
+    member_ids = []
+    for model in (ExamSessionSupervisorAssignment, ExamSessionExaminerAssignment, ExamSessionInternAssignment):
+        for assignment in model.query.filter_by(exam_session_id=session_id).all():
+            member_ids.extend(assignment.non_available_ids())
+            if assignment.team_member_id is not None:
+                member_ids.append(assignment.team_member_id)
+    return member_ids
+
+
+def save_exam_session_logistics(session_record):
+    config = ExamSessionLogistics.query.filter_by(exam_session_id=session_record.id).first()
+    if config is None:
+        config = ExamSessionLogistics(exam_session_id=session_record.id)
+        db.session.add(config)
+
+    logistics_files_url = request.form.get("logistics_files_url", "").strip()
+    if logistics_files_url and not is_valid_url(logistics_files_url):
+        flash("Please enter a valid link.", "error")
+        return False
+    config.logistics_files_url = logistics_files_url
+
+    existing_concepts = {
+        concept.id: concept
+        for concept in ExamSessionLogisticsConcept.query.filter_by(exam_session_id=session_record.id).all()
+    }
+    deleted_ids = [
+        int(value) for value in request.form.getlist("deleted_logistics_concept_ids")
+        if value.isdigit()
+    ]
+    for concept_id in deleted_ids:
+        concept = existing_concepts.get(concept_id)
+        if concept:
+            ExamSessionLogisticsConceptNote.query.filter_by(logistics_concept_id=concept.id).delete(synchronize_session=False)
+            db.session.delete(concept)
+
+    for row_key in request.form.getlist("logistics_concept_row_keys"):
+        concept_id_value = request.form.get(f"logistics_concept_id_{row_key}", "").strip()
+        concept = None
+        if concept_id_value.isdigit():
+            concept = existing_concepts.get(int(concept_id_value))
+            if concept and concept.id in deleted_ids:
+                continue
+
+        status = request.form.get(f"logistics_status_{row_key}", "Pending").strip()
+        status = LEGACY_LOGISTICS_STATUS_MAP.get(status, status)
+        if status not in LOGISTICS_STATUS_OPTIONS:
+            status = "Pending"
+        previous_status = LEGACY_LOGISTICS_STATUS_MAP.get(concept.status, concept.status) if concept else None
+        if (
+            status == "Confirmed"
+            and previous_status != "Confirmed"
+            and request.form.get("logistics_confirmation_password", "").strip() != LOGISTICS_CONFIRMED_PASSWORD
+        ):
+            flash("Confirmation password is required to confirm logistics concepts.", "error")
+            return False
+        provider_type_id_value = request.form.get(f"logistics_provider_type_id_{row_key}", "").strip()
+        provider_type_id = int(provider_type_id_value) if provider_type_id_value.isdigit() else None
+        if status != "Pending" and provider_type_id is None:
+            flash("Select a Type of provider before changing a Logistics concept from Pending.", "error")
+            return False
+        provider_id_value = request.form.get(f"logistics_provider_id_{row_key}", "").strip()
+        provider_record = Provider.query.get(int(provider_id_value)) if provider_id_value.isdigit() else None
+        if provider_record and not provider_type_id:
+            flash("Please select the provider type before selecting a provider.", "error")
+            return False
+        if provider_record and provider_type_id and provider_record.provider_type_id != provider_type_id:
+            flash("Please select a provider matching the selected provider type.", "error")
+            return False
+        provider_id = provider_record.id if provider_record else None
+        provider = provider_record.display_label if provider_record else ""
+        if not provider_record and concept and concept.provider and concept.provider_id is None:
+            provider = concept.provider
+        currency = request.form.get(f"logistics_currency_{row_key}", "ARS").strip()
+        if currency not in FEE_CURRENCY_OPTIONS:
+            currency = "ARS"
+        fee, fee_error = normalize_logistics_fee(request.form.get(f"logistics_fee_{row_key}", ""))
+        if fee_error:
+            flash(fee_error, "error")
+            return False
+        pending_notes = [
+            note.strip()
+            for note in request.form.getlist(f"logistics_note_{row_key}")
+            if note.strip()
+        ]
+
+        is_blank_new_row = concept is None and status == "Pending" and provider_id is None and currency == "ARS" and fee is None and not pending_notes
+        if is_blank_new_row:
+            continue
+
+        if concept is None:
+            concept = ExamSessionLogisticsConcept(exam_session_id=session_record.id)
+            db.session.add(concept)
+        concept.status = status
+        concept.provider_id = provider_id
+        concept.provider = provider
+        concept.currency = currency
+        concept.fee = fee
+        for note in pending_notes:
+            db.session.add(
+                ExamSessionLogisticsConceptNote(
+                    logistics_concept=concept,
+                    comment=note,
+                    created_by=session.get("user"),
+                )
+            )
+    return True
+
+
+def update_exam_session_overall_status(session_record):
+    statuses = exam_session_overall_statuses_by_session_ids([session_record.id])
+    session_record.status = statuses.get(session_record.id, "Pending")
+
+
+def exam_session_overall_statuses_by_session_ids(session_ids):
+    session_ids = [session_id for session_id in session_ids if session_id is not None]
+    statuses_by_session = {session_id: "Pending" for session_id in session_ids}
+    if not session_ids:
+        return statuses_by_session
+
+    supervisor_assignments_by_session = {session_id: [] for session_id in session_ids}
+    examiner_assignments_by_session = {session_id: [] for session_id in session_ids}
+    intern_assignments_by_session = {session_id: [] for session_id in session_ids}
+    for assignment in ExamSessionSupervisorAssignment.query.filter(
+        ExamSessionSupervisorAssignment.exam_session_id.in_(session_ids)
+    ).all():
+        supervisor_assignments_by_session.setdefault(assignment.exam_session_id, []).append(assignment)
+    for assignment in ExamSessionExaminerAssignment.query.filter(
+        ExamSessionExaminerAssignment.exam_session_id.in_(session_ids)
+    ).all():
+        examiner_assignments_by_session.setdefault(assignment.exam_session_id, []).append(assignment)
+    for assignment in ExamSessionInternAssignment.query.filter(
+        ExamSessionInternAssignment.exam_session_id.in_(session_ids)
+    ).all():
+        intern_assignments_by_session.setdefault(assignment.exam_session_id, []).append(assignment)
+
+    logistics_by_session = {
+        logistics.exam_session_id: logistics
+        for logistics in ExamSessionLogistics.query.filter(
+            ExamSessionLogistics.exam_session_id.in_(session_ids)
+        ).all()
+    }
+    logistics_concepts_by_session = {session_id: [] for session_id in session_ids}
+    for concept in ExamSessionLogisticsConcept.query.filter(
+        ExamSessionLogisticsConcept.exam_session_id.in_(session_ids)
+    ).all():
+        logistics_concepts_by_session.setdefault(concept.exam_session_id, []).append(concept)
+
+    for session_id in session_ids:
+        supervisor_assignments = supervisor_assignments_by_session.get(session_id, [])
+        examiner_assignments = examiner_assignments_by_session.get(session_id, [])
+        intern_assignments = intern_assignments_by_session.get(session_id, [])
+        all_assignments = supervisor_assignments + examiner_assignments + intern_assignments
+        staffing_contract = staffing_readiness_contract(
+            supervisor_assignments,
+            examiner_assignments,
+            intern_assignments,
+        )
+        logistics_contract = logistics_readiness_contract(
+            all_assignments,
+            logistics_concepts_by_session.get(session_id, []),
+            logistics_by_session.get(session_id),
+        )
+        statuses_by_session[session_id] = (
+            "Confirmed" if final_email_ready(staffing_contract, logistics_contract) else "Pending"
+        )
+    return statuses_by_session
+
+
+def exam_session_inner_statuses_by_session_ids(session_ids):
+    statuses_by_session = {session_id: [] for session_id in session_ids}
+    if not session_ids:
+        return statuses_by_session
+    assignment_models = (
+        ExamSessionSupervisorAssignment,
+        ExamSessionExaminerAssignment,
+        ExamSessionInternAssignment,
+    )
+    for assignment_model in assignment_models:
+        for session_id, status in (
+            db.session.query(assignment_model.exam_session_id, assignment_model.participation_status)
+            .filter(assignment_model.exam_session_id.in_(session_ids))
+            .all()
+        ):
+            statuses_by_session.setdefault(session_id, []).append(status)
+    for session_id, status in (
+        db.session.query(ExamSessionLogisticsConcept.exam_session_id, ExamSessionLogisticsConcept.status)
+        .filter(ExamSessionLogisticsConcept.exam_session_id.in_(session_ids))
+        .all()
+    ):
+        statuses_by_session.setdefault(session_id, []).append(status)
+    return statuses_by_session
+
+
+def sync_exam_session_overall_statuses(session_records):
+    statuses_by_session = exam_session_overall_statuses_by_session_ids([session_record.id for session_record in session_records])
+    changed = False
+    for session_record in session_records:
+        new_status = statuses_by_session.get(session_record.id, "Pending")
+        if session_record.status != new_status:
+            session_record.status = new_status
+            changed = True
+    if changed:
+        db.session.commit()
+
+
+@staff_bp.route("/exam-session-planner/sessions/<int:session_id>/members", methods=["POST"])
+@login_required
+def update_exam_session_members(session_id):
+    if not validate_csrf():
+        flash("Security token expired. Please try again.", "error")
+        return redirect(url_for("staff.exam_session_planner"))
+
+    session_record = ExamSession.query.get_or_404(session_id)
+    selected_year = request.form.get("session_year", str(session_record.session_date.year)).strip()
+    modal_action = request.form.get("modal_action", "save_close").strip()
+
+    def session_members_redirect(*, keep_open=False):
+        args = {"session_year": selected_year}
+        if keep_open:
+            args["open_session_modal"] = session_record.id
+        return redirect(url_for("staff.exam_session_planner", **args))
+
+    keep_modal_open_on_success = modal_action == "save"
+    supervisor_saved = save_exam_session_assignment_section(
+        session_record=session_record,
+        selected_year=selected_year,
+        section_key="supervisor",
+        assignment_model=ExamSessionSupervisorAssignment,
+        member_options=supervisor_member_options(),
+        section_label="supervisor",
+    )
+    if supervisor_saved is None:
+        return session_members_redirect(keep_open=True)
+
+    examiner_saved = save_exam_session_assignment_section(
+        session_record=session_record,
+        selected_year=selected_year,
+        section_key="examiner",
+        assignment_model=ExamSessionExaminerAssignment,
+        member_options=examiner_session_member_options(),
+        section_label="examiner",
+    )
+    if examiner_saved is None:
+        return session_members_redirect(keep_open=True)
+
+    intern_saved = save_exam_session_assignment_section(
+        session_record=session_record,
+        selected_year=selected_year,
+        section_key="intern",
+        assignment_model=ExamSessionInternAssignment,
+        member_options=intern_session_member_options(),
+        section_label="intern",
+    )
+    if intern_saved is None:
+        return session_members_redirect(keep_open=True)
+
+    db.session.flush()
+    used_member_ids = exam_session_staff_member_ids(session_record.id)
+    if len(used_member_ids) != len(set(used_member_ids)):
+        db.session.rollback()
+        flash("Each staff member can only be selected once within this exam session.", "error")
+        return session_members_redirect(keep_open=True)
+
+    if not save_exam_session_logistics(session_record):
+        db.session.rollback()
+        return session_members_redirect(keep_open=True)
+
+    db.session.flush()
+    logistics_concepts = ExamSessionLogisticsConcept.query.filter_by(exam_session_id=session_record.id).all()
+    if not logistics_enabled_for_session(session_record.id) and logistics_concepts_have_data(logistics_concepts):
+        db.session.rollback()
+        flash("Remove all Logistics concepts before deactivating Logistics from the session.", "error")
+        return session_members_redirect(keep_open=True)
+
+    update_exam_session_overall_status(session_record)
+    db.session.commit()
+    flash(
+        f"Session staff members saved successfully. {supervisor_saved} supervisor {('row' if supervisor_saved == 1 else 'rows')}, {examiner_saved} examiner {('row' if examiner_saved == 1 else 'rows')} and {intern_saved} intern {('row' if intern_saved == 1 else 'rows')} updated.",
+        "success",
+    )
+    return session_members_redirect(keep_open=keep_modal_open_on_success)
+
+
+@staff_bp.route("/exam-session-planner/logistics-concepts/<int:concept_id>/notes", methods=["POST"])
+@login_required
+def add_logistics_concept_note(concept_id):
+    concept = ExamSessionLogisticsConcept.query.get_or_404(concept_id)
+    session_record = ExamSession.query.get_or_404(concept.exam_session_id)
+    if not validate_csrf():
+        flash("Security token expired. Please try again.", "error")
+        return logistics_redirect(session_record)
+
+    note = request.form.get("interview", "").strip()
+    if not note:
+        flash("History note cannot be empty.", "error")
+        return logistics_redirect(session_record)
+
+    db.session.add(
+        ExamSessionLogisticsConceptNote(
+            logistics_concept_id=concept.id,
+            comment=note,
+            created_by=session.get("user"),
+        )
+    )
+    db.session.commit()
+    flash("History note added successfully.", "success")
+    return logistics_redirect(session_record)
+
+
+@staff_bp.route("/exam-session-planner/years", methods=["POST"])
+@login_required
+def add_exam_session_year():
+    if not validate_csrf():
+        flash("Security token expired. Please try again.", "error")
+        return redirect(url_for("staff.exam_session_planner"))
+    next_year = next_exam_session_year()
+    existing = ExamSessionYear.query.filter_by(year=next_year).first()
+    if existing:
+        existing.is_archived = False
+    else:
+        db.session.add(ExamSessionYear(year=next_year, is_archived=False))
+    db.session.commit()
+    flash(f"{next_year} added successfully.", "success")
+    return exam_session_year_redirect(next_year)
+
+
+@staff_bp.route("/exam-session-planner/years/duplicate", methods=["POST"])
+@login_required
+def duplicate_exam_session_year():
+    if not validate_csrf():
+        flash("Security token expired. Please try again.", "error")
+        return redirect(url_for("staff.exam_session_planner"))
+
+    source_year = latest_available_exam_session_year()
+    target_year = next_exam_session_year()
+    if source_year is None:
+        ensure_exam_session_year(target_year)
+        db.session.commit()
+        flash(f"{target_year} added successfully.", "success")
+        return exam_session_year_redirect(target_year)
+
+    ensure_exam_session_year(target_year)
+    source_sessions = (
+        ExamSession.query.filter(db.extract("year", ExamSession.session_date) == source_year)
+        .order_by(ExamSession.session_date.asc(), ExamSession.id.asc())
+        .all()
+    )
+    session_map = {}
+    for source_session in source_sessions:
+        new_session = ExamSession(
+            exam_session_name=source_session.exam_session_name,
+            category=source_session.category,
+            rsg_enabled=source_session.rsg_enabled,
+            pen_enabled=source_session.pen_enabled,
+            pst_enabled=source_session.pst_enabled,
+            status=source_session.status,
+            session_date=same_day_in_year(source_session.session_date, target_year),
+            shifts=source_session.shifts,
+            modules=source_session.modules,
+            full_address_google_maps=source_session.full_address_google_maps,
+            city=source_session.city,
+            province=source_session.province,
+            format=source_session.format,
+            location_url=source_session.location_url,
+            details_url=source_session.details_url,
+        )
+        db.session.add(new_session)
+        db.session.flush()
+        session_map[source_session.id] = new_session.id
+
+    if session_map:
+        source_assignments = ExamSessionSupervisorAssignment.query.filter(
+            ExamSessionSupervisorAssignment.exam_session_id.in_(session_map.keys())
+        ).all()
+        for assignment in source_assignments:
+            db.session.add(
+                ExamSessionSupervisorAssignment(
+                    exam_session_id=session_map[assignment.exam_session_id],
+                    non_available_member_ids=assignment.non_available_member_ids,
+                    team_member_id=assignment.team_member_id,
+                    participation_status=assignment.participation_status,
+                    logistics_enabled=assignment.logistics_enabled,
+                    logistics_type=normalize_assignment_logistics_type(
+                        getattr(assignment, "logistics_type", ""),
+                        assignment.logistics_enabled,
+                    ),
+                    manual_fee_override=assignment.manual_fee_override,
+                    km=assignment.km,
+                    start_time=assignment.start_time,
+                    end_time=assignment.end_time,
+                    time_ranges=assignment.time_ranges,
+                    role_fee=assignment.role_fee,
+                    role_fee_currency=assignment.role_fee_currency,
+                    role_fee_base_value=assignment.role_fee_base_value,
+                    role_fee_unit=assignment.role_fee_unit,
+                    role_fee_last_calculated_on=assignment.role_fee_last_calculated_on,
+                    role_fee_last_recalculated_on=assignment.role_fee_last_recalculated_on,
+                    device_dep=assignment.device_dep,
+                    device_dep_currency=assignment.device_dep_currency,
+                    device_dep_base_value=assignment.device_dep_base_value,
+                    device_dep_unit=assignment.device_dep_unit,
+                    device_dep_last_calculated_on=assignment.device_dep_last_calculated_on,
+                    device_dep_last_recalculated_on=assignment.device_dep_last_recalculated_on,
+                    commuting=assignment.commuting,
+                    commuting_currency=assignment.commuting_currency,
+                    commuting_base_value=assignment.commuting_base_value,
+                    commuting_unit=assignment.commuting_unit,
+                    commuting_last_calculated_on=assignment.commuting_last_calculated_on,
+                    commuting_last_recalculated_on=assignment.commuting_last_recalculated_on,
+                    fuel=assignment.fuel,
+                    fuel_enabled=assignment.fuel_enabled,
+                    fuel_currency=assignment.fuel_currency,
+                    fuel_base_value=assignment.fuel_base_value,
+                    fuel_unit=assignment.fuel_unit,
+                    fuel_last_calculated_on=assignment.fuel_last_calculated_on,
+                    fuel_last_recalculated_on=assignment.fuel_last_recalculated_on,
+                    vehicle_dep=assignment.vehicle_dep,
+                    vehicle_dep_currency=assignment.vehicle_dep_currency,
+                    vehicle_dep_base_value=assignment.vehicle_dep_base_value,
+                    vehicle_dep_unit=assignment.vehicle_dep_unit,
+                    vehicle_dep_last_calculated_on=assignment.vehicle_dep_last_calculated_on,
+                    vehicle_dep_last_recalculated_on=assignment.vehicle_dep_last_recalculated_on,
+                    seniority_fee=assignment.seniority_fee,
+                    seniority_applied=assignment.seniority_applied,
+                    seniority_percentage=assignment.seniority_percentage,
+                    seniority_currency=assignment.seniority_currency,
+                    seniority_last_calculated_on=assignment.seniority_last_calculated_on,
+                    seniority_last_recalculated_on=assignment.seniority_last_recalculated_on,
+                    fee_frozen_on=assignment.fee_frozen_on,
+                    fee_frozen_status=assignment.fee_frozen_status,
+                )
+            )
+        source_examiner_assignments = ExamSessionExaminerAssignment.query.filter(
+            ExamSessionExaminerAssignment.exam_session_id.in_(session_map.keys())
+        ).all()
+        for assignment in source_examiner_assignments:
+            db.session.add(
+                ExamSessionExaminerAssignment(
+                    exam_session_id=session_map[assignment.exam_session_id],
+                    non_available_member_ids=assignment.non_available_member_ids,
+                    team_member_id=assignment.team_member_id,
+                    participation_status=assignment.participation_status,
+                    logistics_enabled=assignment.logistics_enabled,
+                    logistics_type=normalize_assignment_logistics_type(
+                        getattr(assignment, "logistics_type", ""),
+                        assignment.logistics_enabled,
+                    ),
+                    manual_fee_override=assignment.manual_fee_override,
+                    km=assignment.km,
+                    start_time=assignment.start_time,
+                    end_time=assignment.end_time,
+                    time_ranges=assignment.time_ranges,
+                    role_fee=assignment.role_fee,
+                    role_fee_currency=assignment.role_fee_currency,
+                    role_fee_base_value=assignment.role_fee_base_value,
+                    role_fee_unit=assignment.role_fee_unit,
+                    role_fee_last_calculated_on=assignment.role_fee_last_calculated_on,
+                    role_fee_last_recalculated_on=assignment.role_fee_last_recalculated_on,
+                    device_dep=assignment.device_dep,
+                    device_dep_currency=assignment.device_dep_currency,
+                    device_dep_base_value=assignment.device_dep_base_value,
+                    device_dep_unit=assignment.device_dep_unit,
+                    device_dep_last_calculated_on=assignment.device_dep_last_calculated_on,
+                    device_dep_last_recalculated_on=assignment.device_dep_last_recalculated_on,
+                    commuting=assignment.commuting,
+                    commuting_currency=assignment.commuting_currency,
+                    commuting_base_value=assignment.commuting_base_value,
+                    commuting_unit=assignment.commuting_unit,
+                    commuting_last_calculated_on=assignment.commuting_last_calculated_on,
+                    commuting_last_recalculated_on=assignment.commuting_last_recalculated_on,
+                    fuel=assignment.fuel,
+                    fuel_enabled=assignment.fuel_enabled,
+                    fuel_currency=assignment.fuel_currency,
+                    fuel_base_value=assignment.fuel_base_value,
+                    fuel_unit=assignment.fuel_unit,
+                    fuel_last_calculated_on=assignment.fuel_last_calculated_on,
+                    fuel_last_recalculated_on=assignment.fuel_last_recalculated_on,
+                    vehicle_dep=assignment.vehicle_dep,
+                    vehicle_dep_currency=assignment.vehicle_dep_currency,
+                    vehicle_dep_base_value=assignment.vehicle_dep_base_value,
+                    vehicle_dep_unit=assignment.vehicle_dep_unit,
+                    vehicle_dep_last_calculated_on=assignment.vehicle_dep_last_calculated_on,
+                    vehicle_dep_last_recalculated_on=assignment.vehicle_dep_last_recalculated_on,
+                    seniority_fee=assignment.seniority_fee,
+                    seniority_applied=assignment.seniority_applied,
+                    seniority_percentage=assignment.seniority_percentage,
+                    seniority_currency=assignment.seniority_currency,
+                    seniority_last_calculated_on=assignment.seniority_last_calculated_on,
+                    seniority_last_recalculated_on=assignment.seniority_last_recalculated_on,
+                    fee_frozen_on=assignment.fee_frozen_on,
+                    fee_frozen_status=assignment.fee_frozen_status,
+                )
+            )
+        source_intern_assignments = ExamSessionInternAssignment.query.filter(
+            ExamSessionInternAssignment.exam_session_id.in_(session_map.keys())
+        ).all()
+        for assignment in source_intern_assignments:
+            db.session.add(
+                ExamSessionInternAssignment(
+                    exam_session_id=session_map[assignment.exam_session_id],
+                    non_available_member_ids=assignment.non_available_member_ids,
+                    team_member_id=assignment.team_member_id,
+                    participation_status=assignment.participation_status,
+                    logistics_enabled=assignment.logistics_enabled,
+                    logistics_type=normalize_assignment_logistics_type(
+                        getattr(assignment, "logistics_type", ""),
+                        assignment.logistics_enabled,
+                    ),
+                    manual_fee_override=assignment.manual_fee_override,
+                    km=assignment.km,
+                    start_time=assignment.start_time,
+                    end_time=assignment.end_time,
+                    time_ranges=assignment.time_ranges,
+                    role_fee=assignment.role_fee,
+                    role_fee_currency=assignment.role_fee_currency,
+                    role_fee_base_value=assignment.role_fee_base_value,
+                    role_fee_unit=assignment.role_fee_unit,
+                    role_fee_last_calculated_on=assignment.role_fee_last_calculated_on,
+                    role_fee_last_recalculated_on=assignment.role_fee_last_recalculated_on,
+                    device_dep=assignment.device_dep,
+                    device_dep_currency=assignment.device_dep_currency,
+                    device_dep_base_value=assignment.device_dep_base_value,
+                    device_dep_unit=assignment.device_dep_unit,
+                    device_dep_last_calculated_on=assignment.device_dep_last_calculated_on,
+                    device_dep_last_recalculated_on=assignment.device_dep_last_recalculated_on,
+                    commuting=assignment.commuting,
+                    commuting_currency=assignment.commuting_currency,
+                    commuting_base_value=assignment.commuting_base_value,
+                    commuting_unit=assignment.commuting_unit,
+                    commuting_last_calculated_on=assignment.commuting_last_calculated_on,
+                    commuting_last_recalculated_on=assignment.commuting_last_recalculated_on,
+                    fuel=assignment.fuel,
+                    fuel_enabled=assignment.fuel_enabled,
+                    fuel_currency=assignment.fuel_currency,
+                    fuel_base_value=assignment.fuel_base_value,
+                    fuel_unit=assignment.fuel_unit,
+                    fuel_last_calculated_on=assignment.fuel_last_calculated_on,
+                    fuel_last_recalculated_on=assignment.fuel_last_recalculated_on,
+                    vehicle_dep=assignment.vehicle_dep,
+                    vehicle_dep_currency=assignment.vehicle_dep_currency,
+                    vehicle_dep_base_value=assignment.vehicle_dep_base_value,
+                    vehicle_dep_unit=assignment.vehicle_dep_unit,
+                    vehicle_dep_last_calculated_on=assignment.vehicle_dep_last_calculated_on,
+                    vehicle_dep_last_recalculated_on=assignment.vehicle_dep_last_recalculated_on,
+                    seniority_fee=assignment.seniority_fee,
+                    seniority_applied=assignment.seniority_applied,
+                    seniority_percentage=assignment.seniority_percentage,
+                    seniority_currency=assignment.seniority_currency,
+                    seniority_last_calculated_on=assignment.seniority_last_calculated_on,
+                    seniority_last_recalculated_on=assignment.seniority_last_recalculated_on,
+                    fee_frozen_on=assignment.fee_frozen_on,
+                    fee_frozen_status=assignment.fee_frozen_status,
+                )
+            )
+        source_registrations = ExamSessionMonthlyRegistration.query.filter(
+            ExamSessionMonthlyRegistration.exam_session_id.in_(session_map.keys())
+        ).all()
+        for registration in source_registrations:
+            db.session.add(
+                ExamSessionMonthlyRegistration(
+                    exam_session_id=session_map[registration.exam_session_id],
+                    month=registration.month,
+                    module=registration.module,
+                    registration_number=registration.registration_number,
+                )
+            )
+        source_totals = ExamSessionMonthlyCandidateTotal.query.filter(
+            ExamSessionMonthlyCandidateTotal.exam_session_id.in_(session_map.keys())
+        ).all()
+        for total in source_totals:
+            db.session.add(
+                ExamSessionMonthlyCandidateTotal(
+                    exam_session_id=session_map[total.exam_session_id],
+                    month=total.month,
+                    total_candidates=total.total_candidates,
+                )
+            )
+        source_logistics = ExamSessionLogistics.query.filter(
+            ExamSessionLogistics.exam_session_id.in_(session_map.keys())
+        ).all()
+        for logistics in source_logistics:
+            db.session.add(
+                ExamSessionLogistics(
+                    exam_session_id=session_map[logistics.exam_session_id],
+                    logistics_files_url=logistics.logistics_files_url,
+                )
+            )
+        source_concepts = ExamSessionLogisticsConcept.query.filter(
+            ExamSessionLogisticsConcept.exam_session_id.in_(session_map.keys())
+        ).all()
+        concept_map = {}
+        for concept in source_concepts:
+            new_concept = ExamSessionLogisticsConcept(
+                exam_session_id=session_map[concept.exam_session_id],
+                status=concept.status,
+                provider_id=concept.provider_id,
+                provider=concept.provider,
+                currency=concept.currency,
+                fee=concept.fee,
+            )
+            db.session.add(new_concept)
+            db.session.flush()
+            concept_map[concept.id] = new_concept.id
+        if concept_map:
+            source_notes = ExamSessionLogisticsConceptNote.query.filter(
+                ExamSessionLogisticsConceptNote.logistics_concept_id.in_(concept_map.keys())
+            ).all()
+            for note in source_notes:
+                db.session.add(
+                    ExamSessionLogisticsConceptNote(
+                        logistics_concept_id=concept_map[note.logistics_concept_id],
+                        comment=note.comment,
+                        created_by=note.created_by,
+                    )
+                )
+
+    db.session.commit()
+    flash(f"{target_year} duplicated from {source_year} successfully.", "success")
+    return exam_session_year_redirect(target_year)
+
+
+@staff_bp.route("/exam-session-planner/years/<int:year>/archive", methods=["POST"])
+@login_required
+def archive_exam_session_year(year):
+    if not validate_csrf():
+        flash("Security token expired. Please try again.", "error")
+        return redirect(url_for("staff.exam_session_planner"))
+    year_record = ExamSessionYear.query.filter_by(year=year).first_or_404()
+    year_record.is_archived = True
+    db.session.commit()
+    flash(f"{year} archived successfully.", "success")
+    active_years = active_exam_session_years()
+    target_year = 2026 if any(item.year == 2026 for item in active_years) else active_years[-1].year
+    return exam_session_year_redirect(target_year)
+
+
+@staff_bp.route("/exam-session-planner/years/<int:year>/unarchive", methods=["POST"])
+@login_required
+def unarchive_exam_session_year(year):
+    if not validate_csrf():
+        flash("Security token expired. Please try again.", "error")
+        return redirect(url_for("staff.exam_session_planner"))
+    year_record = ExamSessionYear.query.filter_by(year=year).first_or_404()
+    year_record.is_archived = False
+    db.session.commit()
+    flash(f"{year} restored successfully.", "success")
+    return exam_session_year_redirect(year)
+
+
+@staff_bp.route("/exam-session-planner/years/<int:year>/delete", methods=["POST"])
+@login_required
+def delete_exam_session_year(year):
+    if not validate_csrf():
+        flash("Security token expired. Please try again.", "error")
+        return redirect(url_for("staff.exam_session_planner"))
+    year_record = ExamSessionYear.query.filter_by(year=year).first_or_404()
+    session_ids = [
+        item.id for item in ExamSession.query.filter(db.extract("year", ExamSession.session_date) == year).all()
+    ]
+    if session_ids:
+        ExamSessionSupervisorAssignment.query.filter(
+            ExamSessionSupervisorAssignment.exam_session_id.in_(session_ids)
+        ).delete(synchronize_session=False)
+        ExamSessionExaminerAssignment.query.filter(
+            ExamSessionExaminerAssignment.exam_session_id.in_(session_ids)
+        ).delete(synchronize_session=False)
+        ExamSessionInternAssignment.query.filter(
+            ExamSessionInternAssignment.exam_session_id.in_(session_ids)
+        ).delete(synchronize_session=False)
+        concept_ids = [
+            concept_id for (concept_id,) in ExamSessionLogisticsConcept.query.with_entities(ExamSessionLogisticsConcept.id).filter(
+                ExamSessionLogisticsConcept.exam_session_id.in_(session_ids)
+            ).all()
+        ]
+        if concept_ids:
+            ExamSessionLogisticsConceptNote.query.filter(
+                ExamSessionLogisticsConceptNote.logistics_concept_id.in_(concept_ids)
+            ).delete(synchronize_session=False)
+        ExamSessionLogisticsConcept.query.filter(
+            ExamSessionLogisticsConcept.exam_session_id.in_(session_ids)
+        ).delete(synchronize_session=False)
+        ExamSessionLogistics.query.filter(
+            ExamSessionLogistics.exam_session_id.in_(session_ids)
+        ).delete(synchronize_session=False)
+        ExamSessionMonthlyRegistration.query.filter(
+            ExamSessionMonthlyRegistration.exam_session_id.in_(session_ids)
+        ).delete(synchronize_session=False)
+        ExamSessionMonthlyCandidateTotal.query.filter(
+            ExamSessionMonthlyCandidateTotal.exam_session_id.in_(session_ids)
+        ).delete(synchronize_session=False)
+        workflow_ids = [
+            workflow_id for (workflow_id,) in ExamSessionScheduleWorkflow.query.with_entities(ExamSessionScheduleWorkflow.id).filter(
+                ExamSessionScheduleWorkflow.exam_session_id.in_(session_ids)
+            ).all()
+        ]
+        if workflow_ids:
+            ExamSessionScheduleEvent.query.filter(
+                ExamSessionScheduleEvent.workflow_id.in_(workflow_ids)
+            ).delete(synchronize_session=False)
+        ExamSessionScheduleWorkflow.query.filter(
+            ExamSessionScheduleWorkflow.exam_session_id.in_(session_ids)
+        ).delete(synchronize_session=False)
+    ExamSession.query.filter(db.extract("year", ExamSession.session_date) == year).delete(synchronize_session=False)
+    db.session.delete(year_record)
+    db.session.commit()
+    flash(f"{year} permanently deleted.", "success")
+    return exam_session_year_redirect()
+
+
+@staff_bp.route("/")
+@login_required
+def index():
+    query_text = request.args.get("q", "").strip()
+    status = request.args.get("status", "").strip()
+    selected_roles = [role for role in request.args.getlist("roles") if role in ROLE_OPTIONS]
+    legacy_role = request.args.get("role", "").strip()
+    if legacy_role in ROLE_OPTIONS and legacy_role not in selected_roles:
+        selected_roles.append(legacy_role)
+    has_car = request.args.get("has_car", "").strip()
+    show_archived = request.args.get("show_archived") == "1"
+    show_rejected = request.args.get("show_rejected") == "1"
+    sort_by = request.args.get("sort", "").strip()
+    sort_dir = request.args.get("dir", "asc").strip()
+    sortable_columns = {
+        "full_name": AcademicStaff.full_name,
+        "title": AcademicStaff.title,
+        "city": AcademicStaff.city,
+        "province": AcademicStaff.province,
+        "country": AcademicStaff.country,
+        "started_in": AcademicStaff.started_in,
+        "updated_on": AcademicStaff.updated_on,
+    }
+    if sort_by not in sortable_columns:
+        sort_by = ""
+    if sort_dir not in {"asc", "desc"}:
+        sort_dir = "asc"
+    if status not in EDIT_STATUS_OPTIONS:
+        status = ""
+
+    query = AcademicStaff.query
+    if show_archived:
+        query = query.filter(AcademicStaff.status == "Archived")
+    else:
+        query = query.filter(AcademicStaff.status != "Archived")
+
+    if query_text:
+        like = f"%{query_text}%"
+        query = query.filter(
+            db.or_(
+                AcademicStaff.full_name.ilike(like),
+                AcademicStaff.email.ilike(like),
+                AcademicStaff.phone.ilike(like),
+                AcademicStaff.city.ilike(like),
+                AcademicStaff.province.ilike(like),
+                AcademicStaff.country.ilike(like),
+                AcademicStaff.account_id.ilike(like),
+                AcademicStaff.account_owner.ilike(like),
+            )
+        )
+    if status:
+        query = query.filter(AcademicStaff.status == status)
+    if selected_roles:
+        query = query.filter(
+            db.or_(*(AcademicStaff.roles.ilike(f"%{role}%") for role in selected_roles))
+        )
+    if has_car:
+        query = query.filter(AcademicStaff.has_car == has_car)
+
+    if sort_by:
+        if sort_by == "updated_on":
+            sort_column = sortable_columns[sort_by]
+        elif sort_by == "started_in":
+            sort_column = db.cast(sortable_columns[sort_by], db.Integer)
+        else:
+            sort_column = db.func.lower(sortable_columns[sort_by])
+        sort_expression = sort_column.desc() if sort_dir == "desc" else sort_column.asc()
+        secondary_sort = AcademicStaff.full_name.asc() if sort_by == "updated_on" else AcademicStaff.updated_on.desc()
+        query = query.order_by(sort_expression, secondary_sort)
+    else:
+        query = query.order_by(AcademicStaff.updated_on.desc())
+
+    def sort_url(column):
+        args = request.args.to_dict(flat=False)
+        current_sort = args.get("sort", [""])[0]
+        current_dir = args.get("dir", ["asc"])[0]
+        next_dir = "desc" if current_sort == column and current_dir == "asc" else "asc"
+        args["sort"] = [column]
+        args["dir"] = [next_dir]
+        args["page"] = ["1"]
+        return url_for("staff.index", **args)
+
+    members, pagination = paginate_query(query)
+    confirmed_session_counts = confirmed_session_counts_by_member([member.id for member in members])
+    potential_entries = (
+        PotentialEntry.query.filter(PotentialEntry.is_rejected == show_rejected)
+        .order_by(PotentialEntry.updated_on.desc())
+        .all()
+    )
+    return render_template(
+        "staff/index.html",
+        members=members,
+        pagination=pagination,
+        potential_entries=potential_entries,
+        roles=ROLE_OPTIONS,
+        statuses=EDIT_STATUS_OPTIONS,
+        create_statuses=CREATE_STATUS_OPTIONS,
+        potential_statuses=POTENTIAL_STATUS_OPTIONS,
+        interviewer_options=INTERVIEWER_OPTIONS,
+        confirmed_session_counts=confirmed_session_counts,
+        filters={
+            "q": query_text,
+            "status": status,
+            "roles": selected_roles,
+            "has_car": has_car,
+            "show_archived": show_archived,
+            "show_rejected": show_rejected,
+            "sort": sort_by,
+            "dir": sort_dir,
+        },
+        sort_url=sort_url,
+        csrf_token=session.get("csrf_token"),
+    )
+
+
+@staff_bp.route("/annual-certification-programme")
+@login_required
+def annual_certification_programme():
+    query_text = request.args.get("q", "").strip()
+    status = request.args.get("status", "").strip()
+    selected_roles = [role for role in request.args.getlist("roles") if role in ROLE_OPTIONS]
+    year = request.args.get("year", "").strip()
+    completed_certification = request.args.get("completed_certification", "").strip()
+    pending_certification = request.args.get("pending_certification", "").strip()
+    remote_training_filter = request.args.get("remote_training", "").strip()
+    annual_meeting_filter = request.args.get("annual_meeting", "").strip()
+    fut_filter = request.args.get("fut", "").strip()
+    no_years_yet = request.args.get("no_years_yet", "").strip()
+    selected_certification_year, examiner_years = selected_examiner_certification_year()
+
+    if status not in {"", "Active"}:
+        status = ""
+    if completed_certification not in STAFF_YEAR_CERTIFICATION_KEYS:
+        completed_certification = ""
+    if pending_certification not in STAFF_YEAR_CERTIFICATION_KEYS:
+        pending_certification = ""
+    if year and (not year.isdigit() or len(year) != 4):
+        year = ""
+    if remote_training_filter not in {"", "Pending", "With FUT", "Certified"}:
+        remote_training_filter = ""
+    if annual_meeting_filter not in {"", "Attended", "Absent"}:
+        annual_meeting_filter = ""
+    if fut_filter not in {"", "Without", "With completed FUT", "With pending FUT"}:
+        fut_filter = ""
+    if no_years_yet not in {"", "Yes", "No"}:
+        no_years_yet = ""
+
+    query = AcademicStaff.query.filter(
+        AcademicStaff.status == "Active",
+        db.or_(
+            AcademicStaff.roles.ilike("%Examiner%"),
+            AcademicStaff.roles.ilike("%RSG%"),
+        ),
+    )
+
+    if query_text:
+        like = f"%{query_text}%"
+        query = query.filter(
+            db.or_(
+                AcademicStaff.full_name.ilike(like),
+                AcademicStaff.email.ilike(like),
+                AcademicStaff.account_id.ilike(like),
+                AcademicStaff.account_owner.ilike(like),
+            )
+        )
+    if status:
+        query = query.filter(AcademicStaff.status == status)
+    if selected_roles:
+        query = query.filter(
+            db.or_(*(AcademicStaff.roles.ilike(f"%{role}%") for role in selected_roles))
+        )
+
+    year_number = selected_certification_year
+    if completed_certification:
+        completed_conditions = [
+            AnnualCertificationRecord.certification_type == completed_certification
+        ]
+        if year_number:
+            completed_conditions.append(AnnualCertificationRecord.year == year_number)
+        query = query.filter(
+            AcademicStaff.annual_certifications.any(
+                db.and_(*completed_conditions)
+            )
+        )
+    if pending_certification:
+        pending_conditions = [
+            AnnualCertificationRecord.certification_type == pending_certification
+        ]
+        if year_number:
+            pending_conditions.append(AnnualCertificationRecord.year == year_number)
+        query = query.filter(
+            ~AcademicStaff.annual_certifications.any(
+                db.and_(*pending_conditions)
+            )
+        )
+    if remote_training_filter:
+        query = query.filter(
+            AcademicStaff.examiner_remote_training_selections.any(
+                db.and_(
+                    ExaminerCertificationRemoteTrainingSelection.year == selected_certification_year,
+                    ExaminerCertificationRemoteTrainingSelection.status == remote_training_filter,
+                )
+            )
+        )
+    if annual_meeting_filter:
+        query = query.filter(
+            AcademicStaff.examiner_annual_meeting_selections.any(
+                db.and_(
+                    ExaminerCertificationAnnualMeetingSelection.year == selected_certification_year,
+                    ExaminerCertificationAnnualMeetingSelection.status == annual_meeting_filter,
+                )
+            )
+        )
+    if fut_filter:
+        fut1_exists = AcademicStaff.examiner_fut1_selections.any(
+            ExaminerCertificationFut1Selection.year == selected_certification_year
+        )
+        fut1_pending_exists = AcademicStaff.examiner_fut1_selections.any(
+            db.and_(
+                ExaminerCertificationFut1Selection.year == selected_certification_year,
+                ExaminerCertificationFut1Selection.status == "pending",
+            )
+        )
+        if fut_filter == "Without":
+            query = query.filter(~fut1_exists)
+        elif fut_filter == "With pending FUT":
+            query = query.filter(fut1_pending_exists)
+        elif fut_filter == "With completed FUT":
+            query = query.filter(fut1_exists, ~fut1_pending_exists)
+
+    members = [
+        member
+        for member in query.order_by(AcademicStaff.full_name.asc()).all()
+        if {"Examiner", "RSG"}.intersection(member.roles_list())
+    ]
+    if pending_certification:
+        pending_definition = next(
+            (item for item in STAFF_YEAR_CERTIFICATION_TYPES if item["key"] == pending_certification),
+            None,
+        )
+        if pending_definition:
+            members = [
+                member for member in members if certification_allowed(member, pending_definition)
+            ]
+    member_ids = [member.id for member in members]
+    records = []
+    if member_ids:
+        records = (
+            AnnualCertificationRecord.query.filter(AnnualCertificationRecord.member_id.in_(member_ids))
+            .filter(AnnualCertificationRecord.year == selected_certification_year)
+            .order_by(AnnualCertificationRecord.year.asc())
+            .all()
+        )
+    certification_years = {}
+    for record in records:
+        certification_years.setdefault(record.member_id, {}).setdefault(record.certification_type, []).append(record)
+
+    remote_training_records = []
+    if member_ids:
+        remote_training_records = (
+            ExaminerCertificationRemoteTrainingSelection.query.filter(
+                ExaminerCertificationRemoteTrainingSelection.member_id.in_(member_ids),
+                ExaminerCertificationRemoteTrainingSelection.year == selected_certification_year,
+            )
+            .all()
+        )
+    remote_training_selections = {
+        selection.member_id: selection for selection in remote_training_records
+    }
+
+    annual_meeting_records = []
+    if member_ids:
+        annual_meeting_records = (
+            ExaminerCertificationAnnualMeetingSelection.query.filter(
+                ExaminerCertificationAnnualMeetingSelection.member_id.in_(member_ids),
+                ExaminerCertificationAnnualMeetingSelection.year == selected_certification_year,
+            )
+            .all()
+        )
+    annual_meeting_selections = {
+        selection.member_id: selection for selection in annual_meeting_records
+    }
+
+    fut_records = []
+    if member_ids:
+        fut_records = (
+            ExaminerCertificationFut1Selection.query.filter(
+                ExaminerCertificationFut1Selection.member_id.in_(member_ids),
+                ExaminerCertificationFut1Selection.year == selected_certification_year,
+            )
+            .order_by(ExaminerCertificationFut1Selection.option_name.asc())
+            .all()
+        )
+    fut_selections = {}
+    for selection in fut_records:
+        fut_selections.setdefault(selection.member_id, []).append(selection)
+
+    fut2_records = []
+    if member_ids:
+        fut2_records = (
+            ExaminerCertificationFut2Selection.query.filter(
+                ExaminerCertificationFut2Selection.member_id.in_(member_ids),
+                ExaminerCertificationFut2Selection.year == selected_certification_year,
+            )
+            .order_by(ExaminerCertificationFut2Selection.option_name.asc())
+            .all()
+        )
+    fut2_selections = {}
+    for selection in fut2_records:
+        fut2_selections.setdefault(selection.member_id, []).append(selection)
+
+    certification_statuses = {
+        member.id: certification_status_label(
+            member.id,
+            remote_training_selections,
+            annual_meeting_selections,
+            fut_selections,
+            fut2_selections,
+        )
+        for member in members
+    }
+
+    if no_years_yet:
+        expected_pending = no_years_yet == "Yes"
+        members = [
+            member
+            for member in members
+            if has_pending_certification(
+                member,
+                certification_years,
+                STAFF_CERTIFICATION_TYPES,
+                fut_selections,
+                fut2_selections,
+                remote_training_selections,
+                annual_meeting_selections,
+            ) == expected_pending
+        ]
+
+    members, pagination = paginate_items(members)
+    year_configuration = certification_year_configuration(EXAMINER_CERTIFICATION_MODULE_KEY, selected_certification_year)
+
+    return render_template(
+        "certification/index.html",
+        members=members,
+        pagination=pagination,
+        roles=ROLE_OPTIONS,
+        visible_role_filters=["Examiner", "RSG"],
+        statuses=["Active"],
+        certifications=STAFF_CERTIFICATION_TYPES,
+        filter_certifications=STAFF_YEAR_CERTIFICATION_TYPES,
+        certification_years=certification_years,
+        remote_training_selections=remote_training_selections,
+        remote_training_options=REMOTE_TRAINING_OPTIONS,
+        annual_meeting_selections=annual_meeting_selections,
+        annual_meeting_options=ANNUAL_MEETING_OPTIONS,
+        fut_selections=fut_selections,
+        fut2_selections=fut2_selections,
+        certification_statuses=certification_statuses,
+        fut_options=STAFF_FUT_OPTIONS,
+        examiner_years=examiner_years,
+        archived_examiner_years=(
+            ExaminerCertificationYear.query.filter_by(is_archived=True)
+            .order_by(ExaminerCertificationYear.year.desc())
+            .all()
+        ),
+        selected_certification_year=selected_certification_year,
+        certification_year_configuration=year_configuration,
+        certification_year_settings_endpoint="staff.update_examiner_certification_year_settings",
+        certification_annual_meeting_date_value=certification_date_value(year_configuration.annual_meeting_date) if year_configuration else "",
+        certification_annual_meeting_time_value=certification_time_value(year_configuration.annual_meeting_time) if year_configuration else "",
+        certification_remote_training_period_value=certification_remote_training_period_value(year_configuration),
+        certification_allowed=certification_allowed,
+        current_year=current_year(),
+        show_certification_bulk_actions=True,
+        bulk_certification_update_endpoint="staff.bulk_update_examiner_certification",
+        filters={
+            "q": query_text,
+            "status": status,
+            "roles": selected_roles,
+            "year": year,
+            "completed_certification": completed_certification,
+            "pending_certification": pending_certification,
+            "remote_training": remote_training_filter,
+            "annual_meeting": annual_meeting_filter,
+            "fut": fut_filter,
+            "no_years_yet": no_years_yet,
+        },
+        csrf_token=session.get("csrf_token"),
+    )
+
+
+def update_or_create_status_selection(model, member_id, year, status):
+    selection = model.query.filter_by(member_id=member_id, year=year).first()
+    if selection:
+        selection.status = status
+    else:
+        db.session.add(model(member_id=member_id, year=year, status=status))
+
+
+def bulk_update_certification_members(
+    *,
+    role,
+    selected_year,
+    redirect_endpoint,
+    remote_model,
+    annual_model,
+):
+    if not validate_csrf():
+        flash("Security token expired. Please try again.", "error")
+        return redirect(url_for(redirect_endpoint))
+
+    member_ids = [int(value) for value in request.form.getlist("member_ids") if value.isdigit()]
+    bulk_action = request.form.get("bulk_action", "").strip()
+    status = request.form.get("status", "").strip()
+
+    if not member_ids:
+        flash("Please select at least one member before applying a bulk action.", "error")
+        return redirect(url_for(redirect_endpoint, certification_year=selected_year))
+
+    members = [
+        member
+        for member in AcademicStaff.query.filter(
+            AcademicStaff.id.in_(member_ids),
+            AcademicStaff.status == "Active",
+            AcademicStaff.roles.ilike(f"%{role}%"),
+        ).all()
+        if role in member.roles_list()
+    ]
+    if not members:
+        flash("No selected active members were found for this certification menu.", "error")
+        return redirect(url_for(redirect_endpoint, certification_year=selected_year))
+
+    if bulk_action == "annual_meeting":
+        if status not in ANNUAL_MEETING_OPTIONS:
+            flash("Please select a valid Annual meeting status.", "error")
+            return redirect(url_for(redirect_endpoint, certification_year=selected_year))
+        for member in members:
+            update_or_create_status_selection(annual_model, member.id, selected_year, status)
+        label = "Annual meeting"
+    elif bulk_action == "remote_training":
+        if status not in REMOTE_TRAINING_OPTIONS:
+            flash("Please select a valid Remote training status.", "error")
+            return redirect(url_for(redirect_endpoint, certification_year=selected_year))
+        for member in members:
+            update_or_create_status_selection(remote_model, member.id, selected_year, status)
+        label = "Remote training"
+    else:
+        flash("Please select a valid bulk action.", "error")
+        return redirect(url_for(redirect_endpoint, certification_year=selected_year))
+
+    db.session.commit()
+    count = len(members)
+    flash(f"{label} updated for {count} {('member' if count == 1 else 'members')}.", "success")
+    return redirect(url_for(redirect_endpoint, certification_year=selected_year))
+
+
+@staff_bp.route("/annual-certification-programme/export", methods=["POST"])
+@login_required
+def export_annual_certification():
+    if not validate_csrf():
+        flash("Security token expired. Please try again.", "error")
+        return redirect(url_for("staff.annual_certification_programme"))
+
+    member_ids = []
+    for value in request.form.getlist("member_ids"):
+        if value.isdigit():
+            member_ids.append(int(value))
+
+    if not member_ids:
+        flash("Please select at least one member to export.", "error")
+        return redirect(url_for("staff.annual_certification_programme"))
+
+    selected_certification_year, _ = selected_examiner_certification_year()
+    members = (
+        AcademicStaff.query.filter(
+            AcademicStaff.id.in_(member_ids),
+            AcademicStaff.status == "Active",
+            AcademicStaff.roles.ilike("%Examiner%"),
+        )
+        .order_by(AcademicStaff.full_name.asc())
+        .all()
+    )
+    if not members:
+        flash("No selected members were found.", "error")
+        return redirect(url_for("staff.annual_certification_programme"))
+
+    records = (
+        AnnualCertificationRecord.query.filter(AnnualCertificationRecord.member_id.in_([member.id for member in members]))
+        .filter(AnnualCertificationRecord.year == selected_certification_year)
+        .order_by(AnnualCertificationRecord.year.asc())
+        .all()
+    )
+    certification_years = {}
+    for record in records:
+        certification_years.setdefault(record.member_id, {}).setdefault(record.certification_type, []).append(record)
+
+    remote_training_records = (
+        ExaminerCertificationRemoteTrainingSelection.query.filter(
+            ExaminerCertificationRemoteTrainingSelection.member_id.in_([member.id for member in members]),
+            ExaminerCertificationRemoteTrainingSelection.year == selected_certification_year,
+        )
+        .all()
+    )
+    remote_training_selections = {
+        selection.member_id: selection for selection in remote_training_records
+    }
+
+    annual_meeting_records = (
+        ExaminerCertificationAnnualMeetingSelection.query.filter(
+            ExaminerCertificationAnnualMeetingSelection.member_id.in_([member.id for member in members]),
+            ExaminerCertificationAnnualMeetingSelection.year == selected_certification_year,
+        )
+        .all()
+    )
+    annual_meeting_selections = {
+        selection.member_id: selection for selection in annual_meeting_records
+    }
+
+    fut_records = (
+        ExaminerCertificationFut1Selection.query.filter(
+            ExaminerCertificationFut1Selection.member_id.in_([member.id for member in members]),
+            ExaminerCertificationFut1Selection.year == selected_certification_year,
+        )
+        .order_by(ExaminerCertificationFut1Selection.option_name.asc())
+        .all()
+    )
+    fut_selections = {}
+    for selection in fut_records:
+        fut_selections.setdefault(selection.member_id, []).append(selection)
+
+    fut2_records = (
+        ExaminerCertificationFut2Selection.query.filter(
+            ExaminerCertificationFut2Selection.member_id.in_([member.id for member in members]),
+            ExaminerCertificationFut2Selection.year == selected_certification_year,
+        )
+        .order_by(ExaminerCertificationFut2Selection.option_name.asc())
+        .all()
+    )
+    fut2_selections = {}
+    for selection in fut2_records:
+        fut2_selections.setdefault(selection.member_id, []).append(selection)
+
+    workbook = build_annual_certification_export(
+        members,
+        certification_years,
+        export_title="Examiner Certification Export",
+        sheet_title="Examiner Certification",
+        certification_types=STAFF_CERTIFICATION_TYPES,
+        fut_selections=fut_selections,
+        fut2_selections=fut2_selections,
+        remote_training_selections=remote_training_selections,
+        annual_meeting_selections=annual_meeting_selections,
+    )
+    filename = f"annual-certification-export-{datetime.now(LOCAL_TZ).strftime('%Y-%m-%d')}.xlsx"
+    return Response(
+        workbook,
+        mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
+@staff_bp.route("/annual-certification-programme/bulk-update", methods=["POST"])
+@login_required
+def bulk_update_examiner_certification():
+    selected_certification_year, _ = selected_examiner_certification_year()
+    return bulk_update_certification_members(
+        role="Examiner",
+        selected_year=selected_certification_year,
+        redirect_endpoint="staff.annual_certification_programme",
+        remote_model=ExaminerCertificationRemoteTrainingSelection,
+        annual_model=ExaminerCertificationAnnualMeetingSelection,
+    )
+
+
+@staff_bp.route("/annual-certification-programme/years", methods=["POST"])
+@login_required
+def add_examiner_certification_year():
+    if not validate_csrf():
+        flash("Security token expired. Please try again.", "error")
+        return redirect(url_for("staff.annual_certification_programme"))
+
+    all_years = [item.year for item in ExaminerCertificationYear.query.order_by(ExaminerCertificationYear.year.asc()).all()]
+    next_year = (max(all_years) + 1) if all_years else 2026
+    existing = ExaminerCertificationYear.query.filter_by(year=next_year).first()
+    if existing:
+        existing.is_archived = False
+    else:
+        db.session.add(ExaminerCertificationYear(year=next_year, is_archived=False))
+    db.session.commit()
+    flash(f"{next_year} added successfully.", "success")
+    return redirect(url_for("staff.annual_certification_programme", certification_year=next_year))
+
+
+@staff_bp.route("/annual-certification-programme/year-settings", methods=["POST"])
+@login_required
+def update_examiner_certification_year_settings():
+    if not validate_csrf():
+        flash("Security token expired. Please try again.", "error")
+        return redirect(url_for("staff.annual_certification_programme"))
+    selected_certification_year, _ = selected_examiner_certification_year()
+    save_certification_year_configuration(EXAMINER_CERTIFICATION_MODULE_KEY, selected_certification_year)
+    return redirect(url_for("staff.annual_certification_programme", certification_year=selected_certification_year))
+
+
+@staff_bp.route("/annual-certification-programme/years/<int:year>/archive", methods=["POST"])
+@login_required
+def archive_examiner_certification_year(year):
+    if not validate_csrf():
+        flash("Security token expired. Please try again.", "error")
+        return redirect(url_for("staff.annual_certification_programme"))
+
+    year_record = ExaminerCertificationYear.query.filter_by(year=year).first_or_404()
+    year_record.is_archived = True
+    db.session.commit()
+    flash(f"{year} archived successfully.", "success")
+    active_years = active_examiner_certification_years()
+    target_year = 2026 if any(item.year == 2026 for item in active_years) else active_years[-1].year
+    return redirect(url_for("staff.annual_certification_programme", certification_year=target_year))
+
+
+@staff_bp.route("/annual-certification-programme/years/<int:year>/unarchive", methods=["POST"])
+@login_required
+def unarchive_examiner_certification_year(year):
+    if not validate_csrf():
+        flash("Security token expired. Please try again.", "error")
+        return redirect(url_for("staff.annual_certification_programme"))
+
+    year_record = ExaminerCertificationYear.query.filter_by(year=year).first_or_404()
+    year_record.is_archived = False
+    db.session.commit()
+    flash(f"{year} restored successfully.", "success")
+    return redirect(url_for("staff.annual_certification_programme", certification_year=year))
+
+
+@staff_bp.route("/annual-certification-programme/years/<int:year>/delete", methods=["POST"])
+@login_required
+def delete_examiner_certification_year(year):
+    if not validate_csrf():
+        flash("Security token expired. Please try again.", "error")
+        return redirect(url_for("staff.annual_certification_programme"))
+
+    year_record = ExaminerCertificationYear.query.filter_by(year=year).first_or_404()
+    AnnualCertificationRecord.query.filter_by(year=year).delete(synchronize_session=False)
+    ExaminerCertificationRemoteTrainingSelection.query.filter_by(year=year).delete(synchronize_session=False)
+    ExaminerCertificationAnnualMeetingSelection.query.filter_by(year=year).delete(synchronize_session=False)
+    ExaminerCertificationFut1Selection.query.filter_by(year=year).delete(synchronize_session=False)
+    ExaminerCertificationFut2Selection.query.filter_by(year=year).delete(synchronize_session=False)
+    CertificationYearConfiguration.query.filter_by(module_key=EXAMINER_CERTIFICATION_MODULE_KEY, year=year).delete(synchronize_session=False)
+    db.session.delete(year_record)
+    db.session.commit()
+    flash(f"{year} permanently deleted.", "success")
+    return redirect(url_for("staff.annual_certification_programme"))
+
+
+@staff_bp.route("/annual-certification-programme/members/<int:member_id>/certifications", methods=["POST"])
+@login_required
+def add_annual_certification(member_id):
+    if not validate_csrf():
+        flash("Security token expired. Please try again.", "error")
+        return certification_redirect()
+
+    member = AcademicStaff.query.get_or_404(member_id)
+    certification_type = request.form.get("certification_type", "").strip()
+    selected_certification_year, _ = selected_examiner_certification_year()
+    year = str(selected_certification_year)
+    certification = next(
+        (item for item in STAFF_YEAR_CERTIFICATION_TYPES if item["key"] == certification_type),
+        None,
+    )
+    if not certification:
+        flash("Certification type is not valid.", "error")
+        return certification_redirect()
+    if member.status != "Active" or not certification_allowed(member, certification):
+        flash("This certification is not available for this member.", "error")
+        return certification_redirect()
+    if not year.isdigit() or len(year) != 4:
+        flash("Please enter a valid four-digit year.", "error")
+        return certification_redirect()
+
+    record = AnnualCertificationRecord(
+        member_id=member.id,
+        certification_type=certification_type,
+        year=int(year),
+        created_by=session.get("user"),
+        updated_by=session.get("user"),
+    )
+    db.session.add(record)
+    try:
+        db.session.commit()
+    except Exception:
+        db.session.rollback()
+        flash("That year is already registered for this certification.", "error")
+        return certification_redirect()
+
+    flash("Certification year added successfully.", "success")
+    return certification_redirect()
+
+
+@staff_bp.route("/annual-certification-programme/members/<int:member_id>/remote-training", methods=["POST"])
+@login_required
+def update_examiner_remote_training(member_id):
+    if not validate_csrf():
+        flash("Security token expired. Please try again.", "error")
+        return certification_redirect()
+
+    member = AcademicStaff.query.get_or_404(member_id)
+    selected_certification_year, _ = selected_examiner_certification_year()
+    status = request.form.get("remote_training_status", "").strip()
+    if member.status != "Active" or "Examiner" not in member.roles_list():
+        flash("Remote training is only available for active examiner members.", "error")
+        return certification_redirect()
+    selection = ExaminerCertificationRemoteTrainingSelection.query.filter_by(
+        member_id=member.id,
+        year=selected_certification_year,
+    ).first()
+    if not status:
+        if selection:
+            db.session.delete(selection)
+            db.session.commit()
+            flash("Remote training cleared successfully.", "success")
+        return certification_redirect()
+    if status not in REMOTE_TRAINING_OPTIONS:
+        flash("Please select a valid Stage 1 status.", "error")
+        return certification_redirect()
+
+    if selection:
+        selection.status = status
+    else:
+        db.session.add(
+            ExaminerCertificationRemoteTrainingSelection(
+                member_id=member.id,
+                year=selected_certification_year,
+                status=status,
+            )
+        )
+    db.session.commit()
+    flash("Remote training updated successfully.", "success")
+    return certification_redirect()
+
+
+@staff_bp.route("/annual-certification-programme/members/<int:member_id>/annual-meeting", methods=["POST"])
+@login_required
+def update_examiner_annual_meeting(member_id):
+    if not validate_csrf():
+        flash("Security token expired. Please try again.", "error")
+        return certification_redirect()
+
+    member = AcademicStaff.query.get_or_404(member_id)
+    selected_certification_year, _ = selected_examiner_certification_year()
+    status = request.form.get("annual_meeting_status", "").strip()
+    if member.status != "Active" or "Examiner" not in member.roles_list():
+        flash("Annual meeting is only available for active examiner members.", "error")
+        return certification_redirect()
+    selection = ExaminerCertificationAnnualMeetingSelection.query.filter_by(
+        member_id=member.id,
+        year=selected_certification_year,
+    ).first()
+    if not status:
+        if selection:
+            db.session.delete(selection)
+            db.session.commit()
+            flash("Annual meeting cleared successfully.", "success")
+        return certification_redirect()
+    if status not in ANNUAL_MEETING_OPTIONS:
+        flash("Please select a valid Annual meeting status.", "error")
+        return certification_redirect()
+
+    if selection:
+        selection.status = status
+    else:
+        db.session.add(
+            ExaminerCertificationAnnualMeetingSelection(
+                member_id=member.id,
+                year=selected_certification_year,
+                status=status,
+            )
+        )
+    db.session.commit()
+    flash("Annual meeting updated successfully.", "success")
+    return certification_redirect()
+
+
+@staff_bp.route("/annual-certification-programme/members/<int:member_id>/fut", methods=["POST"])
+@login_required
+def update_fut_checkbox(member_id):
+    if not validate_csrf():
+        flash("Security token expired. Please try again.", "error")
+        return certification_redirect()
+
+    member = AcademicStaff.query.get_or_404(member_id)
+    member.fut_checked = "yes" in request.form.getlist("fut_checked")
+    db.session.commit()
+    return certification_redirect()
+
+
+@staff_bp.route("/annual-certification-programme/members/<int:member_id>/fut-options", methods=["POST"])
+@login_required
+def add_staff_fut_options(member_id):
+    if not validate_csrf():
+        flash("Security token expired. Please try again.", "error")
+        return certification_redirect()
+
+    member = AcademicStaff.query.get_or_404(member_id)
+    selected_certification_year, _ = selected_examiner_certification_year()
+    if member.status != "Active":
+        flash("FUT options are only available for visible members.", "error")
+        return certification_redirect()
+
+    selected_options = [
+        option for option in request.form.getlist("fut_options")
+        if option in STAFF_FUT_OPTIONS
+    ]
+    if not selected_options:
+        flash("Please select at least one FUT option.", "error")
+        return certification_redirect()
+
+    existing_options = {
+        selection.option_name
+        for selection in ExaminerCertificationFut1Selection.query.filter_by(
+            member_id=member.id,
+            year=selected_certification_year,
+        ).all()
+    }
+    added = 0
+    for option in selected_options:
+        if option in existing_options:
+            continue
+        db.session.add(
+            ExaminerCertificationFut1Selection(
+                member_id=member.id,
+                option_name=option,
+                status="pending",
+                year=selected_certification_year,
+            )
+        )
+        existing_options.add(option)
+        added += 1
+
+    if added:
+        sync_remote_training_from_fut(member.id, selected_certification_year)
+        db.session.commit()
+        flash("FUT option added successfully.", "success")
+    else:
+        flash("Selected FUT options are already registered.", "error")
+    return certification_redirect()
+
+
+@staff_bp.route("/annual-certification-programme/fut-options/<int:selection_id>/toggle", methods=["POST"])
+@login_required
+def toggle_staff_fut_option(selection_id):
+    if not validate_csrf():
+        flash("Security token expired. Please try again.", "error")
+        return certification_redirect()
+
+    selection = ExaminerCertificationFut1Selection.query.get_or_404(selection_id)
+    selection.status = "pending" if selection.status == "completed" else "completed"
+    sync_remote_training_from_fut(selection.member_id, selection.year)
+    db.session.commit()
+    return certification_redirect()
+
+
+@staff_bp.route("/annual-certification-programme/fut-options/<int:selection_id>/delete", methods=["POST"])
+@login_required
+def delete_staff_fut_option(selection_id):
+    if not validate_csrf():
+        flash("Security token expired. Please try again.", "error")
+        return certification_redirect()
+
+    selection = ExaminerCertificationFut1Selection.query.get_or_404(selection_id)
+    member_id = selection.member_id
+    year = selection.year
+    db.session.delete(selection)
+    sync_remote_training_from_fut(member_id, year)
+    db.session.commit()
+    flash("FUT option removed successfully.", "success")
+    return certification_redirect()
+
+
+@staff_bp.route("/annual-certification-programme/members/<int:member_id>/fut-2-options", methods=["POST"])
+@login_required
+def add_staff_fut2_options(member_id):
+    if not validate_csrf():
+        flash("Security token expired. Please try again.", "error")
+        return certification_redirect()
+
+    member = AcademicStaff.query.get_or_404(member_id)
+    selected_certification_year, _ = selected_examiner_certification_year()
+    if member.status != "Active":
+        flash("FUT options are only available for visible members.", "error")
+        return certification_redirect()
+
+    selected_options = [
+        option for option in request.form.getlist("fut_options")
+        if option in STAFF_FUT_OPTIONS
+    ]
+    if not selected_options:
+        flash("Please select at least one FUT option.", "error")
+        return certification_redirect()
+
+    existing_options = {
+        selection.option_name
+        for selection in ExaminerCertificationFut2Selection.query.filter_by(
+            member_id=member.id,
+            year=selected_certification_year,
+        ).all()
+    }
+    added = 0
+    for option in selected_options:
+        if option in existing_options:
+            continue
+        db.session.add(
+            ExaminerCertificationFut2Selection(
+                member_id=member.id,
+                option_name=option,
+                status="pending",
+                year=selected_certification_year,
+            )
+        )
+        existing_options.add(option)
+        added += 1
+
+    if added:
+        db.session.commit()
+        flash("FUT option added successfully.", "success")
+    else:
+        flash("Selected FUT options are already registered.", "error")
+    return certification_redirect()
+
+
+@staff_bp.route("/annual-certification-programme/fut-2-options/<int:selection_id>/toggle", methods=["POST"])
+@login_required
+def toggle_staff_fut2_option(selection_id):
+    if not validate_csrf():
+        flash("Security token expired. Please try again.", "error")
+        return certification_redirect()
+
+    selection = ExaminerCertificationFut2Selection.query.get_or_404(selection_id)
+    selection.status = "pending" if selection.status == "completed" else "completed"
+    db.session.commit()
+    return certification_redirect()
+
+
+@staff_bp.route("/annual-certification-programme/fut-2-options/<int:selection_id>/delete", methods=["POST"])
+@login_required
+def delete_staff_fut2_option(selection_id):
+    if not validate_csrf():
+        flash("Security token expired. Please try again.", "error")
+        return certification_redirect()
+
+    selection = ExaminerCertificationFut2Selection.query.get_or_404(selection_id)
+    db.session.delete(selection)
+    db.session.commit()
+    flash("FUT option removed successfully.", "success")
+    return certification_redirect()
+
+
+@staff_bp.route("/annual-certification-programme/certifications/<int:record_id>/delete", methods=["POST"])
+@login_required
+def delete_annual_certification(record_id):
+    if not validate_csrf():
+        flash("Security token expired. Please try again.", "error")
+        return certification_redirect()
+
+    record = AnnualCertificationRecord.query.get_or_404(record_id)
+    db.session.delete(record)
+    db.session.commit()
+    flash("Certification year removed successfully.", "success")
+    return certification_redirect()
+
+
+@staff_bp.route("/annual-certification-programme/members/<int:member_id>/notes", methods=["POST"])
+@login_required
+def add_certification_member_note(member_id):
+    if not validate_csrf():
+        flash("Security token expired. Please try again.", "error")
+        return certification_redirect()
+
+    member = AcademicStaff.query.get_or_404(member_id)
+    if not request.form.get("interview", "").strip():
+        flash("History note cannot be empty.", "error")
+        return certification_redirect()
+
+    append_interview_note(member, request.form)
+    db.session.commit()
+    flash("History note added successfully.", "success")
+    return certification_redirect()
+
+
+@staff_bp.route("/supervisor-certification")
+@login_required
+def supervisor_certification():
+    query_text = request.args.get("q", "").strip()
+    selected_roles = [role for role in request.args.getlist("roles") if role in ROLE_OPTIONS]
+    remote_training_filter = request.args.get("remote_training", "").strip()
+    annual_meeting_filter = request.args.get("annual_meeting", "").strip()
+    fut_filter = request.args.get("fut", "").strip()
+    selected_certification_year, supervisor_years = selected_supervisor_certification_year()
+
+    if remote_training_filter not in {"", "Pending", "With FUT", "Certified"}:
+        remote_training_filter = ""
+    if annual_meeting_filter not in {"", "Attended", "Absent"}:
+        annual_meeting_filter = ""
+    if fut_filter not in {"", "Without", "With completed FUT", "With pending FUT"}:
+        fut_filter = ""
+
+    query = AcademicStaff.query.filter(
+        AcademicStaff.status == "Active",
+        AcademicStaff.roles.ilike("%Supervisor%"),
+    )
+    if query_text:
+        like = f"%{query_text}%"
+        query = query.filter(
+            db.or_(
+                AcademicStaff.full_name.ilike(like),
+                AcademicStaff.email.ilike(like),
+                AcademicStaff.account_id.ilike(like),
+                AcademicStaff.account_owner.ilike(like),
+            )
+        )
+    if selected_roles:
+        query = query.filter(
+            db.or_(*(AcademicStaff.roles.ilike(f"%{role}%") for role in selected_roles))
+        )
+    if remote_training_filter:
+        query = query.filter(
+            AcademicStaff.supervisor_remote_training_selections.any(
+                db.and_(
+                    SupervisorCertificationRemoteTrainingSelection.year == selected_certification_year,
+                    SupervisorCertificationRemoteTrainingSelection.status == remote_training_filter,
+                )
+            )
+        )
+    if annual_meeting_filter:
+        query = query.filter(
+            AcademicStaff.supervisor_annual_meeting_selections.any(
+                db.and_(
+                    SupervisorCertificationAnnualMeetingSelection.year == selected_certification_year,
+                    SupervisorCertificationAnnualMeetingSelection.status == annual_meeting_filter,
+                )
+            )
+        )
+    if fut_filter:
+        fut_exists = AcademicStaff.supervisor_fut_selections.any(
+            SupervisorCertificationFutSelection.year == selected_certification_year
+        )
+        fut_pending_exists = AcademicStaff.supervisor_fut_selections.any(
+            db.and_(
+                SupervisorCertificationFutSelection.year == selected_certification_year,
+                SupervisorCertificationFutSelection.status == "pending",
+            )
+        )
+        if fut_filter == "Without":
+            query = query.filter(~fut_exists)
+        elif fut_filter == "With pending FUT":
+            query = query.filter(fut_pending_exists)
+        elif fut_filter == "With completed FUT":
+            query = query.filter(fut_exists, ~fut_pending_exists)
+
+    members = query.order_by(AcademicStaff.full_name.asc()).all()
+    members = [
+        member for member in members if "Supervisor" in member.roles_list()
+    ]
+    members, pagination = paginate_items(members)
+    member_ids = [member.id for member in members]
+
+    remote_training_records = []
+    annual_meeting_records = []
+    fut_records = []
+    if member_ids:
+        remote_training_records = SupervisorCertificationRemoteTrainingSelection.query.filter(
+            SupervisorCertificationRemoteTrainingSelection.member_id.in_(member_ids),
+            SupervisorCertificationRemoteTrainingSelection.year == selected_certification_year,
+        ).all()
+        annual_meeting_records = SupervisorCertificationAnnualMeetingSelection.query.filter(
+            SupervisorCertificationAnnualMeetingSelection.member_id.in_(member_ids),
+            SupervisorCertificationAnnualMeetingSelection.year == selected_certification_year,
+        ).all()
+        fut_records = (
+            SupervisorCertificationFutSelection.query.filter(
+                SupervisorCertificationFutSelection.member_id.in_(member_ids),
+                SupervisorCertificationFutSelection.year == selected_certification_year,
+            )
+            .order_by(SupervisorCertificationFutSelection.option_name.asc())
+            .all()
+        )
+
+    remote_training_selections = {selection.member_id: selection for selection in remote_training_records}
+    annual_meeting_selections = {selection.member_id: selection for selection in annual_meeting_records}
+    fut_selections = {}
+    for selection in fut_records:
+        fut_selections.setdefault(selection.member_id, []).append(selection)
+
+    certification_statuses = {
+        member.id: certification_status_label(
+            member.id,
+            remote_training_selections,
+            annual_meeting_selections,
+            fut_selections,
+        )
+        for member in members
+    }
+    year_configuration = certification_year_configuration(SUPERVISOR_CERTIFICATION_MODULE_KEY, selected_certification_year)
+
+    return render_template(
+        "certification/index.html",
+        page_title="Supervisor certification",
+        page_description="Track supervisor certification, training progress and annual meeting status.",
+        members=members,
+        pagination=pagination,
+        roles=ROLE_OPTIONS,
+        visible_role_filters=["Supervisor"],
+        statuses=["Active"],
+        certifications=STAFF_CERTIFICATION_TYPES,
+        filter_certifications=[],
+        certification_years={},
+        remote_training_selections=remote_training_selections,
+        remote_training_options=REMOTE_TRAINING_OPTIONS,
+        annual_meeting_selections=annual_meeting_selections,
+        annual_meeting_options=ANNUAL_MEETING_OPTIONS,
+        fut_selections=fut_selections,
+        fut2_selections={},
+        certification_statuses=certification_statuses,
+        fut_options=STAFF_FUT_OPTIONS,
+        examiner_years=supervisor_years,
+        archived_examiner_years=(
+            SupervisorCertificationYear.query.filter_by(is_archived=True)
+            .order_by(SupervisorCertificationYear.year.desc())
+            .all()
+        ),
+        selected_certification_year=selected_certification_year,
+        certification_year_configuration=year_configuration,
+        certification_year_settings_endpoint="staff.update_supervisor_certification_year_settings",
+        certification_annual_meeting_date_value=certification_date_value(year_configuration.annual_meeting_date) if year_configuration else "",
+        certification_annual_meeting_time_value=certification_time_value(year_configuration.annual_meeting_time) if year_configuration else "",
+        certification_remote_training_period_value=certification_remote_training_period_value(year_configuration),
+        certification_allowed=certification_allowed,
+        current_year=current_year(),
+        reset_endpoint="staff.supervisor_certification",
+        export_endpoint="staff.export_supervisor_certification",
+        add_note_endpoint="staff.add_supervisor_certification_member_note",
+        archive_year_endpoint="staff.archive_supervisor_certification_year",
+        add_year_endpoint="staff.add_supervisor_certification_year",
+        unarchive_year_endpoint="staff.unarchive_supervisor_certification_year",
+        delete_year_endpoint="staff.delete_supervisor_certification_year",
+        update_remote_training_endpoint="staff.update_supervisor_remote_training",
+        update_annual_meeting_endpoint="staff.update_supervisor_annual_meeting",
+        add_staff_fut_endpoint="staff.add_supervisor_fut_options",
+        toggle_staff_fut_endpoint="staff.toggle_supervisor_fut_option",
+        delete_staff_fut_endpoint="staff.delete_supervisor_fut_option",
+        bulk_form_id="supervisor-certification-bulk-form",
+        bulk_success_message="Supervisor Certification export downloaded successfully.",
+        show_certification_bulk_actions=True,
+        bulk_certification_update_endpoint="staff.bulk_update_supervisor_certification",
+        module_key="certification",
+        filters={
+            "q": query_text,
+            "status": "",
+            "roles": selected_roles,
+            "year": "",
+            "completed_certification": "",
+            "pending_certification": "",
+            "remote_training": remote_training_filter,
+            "annual_meeting": annual_meeting_filter,
+            "fut": fut_filter,
+            "no_years_yet": "",
+        },
+        csrf_token=session.get("csrf_token"),
+    )
+
+
+@staff_bp.route("/supervisor-certification/bulk-update", methods=["POST"])
+@login_required
+def bulk_update_supervisor_certification():
+    selected_certification_year, _ = selected_supervisor_certification_year()
+    return bulk_update_certification_members(
+        role="Supervisor",
+        selected_year=selected_certification_year,
+        redirect_endpoint="staff.supervisor_certification",
+        remote_model=SupervisorCertificationRemoteTrainingSelection,
+        annual_model=SupervisorCertificationAnnualMeetingSelection,
+    )
+
+
+@staff_bp.route("/supervisor-certification/export", methods=["POST"])
+@login_required
+def export_supervisor_certification():
+    if not validate_csrf():
+        flash("Security token expired. Please try again.", "error")
+        return redirect(url_for("staff.supervisor_certification"))
+
+    member_ids = [int(value) for value in request.form.getlist("member_ids") if value.isdigit()]
+    if not member_ids:
+        flash("Please select at least one member to export.", "error")
+        return redirect(url_for("staff.supervisor_certification"))
+
+    selected_certification_year, _ = selected_supervisor_certification_year()
+    members = [
+        member
+        for member in (
+        AcademicStaff.query.filter(
+            AcademicStaff.id.in_(member_ids),
+            AcademicStaff.status == "Active",
+            AcademicStaff.roles.ilike("%Supervisor%"),
+        )
+        .order_by(AcademicStaff.full_name.asc())
+        .all()
+        )
+        if "Supervisor" in member.roles_list()
+    ]
+    if not members:
+        flash("No selected members were found.", "error")
+        return redirect(url_for("staff.supervisor_certification"))
+
+    member_ids = [member.id for member in members]
+    remote_training_records = SupervisorCertificationRemoteTrainingSelection.query.filter(
+        SupervisorCertificationRemoteTrainingSelection.member_id.in_(member_ids),
+        SupervisorCertificationRemoteTrainingSelection.year == selected_certification_year,
+    ).all()
+    annual_meeting_records = SupervisorCertificationAnnualMeetingSelection.query.filter(
+        SupervisorCertificationAnnualMeetingSelection.member_id.in_(member_ids),
+        SupervisorCertificationAnnualMeetingSelection.year == selected_certification_year,
+    ).all()
+    fut_records = (
+        SupervisorCertificationFutSelection.query.filter(
+            SupervisorCertificationFutSelection.member_id.in_(member_ids),
+            SupervisorCertificationFutSelection.year == selected_certification_year,
+        )
+        .order_by(SupervisorCertificationFutSelection.option_name.asc())
+        .all()
+    )
+
+    remote_training_selections = {selection.member_id: selection for selection in remote_training_records}
+    annual_meeting_selections = {selection.member_id: selection for selection in annual_meeting_records}
+    fut_selections = {}
+    for selection in fut_records:
+        fut_selections.setdefault(selection.member_id, []).append(selection)
+
+    workbook = build_annual_certification_export(
+        members,
+        {},
+        export_title="Supervisor Certification Export",
+        sheet_title="Supervisor Certification",
+        certification_types=STAFF_CERTIFICATION_TYPES,
+        fut_selections=fut_selections,
+        fut2_selections={},
+        remote_training_selections=remote_training_selections,
+        annual_meeting_selections=annual_meeting_selections,
+    )
+    filename = f"supervisor-certification-export-{datetime.now(LOCAL_TZ).strftime('%Y-%m-%d')}.xlsx"
+    return Response(
+        workbook,
+        mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
+@staff_bp.route("/supervisor-certification/years", methods=["POST"])
+@login_required
+def add_supervisor_certification_year():
+    if not validate_csrf():
+        flash("Security token expired. Please try again.", "error")
+        return redirect(url_for("staff.supervisor_certification"))
+    all_years = [item.year for item in SupervisorCertificationYear.query.order_by(SupervisorCertificationYear.year.asc()).all()]
+    next_year = (max(all_years) + 1) if all_years else 2026
+    existing = SupervisorCertificationYear.query.filter_by(year=next_year).first()
+    if existing:
+        existing.is_archived = False
+    else:
+        db.session.add(SupervisorCertificationYear(year=next_year, is_archived=False))
+    db.session.commit()
+    flash(f"{next_year} added successfully.", "success")
+    return redirect(url_for("staff.supervisor_certification", certification_year=next_year))
+
+
+@staff_bp.route("/supervisor-certification/year-settings", methods=["POST"])
+@login_required
+def update_supervisor_certification_year_settings():
+    if not validate_csrf():
+        flash("Security token expired. Please try again.", "error")
+        return redirect(url_for("staff.supervisor_certification"))
+    selected_certification_year, _ = selected_supervisor_certification_year()
+    save_certification_year_configuration(SUPERVISOR_CERTIFICATION_MODULE_KEY, selected_certification_year)
+    return redirect(url_for("staff.supervisor_certification", certification_year=selected_certification_year))
+
+
+@staff_bp.route("/supervisor-certification/years/<int:year>/archive", methods=["POST"])
+@login_required
+def archive_supervisor_certification_year(year):
+    if not validate_csrf():
+        flash("Security token expired. Please try again.", "error")
+        return redirect(url_for("staff.supervisor_certification"))
+    year_record = SupervisorCertificationYear.query.filter_by(year=year).first_or_404()
+    year_record.is_archived = True
+    db.session.commit()
+    flash(f"{year} archived successfully.", "success")
+    active_years = active_supervisor_certification_years()
+    target_year = 2026 if any(item.year == 2026 for item in active_years) else active_years[-1].year
+    return redirect(url_for("staff.supervisor_certification", certification_year=target_year))
+
+
+@staff_bp.route("/supervisor-certification/years/<int:year>/unarchive", methods=["POST"])
+@login_required
+def unarchive_supervisor_certification_year(year):
+    if not validate_csrf():
+        flash("Security token expired. Please try again.", "error")
+        return redirect(url_for("staff.supervisor_certification"))
+    year_record = SupervisorCertificationYear.query.filter_by(year=year).first_or_404()
+    year_record.is_archived = False
+    db.session.commit()
+    flash(f"{year} restored successfully.", "success")
+    return redirect(url_for("staff.supervisor_certification", certification_year=year))
+
+
+@staff_bp.route("/supervisor-certification/years/<int:year>/delete", methods=["POST"])
+@login_required
+def delete_supervisor_certification_year(year):
+    if not validate_csrf():
+        flash("Security token expired. Please try again.", "error")
+        return redirect(url_for("staff.supervisor_certification"))
+    year_record = SupervisorCertificationYear.query.filter_by(year=year).first_or_404()
+    SupervisorCertificationRemoteTrainingSelection.query.filter_by(year=year).delete(synchronize_session=False)
+    SupervisorCertificationAnnualMeetingSelection.query.filter_by(year=year).delete(synchronize_session=False)
+    SupervisorCertificationFutSelection.query.filter_by(year=year).delete(synchronize_session=False)
+    CertificationYearConfiguration.query.filter_by(module_key=SUPERVISOR_CERTIFICATION_MODULE_KEY, year=year).delete(synchronize_session=False)
+    db.session.delete(year_record)
+    db.session.commit()
+    flash(f"{year} permanently deleted.", "success")
+    return redirect(url_for("staff.supervisor_certification"))
+
+
+@staff_bp.route("/supervisor-certification/members/<int:member_id>/remote-training", methods=["POST"])
+@login_required
+def update_supervisor_remote_training(member_id):
+    if not validate_csrf():
+        flash("Security token expired. Please try again.", "error")
+        return supervisor_certification_redirect()
+    member = AcademicStaff.query.get_or_404(member_id)
+    selected_certification_year, _ = selected_supervisor_certification_year()
+    status = request.form.get("remote_training_status", "").strip()
+    if member.status != "Active" or "Supervisor" not in member.roles_list():
+        flash("Remote training is only available for active supervisor members.", "error")
+        return supervisor_certification_redirect()
+    if status not in REMOTE_TRAINING_OPTIONS:
+        flash("Please select a valid Remote training status.", "error")
+        return supervisor_certification_redirect()
+    selection = SupervisorCertificationRemoteTrainingSelection.query.filter_by(
+        member_id=member.id,
+        year=selected_certification_year,
+    ).first()
+    if selection:
+        selection.status = status
+    else:
+        db.session.add(SupervisorCertificationRemoteTrainingSelection(member_id=member.id, year=selected_certification_year, status=status))
+    db.session.commit()
+    flash("Remote training updated successfully.", "success")
+    return supervisor_certification_redirect()
+
+
+@staff_bp.route("/supervisor-certification/members/<int:member_id>/annual-meeting", methods=["POST"])
+@login_required
+def update_supervisor_annual_meeting(member_id):
+    if not validate_csrf():
+        flash("Security token expired. Please try again.", "error")
+        return supervisor_certification_redirect()
+    member = AcademicStaff.query.get_or_404(member_id)
+    selected_certification_year, _ = selected_supervisor_certification_year()
+    status = request.form.get("annual_meeting_status", "").strip()
+    if member.status != "Active" or "Supervisor" not in member.roles_list():
+        flash("Annual meeting is only available for active supervisor members.", "error")
+        return supervisor_certification_redirect()
+    if status not in ANNUAL_MEETING_OPTIONS:
+        flash("Please select a valid Annual meeting status.", "error")
+        return supervisor_certification_redirect()
+    selection = SupervisorCertificationAnnualMeetingSelection.query.filter_by(
+        member_id=member.id,
+        year=selected_certification_year,
+    ).first()
+    if selection:
+        selection.status = status
+    else:
+        db.session.add(SupervisorCertificationAnnualMeetingSelection(member_id=member.id, year=selected_certification_year, status=status))
+    db.session.commit()
+    flash("Annual meeting updated successfully.", "success")
+    return supervisor_certification_redirect()
+
+
+@staff_bp.route("/supervisor-certification/members/<int:member_id>/fut-options", methods=["POST"])
+@login_required
+def add_supervisor_fut_options(member_id):
+    if not validate_csrf():
+        flash("Security token expired. Please try again.", "error")
+        return supervisor_certification_redirect()
+    member = AcademicStaff.query.get_or_404(member_id)
+    selected_certification_year, _ = selected_supervisor_certification_year()
+    if member.status != "Active" or "Supervisor" not in member.roles_list():
+        flash("FUT options are only available for active supervisor members.", "error")
+        return supervisor_certification_redirect()
+    selected_options = [option for option in request.form.getlist("fut_options") if option in STAFF_FUT_OPTIONS]
+    if not selected_options:
+        flash("Please select at least one FUT option.", "error")
+        return supervisor_certification_redirect()
+    existing_options = {
+        selection.option_name
+        for selection in SupervisorCertificationFutSelection.query.filter_by(
+            member_id=member.id,
+            year=selected_certification_year,
+        ).all()
+    }
+    added = 0
+    for option in selected_options:
+        if option in existing_options:
+            continue
+        db.session.add(SupervisorCertificationFutSelection(member_id=member.id, option_name=option, status="pending", year=selected_certification_year))
+        existing_options.add(option)
+        added += 1
+    if added:
+        sync_supervisor_remote_training_from_fut(member.id, selected_certification_year)
+        db.session.commit()
+        flash("FUT option added successfully.", "success")
+    else:
+        flash("Selected FUT options are already registered.", "error")
+    return supervisor_certification_redirect()
+
+
+@staff_bp.route("/supervisor-certification/fut-options/<int:selection_id>/toggle", methods=["POST"])
+@login_required
+def toggle_supervisor_fut_option(selection_id):
+    if not validate_csrf():
+        flash("Security token expired. Please try again.", "error")
+        return supervisor_certification_redirect()
+    selection = SupervisorCertificationFutSelection.query.get_or_404(selection_id)
+    selection.status = "pending" if selection.status == "completed" else "completed"
+    sync_supervisor_remote_training_from_fut(selection.member_id, selection.year)
+    db.session.commit()
+    return supervisor_certification_redirect()
+
+
+@staff_bp.route("/supervisor-certification/fut-options/<int:selection_id>/delete", methods=["POST"])
+@login_required
+def delete_supervisor_fut_option(selection_id):
+    if not validate_csrf():
+        flash("Security token expired. Please try again.", "error")
+        return supervisor_certification_redirect()
+    selection = SupervisorCertificationFutSelection.query.get_or_404(selection_id)
+    member_id = selection.member_id
+    year = selection.year
+    db.session.delete(selection)
+    sync_supervisor_remote_training_from_fut(member_id, year)
+    db.session.commit()
+    flash("FUT option removed successfully.", "success")
+    return supervisor_certification_redirect()
+
+
+@staff_bp.route("/supervisor-certification/members/<int:member_id>/notes", methods=["POST"])
+@login_required
+def add_supervisor_certification_member_note(member_id):
+    if not validate_csrf():
+        flash("Security token expired. Please try again.", "error")
+        return supervisor_certification_redirect()
+    member = AcademicStaff.query.get_or_404(member_id)
+    if not request.form.get("interview", "").strip():
+        flash("History note cannot be empty.", "error")
+        return supervisor_certification_redirect()
+    append_interview_note(member, request.form)
+    db.session.commit()
+    flash("History note added successfully.", "success")
+    return supervisor_certification_redirect()
+
+
+@staff_bp.route("/intern-stages")
+@login_required
+def intern_stages():
+    query_text = request.args.get("q", "").strip()
+    selected_roles = [role for role in request.args.getlist("roles") if role in ROLE_OPTIONS]
+    remote_training_filter = request.args.get("remote_training", "").strip()
+    stage_1_filter = request.args.get("stage_1", "").strip()
+    stage_2_filter = request.args.get("stage_2", "").strip()
+    stage_3_filter = request.args.get("stage_3", "").strip()
+    annual_meeting_filter = request.args.get("annual_meeting", "").strip()
+    fut_filter = request.args.get("fut", "").strip()
+    selected_certification_year, intern_years = selected_intern_stage_year()
+
+    if stage_1_filter == "Certified":
+        stage_1_filter = "Completed"
+    if stage_2_filter == "Certified":
+        stage_2_filter = "Completed"
+    if stage_3_filter == "Certified":
+        stage_3_filter = "Completed"
+    if remote_training_filter not in {"", "Pending", "With FUT", "Certified"}:
+        remote_training_filter = ""
+    if stage_1_filter not in set([""] + INTERN_STAGE_1_2_OPTIONS):
+        stage_1_filter = ""
+    if stage_2_filter not in set([""] + INTERN_STAGE_3_OPTIONS):
+        stage_2_filter = ""
+    if stage_3_filter not in set([""] + INTERN_STAGE_1_2_OPTIONS):
+        stage_3_filter = ""
+    if annual_meeting_filter not in {"", "Attended", "Absent"}:
+        annual_meeting_filter = ""
+    if fut_filter not in {"", "Without", "With completed FUT", "With pending FUT"}:
+        fut_filter = ""
+
+    query = AcademicStaff.query.filter(
+        AcademicStaff.status == "Active",
+        AcademicStaff.roles.ilike("%Intern%"),
+    )
+    if query_text:
+        like = f"%{query_text}%"
+        query = query.filter(
+            db.or_(
+                AcademicStaff.full_name.ilike(like),
+                AcademicStaff.email.ilike(like),
+                AcademicStaff.account_id.ilike(like),
+                AcademicStaff.account_owner.ilike(like),
+            )
+        )
+    if selected_roles:
+        query = query.filter(
+            db.or_(*(AcademicStaff.roles.ilike(f"%{role}%") for role in selected_roles))
+        )
+    if stage_1_filter:
+        stage_1_exists = AcademicStaff.intern_stage_remote_training_selections.any(
+            InternStageRemoteTrainingSelection.year == selected_certification_year
+        )
+        stage_1_matches = AcademicStaff.intern_stage_remote_training_selections.any(
+            db.and_(
+                InternStageRemoteTrainingSelection.year == selected_certification_year,
+                InternStageRemoteTrainingSelection.status == stage_1_filter,
+            )
+        )
+        query = query.filter(db.or_(~stage_1_exists, stage_1_matches) if stage_1_filter == "Pending" else stage_1_matches)
+    if stage_2_filter:
+        stage_1_completed = AcademicStaff.intern_stage_remote_training_selections.any(
+            db.and_(
+                InternStageRemoteTrainingSelection.year == selected_certification_year,
+                InternStageRemoteTrainingSelection.status == "Completed",
+            )
+        )
+        stage_2_exists = AcademicStaff.intern_stage_3_selections.any(
+            InternStage3Selection.year == selected_certification_year
+        )
+        stage_2_matches = AcademicStaff.intern_stage_3_selections.any(
+            db.and_(
+                InternStage3Selection.year == selected_certification_year,
+                InternStage3Selection.status == stage_2_filter,
+            )
+        )
+        if stage_2_filter == "Pending":
+            query = query.filter(stage_1_completed, db.or_(~stage_2_exists, stage_2_matches))
+        else:
+            query = query.filter(stage_2_matches)
+    if stage_3_filter:
+        stage_2_completed = AcademicStaff.intern_stage_3_selections.any(
+            db.and_(
+                InternStage3Selection.year == selected_certification_year,
+                InternStage3Selection.status == "Completed",
+            )
+        )
+        stage_3_exists = AcademicStaff.intern_stage_2_selections.any(
+            InternStage2Selection.year == selected_certification_year
+        )
+        stage_3_matches = AcademicStaff.intern_stage_2_selections.any(
+            db.and_(
+                InternStage2Selection.year == selected_certification_year,
+                InternStage2Selection.status == stage_3_filter,
+            )
+        )
+        if stage_3_filter == "Pending":
+            query = query.filter(stage_2_completed, db.or_(~stage_3_exists, stage_3_matches))
+        else:
+            query = query.filter(stage_3_matches)
+    if remote_training_filter:
+        query = query.filter(
+            AcademicStaff.intern_stage_remote_training_selections.any(
+                db.and_(
+                    InternStageRemoteTrainingSelection.year == selected_certification_year,
+                    InternStageRemoteTrainingSelection.status == remote_training_filter,
+                )
+            )
+        )
+    if annual_meeting_filter:
+        query = query.filter(
+            AcademicStaff.intern_stage_annual_meeting_selections.any(
+                db.and_(
+                    InternStageAnnualMeetingSelection.year == selected_certification_year,
+                    InternStageAnnualMeetingSelection.status == annual_meeting_filter,
+                )
+            )
+        )
+    if fut_filter:
+        fut_exists = AcademicStaff.intern_stage_fut_selections.any(
+            InternStageFutSelection.year == selected_certification_year
+        )
+        fut_pending_exists = AcademicStaff.intern_stage_fut_selections.any(
+            db.and_(
+                InternStageFutSelection.year == selected_certification_year,
+                InternStageFutSelection.status == "pending",
+            )
+        )
+        if fut_filter == "Without":
+            query = query.filter(~fut_exists)
+        elif fut_filter == "With pending FUT":
+            query = query.filter(fut_pending_exists)
+        elif fut_filter == "With completed FUT":
+            query = query.filter(fut_exists, ~fut_pending_exists)
+
+    members = query.order_by(AcademicStaff.full_name.asc()).all()
+    members, pagination = paginate_items(members)
+    member_ids = [member.id for member in members]
+
+    remote_training_records = []
+    annual_meeting_records = []
+    stage_2_records = []
+    stage_3_records = []
+    fut_records = []
+    if member_ids:
+        remote_training_records = InternStageRemoteTrainingSelection.query.filter(
+            InternStageRemoteTrainingSelection.member_id.in_(member_ids),
+            InternStageRemoteTrainingSelection.year == selected_certification_year,
+        ).all()
+        stage_2_records = InternStage2Selection.query.filter(
+            InternStage2Selection.member_id.in_(member_ids),
+            InternStage2Selection.year == selected_certification_year,
+        ).all()
+        stage_3_records = InternStage3Selection.query.filter(
+            InternStage3Selection.member_id.in_(member_ids),
+            InternStage3Selection.year == selected_certification_year,
+        ).all()
+        annual_meeting_records = InternStageAnnualMeetingSelection.query.filter(
+            InternStageAnnualMeetingSelection.member_id.in_(member_ids),
+            InternStageAnnualMeetingSelection.year == selected_certification_year,
+        ).all()
+        fut_records = (
+            InternStageFutSelection.query.filter(
+                InternStageFutSelection.member_id.in_(member_ids),
+                InternStageFutSelection.year == selected_certification_year,
+            )
+            .order_by(InternStageFutSelection.option_name.asc())
+            .all()
+        )
+
+    remote_training_selections = {selection.member_id: selection for selection in remote_training_records}
+    stage_2_selections = {selection.member_id: selection for selection in stage_2_records}
+    stage_3_selections = {selection.member_id: selection for selection in stage_3_records}
+    annual_meeting_selections = {selection.member_id: selection for selection in annual_meeting_records}
+    fut_selections = {}
+    for selection in fut_records:
+        fut_selections.setdefault(selection.member_id, []).append(selection)
+
+    certification_statuses = {
+        member.id: intern_stage_status_label(
+            member.id,
+            remote_training_selections,
+            stage_2_selections,
+            stage_3_selections,
+        )
+        for member in members
+    }
+
+    return render_template(
+        "certification/index.html",
+        page_title="Internship stages",
+        page_description="Track intern certification, training progress and annual meeting status.",
+        members=members,
+        pagination=pagination,
+        roles=ROLE_OPTIONS,
+        visible_role_filters=["Examiner", "RSG"],
+        statuses=["Active"],
+        certifications=INTERN_STAGE_CERTIFICATION_TYPES,
+        filter_certifications=[],
+        certification_years={},
+        remote_training_selections=remote_training_selections,
+        remote_training_options=INTERN_STAGE_1_2_OPTIONS,
+        stage_2_options=INTERN_STAGE_3_OPTIONS,
+        stage_3_options=INTERN_STAGE_1_2_OPTIONS,
+        stage_2_selections=stage_2_selections,
+        stage_3_selections=stage_3_selections,
+        certification_statuses=certification_statuses,
+        annual_meeting_selections=annual_meeting_selections,
+        annual_meeting_options=ANNUAL_MEETING_OPTIONS,
+        fut_selections=fut_selections,
+        fut2_selections={},
+        fut_options=STAFF_FUT_OPTIONS,
+        examiner_years=intern_years,
+        archived_examiner_years=(
+            InternStageYear.query.filter_by(is_archived=True)
+            .order_by(InternStageYear.year.desc())
+            .all()
+        ),
+        selected_certification_year=selected_certification_year,
+        certification_allowed=certification_allowed,
+        current_year=current_year(),
+        reset_endpoint="staff.intern_stages",
+        export_endpoint="staff.export_intern_stages",
+        add_note_endpoint="staff.add_intern_stages_member_note",
+        archive_year_endpoint="staff.archive_intern_stages_year",
+        add_year_endpoint="staff.add_intern_stages_year",
+        unarchive_year_endpoint="staff.unarchive_intern_stages_year",
+        delete_year_endpoint="staff.delete_intern_stages_year",
+        update_remote_training_endpoint="staff.update_intern_stage_remote_training",
+        update_stage_2_endpoint="staff.update_intern_stage_2",
+        update_stage_3_endpoint="staff.update_intern_stage_3",
+        update_annual_meeting_endpoint="staff.update_intern_stage_annual_meeting",
+        add_staff_fut_endpoint="staff.add_intern_stage_fut_options",
+        toggle_staff_fut_endpoint="staff.toggle_intern_stage_fut_option",
+        delete_staff_fut_endpoint="staff.delete_intern_stage_fut_option",
+        bulk_form_id="intern-stages-bulk-form",
+        bulk_success_message="Internship Stages export downloaded successfully.",
+        show_intern_bulk_actions=True,
+        bulk_stage_update_endpoint="staff.bulk_update_intern_stages",
+        module_key="certification",
+        show_annual_meeting_filter=False,
+        show_role_filter=False,
+        show_remote_training_filter=False,
+        show_stage_filters=True,
+        fut_requires_stage_certification=True,
+        filters={
+            "q": query_text,
+            "status": "",
+            "roles": selected_roles,
+            "year": "",
+            "completed_certification": "",
+            "pending_certification": "",
+            "stage_1": stage_1_filter,
+            "stage_2": stage_2_filter,
+            "stage_3": stage_3_filter,
+            "remote_training": remote_training_filter,
+            "annual_meeting": annual_meeting_filter,
+            "fut": fut_filter,
+            "no_years_yet": "",
+        },
+        csrf_token=session.get("csrf_token"),
+    )
+
+
+@staff_bp.route("/intern-stages/export", methods=["POST"])
+@login_required
+def export_intern_stages():
+    if not validate_csrf():
+        flash("Security token expired. Please try again.", "error")
+        return redirect(url_for("staff.intern_stages"))
+
+    member_ids = [int(value) for value in request.form.getlist("member_ids") if value.isdigit()]
+    if not member_ids:
+        flash("Please select at least one member to export.", "error")
+        return redirect(url_for("staff.intern_stages"))
+
+    selected_certification_year, _ = selected_intern_stage_year()
+    members = [
+        member
+        for member in (
+        AcademicStaff.query.filter(
+            AcademicStaff.id.in_(member_ids),
+            AcademicStaff.status == "Active",
+            AcademicStaff.roles.ilike("%Intern%"),
+        )
+        .order_by(AcademicStaff.full_name.asc())
+        .all()
+        )
+        if "Intern" in member.roles_list()
+    ]
+    if not members:
+        flash("No selected members were found.", "error")
+        return redirect(url_for("staff.intern_stages"))
+
+    member_ids = [member.id for member in members]
+    remote_training_records = InternStageRemoteTrainingSelection.query.filter(
+        InternStageRemoteTrainingSelection.member_id.in_(member_ids),
+        InternStageRemoteTrainingSelection.year == selected_certification_year,
+    ).all()
+    stage_2_records = InternStage2Selection.query.filter(
+        InternStage2Selection.member_id.in_(member_ids),
+        InternStage2Selection.year == selected_certification_year,
+    ).all()
+    stage_3_records = InternStage3Selection.query.filter(
+        InternStage3Selection.member_id.in_(member_ids),
+        InternStage3Selection.year == selected_certification_year,
+    ).all()
+    annual_meeting_records = InternStageAnnualMeetingSelection.query.filter(
+        InternStageAnnualMeetingSelection.member_id.in_(member_ids),
+        InternStageAnnualMeetingSelection.year == selected_certification_year,
+    ).all()
+    fut_records = (
+        InternStageFutSelection.query.filter(
+            InternStageFutSelection.member_id.in_(member_ids),
+            InternStageFutSelection.year == selected_certification_year,
+        )
+        .order_by(InternStageFutSelection.option_name.asc())
+        .all()
+    )
+
+    remote_training_selections = {selection.member_id: selection for selection in remote_training_records}
+    stage_2_selections = {selection.member_id: selection for selection in stage_2_records}
+    stage_3_selections = {selection.member_id: selection for selection in stage_3_records}
+    annual_meeting_selections = {selection.member_id: selection for selection in annual_meeting_records}
+    fut_selections = {}
+    for selection in fut_records:
+        fut_selections.setdefault(selection.member_id, []).append(selection)
+
+    workbook = build_annual_certification_export(
+        members,
+        {},
+        export_title="Intern Stages Export",
+        sheet_title="Intern Stages",
+        certification_types=INTERN_STAGE_CERTIFICATION_TYPES,
+        fut_selections=fut_selections,
+        fut2_selections={},
+        remote_training_selections=remote_training_selections,
+        annual_meeting_selections=annual_meeting_selections,
+        stage_2_selections=stage_2_selections,
+        stage_3_selections=stage_3_selections,
+    )
+    filename = f"intern-stages-export-{datetime.now(LOCAL_TZ).strftime('%Y-%m-%d')}.xlsx"
+    return Response(
+        workbook,
+        mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
+@staff_bp.route("/intern-stages/bulk-update", methods=["POST"])
+@login_required
+def bulk_update_intern_stages():
+    if not validate_csrf():
+        flash("Security token expired. Please try again.", "error")
+        return redirect(url_for("staff.intern_stages"))
+
+    selected_certification_year, _ = selected_intern_stage_year()
+    member_ids = [int(value) for value in request.form.getlist("member_ids") if value.isdigit()]
+    stage = request.form.get("stage", "").strip()
+    status = request.form.get("status", "").strip()
+    stage_config = {
+        "stage_1": (InternStageRemoteTrainingSelection, INTERN_STAGE_1_2_OPTIONS, "Stage 1"),
+        "stage_2": (InternStage3Selection, INTERN_STAGE_3_OPTIONS, "Stage 2"),
+        "stage_3": (InternStage2Selection, INTERN_STAGE_1_2_OPTIONS, "Stage 3"),
+    }
+    if not member_ids:
+        flash("Please select at least one member before applying a bulk action.", "error")
+        return redirect(url_for("staff.intern_stages", certification_year=selected_certification_year))
+    if stage not in stage_config:
+        flash("Please select a valid bulk action.", "error")
+        return redirect(url_for("staff.intern_stages", certification_year=selected_certification_year))
+
+    model, allowed_options, label = stage_config[stage]
+    if status not in allowed_options:
+        flash(f"Please select a valid {label} status.", "error")
+        return redirect(url_for("staff.intern_stages", certification_year=selected_certification_year))
+
+    members = [
+        member
+        for member in AcademicStaff.query.filter(
+            AcademicStaff.id.in_(member_ids),
+            AcademicStaff.status == "Active",
+            AcademicStaff.roles.ilike("%Intern%"),
+        ).all()
+        if "Intern" in member.roles_list()
+    ]
+    updated = 0
+    skipped = 0
+    for member in members:
+        if stage == "stage_2":
+            stage_1 = InternStageRemoteTrainingSelection.query.filter_by(
+                member_id=member.id,
+                year=selected_certification_year,
+            ).first()
+            if not stage_1 or not intern_stage_is_completed(stage_1.status):
+                skipped += 1
+                continue
+        if stage == "stage_3":
+            stage_2 = InternStage3Selection.query.filter_by(
+                member_id=member.id,
+                year=selected_certification_year,
+            ).first()
+            if not stage_2 or not intern_stage_is_completed(stage_2.status):
+                skipped += 1
+                continue
+
+        selection = model.query.filter_by(
+            member_id=member.id,
+            year=selected_certification_year,
+        ).first()
+        if selection:
+            selection.status = status
+        else:
+            db.session.add(model(member_id=member.id, year=selected_certification_year, status=status))
+        if stage == "stage_1" and not intern_stage_is_completed(status):
+            clear_intern_stage_after_stage_1(member.id, selected_certification_year)
+        if stage == "stage_2" and not intern_stage_is_completed(status):
+            clear_intern_stage_3_after_stage_2(member.id, selected_certification_year)
+            if status != "With FUT":
+                clear_intern_fut_after_stage_2(member.id, selected_certification_year)
+        updated += 1
+
+    db.session.commit()
+    message = f"{label} updated for {updated} {('member' if updated == 1 else 'members')}."
+    if skipped:
+        message += f" {skipped} skipped because previous stages were not completed."
+    flash(message, "success" if updated else "error")
+    return redirect(url_for("staff.intern_stages", certification_year=selected_certification_year))
+
+
+@staff_bp.route("/intern-stages/years", methods=["POST"])
+@login_required
+def add_intern_stages_year():
+    if not validate_csrf():
+        flash("Security token expired. Please try again.", "error")
+        return redirect(url_for("staff.intern_stages"))
+    all_years = [item.year for item in InternStageYear.query.order_by(InternStageYear.year.asc()).all()]
+    next_year = (max(all_years) + 1) if all_years else 2026
+    existing = InternStageYear.query.filter_by(year=next_year).first()
+    if existing:
+        existing.is_archived = False
+    else:
+        db.session.add(InternStageYear(year=next_year, is_archived=False))
+    db.session.commit()
+    flash(f"{next_year} added successfully.", "success")
+    return redirect(url_for("staff.intern_stages", certification_year=next_year))
+
+
+@staff_bp.route("/intern-stages/years/<int:year>/archive", methods=["POST"])
+@login_required
+def archive_intern_stages_year(year):
+    if not validate_csrf():
+        flash("Security token expired. Please try again.", "error")
+        return redirect(url_for("staff.intern_stages"))
+    year_record = InternStageYear.query.filter_by(year=year).first_or_404()
+    year_record.is_archived = True
+    db.session.commit()
+    flash(f"{year} archived successfully.", "success")
+    active_years = active_intern_stage_years()
+    target_year = 2026 if any(item.year == 2026 for item in active_years) else active_years[-1].year
+    return redirect(url_for("staff.intern_stages", certification_year=target_year))
+
+
+@staff_bp.route("/intern-stages/years/<int:year>/unarchive", methods=["POST"])
+@login_required
+def unarchive_intern_stages_year(year):
+    if not validate_csrf():
+        flash("Security token expired. Please try again.", "error")
+        return redirect(url_for("staff.intern_stages"))
+    year_record = InternStageYear.query.filter_by(year=year).first_or_404()
+    year_record.is_archived = False
+    db.session.commit()
+    flash(f"{year} restored successfully.", "success")
+    return redirect(url_for("staff.intern_stages", certification_year=year))
+
+
+@staff_bp.route("/intern-stages/years/<int:year>/delete", methods=["POST"])
+@login_required
+def delete_intern_stages_year(year):
+    if not validate_csrf():
+        flash("Security token expired. Please try again.", "error")
+        return redirect(url_for("staff.intern_stages"))
+    year_record = InternStageYear.query.filter_by(year=year).first_or_404()
+    InternStageRemoteTrainingSelection.query.filter_by(year=year).delete(synchronize_session=False)
+    InternStage2Selection.query.filter_by(year=year).delete(synchronize_session=False)
+    InternStage3Selection.query.filter_by(year=year).delete(synchronize_session=False)
+    InternStageAnnualMeetingSelection.query.filter_by(year=year).delete(synchronize_session=False)
+    InternStageFutSelection.query.filter_by(year=year).delete(synchronize_session=False)
+    db.session.delete(year_record)
+    db.session.commit()
+    flash(f"{year} permanently deleted.", "success")
+    return redirect(url_for("staff.intern_stages"))
+
+
+@staff_bp.route("/intern-stages/members/<int:member_id>/remote-training", methods=["POST"])
+@login_required
+def update_intern_stage_remote_training(member_id):
+    if not validate_csrf():
+        flash("Security token expired. Please try again.", "error")
+        return intern_stage_redirect()
+    member = AcademicStaff.query.get_or_404(member_id)
+    selected_certification_year, _ = selected_intern_stage_year()
+    status = request.form.get("remote_training_status", "").strip()
+    if member.status != "Active" or "Intern" not in member.roles_list():
+        flash("Remote training is only available for active intern members.", "error")
+        return intern_stage_redirect()
+    if status not in INTERN_STAGE_1_2_OPTIONS:
+        flash("Please select a valid Stage 1 status.", "error")
+        return intern_stage_redirect()
+    selection = InternStageRemoteTrainingSelection.query.filter_by(
+        member_id=member.id,
+        year=selected_certification_year,
+    ).first()
+    if selection:
+        selection.status = status
+    else:
+        db.session.add(InternStageRemoteTrainingSelection(member_id=member.id, year=selected_certification_year, status=status))
+    if not intern_stage_is_completed(status):
+        clear_intern_stage_after_stage_1(member.id, selected_certification_year)
+    db.session.commit()
+    flash("Stage 1 updated successfully.", "success")
+    return intern_stage_redirect()
+
+
+def update_intern_stage_selection(member_id, model, field_label, allowed_options):
+    if not validate_csrf():
+        flash("Security token expired. Please try again.", "error")
+        return intern_stage_redirect()
+    member = AcademicStaff.query.get_or_404(member_id)
+    selected_certification_year, _ = selected_intern_stage_year()
+    status = request.form.get("stage_status", "").strip()
+    if member.status != "Active" or "Intern" not in member.roles_list():
+        flash(f"{field_label} is only available for active intern members.", "error")
+        return intern_stage_redirect()
+    if status not in allowed_options:
+        flash(f"Please select a valid {field_label} status.", "error")
+        return intern_stage_redirect()
+    selection = model.query.filter_by(
+        member_id=member.id,
+        year=selected_certification_year,
+    ).first()
+    if selection:
+        selection.status = status
+    else:
+        db.session.add(model(member_id=member.id, year=selected_certification_year, status=status))
+    if model is InternStage3Selection and not intern_stage_is_completed(status):
+        clear_intern_stage_3_after_stage_2(member.id, selected_certification_year)
+        if status != "With FUT":
+            clear_intern_fut_after_stage_2(member.id, selected_certification_year)
+    db.session.commit()
+    flash(f"{field_label} updated successfully.", "success")
+    return intern_stage_redirect()
+
+
+@staff_bp.route("/intern-stages/members/<int:member_id>/stage-2", methods=["POST"])
+@login_required
+def update_intern_stage_2(member_id):
+    member = AcademicStaff.query.get_or_404(member_id)
+    selected_certification_year, _ = selected_intern_stage_year()
+    stage_2 = InternStage3Selection.query.filter_by(
+        member_id=member.id,
+        year=selected_certification_year,
+    ).first()
+    if not stage_2 or not intern_stage_is_completed(stage_2.status):
+        flash("Stage 3 is available only after Stage 2 is completed.", "error")
+        return intern_stage_redirect()
+    return update_intern_stage_selection(member_id, InternStage2Selection, "Stage 3", INTERN_STAGE_1_2_OPTIONS)
+
+
+@staff_bp.route("/intern-stages/members/<int:member_id>/stage-3", methods=["POST"])
+@login_required
+def update_intern_stage_3(member_id):
+    member = AcademicStaff.query.get_or_404(member_id)
+    selected_certification_year, _ = selected_intern_stage_year()
+    stage_1 = InternStageRemoteTrainingSelection.query.filter_by(
+        member_id=member.id,
+        year=selected_certification_year,
+    ).first()
+    if not stage_1 or not intern_stage_is_completed(stage_1.status):
+        flash("Stage 2 is available only after Stage 1 is completed.", "error")
+        return intern_stage_redirect()
+    return update_intern_stage_selection(member_id, InternStage3Selection, "Stage 2", INTERN_STAGE_3_OPTIONS)
+
+
+@staff_bp.route("/intern-stages/members/<int:member_id>/annual-meeting", methods=["POST"])
+@login_required
+def update_intern_stage_annual_meeting(member_id):
+    if not validate_csrf():
+        flash("Security token expired. Please try again.", "error")
+        return intern_stage_redirect()
+    member = AcademicStaff.query.get_or_404(member_id)
+    selected_certification_year, _ = selected_intern_stage_year()
+    status = request.form.get("annual_meeting_status", "").strip()
+    if member.status != "Active" or "Intern" not in member.roles_list():
+        flash("Annual meeting is only available for active intern members.", "error")
+        return intern_stage_redirect()
+    if status not in ANNUAL_MEETING_OPTIONS:
+        flash("Please select a valid Annual meeting status.", "error")
+        return intern_stage_redirect()
+    selection = InternStageAnnualMeetingSelection.query.filter_by(
+        member_id=member.id,
+        year=selected_certification_year,
+    ).first()
+    if selection:
+        selection.status = status
+    else:
+        db.session.add(InternStageAnnualMeetingSelection(member_id=member.id, year=selected_certification_year, status=status))
+    db.session.commit()
+    flash("Annual meeting updated successfully.", "success")
+    return intern_stage_redirect()
+
+
+@staff_bp.route("/intern-stages/members/<int:member_id>/fut-options", methods=["POST"])
+@login_required
+def add_intern_stage_fut_options(member_id):
+    if not validate_csrf():
+        flash("Security token expired. Please try again.", "error")
+        return intern_stage_redirect()
+    member = AcademicStaff.query.get_or_404(member_id)
+    selected_certification_year, _ = selected_intern_stage_year()
+    if member.status != "Active" or "Intern" not in member.roles_list():
+        flash("FUT options are only available for active intern members.", "error")
+        return intern_stage_redirect()
+    if not intern_fut_is_available(member.id, selected_certification_year):
+        flash("FUT is available only after Stage 1 is completed and Stage 2 has started.", "error")
+        return intern_stage_redirect()
+    selected_options = [option for option in request.form.getlist("fut_options") if option in STAFF_FUT_OPTIONS]
+    if not selected_options:
+        flash("Please select at least one FUT option.", "error")
+        return intern_stage_redirect()
+    existing_options = {
+        selection.option_name
+        for selection in InternStageFutSelection.query.filter_by(
+            member_id=member.id,
+            year=selected_certification_year,
+        ).all()
+    }
+    added = 0
+    for option in selected_options:
+        if option in existing_options:
+            continue
+        db.session.add(InternStageFutSelection(member_id=member.id, option_name=option, status="pending", year=selected_certification_year))
+        existing_options.add(option)
+        added += 1
+    if added:
+        sync_intern_stage_2_from_fut(member.id, selected_certification_year)
+        db.session.commit()
+        flash("FUT option added successfully.", "success")
+    else:
+        flash("Selected FUT options are already registered.", "error")
+    return intern_stage_redirect()
+
+
+@staff_bp.route("/intern-stages/fut-options/<int:selection_id>/toggle", methods=["POST"])
+@login_required
+def toggle_intern_stage_fut_option(selection_id):
+    if not validate_csrf():
+        flash("Security token expired. Please try again.", "error")
+        return intern_stage_redirect()
+    selection = InternStageFutSelection.query.get_or_404(selection_id)
+    if not intern_fut_is_available(selection.member_id, selection.year):
+        flash("FUT is available only after Stage 1 is completed and Stage 2 has started.", "error")
+        return intern_stage_redirect()
+    selection.status = "pending" if selection.status == "completed" else "completed"
+    sync_intern_stage_2_from_fut(selection.member_id, selection.year)
+    db.session.commit()
+    return intern_stage_redirect()
+
+
+@staff_bp.route("/intern-stages/fut-options/<int:selection_id>/delete", methods=["POST"])
+@login_required
+def delete_intern_stage_fut_option(selection_id):
+    if not validate_csrf():
+        flash("Security token expired. Please try again.", "error")
+        return intern_stage_redirect()
+    selection = InternStageFutSelection.query.get_or_404(selection_id)
+    if not intern_fut_is_available(selection.member_id, selection.year):
+        flash("FUT is available only after Stage 1 is completed and Stage 2 has started.", "error")
+        return intern_stage_redirect()
+    member_id = selection.member_id
+    year = selection.year
+    db.session.delete(selection)
+    sync_intern_stage_2_from_fut(member_id, year)
+    db.session.commit()
+    flash("FUT option removed successfully.", "success")
+    return intern_stage_redirect()
+
+
+@staff_bp.route("/intern-stages/members/<int:member_id>/notes", methods=["POST"])
+@login_required
+def add_intern_stages_member_note(member_id):
+    if not validate_csrf():
+        flash("Security token expired. Please try again.", "error")
+        return intern_stage_redirect()
+    member = AcademicStaff.query.get_or_404(member_id)
+    if not request.form.get("interview", "").strip():
+        flash("History note cannot be empty.", "error")
+        return intern_stage_redirect()
+    append_interview_note(member, request.form)
+    db.session.commit()
+    flash("History note added successfully.", "success")
+    return intern_stage_redirect()
+
+
+
+
+@staff_bp.route("/annual-meetings")
+@login_required
+def annual_meetings():
+    query_text = request.args.get("q", "").strip()
+    status = request.args.get("status", "").strip()
+    selected_roles = [role for role in request.args.getlist("roles") if role in ROLE_OPTIONS]
+    year = request.args.get("year", "").strip()
+    completed_certification = request.args.get("completed_certification", "").strip()
+    pending_certification = request.args.get("pending_certification", "").strip()
+    fut_filter = request.args.get("fut", "").strip()
+    no_years_yet = request.args.get("no_years_yet", "").strip()
+
+    if status not in {"", "Active", "In progress"}:
+        status = ""
+    if completed_certification not in CERTIFICATION_KEYS:
+        completed_certification = ""
+    if pending_certification not in CERTIFICATION_KEYS:
+        pending_certification = ""
+    if year and (not year.isdigit() or len(year) != 4):
+        year = ""
+    if fut_filter not in {"", "Yes", "No"}:
+        fut_filter = ""
+    if no_years_yet not in {"", "Yes", "No"}:
+        no_years_yet = ""
+
+    query = AcademicStaff.query.filter(AcademicStaff.status.in_(["Active", "In progress"]))
+
+    if query_text:
+        like = f"%{query_text}%"
+        query = query.filter(
+            db.or_(
+                AcademicStaff.full_name.ilike(like),
+                AcademicStaff.email.ilike(like),
+                AcademicStaff.account_id.ilike(like),
+                AcademicStaff.account_owner.ilike(like),
+            )
+        )
+    if status:
+        query = query.filter(AcademicStaff.status == status)
+    if selected_roles:
+        query = query.filter(
+            db.or_(*(AcademicStaff.roles.ilike(f"%{role}%") for role in selected_roles))
+        )
+
+    year_number = int(year) if year else None
+    if completed_certification:
+        completed_conditions = [
+            AnnualMeetingRecord.meeting_type == completed_certification
+        ]
+        if year_number:
+            completed_conditions.append(AnnualMeetingRecord.year == year_number)
+        query = query.filter(
+            AcademicStaff.annual_meetings.any(
+                db.and_(*completed_conditions)
+            )
+        )
+    if pending_certification:
+        pending_conditions = [
+            AnnualMeetingRecord.meeting_type == pending_certification
+        ]
+        if year_number:
+            pending_conditions.append(AnnualMeetingRecord.year == year_number)
+        query = query.filter(
+            ~AcademicStaff.annual_meetings.any(
+                db.and_(*pending_conditions)
+            )
+        )
+    if fut_filter:
+        query = query.filter(AcademicStaff.meeting_fut_checked.is_(fut_filter == "Yes"))
+        if year_number:
+            fut_conditions = [
+                AnnualMeetingRecord.meeting_type == "fut",
+                AnnualMeetingRecord.year == year_number,
+            ]
+            fut_has_record = AcademicStaff.annual_meetings.any(
+                db.and_(*fut_conditions)
+            )
+            query = query.filter(fut_has_record if fut_filter == "Yes" else ~fut_has_record)
+
+    members = query.order_by(AcademicStaff.full_name.asc()).all()
+    if pending_certification:
+        pending_definition = next(
+            (item for item in CERTIFICATION_TYPES if item["key"] == pending_certification),
+            None,
+        )
+        if pending_definition:
+            members = [
+                member for member in members if certification_allowed(member, pending_definition)
+            ]
+    member_ids = [member.id for member in members]
+    records = []
+    if member_ids:
+        records = (
+            AnnualMeetingRecord.query.filter(AnnualMeetingRecord.member_id.in_(member_ids))
+            .order_by(AnnualMeetingRecord.year.asc())
+            .all()
+        )
+    meeting_years = {}
+    for record in records:
+        meeting_years.setdefault(record.member_id, {}).setdefault(record.meeting_type, []).append(record)
+
+    if no_years_yet:
+        expected_pending = no_years_yet == "Yes"
+        members = [
+            member
+            for member in members
+            if has_pending_certification(member, meeting_years) == expected_pending
+        ]
+
+    return render_template(
+        "certification/index.html",
+        page_title="Annual meetings",
+        page_description="Track annual participation in internal meetings, training and follow-up stages.",
+        reset_endpoint="staff.annual_meetings",
+        export_endpoint="staff.export_annual_meetings",
+        add_record_endpoint="staff.add_annual_meeting",
+        delete_record_endpoint="staff.delete_annual_meeting",
+        update_fut_endpoint="staff.update_meeting_fut_checkbox",
+        add_note_endpoint="staff.add_meeting_member_note",
+        bulk_form_id="annual-meetings-bulk-form",
+        bulk_success_message="Annual Meetings export downloaded successfully.",
+        fut_checked_attr="meeting_fut_checked",
+        module_key="meetings",
+        members=members,
+        roles=ROLE_OPTIONS,
+        statuses=["Active", "In progress"],
+        certifications=CERTIFICATION_TYPES,
+        filter_certifications=[
+            certification for certification in CERTIFICATION_TYPES if certification["key"] != "fut"
+        ],
+        certification_years=meeting_years,
+        certification_allowed=certification_allowed,
+        current_year=current_year(),
+        filters={
+            "q": query_text,
+            "status": status,
+            "roles": selected_roles,
+            "year": year,
+            "completed_certification": completed_certification,
+            "pending_certification": pending_certification,
+            "fut": fut_filter,
+            "no_years_yet": no_years_yet,
+        },
+        csrf_token=session.get("csrf_token"),
+    )
+
+
+@staff_bp.route("/annual-meetings/export", methods=["POST"])
+@login_required
+def export_annual_meetings():
+    if not validate_csrf():
+        flash("Security token expired. Please try again.", "error")
+        return redirect(url_for("staff.annual_meetings"))
+
+    member_ids = []
+    for value in request.form.getlist("member_ids"):
+        if value.isdigit():
+            member_ids.append(int(value))
+
+    if not member_ids:
+        flash("Please select at least one member to export.", "error")
+        return redirect(url_for("staff.annual_meetings"))
+
+    members = (
+        AcademicStaff.query.filter(
+            AcademicStaff.id.in_(member_ids),
+            AcademicStaff.status.in_(["Active", "In progress"]),
+        )
+        .order_by(AcademicStaff.full_name.asc())
+        .all()
+    )
+    if not members:
+        flash("No selected members were found.", "error")
+        return redirect(url_for("staff.annual_meetings"))
+
+    records = (
+        AnnualMeetingRecord.query.filter(AnnualMeetingRecord.member_id.in_([member.id for member in members]))
+        .order_by(AnnualMeetingRecord.year.asc())
+        .all()
+    )
+    meeting_years = {}
+    for record in records:
+        meeting_years.setdefault(record.member_id, {}).setdefault(record.meeting_type, []).append(record)
+
+    workbook = build_annual_meetings_export(members, meeting_years)
+    filename = f"annual-meetings-export-{datetime.now(LOCAL_TZ).strftime('%Y-%m-%d')}.xlsx"
+    return Response(
+        workbook,
+        mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
+@staff_bp.route("/annual-meetings/members/<int:member_id>/meetings", methods=["POST"])
+@login_required
+def add_annual_meeting(member_id):
+    if not validate_csrf():
+        flash("Security token expired. Please try again.", "error")
+        return meetings_redirect()
+
+    member = AcademicStaff.query.get_or_404(member_id)
+    meeting_type = request.form.get("certification_type", "").strip()
+    year = request.form.get("year", "").strip()
+    meeting = next(
+        (item for item in CERTIFICATION_TYPES if item["key"] == meeting_type),
+        None,
+    )
+    if not meeting:
+        flash("Certification type is not valid.", "error")
+        return meetings_redirect()
+    if member.status not in {"Active", "In progress"} or not certification_allowed(member, meeting):
+        flash("This certification is not available for this member.", "error")
+        return meetings_redirect()
+    if not year.isdigit() or len(year) != 4:
+        flash("Please enter a valid four-digit year.", "error")
+        return meetings_redirect()
+
+    record = AnnualMeetingRecord(
+        member_id=member.id,
+        meeting_type=meeting_type,
+        year=int(year),
+        created_by=session.get("user"),
+        updated_by=session.get("user"),
+    )
+    db.session.add(record)
+    try:
+        db.session.commit()
+    except Exception:
+        db.session.rollback()
+        flash("That year is already registered for this certification.", "error")
+        return meetings_redirect()
+
+    flash("Certification year added successfully.", "success")
+    return meetings_redirect()
+
+
+@staff_bp.route("/annual-meetings/members/<int:member_id>/fut", methods=["POST"])
+@login_required
+def update_meeting_fut_checkbox(member_id):
+    if not validate_csrf():
+        flash("Security token expired. Please try again.", "error")
+        return meetings_redirect()
+
+    member = AcademicStaff.query.get_or_404(member_id)
+    member.meeting_fut_checked = "yes" in request.form.getlist("fut_checked")
+    db.session.commit()
+    return meetings_redirect()
+
+
+@staff_bp.route("/annual-meetings/meetings/<int:record_id>/delete", methods=["POST"])
+@login_required
+def delete_annual_meeting(record_id):
+    if not validate_csrf():
+        flash("Security token expired. Please try again.", "error")
+        return meetings_redirect()
+
+    record = AnnualMeetingRecord.query.get_or_404(record_id)
+    db.session.delete(record)
+    db.session.commit()
+    flash("Certification year removed successfully.", "success")
+    return meetings_redirect()
+
+
+@staff_bp.route("/annual-meetings/members/<int:member_id>/notes", methods=["POST"])
+@login_required
+def add_meeting_member_note(member_id):
+    if not validate_csrf():
+        flash("Security token expired. Please try again.", "error")
+        return meetings_redirect()
+
+    member = AcademicStaff.query.get_or_404(member_id)
+    if not request.form.get("interview", "").strip():
+        flash("History note cannot be empty.", "error")
+        return meetings_redirect()
+
+    append_interview_note(member, request.form)
+    db.session.commit()
+    flash("History note added successfully.", "success")
+    return meetings_redirect()
+
+
+@staff_bp.route("/members", methods=["POST"])
+@login_required
+def create_member():
+    if not validate_csrf():
+        flash("Security token expired. Please try again.", "error")
+        return redirect(url_for("staff.index"))
+
+    errors = validate_member_form(request.form, allow_archived=False)
+    if errors:
+        for error in errors:
+            flash(error, "error")
+        return redirect(url_for("staff.index"))
+
+    member = AcademicStaff()
+    apply_form(member, request.form)
+    db.session.add(member)
+    db.session.commit()
+    flash("Member created successfully.", "success")
+    return redirect(url_for("staff.index"))
+
+
+@staff_bp.route("/members/export", methods=["POST"])
+@login_required
+def export_members():
+    if not validate_csrf():
+        flash("Security token expired. Please try again.", "error")
+        return redirect(url_for("staff.index"))
+
+    member_ids = []
+    for value in request.form.getlist("member_ids"):
+        if value.isdigit():
+            member_ids.append(int(value))
+
+    if not member_ids:
+        flash("Select at least one member before exporting.", "error")
+        return redirect(url_for("staff.index"))
+
+    members = (
+        AcademicStaff.query.filter(AcademicStaff.id.in_(member_ids))
+        .order_by(AcademicStaff.full_name.asc())
+        .all()
+    )
+    if not members:
+        flash("No selected members were found.", "error")
+        return redirect(url_for("staff.index"))
+
+    workbook = build_academic_staff_export(members)
+    filename = f"academic-staff-export-{datetime.now(LOCAL_TZ).strftime('%Y-%m-%d')}.xlsx"
+    return Response(
+        workbook,
+        mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
+@staff_bp.route("/members/bulk-update", methods=["POST"])
+@login_required
+def bulk_update_members():
+    if not validate_csrf():
+        flash("Security token expired. Please try again.", "error")
+        return redirect(url_for("staff.index"))
+
+    member_ids = [int(value) for value in request.form.getlist("member_ids") if value.isdigit()]
+    bulk_action = request.form.get("bulk_action", "").strip()
+    if bulk_action == "permanent_delete":
+        if not member_ids:
+            flash("Please select at least one archived member before deleting.", "error")
+            return redirect(url_for("staff.index", show_archived=1))
+        if not is_valid_permanent_delete_password():
+            flash("Permanent delete password is not valid.", "error")
+            return redirect(url_for("staff.index", show_archived=1))
+        members = AcademicStaff.query.filter(
+            AcademicStaff.id.in_(member_ids),
+            AcademicStaff.status == "Archived",
+        ).all()
+        if not members:
+            flash("No archived members were found for permanent deletion.", "error")
+            return redirect(url_for("staff.index", show_archived=1))
+        count = len(members)
+        for member in members:
+            delete_archived_member(member)
+        db.session.commit()
+        flash(f"{count} archived {('member' if count == 1 else 'members')} permanently deleted.", "success")
+        return redirect(url_for("staff.index", show_archived=1))
+
+    if not member_ids:
+        flash("Please select at least one member before applying a bulk action.", "error")
+        return redirect(url_for("staff.index"))
+
+    members = AcademicStaff.query.filter(AcademicStaff.id.in_(member_ids)).all()
+    if not members:
+        flash("No selected members were found.", "error")
+        return redirect(url_for("staff.index"))
+
+    if bulk_action == "status":
+        status = request.form.get("status", "").strip()
+        if status not in EDIT_STATUS_OPTIONS:
+            flash("Please select a valid Status.", "error")
+            return redirect(url_for("staff.index"))
+        for member in members:
+            member.status = status
+        label = f"Status changed to {status}"
+    elif bulk_action == "role":
+        role_action = request.form.get("role_action", "").strip()
+        role = request.form.get("role", "").strip()
+        if role_action not in {"add", "remove"} or role not in ROLE_OPTIONS:
+            flash("Please select a valid role action.", "error")
+            return redirect(url_for("staff.index"))
+        for member in members:
+            role_set = {item for item in member.roles_list()}
+            if role_action == "add":
+                role_set.add(role)
+            else:
+                role_set.discard(role)
+            ordered_roles = [option for option in ROLE_OPTIONS if option in role_set]
+            member.roles = ", ".join(ordered_roles)
+        label = f"Role {role_action}ed: {role}"
+    elif bulk_action == "has_car":
+        has_car = request.form.get("has_car", "").strip()
+        if has_car not in {"Yes", "No"}:
+            flash("Please select a valid car ownership value.", "error")
+            return redirect(url_for("staff.index"))
+        for member in members:
+            member.has_car = has_car
+        label = f"Car ownership changed to {has_car}"
+    else:
+        flash("Please select a valid bulk action.", "error")
+        return redirect(url_for("staff.index"))
+
+    db.session.commit()
+    count = len(members)
+    flash(f"{label} for {count} {('member' if count == 1 else 'members')}.", "success")
+    return redirect(url_for("staff.index"))
+
+
+@staff_bp.route("/members/<int:member_id>/delete", methods=["POST"])
+@login_required
+def delete_member(member_id):
+    if not validate_csrf():
+        flash("Security token expired. Please try again.", "error")
+        return redirect(url_for("staff.index", show_archived=1))
+    if not is_valid_permanent_delete_password():
+        flash("Permanent delete password is not valid.", "error")
+        return redirect(url_for("staff.index", show_archived=1))
+
+    member = AcademicStaff.query.get_or_404(member_id)
+    if member.status != "Archived":
+        flash("Only archived members can be permanently deleted.", "error")
+        return redirect(url_for("staff.index"))
+
+    delete_archived_member(member)
+    db.session.commit()
+    flash("Archived member permanently deleted.", "success")
+    return redirect(url_for("staff.index", show_archived=1))
+
+
+@staff_bp.route("/members/import-preview", methods=["POST"])
+@login_required
+def import_members_preview():
+    if not validate_csrf():
+        flash("Security token expired. Please try again.", "error")
+        return redirect(url_for("staff.index"))
+
+    upload = request.files.get("import_file")
+    update_empty_fields = request.form.get("update_empty_fields") == "on"
+    if not upload or not upload.filename:
+        flash("Please choose an Excel file to import.", "error")
+        return redirect(url_for("staff.index"))
+    if not upload.filename.lower().endswith(".xlsx"):
+        flash("Only .xlsx files are accepted.", "error")
+        return redirect(url_for("staff.index"))
+
+    try:
+        payload = parse_import_workbook(upload, update_empty_fields)
+    except Exception as error:
+        flash(str(error), "error")
+        return redirect(url_for("staff.index"))
+
+    token = save_import_batch(payload)
+    return redirect(url_for("staff.import_members_preview_page", token=token))
+
+
+@staff_bp.route("/members/import-preview/<token>")
+@login_required
+def import_members_preview_page(token):
+    payload = load_import_batch(token)
+    if not payload:
+        flash("Import preview expired. Please upload the file again.", "error")
+        return redirect(url_for("staff.index"))
+    return render_template(
+        "staff/import_preview.html",
+        token=token,
+        payload=payload,
+        csrf_token=session.get("csrf_token"),
+    )
+
+
+@staff_bp.route("/members/import-confirm/<token>", methods=["POST"])
+@login_required
+def import_members_confirm(token):
+    if not validate_csrf():
+        flash("Security token expired. Please try again.", "error")
+        return redirect(url_for("staff.import_members_preview_page", token=token))
+
+    payload = load_import_batch(token)
+    if not payload:
+        flash("Import preview expired. Please upload the file again.", "error")
+        return redirect(url_for("staff.index"))
+
+    update_empty_fields = payload.get("update_empty_fields", False)
+    created = 0
+    updated = 0
+    skipped = 0
+    for row in payload.get("rows", []):
+        if row.get("action") == "Error":
+            skipped += 1
+            continue
+        row_data = row.get("data", {})
+        email = row_data.get("Email", "").lower()
+        member = AcademicStaff.query.filter(db.func.lower(AcademicStaff.email) == email).first()
+        if member:
+            apply_import_row(member, row_data, update_empty_fields)
+            updated += 1
+        else:
+            member = AcademicStaff()
+            apply_import_row(member, row_data, True)
+            db.session.add(member)
+            created += 1
+
+    db.session.commit()
+    try:
+        os.remove(import_batch_path(token))
+    except OSError:
+        pass
+
+    flash(
+        f"Import completed. Members created: {created}. Members updated: {updated}. Rows skipped: {skipped}. Errors found: {payload.get('summary', {}).get('errors', 0)}.",
+        "success",
+    )
+    return redirect(url_for("staff.index"))
+
+
+@staff_bp.route("/members/<int:member_id>", methods=["POST"])
+@login_required
+def update_member(member_id):
+    if not validate_csrf():
+        flash("Security token expired. Please try again.", "error")
+        return redirect(url_for("staff.index"))
+
+    member = AcademicStaff.query.get_or_404(member_id)
+    previous_status = member.status
+    errors = validate_member_form(request.form, allow_archived=True)
+    if errors:
+        for error in errors:
+            flash(error, "error")
+        return redirect(url_for("staff.index", show_archived=1 if previous_status == "Archived" else 0))
+
+    if previous_status != "Archived" and request.form.get("status") == "Archived":
+        if request.form.get("confirm_archive") != "yes":
+            flash("Archive confirmation is required.", "error")
+            return redirect(url_for("staff.index"))
+
+    apply_form(member, request.form)
+    db.session.commit()
+    flash("Member updated successfully.", "success")
+    return redirect(url_for("staff.index", show_archived=1 if member.status == "Archived" else 0))
+
+
+@staff_bp.route("/members/<int:member_id>/notes", methods=["POST"])
+@login_required
+def add_member_note(member_id):
+    if not validate_csrf():
+        flash("Security token expired. Please try again.", "error")
+        return redirect(url_for("staff.index"))
+
+    member = AcademicStaff.query.get_or_404(member_id)
+    if not request.form.get("interview", "").strip():
+        flash("History note cannot be empty.", "error")
+        return redirect(url_for("staff.index"))
+
+    append_interview_note(member, request.form)
+    db.session.commit()
+    flash("History note added successfully.", "success")
+    return redirect(url_for("staff.index"))
+
+
+@staff_bp.route("/potential-entries", methods=["POST"])
+@login_required
+def create_potential_entry():
+    if not validate_csrf():
+        flash("Security token expired. Please try again.", "error")
+        return redirect(url_for("staff.index"))
+
+    errors = validate_potential_form(request.form)
+    if errors:
+        for error in errors:
+            flash(error, "error")
+        return redirect(url_for("staff.index"))
+
+    entry = PotentialEntry()
+    apply_potential_form(entry, request.form)
+    db.session.add(entry)
+    db.session.commit()
+    flash("Potential entry created successfully.", "success")
+    return redirect(url_for("staff.index"))
+
+
+@staff_bp.route("/potential-entries/<int:entry_id>", methods=["POST"])
+@login_required
+def update_potential_entry(entry_id):
+    if not validate_csrf():
+        flash("Security token expired. Please try again.", "error")
+        return redirect(url_for("staff.index"))
+
+    entry = PotentialEntry.query.get_or_404(entry_id)
+    errors = validate_potential_form(request.form)
+    if errors:
+        for error in errors:
+            flash(error, "error")
+        return redirect(url_for("staff.index"))
+
+    apply_potential_form(entry, request.form)
+    db.session.commit()
+    flash("Potential entry updated successfully.", "success")
+    return redirect(url_for("staff.index"))
+
+
+@staff_bp.route("/potential-entries/<int:entry_id>/reject", methods=["POST"])
+@login_required
+def reject_potential_entry(entry_id):
+    if not validate_csrf():
+        flash("Security token expired. Please try again.", "error")
+        return redirect(url_for("staff.index"))
+
+    entry = PotentialEntry.query.get_or_404(entry_id)
+    entry.is_rejected = True
+    entry.rejected_on = datetime.now(timezone.utc)
+    db.session.commit()
+    flash("Potential entry rejected and archived.", "success")
+    return redirect(url_for("staff.index"))
+
+
+@staff_bp.route("/potential-entries/<int:entry_id>/accept", methods=["POST"])
+@login_required
+def accept_potential_entry(entry_id):
+    if not validate_csrf():
+        flash("Security token expired. Please try again.", "error")
+        return redirect(url_for("staff.index"))
+
+    entry = PotentialEntry.query.get_or_404(entry_id)
+    errors = validate_member_form(request.form, allow_archived=False)
+    if errors:
+        for error in errors:
+            flash(error, "error")
+        return redirect(url_for("staff.index"))
+
+    member = AcademicStaff()
+    member.interview = entry.interview
+    apply_form(member, request.form)
+    db.session.add(member)
+    db.session.delete(entry)
+    db.session.commit()
+    flash("Potential entry accepted and moved to academic staff.", "success")
+    return redirect(url_for("staff.index"))
+
+
+@staff_bp.route("/potential-entries/<int:entry_id>/notes", methods=["POST"])
+@login_required
+def add_potential_note(entry_id):
+    if not validate_csrf():
+        flash("Security token expired. Please try again.", "error")
+        return redirect(url_for("staff.index"))
+
+    entry = PotentialEntry.query.get_or_404(entry_id)
+    if not request.form.get("interview", "").strip():
+        flash("Interview note cannot be empty.", "error")
+        return redirect(url_for("staff.index"))
+
+    append_potential_interview_note(entry, request.form)
+    db.session.commit()
+    flash("Interview note added successfully.", "success")
+    return redirect(url_for("staff.index"))

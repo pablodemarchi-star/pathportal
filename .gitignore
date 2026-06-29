@@ -1,0 +1,9 @@
+.venv/
+__pycache__/
+.pycache_tmp/
+*.py[cod]
+.env
+instance/*.db
+instance/email_outbox/
+instance/import_batches/
+.DS_Store

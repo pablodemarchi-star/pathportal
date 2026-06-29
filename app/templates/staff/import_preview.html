@@ -1,0 +1,97 @@
+{% extends "base.html" %}
+
+{% block title %}Import preview | Path Examinations{% endblock %}
+
+{% block content %}
+<header class="page-header">
+  <div>
+    <p class="eyebrow">Academic staff</p>
+    <h1>Import preview</h1>
+    <p>Review validation results before importing members.</p>
+  </div>
+  <div class="page-actions">
+    <a class="secondary-button link-button" href="{{ url_for('staff.index') }}">Cancel</a>
+    <form method="post" action="{{ url_for('staff.import_members_confirm', token=token) }}">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+      <button class="primary-button" type="submit" {% if not payload.summary.ready %}disabled{% endif %}>Import members</button>
+    </form>
+  </div>
+</header>
+
+<section class="import-summary">
+  <div class="summary-card summary-total">
+    <span class="summary-icon">T</span>
+    <span>Total rows detected</span>
+    <strong>{{ payload.summary.total }}</strong>
+  </div>
+  <div class="summary-card summary-create">
+    <span class="summary-icon">N</span>
+    <span>New members to create</span>
+    <strong>{{ payload.summary.create }}</strong>
+  </div>
+  <div class="summary-card summary-update">
+    <span class="summary-icon">U</span>
+    <span>Existing members to update</span>
+    <strong>{{ payload.summary['update'] }}</strong>
+  </div>
+  <div class="summary-card summary-errors">
+    <span class="summary-icon">E</span>
+    <span>Rows with errors</span>
+    <strong>{{ payload.summary.errors }}</strong>
+  </div>
+  <div class="summary-card summary-ready">
+    <span class="summary-icon">R</span>
+    <span>Rows ready to import</span>
+    <strong>{{ payload.summary.ready }}</strong>
+  </div>
+</section>
+
+<div class="import-state-message {% if payload.summary.errors %}has-errors{% else %}is-ready{% endif %}">
+  {% if payload.summary.errors %}
+    Some rows contain errors. Only valid rows will be imported.
+  {% else %}
+    All rows are valid and ready to import.
+  {% endif %}
+</div>
+
+{% if payload.unknown_headers %}
+  <div class="flash warning">Ignored unknown columns: {{ payload.unknown_headers|join(', ') }}</div>
+{% endif %}
+
+<section class="table-wrap import-preview-wrap" aria-label="Import preview rows">
+  <table class="import-preview-table">
+    <thead>
+      <tr>
+        <th>Row number</th>
+        <th>Full name</th>
+        <th>Email</th>
+        <th>Action</th>
+        <th>Error details</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for row in payload.rows %}
+        <tr>
+          <td>{{ row.row_number }}</td>
+          <td>{{ row.full_name or '-' }}</td>
+          <td>{{ row.email or '-' }}</td>
+          <td>
+            <span class="badge import-action-{{ row.action|lower }}">{{ row.action }}</span>
+          </td>
+          <td>
+            {% if row.errors %}
+              <span class="import-error-text">{{ row.errors|join(' ') }}</span>
+            {% else %}
+              <span class="import-ready-text">Ready</span>
+            {% endif %}
+          </td>
+        </tr>
+      {% else %}
+        <tr>
+          <td colspan="5" class="empty-state">No rows detected.</td>
+        </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</section>
+{% endblock %}

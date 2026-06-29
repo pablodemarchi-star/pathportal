@@ -1,0 +1,15 @@
+{% macro status_badge(value) -%}
+  <span class="badge status-{{ value|lower|replace(' ', '-') }}">{{ value }}</span>
+{%- endmacro %}
+
+{% macro role_badge(value) -%}
+  <span class="badge role-{{ value|trim|lower }}">{{ value|trim }}</span>
+{%- endmacro %}
+
+{% macro yes_no_badge(value) -%}
+  {% if value %}
+    <span class="badge yn-{{ value|lower }}">{{ value }}</span>
+  {% else %}
+    <span class="muted">-</span>
+  {% endif %}
+{%- endmacro %}

@@ -1,0 +1,218 @@
+{% extends "base.html" %}
+
+{% macro session_status_badge(status) -%}
+  <span class="badge exam-status-{{ status|lower }}">{{ status }}</span>
+{%- endmacro %}
+
+{% macro centre_type_badge(centre_type) -%}
+  {% if centre_type %}
+    <span class="centre-type-chip centre-type-{{ centre_type|lower|replace(' ', '-') }}">{{ centre_type }}</span>
+  {% endif %}
+{%- endmacro %}
+
+{% macro format_badge(format) -%}
+  <span class="badge exam-format-{{ format|lower }}">{{ format }}</span>
+{%- endmacro %}
+
+{% block title %}Monthly exam session registrations | Path Examinations{% endblock %}
+
+{% block content %}
+<header class="page-header">
+  <div>
+    <p class="eyebrow">Monthly exam session registrations</p>
+    <h1>Monthly exam session registrations</h1>
+    <p>Track monthly registration numbers by module for each exam session.</p>
+  </div>
+</header>
+
+<section class="toolbar {% if archived_session_years %}toolbar-with-archive{% endif %}">
+  <div>
+    <p class="archived-year-title">Session years</p>
+    <p class="archived-year-copy">Use the active year selector to manage monthly registrations by year.</p>
+  </div>
+  {% if archived_session_years %}
+    <section class="archived-year-panel" aria-label="Archived Monthly exam session registration years">
+      <div>
+        <p class="archived-year-title">Archived years</p>
+        <p class="archived-year-copy">Archived years are hidden from the active selector, but their records are preserved.</p>
+      </div>
+      <div class="archived-year-list">
+        {% for year_item in archived_session_years %}
+          <article class="archived-year-item">
+            <span>{{ year_item.year }}</span>
+            <form method="post" action="{{ url_for('staff.unarchive_exam_session_year', year=year_item.year) }}" data-confirm-submit="Restore {{ year_item.year }} to active years?">
+              <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+              <input type="hidden" name="return_to" value="{{ url_for('staff.monthly_exam_session_registrations', session_year=year_item.year) }}">
+              <button class="secondary-button compact-action" type="submit">Unarchive</button>
+            </form>
+            <form method="post" action="{{ url_for('staff.delete_exam_session_year', year=year_item.year) }}" data-confirm-submit="Permanently delete {{ year_item.year }} and all its exam session records? This cannot be undone.">
+              <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+              <input type="hidden" name="return_to" value="{{ url_for('staff.monthly_exam_session_registrations') }}">
+              <button class="danger-button compact-action" type="submit">Delete permanently</button>
+            </form>
+          </article>
+        {% endfor %}
+      </div>
+    </section>
+  {% endif %}
+</section>
+
+{% if session_years %}
+<section class="year-toolbar" aria-label="Monthly exam session registration years">
+  <div class="year-tabs">
+    {% for year_item in session_years %}
+      <a class="year-tab {% if year_item.year == selected_session_year %}active{% endif %}" href="{{ url_for('staff.monthly_exam_session_registrations', session_year=year_item.year) }}">{{ year_item.year }}</a>
+    {% endfor %}
+  </div>
+  <form method="post" action="{{ url_for('staff.archive_exam_session_year', year=selected_session_year) }}" data-confirm-submit="Archive {{ selected_session_year }}? This year will be hidden but its information will be preserved.">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <input type="hidden" name="return_to" value="{{ url_for('staff.monthly_exam_session_registrations') }}">
+    <button class="secondary-button compact-action" type="submit">Archive year</button>
+  </form>
+</section>
+{% endif %}
+
+<section class="table-wrap monthly-registration-wrap" aria-label="Monthly exam session registrations">
+  <table class="monthly-registration-table">
+    <thead>
+      <tr>
+        <th class="sticky-registration-col status-col">Status</th>
+        <th class="sticky-registration-col name-col">Exam session name</th>
+        {% for month_number, month_name in months %}
+          <th>{{ month_name }}</th>
+        {% endfor %}
+        <th>Reset</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for session in sessions %}
+        {% set session_registrations = registrations.get(session.id, {}) %}
+        {% set session_candidate_totals = candidate_totals.get(session.id, {}) %}
+        {% set session_candidate_trends = candidate_total_trends.get(session.id, {}) %}
+        <tr>
+          <td class="sticky-registration-col status-col">{{ session_status_badge(session.status) }}</td>
+          <td class="sticky-registration-col name-col">
+            <div class="session-name-cell">
+              <span>{{ session.exam_session_name }}</span>
+              {{ format_badge(session.format) }}
+              {{ centre_type_badge(session.category) }}
+              <div class="session-marker-actions" aria-label="Session markers">
+                {% if session.format != 'Online' %}
+                  <form method="post" action="{{ url_for('staff.toggle_exam_session_marker', session_id=session.id, marker='rsg') }}">
+                    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                    <button class="session-marker-chip {% if session.rsg_enabled %}is-active{% endif %}" type="submit">RSG</button>
+                  </form>
+                {% endif %}
+                <form method="post" action="{{ url_for('staff.toggle_exam_session_marker', session_id=session.id, marker='pen') }}">
+                  <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                  <button class="session-marker-chip {% if session.pen_enabled %}is-active{% endif %}" type="submit">PEN</button>
+                </form>
+                {% if session.format == 'Online' %}
+                  <form method="post" action="{{ url_for('staff.toggle_exam_session_marker', session_id=session.id, marker='pst') }}">
+                    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                    <button class="session-marker-chip {% if session.pst_enabled %}is-active{% endif %}" type="submit">PST</button>
+                  </form>
+                {% endif %}
+              </div>
+            </div>
+          </td>
+          {% for month_number, month_name in months %}
+            {% set month_values = session_registrations.get(month_number, {}) %}
+            {% set total_value = session_candidate_totals.get(month_number) %}
+            {% set total_trend = session_candidate_trends.get(month_number, {}) %}
+            {% set month_active = month_values|length > 0 or total_value is not none %}
+            <td>
+              <div class="monthly-registration-cell {% if month_active %}is-active{% endif %}" data-monthly-registration-cell>
+                <button class="badge monthly-inactive-badge" type="button" data-activate-monthly-cell {% if month_active %}hidden{% endif %}>Inactive</button>
+                <form method="post" action="{{ url_for('staff.update_monthly_exam_session_registration', session_id=session.id, month=month_number) }}" class="monthly-registration-form" {% if not month_active %}hidden{% endif %}>
+                  <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                  <label class="monthly-registration-field monthly-total-field">
+                    <span>Total candidates</span>
+                    <input
+                      type="number"
+                      name="total_candidates"
+                      value="{{ total_value if total_value is not none else '' }}"
+                      min="0"
+                      step="1"
+                      inputmode="numeric"
+                      pattern="[0-9]*"
+                      placeholder="Total candidates"
+                      class="candidate-total-input {% if total_trend.get('trend') %}trend-{{ total_trend.get('trend') }}{% endif %}"
+                      title="{{ total_trend.get('tooltip', '') }}"
+                      data-integer-input
+                      data-total-candidates-input
+                    >
+                  </label>
+                  {% for module in session.modules_list() %}
+                    <label class="monthly-registration-field">
+                      <span>{{ module }}</span>
+                      <input
+                        type="number"
+                        name="registration_{{ module }}"
+                        value="{{ month_values.get(module, '') }}"
+                        min="0"
+                        step="1"
+                        inputmode="numeric"
+                        pattern="[0-9]*"
+                        placeholder="{{ module }}"
+                        data-integer-input
+                      >
+                    </label>
+                  {% endfor %}
+                </form>
+              </div>
+            </td>
+          {% endfor %}
+          <td>
+            <form method="post" action="{{ url_for('staff.reset_monthly_exam_session_registration', session_id=session.id) }}" data-reset-monthly-form>
+              <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+              <button class="danger-button compact-action" type="submit">Reset</button>
+            </form>
+          </td>
+        </tr>
+      {% else %}
+        <tr>
+          <td colspan="15" class="empty-state">No exam sessions found.</td>
+        </tr>
+      {% endfor %}
+    </tbody>
+    <tfoot>
+      <tr class="monthly-total-row" title="Totals are calculated using all filtered records, not only the records displayed on the current page.">
+        <td class="sticky-registration-col status-col"></td>
+        <td class="sticky-registration-col name-col">
+          <span>Monthly total</span>
+          <small>All filtered records</small>
+        </td>
+        {% for month_number, month_name in months %}
+          {% set monthly_total = monthly_totals.get(month_number, {}) %}
+          <td>
+            <span
+              class="monthly-total-value trend-{{ monthly_total.get('trend', 'inactive') }}"
+              data-monthly-total-value="{{ month_number }}"
+              title="{{ monthly_total.get('tooltip', '') }}"
+            >{% if monthly_total.get('has_data') %}{{ monthly_total.get('value', 0) }}{% else %}Inactive{% endif %}</span>
+          </td>
+        {% endfor %}
+        <td></td>
+      </tr>
+    </tfoot>
+  </table>
+</section>
+
+{% include "_pagination.html" %}
+
+<div class="modal" id="reset-monthly-confirmation" aria-hidden="true">
+  <div class="modal-panel confirm-panel">
+    <div class="modal-header">
+      <h2>Reset monthly registrations</h2>
+      <button class="icon-button" type="button" data-reset-monthly-cancel>&times;</button>
+    </div>
+    <p>This action will permanently remove all monthly registration data for this exam session and set all months back to Inactive.</p>
+    <p>Do you want to continue?</p>
+    <div class="form-actions">
+      <button class="secondary-button" type="button" data-reset-monthly-cancel>Cancel</button>
+      <button class="danger-button" type="button" data-reset-monthly-confirm>Reset</button>
+    </div>
+  </div>
+</div>
+{% endblock %}
