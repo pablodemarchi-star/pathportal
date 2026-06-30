@@ -3686,6 +3686,116 @@ const buildPotentialInvitationEmail = (button) => {
   return { html, text };
 };
 
+const CONTRACT_LINK = "https://drive.google.com/file/d/1FfzKcWq8pED3qv5yuzx2L9n_VEx0ZysM/view?usp=sharing";
+
+const formatInductionSessionDate = (value) => {
+  const match = cleanEmailValue(value).match(/^(\d{2})\/(\d{2})\/(\d{4})$/);
+  if (!match) return "";
+  const day = Number.parseInt(match[1], 10);
+  const monthIndex = Number.parseInt(match[2], 10) - 1;
+  const year = Number.parseInt(match[3], 10);
+  const date = new Date(year, monthIndex, day);
+  if (Number.isNaN(date.getTime()) || date.getDate() !== day || date.getMonth() !== monthIndex || date.getFullYear() !== year) {
+    return "";
+  }
+  const weekday = date.toLocaleDateString("en-US", { weekday: "long" });
+  const month = date.toLocaleDateString("en-US", { month: "long" });
+  return `${weekday} ${day} ${month} ${year}`;
+};
+
+const formatInductionTimeRange = (startTime, endTime) => {
+  const start = cleanEmailValue(startTime);
+  const end = cleanEmailValue(endTime);
+  if (!/^([01]\d|2[0-3]):[0-5]\d$/.test(start) || !/^([01]\d|2[0-3]):[0-5]\d$/.test(end)) {
+    return "";
+  }
+  return `${start}–${end}`;
+};
+
+const pathEmailShell = ({ label, title, bodyHtml }) => `
+  <div style="margin:0;padding:24px;background:#00506b;font-family:Arial, Helvetica, sans-serif;color:#111115;">
+    <div style="max-width:640px;margin:0 auto;background:#ffffff;border:1px solid #d9dfdc;border-radius:16px;padding:26px 28px;">
+      <p style="display:inline-block;margin:0 0 14px;padding:5px 10px;border-radius:999px;background:#e7f5f8;color:#00506b;font:700 11px Arial, Helvetica, sans-serif;letter-spacing:.5px;text-transform:uppercase;">${escapeEmailHtml(label)}</p>
+      <h1 style="margin:0 0 18px;color:#00506b;font:700 24px/1.25 Arial, Helvetica, sans-serif;">${escapeEmailHtml(title)}</h1>
+      ${bodyHtml}
+      <p style="margin:22px 0 0;color:#111115;font:400 15px/1.55 Arial, Helvetica, sans-serif;">Best regards,</p>
+      <p style="margin:4px 0 0;color:#00506b;font:700 15px/1.55 Arial, Helvetica, sans-serif;">Path International Examinations</p>
+    </div>
+  </div>
+`;
+
+const buildSuccessfulApplicationEmail = (button) => {
+  const fullName = cleanEmailValue(button.dataset.fullName);
+  if (!fullName) return { error: "Potential entry full name is required." };
+  const inductionDate = formatInductionSessionDate(button.dataset.inductionDate);
+  const inductionTimeRange = formatInductionTimeRange(button.dataset.inductionStartTime, button.dataset.inductionEndTime);
+  if (!inductionDate || !inductionTimeRange) {
+    return { error: "Upcoming induction session date and time is not configured." };
+  }
+  const { link: zoomLink, id: zoomId, password: zoomPassword } = POTENTIAL_INTERVIEW_ACCESS_DETAILS.Zoom;
+  const safeName = escapeEmailHtml(fullName);
+  const safeDate = escapeEmailHtml(inductionDate);
+  const safeTimeRange = escapeEmailHtml(inductionTimeRange);
+  const bodyHtml = `
+    <p style="margin:0 0 14px;color:#111115;font:400 15px/1.55 Arial, Helvetica, sans-serif;">Dear ${safeName},</p>
+    <p style="margin:0 0 16px;color:#111115;font:400 15px/1.55 Arial, Helvetica, sans-serif;">We are delighted to inform you that your application for the role of <strong>Examiner</strong> at Path International Examinations has been accepted. We are confident that you will be a valuable addition to our academic team.</p>
+    <div style="margin:0 0 18px;padding:16px 18px;background:#e6f0f3;border-left:4px solid #00506b;border-radius:12px;">
+      <p style="margin:0 0 10px;color:#00506b;font:700 15px Arial, Helvetica, sans-serif;">To formally accept this offer and secure your place, please complete the following steps within 3 working days:</p>
+      <ol style="margin:0;padding-left:20px;color:#111115;font:400 14px/1.55 Arial, Helvetica, sans-serif;">
+        <li style="margin-bottom:8px;">Review, complete, sign and return <a href="${escapeEmailAttribute(CONTRACT_LINK)}" style="color:#00506b;font-weight:700;">this contract</a> to <a href="mailto:admin@pathexaminations.com" style="color:#00506b;font-weight:700;">admin@pathexaminations.com</a>, together with a professional profile picture.</li>
+        <li>Confirm your availability for the upcoming online induction session.</li>
+      </ol>
+    </div>
+    <div style="margin:0 0 18px;padding:16px 18px;background:#f1f3f2;border:1px solid #d9dfdc;border-radius:12px;">
+      <p style="margin:0 0 6px;color:#62727a;font:700 11px Arial, Helvetica, sans-serif;letter-spacing:.7px;text-transform:uppercase;">Upcoming online induction session</p>
+      <p style="margin:0;color:#00506b;font:700 18px/1.35 Arial, Helvetica, sans-serif;">${safeDate}</p>
+      <p style="margin:3px 0 0;color:#00506b;font:700 18px/1.35 Arial, Helvetica, sans-serif;">${safeTimeRange}</p>
+    </div>
+    <div style="margin:0 0 18px;padding:16px 18px;background:#f1f3f2;border:1px solid #d9dfdc;border-radius:12px;">
+      <p style="margin:0 0 10px;color:#00506b;font:700 15px Arial, Helvetica, sans-serif;">The Zoom access details are as follows:</p>
+      <p style="margin:0 0 6px;color:#111115;font:400 14px/1.5 Arial, Helvetica, sans-serif;">Link: <a href="${escapeEmailAttribute(zoomLink)}" style="color:#00506b;font-weight:700;">${escapeEmailHtml(zoomLink)}</a></p>
+      <p style="margin:0 0 6px;color:#111115;font:400 14px/1.5 Arial, Helvetica, sans-serif;">Zoom ID: <strong>${escapeEmailHtml(zoomId)}</strong></p>
+      <p style="margin:0;color:#111115;font:400 14px/1.5 Arial, Helvetica, sans-serif;">Password: <strong>${escapeEmailHtml(zoomPassword)}</strong></p>
+    </div>
+    <p style="margin:0 0 14px;color:#111115;font:400 15px/1.55 Arial, Helvetica, sans-serif;">Should you have any questions or require any further information, please let us know.</p>
+    <p style="margin:0;color:#111115;font:400 15px/1.55 Arial, Helvetica, sans-serif;">Welcome to Path International Examinations. We look forward to working with you.</p>
+  `;
+  const html = pathEmailShell({
+    label: "Successful application",
+    title: "Your application has been accepted",
+    bodyHtml,
+  });
+  const text = `Dear ${fullName},\n\nWe are delighted to inform you that your application for the role of Examiner at Path International Examinations has been accepted. We are confident that you will be a valuable addition to our academic team.\n\nTo formally accept this offer and secure your place, please complete the following steps within 3 working days:\n\n* Review, complete, sign and return this contract to admin@pathexaminations.com, together with a professional profile picture:\n${CONTRACT_LINK}\n\n* Confirm your availability for the upcoming online induction session:\n\n${inductionDate}\n${inductionTimeRange}\n\nThe Zoom access details are as follows:\n\nLink: ${zoomLink}\nZoom ID: ${zoomId}\nPassword: ${zoomPassword}\n\nShould you have any questions or require any further information, please let us know.\n\nWelcome to Path International Examinations. We look forward to working with you.\n\nBest regards,\n\nPath International Examinations`;
+  return { html, text };
+};
+
+const buildUnsuccessfulApplicationEmail = (button) => {
+  const fullName = cleanEmailValue(button.dataset.fullName);
+  if (!fullName) return { error: "Potential entry full name is required." };
+  const safeName = escapeEmailHtml(fullName);
+  const bodyHtml = `
+    <p style="margin:0 0 14px;color:#111115;font:400 15px/1.55 Arial, Helvetica, sans-serif;">Dear ${safeName},</p>
+    <p style="margin:0 0 14px;color:#111115;font:400 15px/1.55 Arial, Helvetica, sans-serif;">Thank you very much for your interest in joining Path International Examinations and for taking part in our selection process.</p>
+    <p style="margin:0 0 14px;color:#111115;font:400 15px/1.55 Arial, Helvetica, sans-serif;">After careful consideration, we regret to inform you that we will not be moving forward with your application at this stage. At present, we do not have active examination sessions requiring additional examiners, so we are not currently expanding our examiner team.</p>
+    <p style="margin:0 0 14px;color:#111115;font:400 15px/1.55 Arial, Helvetica, sans-serif;">However, we truly appreciate your interest and the time you invested in the process. We will keep your profile in our database and may contact you in the future should new opportunities arise that match your experience and our academic needs.</p>
+    <p style="margin:0;color:#111115;font:400 15px/1.55 Arial, Helvetica, sans-serif;">We wish you every success in your professional journey and thank you once again for your interest in Path International Examinations.</p>
+  `;
+  const html = pathEmailShell({
+    label: "Application update",
+    title: "Update on your application",
+    bodyHtml,
+  });
+  const text = `Dear ${fullName},\n\nThank you very much for your interest in joining Path International Examinations and for taking part in our selection process.\n\nAfter careful consideration, we regret to inform you that we will not be moving forward with your application at this stage. At present, we do not have active examination sessions requiring additional examiners, so we are not currently expanding our examiner team.\n\nHowever, we truly appreciate your interest and the time you invested in the process. We will keep your profile in our database and may contact you in the future should new opportunities arise that match your experience and our academic needs.\n\nWe wish you every success in your professional journey and thank you once again for your interest in Path International Examinations.\n\nBest regards,\n\nPath International Examinations`;
+  return { html, text };
+};
+
+const enableInvitationSentAction = (button) => {
+  const actionButton = button.closest(".potential-card-actions")?.querySelector("[data-invitation-sent-action]");
+  if (!actionButton) return;
+  actionButton.disabled = false;
+  actionButton.title = "Mark interview invitation as sent.";
+};
+
 const initPotentialInvitationEmailButtons = (root = document) => {
   root.querySelectorAll("[data-copy-potential-invitation]").forEach((button) => {
     if (button.dataset.potentialInvitationInitialized === "true") return;
@@ -3700,6 +3810,7 @@ const initPotentialInvitationEmailButtons = (root = document) => {
       button.dataset.originalText = originalText;
       try {
         await copyRichTextToClipboard(payload);
+        enableInvitationSentAction(button);
         button.textContent = "Interview invitation copied.";
         button.classList.add("is-copied");
         window.setTimeout(() => {
@@ -3708,6 +3819,38 @@ const initPotentialInvitationEmailButtons = (root = document) => {
         }, 1800);
       } catch (error) {
         potentialInvitationError(button, "Could not copy the invitation. Please try again.");
+      }
+    });
+  });
+};
+
+const initPotentialOutcomeEmailButtons = (root = document) => {
+  root.querySelectorAll("[data-copy-potential-outcome]").forEach((button) => {
+    if (button.dataset.potentialOutcomeInitialized === "true") return;
+    button.dataset.potentialOutcomeInitialized = "true";
+    button.addEventListener("click", async () => {
+      const outcome = cleanEmailValue(button.dataset.copyPotentialOutcome);
+      const payload = outcome === "successful"
+        ? buildSuccessfulApplicationEmail(button)
+        : buildUnsuccessfulApplicationEmail(button);
+      if (payload.error) {
+        potentialInvitationError(button, payload.error);
+        return;
+      }
+      const originalText = button.dataset.originalText || button.textContent;
+      button.dataset.originalText = originalText;
+      try {
+        await copyRichTextToClipboard(payload);
+        button.textContent = outcome === "successful"
+          ? "Successful application email copied."
+          : "Unsuccessful application email copied.";
+        button.classList.add("is-copied");
+        window.setTimeout(() => {
+          button.textContent = originalText;
+          button.classList.remove("is-copied");
+        }, 1800);
+      } catch (error) {
+        potentialInvitationError(button, "Could not copy the email. Please try again.");
       }
     });
   });
@@ -4560,6 +4703,7 @@ const initTeamMemberSelects = (root = document) => {
   });
   initInvitationEmailCopyButtons(root);
   initPotentialInvitationEmailButtons(root);
+  initPotentialOutcomeEmailButtons(root);
 };
 
 document.querySelectorAll("[data-copy-link]").forEach((button) => {
@@ -4583,6 +4727,7 @@ document.querySelectorAll("[data-copy-link]").forEach((button) => {
 });
 
 initPotentialInvitationEmailButtons();
+initPotentialOutcomeEmailButtons();
 
 document.addEventListener("click", (event) => {
   document.querySelectorAll("[data-team-member-picker][open]").forEach((picker) => {

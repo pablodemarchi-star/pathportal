@@ -127,15 +127,60 @@
               {% endif %}
               <button class="mini-button" type="button" data-open-modal="potential-note-{{ entry.id }}">Add notes</button>
               {% if entry.status == 'Interview arranged' %}
-                <button
-                  class="mini-button potential-email-invitation-button"
-                  type="button"
-                  data-copy-potential-invitation
-                  data-full-name="{{ entry.full_name }}"
-                  data-interview-date="{{ entry.interview_date or '' }}"
-                  data-interview-time="{{ entry.interview_time or '' }}"
-                  data-platform="{{ entry.platform or '' }}"
-                >Email invitation</button>
+                {% if entry.interview_invitation_sent %}
+                  <button
+                    class="mini-button potential-email-invitation-button disabled-button"
+                    type="button"
+                    disabled
+                    title="Interview invitation already sent."
+                  >Email invitation</button>
+                  <form class="potential-inline-action-form" method="post" action="{{ url_for('staff.update_potential_interview_invitation_sent', entry_id=entry.id) }}">
+                    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                    <input type="hidden" name="next" value="{{ request.full_path }}">
+                    <input type="hidden" name="interview_invitation_sent" value="0">
+                    <span class="potential-sent-pill">Invitation sent</span>
+                    <button class="mini-icon-button" type="submit" aria-label="Undo invitation sent for {{ entry.full_name }}" title="Undo invitation sent">X</button>
+                  </form>
+                  <button
+                    class="mini-button potential-email-outcome-button"
+                    type="button"
+                    data-copy-potential-outcome="successful"
+                    data-full-name="{{ entry.full_name }}"
+                    data-induction-date="{{ staff_settings_values.upcoming_induction_session_date }}"
+                    data-induction-start-time="{{ staff_settings_values.upcoming_induction_session_start_time }}"
+                    data-induction-end-time="{{ staff_settings_values.upcoming_induction_session_end_time }}"
+                    aria-label="Copy successful application email for {{ entry.full_name }}"
+                  >Successful application email</button>
+                  <button
+                    class="mini-button potential-email-outcome-button"
+                    type="button"
+                    data-copy-potential-outcome="unsuccessful"
+                    data-full-name="{{ entry.full_name }}"
+                    aria-label="Copy unsuccessful application email for {{ entry.full_name }}"
+                  >Unsuccessful application email</button>
+                {% else %}
+                  <button
+                    class="mini-button potential-email-invitation-button"
+                    type="button"
+                    data-copy-potential-invitation
+                    data-full-name="{{ entry.full_name }}"
+                    data-interview-date="{{ entry.interview_date or '' }}"
+                    data-interview-time="{{ entry.interview_time or '' }}"
+                    data-platform="{{ entry.platform or '' }}"
+                  >Email invitation</button>
+                  <form class="potential-inline-action-form" method="post" action="{{ url_for('staff.update_potential_interview_invitation_sent', entry_id=entry.id) }}">
+                    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                    <input type="hidden" name="next" value="{{ request.full_path }}">
+                    <input type="hidden" name="interview_invitation_sent" value="1">
+                    <button
+                      class="mini-button invitation-sent-action"
+                      type="submit"
+                      data-invitation-sent-action
+                      disabled
+                      title="Copy the email invitation first."
+                    >Invitation sent</button>
+                  </form>
+                {% endif %}
               {% endif %}
             </div>
           </article>
@@ -145,6 +190,45 @@
       <div class="potential-empty">No potential entries yet.</div>
     {% endif %}
   </div>
+</section>
+
+<section class="certification-year-settings staff-settings-panel" aria-label="Staff members settings">
+  <form method="post" action="{{ url_for('staff.update_staff_members_settings') }}" class="certification-year-settings-form">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <label>
+      Upcoming induction session date and time
+      <span class="certification-date-time-fields staff-induction-date-time-fields">
+        <input
+          name="upcoming_induction_session_date"
+          value="{{ staff_settings_values.upcoming_induction_session_date }}"
+          placeholder="DD/MM/YYYY"
+          inputmode="numeric"
+          maxlength="10"
+          pattern="\d{2}/\d{2}/\d{4}"
+          aria-label="Upcoming induction session date"
+        >
+        <input
+          name="upcoming_induction_session_start_time"
+          value="{{ staff_settings_values.upcoming_induction_session_start_time }}"
+          placeholder="hh:mm"
+          inputmode="numeric"
+          maxlength="5"
+          pattern="([01]\d|2[0-3]):[0-5]\d"
+          aria-label="Upcoming induction session start time"
+        >
+        <input
+          name="upcoming_induction_session_end_time"
+          value="{{ staff_settings_values.upcoming_induction_session_end_time }}"
+          placeholder="hh:mm"
+          inputmode="numeric"
+          maxlength="5"
+          pattern="([01]\d|2[0-3]):[0-5]\d"
+          aria-label="Upcoming induction session end time"
+        >
+      </span>
+    </label>
+    <button class="secondary-button compact-action" type="submit">Save settings</button>
+  </form>
 </section>
 
 <form id="staff-bulk-export-form" method="post" action="{{ url_for('staff.export_members') }}" data-bulk-form data-bulk-scope="[data-staff-records-table]">

@@ -285,6 +285,20 @@ class CertificationYearConfiguration(db.Model):
     )
 
 
+class StaffMembersSettings(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    upcoming_induction_session_date = db.Column(db.Date)
+    upcoming_induction_session_start_time = db.Column(db.Time)
+    upcoming_induction_session_end_time = db.Column(db.Time)
+    created_on = db.Column(db.DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))
+    updated_on = db.Column(
+        db.DateTime(timezone=True),
+        nullable=False,
+        default=lambda: datetime.now(timezone.utc),
+        onupdate=lambda: datetime.now(timezone.utc),
+    )
+
+
 class ExaminerCertificationFut1Selection(db.Model):
     __table_args__ = (
         db.UniqueConstraint("member_id", "option_name", "year", name="uq_member_examiner_fut1_option_year"),
@@ -1576,6 +1590,7 @@ class PotentialEntry(db.Model):
     platform = db.Column(db.String(20), nullable=True)
     interviewer = db.Column(db.String(220), nullable=True)
     interview = db.Column(db.Text, nullable=True)
+    interview_invitation_sent = db.Column(db.Boolean, nullable=False, default=False, index=True)
     is_rejected = db.Column(db.Boolean, nullable=False, default=False, index=True)
     rejected_on = db.Column(db.DateTime(timezone=True), nullable=True)
     created_on = db.Column(db.DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))

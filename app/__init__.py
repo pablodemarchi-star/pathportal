@@ -82,6 +82,7 @@ def create_app():
         ProviderHistory,
         ProviderType,
         Role,
+        StaffMembersSettings,
         StaffPayment,
         StaffCertificationFut2Selection,
         StaffCertificationFutSelection,
@@ -170,6 +171,12 @@ def create_app():
         }
         if certification_year_configuration_columns and "annual_meeting_time" not in certification_year_configuration_columns:
             db.session.execute(text("ALTER TABLE certification_year_configuration ADD COLUMN annual_meeting_time TIME"))
+            db.session.commit()
+        potential_entry_columns = {
+            row[1] for row in db.session.execute(text("PRAGMA table_info(potential_entry)"))
+        }
+        if potential_entry_columns and "interview_invitation_sent" not in potential_entry_columns:
+            db.session.execute(text("ALTER TABLE potential_entry ADD COLUMN interview_invitation_sent BOOLEAN NOT NULL DEFAULT 0"))
             db.session.commit()
         journey_share_columns = {
             row[1] for row in db.session.execute(text("PRAGMA table_info(exam_session_journey_share)"))

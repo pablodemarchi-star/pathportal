@@ -74,6 +74,7 @@ from app.models import (
     ProviderHistory,
     ProviderType,
     Role,
+    StaffMembersSettings,
     StaffPayment,
     StaffCertificationFut2Selection,
     StaffCertificationFutSelection,
@@ -3093,6 +3094,79 @@ def parse_certification_time(value, field_label):
     except ValueError:
         return None, f"{field_label} must be a valid 24h time."
     return parsed, None
+
+
+def parse_staff_settings_date(value, field_label):
+    raw_value = (value or "").strip()
+    if not raw_value:
+        return None, None
+    if not re.match(r"^\d{2}/\d{2}/\d{4}$", raw_value):
+        return None, f"{field_label} must use DD/MM/YYYY."
+    try:
+        parsed = datetime.strptime(raw_value, "%d/%m/%Y").date()
+    except ValueError:
+        return None, f"{field_label} must be a valid date."
+    return parsed, None
+
+
+def staff_members_settings():
+    return StaffMembersSettings.query.order_by(StaffMembersSettings.id.asc()).first()
+
+
+def staff_members_settings_values(settings_record):
+    return {
+        "upcoming_induction_session_date": certification_date_value(
+            settings_record.upcoming_induction_session_date
+        ) if settings_record else "",
+        "upcoming_induction_session_start_time": certification_time_value(
+            settings_record.upcoming_induction_session_start_time
+        ) if settings_record else "",
+        "upcoming_induction_session_end_time": certification_time_value(
+            settings_record.upcoming_induction_session_end_time
+        ) if settings_record else "",
+    }
+
+
+def save_staff_members_settings():
+    induction_date, date_error = parse_staff_settings_date(
+        request.form.get("upcoming_induction_session_date", ""),
+        "Upcoming induction session date",
+    )
+    if date_error:
+        flash(date_error, "error")
+        return False
+    start_time, start_error = parse_certification_time(
+        request.form.get("upcoming_induction_session_start_time", ""),
+        "Upcoming induction session start time",
+    )
+    if start_error:
+        flash(start_error, "error")
+        return False
+    end_time, end_error = parse_certification_time(
+        request.form.get("upcoming_induction_session_end_time", ""),
+        "Upcoming induction session end time",
+    )
+    if end_error:
+        flash(end_error, "error")
+        return False
+    values = [induction_date, start_time, end_time]
+    if any(value is not None for value in values) and any(value is None for value in values):
+        flash("Please complete a valid date and time range.", "error")
+        return False
+    if start_time and end_time and start_time >= end_time:
+        flash("Please complete a valid date and time range.", "error")
+        return False
+
+    settings_record = staff_members_settings()
+    if settings_record is None:
+        settings_record = StaffMembersSettings()
+        db.session.add(settings_record)
+    settings_record.upcoming_induction_session_date = induction_date
+    settings_record.upcoming_induction_session_start_time = start_time
+    settings_record.upcoming_induction_session_end_time = end_time
+    db.session.commit()
+    flash("Upcoming induction session date and time updated.", "success")
+    return True
 
 
 def parse_certification_remote_training_period(value, selected_year):
@@ -14147,6 +14221,7 @@ def index():
         .order_by(PotentialEntry.updated_on.desc())
         .all()
     )
+    staff_settings = staff_members_settings()
     return render_template(
         "staff/index.html",
         members=members,
@@ -14158,6 +14233,7 @@ def index():
         potential_statuses=POTENTIAL_STATUS_OPTIONS,
         interviewer_options=INTERVIEWER_OPTIONS,
         confirmed_session_counts=confirmed_session_counts,
+        staff_settings_values=staff_members_settings_values(staff_settings),
         filters={
             "q": query_text,
             "status": status,
@@ -14171,6 +14247,23 @@ def index():
         sort_url=sort_url,
         csrf_token=session.get("csrf_token"),
     )
+
+
+@staff_bp.route("/staff-members/settings", methods=["POST"])
+@login_required
+def update_staff_members_settings():
+    if not validate_csrf():
+        flash("Security token expired. Please try again.", "error")
+        return redirect(url_for("staff.index"))
+    save_staff_members_settings()
+    return redirect(url_for("staff.index"))
+
+
+def staff_return_redirect():
+    next_url = request.form.get("next", "").strip()
+    if next_url.startswith("/") and not next_url.startswith("//"):
+        return redirect(next_url)
+    return redirect(url_for("staff.index"))
 
 
 @staff_bp.route("/annual-certification-programme")
@@ -16841,6 +16934,24 @@ def update_potential_entry(entry_id):
     db.session.commit()
     flash("Potential entry updated successfully.", "success")
     return redirect(url_for("staff.index"))
+
+
+@staff_bp.route("/potential-entries/<int:entry_id>/interview-invitation-sent", methods=["POST"])
+@login_required
+def update_potential_interview_invitation_sent(entry_id):
+    if not validate_csrf():
+        flash("Security token expired. Please try again.", "error")
+        return redirect(url_for("staff.index"))
+
+    entry = PotentialEntry.query.get_or_404(entry_id)
+    invitation_sent = request.form.get("interview_invitation_sent") == "1"
+    entry.interview_invitation_sent = invitation_sent
+    db.session.commit()
+    if invitation_sent:
+        flash("Interview invitation marked as sent.", "success")
+    else:
+        flash("Interview invitation marked as not sent.", "success")
+    return staff_return_redirect()
 
 
 @staff_bp.route("/potential-entries/<int:entry_id>/reject", methods=["POST"])
