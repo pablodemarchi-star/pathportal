@@ -3856,6 +3856,24 @@ const initPotentialOutcomeEmailButtons = (root = document) => {
   });
 };
 
+const buildPotentialGmailUrl = (email) => (
+  `https://mail.google.com/mail/?view=cm&fs=1&to=${encodeURIComponent(cleanEmailValue(email))}`
+);
+
+const initPotentialGmailButtons = (root = document) => {
+  root.querySelectorAll("[data-potential-gmail-email]").forEach((button) => {
+    if (button.dataset.potentialGmailInitialized === "true") return;
+    button.dataset.potentialGmailInitialized = "true";
+    button.addEventListener("click", (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      const email = cleanEmailValue(button.dataset.potentialGmailEmail);
+      if (!email) return;
+      window.open(buildPotentialGmailUrl(email), "_blank", "noopener,noreferrer");
+    });
+  });
+};
+
 const roleLabelForSection = (sectionKey) => ({
   supervisor: "Supervisor",
   examiner: "Examiner",
@@ -4704,6 +4722,7 @@ const initTeamMemberSelects = (root = document) => {
   initInvitationEmailCopyButtons(root);
   initPotentialInvitationEmailButtons(root);
   initPotentialOutcomeEmailButtons(root);
+  initPotentialGmailButtons(root);
 };
 
 document.querySelectorAll("[data-copy-link]").forEach((button) => {
@@ -4728,11 +4747,19 @@ document.querySelectorAll("[data-copy-link]").forEach((button) => {
 
 initPotentialInvitationEmailButtons();
 initPotentialOutcomeEmailButtons();
+initPotentialGmailButtons();
 
 document.addEventListener("click", (event) => {
   document.querySelectorAll("[data-team-member-picker][open]").forEach((picker) => {
     if (!picker.contains(event.target)) picker.open = false;
   });
+});
+
+document.addEventListener("keydown", (event) => {
+  const opener = event.target.closest('[data-open-modal][role="button"]');
+  if (!opener || !["Enter", " "].includes(event.key)) return;
+  event.preventDefault();
+  opener.click();
 });
 
 const initCopyTextButtons = (root = document) => {

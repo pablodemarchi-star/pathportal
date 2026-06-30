@@ -1074,6 +1074,22 @@ textarea {
   font-size: 13px;
 }
 
+.potential-email-row {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.potential-email-row > span {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.potential-gmail-button {
+  flex: 0 0 auto;
+}
+
 .potential-card-actions {
   display: flex;
   gap: 8px;

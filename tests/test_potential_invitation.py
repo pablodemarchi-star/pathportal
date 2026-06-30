@@ -57,6 +57,8 @@ class PotentialInvitationTest(unittest.TestCase):
         self.assertIn("Invitation sent", html)
         self.assertIn("data-invitation-sent-action", html)
         self.assertIn("Copy the email invitation first.", html)
+        self.assertIn('data-potential-gmail-email="jane@example.com"', html)
+        self.assertIn("Open Gmail compose", html)
         self.assertIn(f'data-full-name="{entry.full_name}"', html)
         self.assertIn('data-interview-date="2026-07-02"', html)
         self.assertIn('data-interview-time="10:00:00"', html)
@@ -76,6 +78,13 @@ class PotentialInvitationTest(unittest.TestCase):
         self.assertNotIn("data-copy-potential-invitation", html)
         self.assertNotIn("Successful application email", html)
         self.assertNotIn("Unsuccessful application email", html)
+
+    def test_potential_entry_without_email_does_not_show_gmail_button(self):
+        self.add_entry(email="")
+        response = self.client().get("/")
+        html = response.get_data(as_text=True)
+        self.assertIn("No email recorded", html)
+        self.assertNotIn("data-potential-gmail-email", html)
 
     def test_meet_entry_uses_platform_without_manual_access_data(self):
         self.add_entry(platform="Meet")
@@ -211,6 +220,11 @@ class PotentialInvitationTest(unittest.TestCase):
         self.assertIn("enableInvitationSentAction", js)
         self.assertIn("data-invitation-sent-action", js)
         self.assertIn("Mark interview invitation as sent.", js)
+        self.assertIn("buildPotentialGmailUrl", js)
+        self.assertIn("https://mail.google.com/mail/?view=cm&fs=1&to=", js)
+        self.assertIn("data-potential-gmail-email", js)
+        gmail_helper = js[js.index("const buildPotentialGmailUrl"):js.index("const initPotentialGmailButtons")]
+        self.assertNotIn("subject", gmail_helper)
         self.assertIn("undefined", js)
 
     def test_js_contains_potential_outcome_email_templates(self):

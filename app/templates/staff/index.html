@@ -97,14 +97,30 @@
       <div class="potential-grid">
         {% for entry in potential_entries %}
           <article class="potential-card">
-            <button class="potential-card-main" type="button" data-open-modal="potential-entry-{{ entry.id }}">
+            <div class="potential-card-main" role="button" tabindex="0" data-open-modal="potential-entry-{{ entry.id }}">
               {% if entry.is_rejected %}
                 <span class="badge potential-status-rejected">Rejected</span>
               {% else %}
                 <span class="badge potential-status-{{ entry.status|lower|replace(' ', '-') }}">{{ entry.status }}</span>
               {% endif %}
               <strong>{{ entry.full_name }}</strong>
-              <span>{{ entry.email or 'No email recorded' }}</span>
+              <span class="potential-email-row">
+                <span>{{ entry.email or 'No email recorded' }}</span>
+                {% if entry.email %}
+                  <button
+                    class="copy-icon-button potential-gmail-button"
+                    type="button"
+                    data-potential-gmail-email="{{ entry.email }}"
+                    aria-label="Open Gmail compose for {{ entry.full_name }}"
+                    title="Open Gmail compose"
+                  >
+                    <svg viewBox="0 0 24 24" aria-hidden="true">
+                      <rect x="9" y="9" width="10" height="10" rx="2"></rect>
+                      <path d="M5 15V7a2 2 0 0 1 2-2h8"></path>
+                    </svg>
+                  </button>
+                {% endif %}
+              </span>
               {% if entry.is_rejected %}
                 <span>Rejected on: {{ entry.rejected_on|localdt if entry.rejected_on else '-' }}</span>
               {% endif %}
@@ -118,7 +134,7 @@
                   <span>{{ entry.interviewer|display_interviewer }}</span>
                 {% endif %}
               {% endif %}
-            </button>
+            </div>
             <div class="potential-card-actions">
               {% if entry.cv %}
                 <a class="mini-button link-button" href="{{ entry.cv }}" target="_blank" rel="noopener noreferrer">View CV</a>
