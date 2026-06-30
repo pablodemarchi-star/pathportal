@@ -9776,6 +9776,12 @@ def update_staff_payment(member_id, payment_year):
     })
 
 
+@staff_bp.route("/local-payments")
+@login_required
+def local_payments():
+    return render_template("local_payments/index.html")
+
+
 @staff_bp.route("/pre-session-control-tower")
 @login_required
 def pre_session_control_tower():
