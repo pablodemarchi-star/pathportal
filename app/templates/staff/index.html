@@ -126,6 +126,17 @@
                 <span class="mini-button disabled-button">No link</span>
               {% endif %}
               <button class="mini-button" type="button" data-open-modal="potential-note-{{ entry.id }}">Add notes</button>
+              {% if entry.status == 'Interview arranged' %}
+                <button
+                  class="mini-button potential-email-invitation-button"
+                  type="button"
+                  data-copy-potential-invitation
+                  data-full-name="{{ entry.full_name }}"
+                  data-interview-date="{{ entry.interview_date or '' }}"
+                  data-interview-time="{{ entry.interview_time or '' }}"
+                  data-platform="{{ entry.platform or '' }}"
+                >Email invitation</button>
+              {% endif %}
             </div>
           </article>
         {% endfor %}

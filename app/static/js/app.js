@@ -3582,6 +3582,137 @@ const formatInvitationDate = (isoDate) => {
   return `${weekday}, ${month} ${day}${ordinalSuffix(day)}, ${year}`;
 };
 
+const formatInterviewTimeForEmail = (value) => {
+  const match = cleanEmailValue(value).match(/^(\d{2}):(\d{2})(?::\d{2})?$/);
+  if (!match) return "";
+  let hour = Number.parseInt(match[1], 10);
+  const minute = Number.parseInt(match[2], 10);
+  if (Number.isNaN(hour) || Number.isNaN(minute)) return "";
+  const suffix = hour >= 12 ? "pm" : "am";
+  hour %= 12;
+  if (hour === 0) hour = 12;
+  return minute ? `${hour}:${String(minute).padStart(2, "0")}${suffix}` : `${hour}${suffix}`;
+};
+
+const formatPotentialInterviewDateTime = (isoDate, timeValue) => {
+  const match = cleanEmailValue(isoDate).match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  const formattedTime = formatInterviewTimeForEmail(timeValue);
+  if (!match || !formattedTime) return "";
+  const year = Number.parseInt(match[1], 10);
+  const monthIndex = Number.parseInt(match[2], 10) - 1;
+  const day = Number.parseInt(match[3], 10);
+  const date = new Date(year, monthIndex, day);
+  const weekday = date.toLocaleDateString("en-US", { weekday: "long" });
+  const month = date.toLocaleDateString("en-US", { month: "long" });
+  return `${weekday}, ${month} ${day}${ordinalSuffix(day)} at ${formattedTime}`;
+};
+
+const POTENTIAL_INTERVIEW_ACCESS_DETAILS = {
+  Zoom: {
+    link: "https://zoom.us/j/7284728472",
+    id: "728 472 8472",
+    password: "path",
+  },
+  Meet: {
+    link: "https://meet.google.com/zrv-ucir-ugc",
+  },
+};
+
+const potentialInvitationError = (button, message) => {
+  const originalText = button.dataset.originalText || button.textContent;
+  button.dataset.originalText = originalText;
+  button.textContent = message;
+  button.classList.add("is-error");
+  window.setTimeout(() => {
+    button.textContent = originalText;
+    button.classList.remove("is-error");
+  }, 2200);
+};
+
+const buildPotentialInvitationEmail = (button) => {
+  const fullName = cleanEmailValue(button.dataset.fullName);
+  const formattedDateTime = formatPotentialInterviewDateTime(button.dataset.interviewDate, button.dataset.interviewTime);
+  const platform = cleanEmailValue(button.dataset.platform);
+  if (!fullName || !formattedDateTime || !platform) {
+    return { error: "Interview details are incomplete." };
+  }
+
+  let accessHtml = "";
+  let accessText = "";
+  if (platform === "Zoom") {
+    const { link: zoomLink, id: zoomId, password: zoomPassword } = POTENTIAL_INTERVIEW_ACCESS_DETAILS.Zoom;
+    accessText = `The Zoom access details are as follows:\nLink: ${zoomLink}\nZoom ID: ${zoomId}\nPassword: ${zoomPassword}`;
+    accessHtml = `
+      <div style="margin-top:18px;padding:16px 18px;background:#f1f3f2;border:1px solid #d9dfdc;border-radius:12px;">
+        <p style="margin:0 0 10px;color:#00506b;font:700 15px Arial, Helvetica, sans-serif;">The Zoom access details are as follows:</p>
+        <p style="margin:0 0 6px;color:#111115;font:400 14px/1.5 Arial, Helvetica, sans-serif;">Link: <a href="${escapeEmailAttribute(zoomLink)}" style="color:#00506b;font-weight:700;">${escapeEmailHtml(zoomLink)}</a></p>
+        <p style="margin:0 0 6px;color:#111115;font:400 14px/1.5 Arial, Helvetica, sans-serif;">Zoom ID: <strong>${escapeEmailHtml(zoomId)}</strong></p>
+        <p style="margin:0;color:#111115;font:400 14px/1.5 Arial, Helvetica, sans-serif;">Password: <strong>${escapeEmailHtml(zoomPassword)}</strong></p>
+      </div>
+    `;
+  } else if (platform === "Meet") {
+    const { link: meetLink } = POTENTIAL_INTERVIEW_ACCESS_DETAILS.Meet;
+    accessText = `The Meet access details are as follows:\nLink: ${meetLink}`;
+    accessHtml = `
+      <div style="margin-top:18px;padding:16px 18px;background:#f1f3f2;border:1px solid #d9dfdc;border-radius:12px;">
+        <p style="margin:0 0 10px;color:#00506b;font:700 15px Arial, Helvetica, sans-serif;">The Meet access details are as follows:</p>
+        <p style="margin:0;color:#111115;font:400 14px/1.5 Arial, Helvetica, sans-serif;">Link: <a href="${escapeEmailAttribute(meetLink)}" style="color:#00506b;font-weight:700;">${escapeEmailHtml(meetLink)}</a></p>
+      </div>
+    `;
+  } else {
+    return { error: "Interview details are incomplete." };
+  }
+
+  const safeName = escapeEmailHtml(fullName);
+  const safeDateTime = escapeEmailHtml(formattedDateTime);
+  const html = `
+    <div style="margin:0;padding:24px;background:#00506b;font-family:Arial, Helvetica, sans-serif;color:#111115;">
+      <div style="max-width:620px;margin:0 auto;background:#ffffff;border:1px solid #d9dfdc;border-radius:16px;padding:26px 28px;">
+        <p style="display:inline-block;margin:0 0 14px;padding:5px 10px;border-radius:999px;background:#e7f5f8;color:#00506b;font:700 11px Arial, Helvetica, sans-serif;letter-spacing:.5px;text-transform:uppercase;">Interview invitation</p>
+        <h1 style="margin:0 0 18px;color:#00506b;font:700 24px/1.25 Arial, Helvetica, sans-serif;">Your interview with Path Examinations</h1>
+        <p style="margin:0 0 14px;color:#111115;font:400 15px/1.55 Arial, Helvetica, sans-serif;">Dear ${safeName}:</p>
+        <p style="margin:0 0 18px;color:#111115;font:400 15px/1.55 Arial, Helvetica, sans-serif;">We are pleased to confirm your interview with our team for ${safeDateTime}.</p>
+        <div style="margin:0 0 18px;padding:16px 18px;background:#e6f0f3;border-left:4px solid #00506b;border-radius:12px;">
+          <p style="margin:0 0 6px;color:#62727a;font:700 11px Arial, Helvetica, sans-serif;letter-spacing:.7px;text-transform:uppercase;">Interview date and time</p>
+          <p style="margin:0;color:#00506b;font:700 18px/1.35 Arial, Helvetica, sans-serif;">${safeDateTime}</p>
+        </div>
+        ${accessHtml}
+        <p style="margin:22px 0 0;color:#111115;font:400 15px/1.55 Arial, Helvetica, sans-serif;">Kind regards,</p>
+        <p style="margin:4px 0 0;color:#00506b;font:700 15px/1.55 Arial, Helvetica, sans-serif;">Path Examinations</p>
+      </div>
+    </div>
+  `;
+  const text = `Dear ${fullName}:\n\nWe are pleased to confirm your interview with our team for ${formattedDateTime}.\n\n${accessText}\n\nKind regards,\n\nPath Examinations`;
+  return { html, text };
+};
+
+const initPotentialInvitationEmailButtons = (root = document) => {
+  root.querySelectorAll("[data-copy-potential-invitation]").forEach((button) => {
+    if (button.dataset.potentialInvitationInitialized === "true") return;
+    button.dataset.potentialInvitationInitialized = "true";
+    button.addEventListener("click", async () => {
+      const payload = buildPotentialInvitationEmail(button);
+      if (payload.error) {
+        potentialInvitationError(button, payload.error);
+        return;
+      }
+      const originalText = button.dataset.originalText || button.textContent;
+      button.dataset.originalText = originalText;
+      try {
+        await copyRichTextToClipboard(payload);
+        button.textContent = "Interview invitation copied.";
+        button.classList.add("is-copied");
+        window.setTimeout(() => {
+          button.textContent = originalText;
+          button.classList.remove("is-copied");
+        }, 1800);
+      } catch (error) {
+        potentialInvitationError(button, "Could not copy the invitation. Please try again.");
+      }
+    });
+  });
+};
+
 const roleLabelForSection = (sectionKey) => ({
   supervisor: "Supervisor",
   examiner: "Examiner",
@@ -4428,6 +4559,7 @@ const initTeamMemberSelects = (root = document) => {
     });
   });
   initInvitationEmailCopyButtons(root);
+  initPotentialInvitationEmailButtons(root);
 };
 
 document.querySelectorAll("[data-copy-link]").forEach((button) => {
@@ -4449,6 +4581,8 @@ document.querySelectorAll("[data-copy-link]").forEach((button) => {
     }
   });
 });
+
+initPotentialInvitationEmailButtons();
 
 document.addEventListener("click", (event) => {
   document.querySelectorAll("[data-team-member-picker][open]").forEach((picker) => {
@@ -5512,7 +5646,7 @@ document.querySelectorAll(".member-form").forEach((form) => {
     const isArranged = status.value === "Interview arranged" || status.value === "Interview scheduled";
     arrangedFields.hidden = !isArranged;
     arrangedFields.querySelectorAll("input, select").forEach((field) => {
-      field.required = isArranged;
+      field.required = isArranged && field.dataset.arrangedOptional !== "true";
     });
   };
 

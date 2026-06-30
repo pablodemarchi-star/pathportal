@@ -1527,7 +1527,8 @@ def apply_exam_session_form(session_record, data):
     session_record.details_url = data["details_url"]
 
 
-def build_academic_staff_export(members):
+def build_academic_staff_export(members, session_counts=None):
+    session_counts = session_counts or {}
     headers = [
         "Status",
         "Title",
@@ -1536,20 +1537,17 @@ def build_academic_staff_export(members):
         "Phone",
         "Email",
         "Has a car",
-        "Street name",
-        "Street number",
+        "Full address",
         "City",
-        "Postcode",
         "Province",
         "Country",
-        "Location point",
         "CV",
         "History",
         "Account ID",
         "Account owner",
         "Profile picture",
         "Started in",
-        "Updated on",
+        "Sessions",
         "Seniority",
     ]
     rows = []
@@ -1562,20 +1560,17 @@ def build_academic_staff_export(members):
             member.phone or "",
             member.email or "",
             member.has_car or "",
-            member.street_name or "",
-            member.street_number or "",
+            member.full_address_google_maps or "",
             member.city or "",
-            member.postcode or "",
             member.province or "",
             member.country or "",
-            member.location_point or "",
             member.cv or "",
             member.interview or "",
             member.account_id or "",
             member.account_owner or "",
             member.profile_picture or "",
             member.started_in or "",
-            export_datetime(member.updated_on),
+            session_counts.get(member.id, 0),
             "Yes" if member.seniority else "No",
         ])
 
@@ -1596,10 +1591,15 @@ def build_academic_staff_export(members):
     for column_index, header in enumerate(headers, start=1):
         sheet.cell(row=3, column=column_index, value=header)
 
+    hyperlink_columns = {
+        headers.index("CV") + 1,
+        headers.index("Profile picture") + 1,
+    }
+
     for row_index, row in enumerate(rows, start=4):
         for column_index, value in enumerate(row, start=1):
             cell = sheet.cell(row=row_index, column=column_index, value=value)
-            if column_index in {14, 15, 19} and value:
+            if column_index in hyperlink_columns and value:
                 cell.hyperlink = value
                 cell.style = "Hyperlink"
 
@@ -1836,6 +1836,7 @@ IMPORT_REQUIRED_HEADERS = {
 IMPORT_OPTIONAL_HEADERS = {
     "Title",
     "Phone",
+    "Full address",
     "Street name",
     "Street number",
     "Postcode",
@@ -1846,6 +1847,7 @@ IMPORT_OPTIONAL_HEADERS = {
     "Account owner",
     "Profile picture",
     "Started in",
+    "Sessions",
     "Updated on",
     "Seniority",
 }
@@ -2030,6 +2032,7 @@ def apply_import_row(member, row_data, update_empty_fields):
         "Phone": "phone",
         "Email": "email",
         "Has a car": "has_car",
+        "Full address": "full_address_google_maps",
         "Street name": "street_name",
         "Street number": "street_number",
         "City": "city",
@@ -16558,7 +16561,8 @@ def export_members():
         flash("No selected members were found.", "error")
         return redirect(url_for("staff.index"))
 
-    workbook = build_academic_staff_export(members)
+    session_counts = confirmed_session_counts_by_member([member.id for member in members])
+    workbook = build_academic_staff_export(members, session_counts=session_counts)
     filename = f"academic-staff-export-{datetime.now(LOCAL_TZ).strftime('%Y-%m-%d')}.xlsx"
     return Response(
         workbook,

@@ -2861,6 +2861,18 @@ span.session-marker-chip {
   cursor: default;
 }
 
+.potential-email-invitation-button.is-copied {
+  border-color: rgba(53, 130, 73, 0.35);
+  background: var(--badge-green-bg);
+  color: var(--badge-green-text);
+}
+
+.potential-email-invitation-button.is-error {
+  border-color: rgba(205, 73, 61, 0.35);
+  background: var(--badge-red-bg);
+  color: var(--badge-red-text);
+}
+
 .time-range-stack {
   display: grid;
   gap: 5px;
