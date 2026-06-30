@@ -94,16 +94,6 @@
             </svg>
             <span>Staff payments</span>
           </a>
-          <a class="nav-link standalone-nav-link {% if request.endpoint == 'staff.local_payments' %}active{% endif %}" href="{{ url_for('staff.local_payments') }}">
-            <svg class="nav-icon" viewBox="0 0 24 24" aria-hidden="true">
-              <path d="M5 6h14v12H5z" />
-              <path d="M5 10h14" />
-              <path d="M8 14h4" />
-              <path d="M16 13v4" />
-              <path d="M14 15h4" />
-            </svg>
-            <span>Local payments</span>
-          </a>
           <a class="nav-link standalone-nav-link {% if request.endpoint in ['staff.fees', 'staff.create_fee', 'staff.update_fee', 'staff.delete_fee'] %}active{% endif %}" href="{{ url_for('staff.fees') }}">
             <svg class="nav-icon" viewBox="0 0 24 24" aria-hidden="true">
               <path d="M4 7h16" />
