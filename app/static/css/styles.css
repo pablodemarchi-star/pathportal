@@ -3995,22 +3995,24 @@ span.session-marker-chip {
 
 .users-table th:nth-child(3),
 .users-table td:nth-child(3) {
-  width: 15%;
+  width: 11%;
 }
 
 .users-table th:nth-child(4),
 .users-table td:nth-child(4) {
-  width: 11%;
+  width: 8%;
 }
 
 .users-table th:nth-child(5),
 .users-table td:nth-child(5) {
-  width: 15%;
+  width: 19%;
+  padding-right: 22px;
 }
 
 .users-table th:nth-child(6),
 .users-table td:nth-child(6) {
-  width: 12%;
+  width: 19%;
+  padding-left: 22px;
 }
 
 .users-name-cell,
