@@ -3985,12 +3985,12 @@ span.session-marker-chip {
 
 .users-table th:nth-child(1),
 .users-table td:nth-child(1) {
-  width: 22%;
+  width: 17%;
 }
 
 .users-table th:nth-child(2),
 .users-table td:nth-child(2) {
-  width: 25%;
+  width: 30%;
 }
 
 .users-table th:nth-child(3),
