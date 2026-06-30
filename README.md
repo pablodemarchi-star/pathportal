@@ -64,6 +64,46 @@ python run.py
 
 Open `http://127.0.0.1:5001`.
 
+## Render Free Deploy
+
+This repository includes `render.yaml` for deploying the Flask app as a Render
+web service.
+
+1. Push the project to a GitHub repository.
+2. In Render, create a new Blueprint or Web Service from that repository.
+3. Use the free instance type for the first test deploy.
+4. Keep the generated build command:
+
+```bash
+pip install -r requirements.txt
+```
+
+5. Keep the generated start command:
+
+```bash
+gunicorn run:app --bind 0.0.0.0:$PORT
+```
+
+6. Configure these environment variables in Render:
+
+```text
+SECRET_KEY=<long-random-secret>
+ADMIN_USERNAME=<admin-user>
+ADMIN_PASSWORD_HASH=<generated-werkzeug-password-hash>
+DATABASE_URL=sqlite:///academic_staff.db
+```
+
+Generate the password hash locally with:
+
+```bash
+python -c "from werkzeug.security import generate_password_hash; print(generate_password_hash('replace-with-a-strong-password', method='pbkdf2:sha256'))"
+```
+
+Important: Render's free web service filesystem is ephemeral. With the current
+SQLite setup, this is appropriate for an online demo/test deployment only. For
+real operational data, use a paid Render service with a persistent disk or
+migrate the application to a managed database before storing production data.
+
 For first local testing only, if no valid `ADMIN_PASSWORD_HASH` is configured, the fallback credentials are:
 
 ```text
