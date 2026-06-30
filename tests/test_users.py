@@ -170,6 +170,12 @@ class UsersTest(unittest.TestCase):
 
     def test_users_ui_contains_menu_modal_and_no_password_hash(self):
         user = self.create_user_record(email="visible@example.com", password="secret123", department="Management")
+        inactive_user = self.create_user_record(
+            email="inactive-visible@example.com",
+            password="secret123",
+            department="Finance",
+            is_active=False,
+        )
         response = self.admin_client().get("/users")
         body = response.get_data(as_text=True)
         self.assertIn("Users", body)
@@ -179,9 +185,14 @@ class UsersTest(unittest.TestCase):
         self.assertIn("Department", body)
         self.assertIn("Password", body)
         self.assertIn("visible@example.com", body)
-        self.assertIn("Management", body)
+        self.assertIn("MANAGEMENT", body)
+        self.assertIn("users-department-chip", body)
+        self.assertIn("status-active", body)
+        self.assertIn("FINANCE", body)
+        self.assertIn("status-inactive", body)
         self.assertIn("Active", body)
         self.assertNotIn(user.password_hash, body)
+        self.assertNotIn(inactive_user.password_hash, body)
 
 
 if __name__ == "__main__":

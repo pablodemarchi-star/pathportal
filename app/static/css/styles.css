@@ -3968,6 +3968,68 @@ span.session-marker-chip {
   white-space: nowrap;
 }
 
+.users-table-wrap {
+  overflow-x: visible;
+}
+
+.users-table {
+  min-width: 0;
+  table-layout: fixed;
+}
+
+.users-table th,
+.users-table td {
+  padding: 10px 11px;
+  vertical-align: middle;
+}
+
+.users-table th:nth-child(1),
+.users-table td:nth-child(1) {
+  width: 22%;
+}
+
+.users-table th:nth-child(2),
+.users-table td:nth-child(2) {
+  width: 25%;
+}
+
+.users-table th:nth-child(3),
+.users-table td:nth-child(3) {
+  width: 15%;
+}
+
+.users-table th:nth-child(4),
+.users-table td:nth-child(4) {
+  width: 11%;
+}
+
+.users-table th:nth-child(5),
+.users-table td:nth-child(5) {
+  width: 15%;
+}
+
+.users-table th:nth-child(6),
+.users-table td:nth-child(6) {
+  width: 12%;
+}
+
+.users-name-cell,
+.users-email-cell {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.users-department-chip {
+  background: var(--path-blue-50);
+  color: var(--color-primary-dark);
+  text-transform: uppercase;
+}
+
+.users-actions-cell {
+  white-space: nowrap;
+}
+
 .sinapsis-chip-link {
   display: inline-flex;
   align-items: center;

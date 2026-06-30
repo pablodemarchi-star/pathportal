@@ -56,8 +56,8 @@
   <button class="primary-button" type="button" data-open-modal="create-user">New user</button>
 </header>
 
-<section class="table-wrap" aria-label="Users list">
-  <table>
+<section class="table-wrap users-table-wrap" aria-label="Users list">
+  <table class="users-table">
     <thead>
       <tr>
         <th>Full name</th>
@@ -71,12 +71,12 @@
     <tbody>
       {% for user in users %}
         <tr>
-          <td class="strong">{{ user.full_name }}</td>
-          <td>{{ user.email }}</td>
-          <td>{{ user.department }}</td>
-          <td>{{ user_status_label(user) }}</td>
+          <td class="strong users-name-cell">{{ user.full_name }}</td>
+          <td class="users-email-cell" title="{{ user.email }}">{{ user.email }}</td>
+          <td><span class="responsible-chip users-department-chip">{{ user.department|upper }}</span></td>
+          <td><span class="badge status-{{ user_status_label(user)|lower }}">{{ user_status_label(user) }}</span></td>
           <td>{{ local_datetime(user.created_at) }}</td>
-          <td><button class="mini-button" type="button" data-open-modal="edit-user-{{ user.id }}">Edit user</button></td>
+          <td class="users-actions-cell"><button class="mini-button" type="button" data-open-modal="edit-user-{{ user.id }}">Edit user</button></td>
         </tr>
       {% else %}
         <tr>
