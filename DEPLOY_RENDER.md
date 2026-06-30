@@ -1,7 +1,8 @@
-# Deploy en Render gratis
+# Deploy en Render
 
-Esta guia levanta la app Flask en Render usando el plan gratuito. Es ideal para
-probar que la aplicacion funciona online antes de pagar una suscripcion.
+Esta guia levanta la app Flask en Render usando un servicio pago con disco
+persistente. Esta es la configuracion recomendada para no perder la base SQLite
+en redeploys o restarts.
 
 ## 1. Preparar el repositorio
 
@@ -12,7 +13,7 @@ probar que la aplicacion funciona online antes de pagar una suscripcion.
 Archivos importantes que ya estan preparados:
 
 - `requirements.txt`: incluye las dependencias de Python y `gunicorn`.
-- `render.yaml`: define el servicio web gratuito para Render.
+- `render.yaml`: define el servicio web de Render, el plan y el disco persistente.
 - `run.py`: expone la app como `run:app`, que es lo que usa Gunicorn.
 
 No subas archivos locales sensibles como `.env` ni bases SQLite dentro de
@@ -50,9 +51,10 @@ Ese valor va en `ADMIN_PASSWORD_HASH`.
 El `render.yaml` ya define:
 
 ```text
-plan: free
+plan: starter
 buildCommand: pip install -r requirements.txt
 startCommand: gunicorn run:app --bind 0.0.0.0:$PORT
+disk: app-data mounted at /var/data
 ```
 
 ## 4. Configurar variables de entorno
@@ -64,7 +66,7 @@ Configurar:
 ```text
 ADMIN_USERNAME=admin
 ADMIN_PASSWORD_HASH=<el hash generado>
-DATABASE_URL=sqlite:///academic_staff.db
+DATABASE_URL=sqlite:////var/data/academic_staff.db
 ```
 
 `SECRET_KEY` se genera automaticamente desde `render.yaml`. Si Render te pide
@@ -85,31 +87,34 @@ https://path-internal-app.onrender.com
 
 La app deberia redirigir a `/login`.
 
-## 6. Limitaciones del plan gratuito
+## 6. Persistencia de datos
 
-En el plan gratuito, este deploy sirve para probar la app online, pero no para
-guardar datos reales de forma definitiva.
-
-Motivos:
-
-- El servicio puede dormir cuando no recibe trafico.
-- La primera carga despues de dormir puede tardar mas.
-- El filesystem del servicio gratuito no debe tratarse como almacenamiento
-  durable para la base SQLite.
-
-Para usar la app en serio, el siguiente paso es pasar a un plan pago con disco
-persistente o migrar la base a un servicio de base de datos.
-
-## 7. Cuando pasemos a pago
-
-La opcion mas simple para esta app es:
-
-1. Agregar un persistent disk en Render.
-2. Montarlo en una ruta como `/var/data`.
-3. Cambiar `DATABASE_URL` a:
+La base SQLite debe estar en el disco persistente de Render:
 
 ```text
 sqlite:////var/data/academic_staff.db
 ```
 
-Despues de eso, los datos dejan de depender del filesystem efimero del servicio.
+El disco persistente se monta en:
+
+```text
+/var/data
+```
+
+Con esta configuracion, los datos sobreviven redeploys y restarts.
+
+Si ya cargaste datos en la app antes de activar el disco persistente, no cambies
+la ruta sin antes migrar o exportar esa base. Al cambiar a `/var/data`, SQLite
+crea una base nueva si no existe una en el disco.
+
+## 7. Configuracion esperada del disco
+
+En Render, el servicio debe tener un Persistent Disk con:
+
+```text
+Name: app-data
+Mount Path: /var/data
+Size: 1 GB
+```
+
+Si Render no permite 1 GB, usar el minimo disponible.
