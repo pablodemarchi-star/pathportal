@@ -1,0 +1,111 @@
+{% extends "base.html" %}
+
+{% block title %}Users | Path Examinations{% endblock %}
+
+{% macro user_form(action, submit_label, user, departments, status_options, csrf_token, include_password) %}
+<form method="post" action="{{ action }}" class="form-grid">
+  <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+  <label>
+    Full name
+    <input name="full_name" value="{{ user.full_name if user else '' }}" required>
+  </label>
+  <label>
+    Email
+    <input name="email" type="email" value="{{ user.email if user else '' }}" required>
+  </label>
+  <label>
+    Department
+    <select name="department" required>
+      <option value="">Select department</option>
+      {% for department in departments %}
+        <option value="{{ department }}" {% if user and user.department == department %}selected{% endif %}>{{ department }}</option>
+      {% endfor %}
+    </select>
+  </label>
+  {% if user %}
+    <label>
+      Status
+      <select name="status" required>
+        {% for status in status_options %}
+          <option value="{{ status }}" {% if status == user_status_label(user) %}selected{% endif %}>{{ status }}</option>
+        {% endfor %}
+      </select>
+    </label>
+  {% endif %}
+  <label>
+    {% if user %}Reset password{% else %}Password{% endif %}
+    <input name="password" type="password" autocomplete="new-password" {% if include_password %}required{% endif %}>
+  </label>
+  {% if user %}
+    <p class="hint">Leave Reset password empty to keep the current password.</p>
+  {% endif %}
+  <div class="form-actions">
+    <button class="secondary-button" type="button" data-close-modal>Cancel</button>
+    <button class="primary-button" type="submit">{{ submit_label }}</button>
+  </div>
+</form>
+{% endmacro %}
+
+{% block content %}
+<header class="page-header">
+  <div>
+    <p class="eyebrow">Users</p>
+    <h1>Users</h1>
+    <p>Manage internal users who can access the platform.</p>
+  </div>
+  <button class="primary-button" type="button" data-open-modal="create-user">New user</button>
+</header>
+
+<section class="table-wrap" aria-label="Users list">
+  <table>
+    <thead>
+      <tr>
+        <th>Full name</th>
+        <th>Email</th>
+        <th>Department</th>
+        <th>Status</th>
+        <th>Created at</th>
+        <th>Actions</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for user in users %}
+        <tr>
+          <td class="strong">{{ user.full_name }}</td>
+          <td>{{ user.email }}</td>
+          <td>{{ user.department }}</td>
+          <td>{{ user_status_label(user) }}</td>
+          <td>{{ local_datetime(user.created_at) }}</td>
+          <td><button class="mini-button" type="button" data-open-modal="edit-user-{{ user.id }}">Edit user</button></td>
+        </tr>
+      {% else %}
+        <tr>
+          <td colspan="6" class="empty-state">No users found.</td>
+        </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</section>
+
+<div class="modal" id="create-user" aria-hidden="true">
+  <div class="modal-panel large">
+    <div class="modal-header">
+      <h2>New user</h2>
+      <button class="icon-button" type="button" data-close-modal>&times;</button>
+    </div>
+    {{ user_form(url_for('staff.create_user'), 'Create user', none, departments, status_options, csrf_token, true) }}
+  </div>
+</div>
+
+{% for user in users %}
+  <div class="modal" id="edit-user-{{ user.id }}" aria-hidden="true">
+    <div class="modal-panel large">
+      <div class="modal-header">
+        <h2>Edit user</h2>
+        <button class="icon-button" type="button" data-close-modal>&times;</button>
+      </div>
+      {{ user_form(url_for('staff.update_user', user_id=user.id), 'Save changes', user, departments, status_options, csrf_token, false) }}
+    </div>
+  </div>
+{% endfor %}
+{% endblock %}

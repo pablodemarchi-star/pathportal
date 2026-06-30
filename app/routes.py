@@ -81,6 +81,8 @@ from app.models import (
     SupervisorCertificationFutSelection,
     SupervisorCertificationRemoteTrainingSelection,
     SupervisorCertificationYear,
+    User,
+    USER_DEPARTMENTS,
 )
 from app.validators import is_valid_google_maps_url, is_valid_url, validate_member_form, validate_potential_form
 
@@ -129,6 +131,7 @@ INTERN_STAGE_3_OPTIONS = ["Pending", "Attended meeting", "With FUT", "Completed"
 ANNUAL_MEETING_OPTIONS = ["Attended", "Absent"]
 PAGE_SIZE_OPTIONS = ["5", "10", "25", "50", "all"]
 DEFAULT_PAGE_SIZE = "10"
+USER_STATUS_OPTIONS = ["Active", "Inactive"]
 PERMANENT_DELETE_PASSWORD = "7284"
 EXAM_SESSION_STATUS_OPTIONS = ["Pending", "Confirmed"]
 EXAM_SESSION_CATEGORY_OPTIONS = [
@@ -9725,6 +9728,123 @@ def delete_provider(provider_id):
     db.session.delete(provider)
     db.session.commit()
     return jsonify({"ok": True, "message": "Provider deleted successfully.", "provider_id": provider_id})
+
+
+def admin_required(view):
+    def wrapped_view(**kwargs):
+        if session.get("user_department") != "Admin":
+            abort(403)
+        return view(**kwargs)
+
+    wrapped_view.__name__ = view.__name__
+    return wrapped_view
+
+
+def normalize_user_email(value):
+    return (value or "").strip().lower()
+
+
+def user_status_label(user):
+    return "Active" if user.is_active else "Inactive"
+
+
+def user_form_errors(form, existing_user=None, require_password=False):
+    full_name = (form.get("full_name") or "").strip()
+    email = normalize_user_email(form.get("email"))
+    department = (form.get("department") or "").strip()
+    password = form.get("password") or ""
+    is_active = (form.get("status") or "Active").strip() != "Inactive"
+    errors = []
+
+    if not full_name:
+        errors.append("Full name is required.")
+    if not email:
+        errors.append("Email is required.")
+    elif not EMAIL_RE.match(email):
+        errors.append("Please enter a valid email.")
+    else:
+        duplicate = User.query.filter_by(email=email).first()
+        if duplicate and (not existing_user or duplicate.id != existing_user.id):
+            errors.append("Email already exists.")
+    if not department:
+        errors.append("Department is required.")
+    elif department not in USER_DEPARTMENTS:
+        errors.append("Department is required.")
+    if require_password and not password:
+        errors.append("Password is required.")
+
+    return errors, {
+        "full_name": full_name,
+        "email": email,
+        "department": department,
+        "password": password,
+        "is_active": is_active,
+    }
+
+
+@staff_bp.route("/users")
+@login_required
+@admin_required
+def users():
+    user_rows = User.query.order_by(User.full_name.asc()).all()
+    return render_template(
+        "users/index.html",
+        users=user_rows,
+        departments=USER_DEPARTMENTS,
+        status_options=USER_STATUS_OPTIONS,
+        csrf_token=session.get("csrf_token"),
+        user_status_label=user_status_label,
+        local_datetime=local_datetime,
+    )
+
+
+@staff_bp.route("/users", methods=["POST"])
+@login_required
+@admin_required
+def create_user():
+    if not validate_csrf():
+        flash("Security token expired. Please try again.", "error")
+        return redirect(url_for("staff.users"))
+    errors, values = user_form_errors(request.form, require_password=True)
+    if errors:
+        for error in errors:
+            flash(error, "error")
+        return redirect(url_for("staff.users"))
+    user = User(
+        full_name=values["full_name"],
+        email=values["email"],
+        department=values["department"],
+        is_active=True,
+    )
+    user.set_password(values["password"])
+    db.session.add(user)
+    db.session.commit()
+    flash("User created successfully.", "success")
+    return redirect(url_for("staff.users"))
+
+
+@staff_bp.route("/users/<int:user_id>", methods=["POST"])
+@login_required
+@admin_required
+def update_user(user_id):
+    if not validate_csrf():
+        flash("Security token expired. Please try again.", "error")
+        return redirect(url_for("staff.users"))
+    user = User.query.get_or_404(user_id)
+    errors, values = user_form_errors(request.form, existing_user=user)
+    if errors:
+        for error in errors:
+            flash(error, "error")
+        return redirect(url_for("staff.users"))
+    user.full_name = values["full_name"]
+    user.email = values["email"]
+    user.department = values["department"]
+    user.is_active = values["is_active"]
+    if values["password"]:
+        user.set_password(values["password"])
+    db.session.commit()
+    flash("User updated successfully.", "success")
+    return redirect(url_for("staff.users"))
 
 
 @staff_bp.route("/staff-payments")

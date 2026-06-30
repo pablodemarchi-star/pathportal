@@ -89,6 +89,7 @@ def create_app():
         SupervisorCertificationFutSelection,
         SupervisorCertificationRemoteTrainingSelection,
         SupervisorCertificationYear,
+        User,
     )
     from app.routes import staff_bp
 
@@ -97,6 +98,8 @@ def create_app():
     @app.before_request
     def load_user():
         g.user = session.get("user")
+        g.user_department = session.get("user_department")
+        g.is_admin = session.get("user_department") == "Admin"
 
     @app.after_request
     def set_security_headers(response):
@@ -113,21 +116,39 @@ def create_app():
 
         error = None
         if request.method == "POST":
-            username = request.form.get("username", "").strip()
+            email_or_username = request.form.get("email", request.form.get("username", "")).strip()
             password = request.form.get("password", "")
-            expected_username = os.getenv("ADMIN_USERNAME", "admin")
-            password_hash = os.getenv("ADMIN_PASSWORD_HASH", "")
+            normalized_email = email_or_username.lower()
 
-            if not password_hash or "replace-this-with-a-generated-hash" in password_hash:
-                password_hash = generate_password_hash("admin123", method="pbkdf2:sha256")
+            if User.query.count():
+                user = User.query.filter_by(email=normalized_email).first()
+                if user and user.is_active and check_password_hash(user.password_hash, password):
+                    session.clear()
+                    session["user"] = user.full_name
+                    session["user_id"] = user.id
+                    session["user_full_name"] = user.full_name
+                    session["user_email"] = user.email
+                    session["user_department"] = user.department
+                    session["csrf_token"] = secrets.token_urlsafe(32)
+                    return redirect(url_for("staff.index"))
+                error = "Invalid email or password."
+            else:
+                expected_username = os.getenv("ADMIN_USERNAME", "admin")
+                password_hash = os.getenv("ADMIN_PASSWORD_HASH", "")
 
-            if username == expected_username and check_password_hash(password_hash, password):
-                session.clear()
-                session["user"] = username
-                session["csrf_token"] = secrets.token_urlsafe(32)
-                return redirect(url_for("staff.index"))
+                if not password_hash or "replace-this-with-a-generated-hash" in password_hash:
+                    password_hash = generate_password_hash("admin123", method="pbkdf2:sha256")
 
-            error = "Invalid username or password."
+                if email_or_username == expected_username and check_password_hash(password_hash, password):
+                    session.clear()
+                    session["user"] = expected_username
+                    session["user_full_name"] = expected_username
+                    session["user_email"] = ""
+                    session["user_department"] = "Admin"
+                    session["csrf_token"] = secrets.token_urlsafe(32)
+                    return redirect(url_for("staff.index"))
+
+                error = "Invalid email or password."
 
         return render_template("login.html", error=error)
 

@@ -25,8 +25,8 @@
       {% if error %}<div class="flash error">{{ error }}</div>{% endif %}
       <form method="post" class="form-grid one-column login-form">
         <label>
-          Username
-          <input name="username" autocomplete="username" placeholder="admin" required>
+          Email
+          <input name="email" autocomplete="username" placeholder="name@example.com" required>
         </label>
         <label>
           Password
@@ -40,7 +40,7 @@
         </div>
         <button class="primary-button login-submit" type="submit">Sign in <span aria-hidden="true">&rarr;</span></button>
       </form>
-      <p class="hint">Default local credentials: admin / admin123. Change them in .env before real use.</p>
+      <p class="hint">If no users exist yet, the temporary admin / admin123 bootstrap login remains available.</p>
     </div>
   </section>
 </section>

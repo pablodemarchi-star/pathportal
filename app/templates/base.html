@@ -112,6 +112,18 @@
             </svg>
             <span>Providers</span>
           </a>
+          {% if g.is_admin %}
+          <a class="nav-link standalone-nav-link {% if request.endpoint in ['staff.users', 'staff.create_user', 'staff.update_user'] %}active{% endif %}" href="{{ url_for('staff.users') }}">
+            <svg class="nav-icon" viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M8 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8Z" />
+              <path d="M2.5 21a5.5 5.5 0 0 1 11 0" />
+              <path d="M17 8v6" />
+              <path d="M14 11h6" />
+              <path d="M16 18h5" />
+            </svg>
+            <span>Users</span>
+          </a>
+          {% endif %}
         </nav>
         <form method="post" action="{{ url_for('logout') }}" class="logout-form">
           <button type="submit">Sign out</button>
