@@ -11,8 +11,14 @@ from app.models import (
     AcademicStaff,
     ExamSession,
     ExamSessionExaminerAssignment,
+    ExamSessionInternAssignment,
+    ExamSessionShipmentBundle,
+    ExamSessionShipmentBundleSession,
+    ExamSessionShipmentChecklistItem,
+    ExamSessionShipmentEvent,
     ExamSessionSupervisorAssignment,
     PotentialEntry,
+    StaffPayment,
     StaffMembersSettings,
 )
 
@@ -198,6 +204,55 @@ class PotentialInvitationTest(unittest.TestCase):
 
     def test_archived_staff_member_delete_requires_path_password(self):
         member = self.add_member(status="Archived", full_name="Archived Staff", email="archived@example.com")
+        session_record = self.add_session()
+        db.session.add_all(
+            [
+                StaffPayment(member_id=member.id, year=2026),
+                ExamSessionSupervisorAssignment(
+                    exam_session_id=session_record.id,
+                    team_member_id=member.id,
+                    participation_status="Confirmed",
+                ),
+                ExamSessionExaminerAssignment(
+                    exam_session_id=session_record.id,
+                    team_member_id=member.id,
+                    participation_status="Confirmed",
+                ),
+                ExamSessionInternAssignment(
+                    exam_session_id=session_record.id,
+                    team_member_id=member.id,
+                    participation_status="Confirmed",
+                ),
+            ]
+        )
+        bundle = ExamSessionShipmentBundle(
+            supervisor_staff_id=member.id,
+            delivery_address="742 Evergreen Terrace",
+            delivery_city="CABA",
+            delivery_province="Buenos Aires",
+            courier="Correo Argentino",
+            status="Preparing bundle",
+        )
+        db.session.add(bundle)
+        db.session.flush()
+        db.session.add_all(
+            [
+                ExamSessionShipmentBundleSession(bundle_id=bundle.id, exam_session_id=session_record.id),
+                ExamSessionShipmentChecklistItem(
+                    bundle_id=bundle.id,
+                    item_key="label",
+                    label="Label printed",
+                    display_order=1,
+                ),
+                ExamSessionShipmentEvent(
+                    bundle_id=bundle.id,
+                    event_type="status",
+                    new_status="Preparing bundle",
+                ),
+            ]
+        )
+        db.session.commit()
+        bundle_id = bundle.id
         response = self.client().get("/?show_archived=1")
         html = response.get_data(as_text=True)
 
@@ -224,6 +279,14 @@ class PotentialInvitationTest(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertIn("Archived member permanently deleted.", response.get_data(as_text=True))
         self.assertIsNone(db.session.get(AcademicStaff, member.id))
+        self.assertEqual(StaffPayment.query.filter_by(member_id=member.id).count(), 0)
+        self.assertEqual(ExamSessionSupervisorAssignment.query.filter_by(team_member_id=member.id).count(), 0)
+        self.assertEqual(ExamSessionExaminerAssignment.query.filter_by(team_member_id=member.id).count(), 0)
+        self.assertEqual(ExamSessionInternAssignment.query.filter_by(team_member_id=member.id).count(), 0)
+        self.assertIsNone(db.session.get(ExamSessionShipmentBundle, bundle_id))
+        self.assertEqual(ExamSessionShipmentBundleSession.query.filter_by(bundle_id=bundle_id).count(), 0)
+        self.assertEqual(ExamSessionShipmentChecklistItem.query.filter_by(bundle_id=bundle_id).count(), 0)
+        self.assertEqual(ExamSessionShipmentEvent.query.filter_by(bundle_id=bundle_id).count(), 0)
 
     def test_non_rejected_potential_entry_cannot_be_deleted(self):
         entry = self.add_entry(is_rejected=False)

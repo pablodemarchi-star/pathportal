@@ -1070,6 +1070,7 @@ MEMBER_DEPENDENT_MODELS = [
     InternStage2Selection,
     InternStage3Selection,
     InternStageAnnualMeetingSelection,
+    StaffPayment,
 ]
 STAFF_FUT_OPTIONS = [
     "Ready",
@@ -1644,6 +1645,27 @@ def delete_exam_session_dependencies(session_id):
 def delete_archived_member(member):
     for model in MEMBER_DEPENDENT_MODELS:
         model.query.filter_by(member_id=member.id).delete(synchronize_session=False)
+    for model in (ExamSessionSupervisorAssignment, ExamSessionExaminerAssignment, ExamSessionInternAssignment):
+        model.query.filter_by(team_member_id=member.id).delete(synchronize_session=False)
+    bundle_ids = [
+        bundle_id for (bundle_id,) in ExamSessionShipmentBundle.query.with_entities(ExamSessionShipmentBundle.id).filter_by(supervisor_staff_id=member.id).all()
+    ]
+    if bundle_ids:
+        ExamSessionShipmentBundle.query.filter(
+            ExamSessionShipmentBundle.split_from_bundle_id.in_(bundle_ids)
+        ).update({"split_from_bundle_id": None}, synchronize_session=False)
+        ExamSessionShipmentBundleSession.query.filter(
+            ExamSessionShipmentBundleSession.bundle_id.in_(bundle_ids)
+        ).delete(synchronize_session=False)
+        ExamSessionShipmentChecklistItem.query.filter(
+            ExamSessionShipmentChecklistItem.bundle_id.in_(bundle_ids)
+        ).delete(synchronize_session=False)
+        ExamSessionShipmentEvent.query.filter(
+            ExamSessionShipmentEvent.bundle_id.in_(bundle_ids)
+        ).delete(synchronize_session=False)
+        ExamSessionShipmentBundle.query.filter(
+            ExamSessionShipmentBundle.id.in_(bundle_ids)
+        ).delete(synchronize_session=False)
     db.session.delete(member)
 
 
