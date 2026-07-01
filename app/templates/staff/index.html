@@ -656,6 +656,16 @@
       <div class="potential-actions">
         {% if entry.is_rejected %}
           <span class="muted">This rejected record is kept for audit.</span>
+          <form
+            method="post"
+            action="{{ url_for('staff.delete_rejected_potential_entry', entry_id=entry.id) }}"
+            data-confirm-password-submit="This will permanently delete {{ entry.full_name }}. This cannot be undone."
+            data-confirm-password-value="Path1234"
+          >
+            <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+            <input type="hidden" name="deletion_password" value="">
+            <button class="danger-button" type="submit">Delete permanently</button>
+          </form>
         {% else %}
           <button class="secondary-button" type="button" data-open-modal="edit-potential-entry-{{ entry.id }}">Edit</button>
           <form method="post" action="{{ url_for('staff.reject_potential_entry', entry_id=entry.id) }}">

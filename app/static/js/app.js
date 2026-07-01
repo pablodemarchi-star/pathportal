@@ -1,5 +1,17 @@
 const modalOpeners = new WeakMap();
 
+document.querySelectorAll("[data-password-toggle]").forEach((button) => {
+  const inputId = button.dataset.passwordInput;
+  const input = inputId ? document.getElementById(inputId) : null;
+  if (!input) return;
+
+  button.addEventListener("click", () => {
+    const shouldShowPassword = input.type === "password";
+    input.type = shouldShowPassword ? "text" : "password";
+    button.setAttribute("aria-label", shouldShowPassword ? "Hide password" : "Show password");
+  });
+});
+
 const getFocusableElements = (container) => Array.from(container.querySelectorAll(
   'a[href], button:not([disabled]), textarea:not([disabled]), input:not([disabled]):not([type="hidden"]), select:not([disabled]), details summary, [tabindex]:not([tabindex="-1"])'
 )).filter((element) => {
@@ -1204,8 +1216,9 @@ document.addEventListener("submit", (event) => {
       event.preventDefault();
       return;
     }
+    const expectedPassword = passwordForm.dataset.confirmPasswordValue || "7284";
     const password = window.prompt("Enter the confirmation password to continue:");
-    if (password !== "7284") {
+    if (password !== expectedPassword) {
       event.preventDefault();
       window.alert("Incorrect password. The action was cancelled.");
       return;

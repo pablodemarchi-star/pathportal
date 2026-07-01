@@ -241,6 +241,66 @@ class UsersTest(unittest.TestCase):
             self.assertEqual(user_session["user_full_name"], "Person Example")
             self.assertEqual(user_session["user_department"], "Logistics")
 
+    def test_login_page_has_password_visibility_toggle_and_no_greeting(self):
+        response = self.client.get("/login")
+        body = response.get_data(as_text=True)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn('name="password" type="password"', body)
+        self.assertIn('data-password-toggle', body)
+        self.assertIn('data-password-input="login-password"', body)
+        self.assertIn('aria-label="Show password"', body)
+        self.assertNotIn("Hello,", body)
+
+    def test_logged_in_layout_shows_escaped_full_name_greeting(self):
+        user = self.create_user_record(email="hello@example.com", password="secret123", department="Logistics")
+        user.full_name = "Pablo <Admin>"
+        db.session.add(UserMenuPermission(user_id=user.id, menu_key="staff_members", can_view=True))
+        db.session.commit()
+
+        response = self.client.post(
+            "/login",
+            data={"email": "hello@example.com", "password": "secret123"},
+            follow_redirects=True,
+        )
+        body = response.get_data(as_text=True)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("Hello, Pablo &lt;Admin&gt;", body)
+        self.assertNotIn("Hello, Pablo <Admin>", body)
+
+    def test_logged_in_greeting_falls_back_without_empty_values(self):
+        client = self.app.test_client()
+        with client.session_transaction() as user_session:
+            user_session["user"] = "fallback@example.com"
+            user_session["user_full_name"] = ""
+            user_session["user_email"] = "fallback@example.com"
+            user_session["csrf_token"] = "token"
+
+        response = client.get("/")
+        body = response.get_data(as_text=True)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("Hello, fallback@example.com", body)
+        self.assertNotIn("Hello, None", body)
+        self.assertNotIn("Hello, null", body)
+        self.assertNotIn("Hello, undefined", body)
+
+    def test_logout_clears_greeting_from_login_page(self):
+        client = self.app.test_client()
+        with client.session_transaction() as user_session:
+            user_session["user"] = "Logout User"
+            user_session["user_full_name"] = "Logout User"
+            user_session["user_email"] = "logout@example.com"
+            user_session["csrf_token"] = "token"
+
+        response = client.post("/logout", follow_redirects=True)
+        body = response.get_data(as_text=True)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("Internal team portal", body)
+        self.assertNotIn("Hello, Logout User", body)
+
     def test_invalid_or_inactive_login_uses_generic_error(self):
         self.create_user_record(email="inactive@example.com", password="secret123", is_active=False)
         response = self.client.post(

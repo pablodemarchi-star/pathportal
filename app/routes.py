@@ -147,6 +147,8 @@ PAGE_SIZE_OPTIONS = ["5", "10", "25", "50", "all"]
 DEFAULT_PAGE_SIZE = "10"
 USER_STATUS_OPTIONS = ["Active", "Inactive"]
 PERMANENT_DELETE_PASSWORD = "7284"
+EXAM_SESSION_DELETE_PASSWORD = "Path1234"
+REJECTED_POTENTIAL_ENTRY_DELETE_PASSWORD = "Path1234"
 MENU_PERMISSION_PATHS = (
     ("staff_members", ("/", "/members", "/potential-entries", "/staff-members")),
     ("examiner_certification", ("/annual-certification-programme",)),
@@ -1521,6 +1523,14 @@ def paginate_items(items):
 
 def is_valid_permanent_delete_password():
     return request.form.get("deletion_password", "").strip() == PERMANENT_DELETE_PASSWORD
+
+
+def is_valid_exam_session_delete_password():
+    return request.form.get("deletion_password", "").strip() == EXAM_SESSION_DELETE_PASSWORD
+
+
+def is_valid_rejected_potential_entry_delete_password():
+    return request.form.get("deletion_password", "").strip() == REJECTED_POTENTIAL_ENTRY_DELETE_PASSWORD
 
 
 def delete_archived_member(member):
@@ -13862,7 +13872,7 @@ def delete_exam_session(session_id):
     if not validate_csrf():
         flash("Security token expired. Please try again.", "error")
         return redirect(url_for("staff.exam_session_planner", session_year=selected_year))
-    if not is_valid_permanent_delete_password():
+    if not is_valid_exam_session_delete_password():
         flash("Permanent delete password is not valid.", "error")
         return redirect(url_for("staff.exam_session_planner", session_year=selected_year))
 
@@ -17957,6 +17967,27 @@ def reject_potential_entry(entry_id):
     db.session.commit()
     flash("Potential entry rejected and archived.", "success")
     return redirect(url_for("staff.index"))
+
+
+@staff_bp.route("/potential-entries/<int:entry_id>/delete", methods=["POST"])
+@login_required
+def delete_rejected_potential_entry(entry_id):
+    if not validate_csrf():
+        flash("Security token expired. Please try again.", "error")
+        return redirect(url_for("staff.index", show_rejected=1))
+
+    entry = PotentialEntry.query.get_or_404(entry_id)
+    if not entry.is_rejected:
+        flash("Only rejected potential entries can be permanently deleted.", "error")
+        return redirect(url_for("staff.index"))
+    if not is_valid_rejected_potential_entry_delete_password():
+        flash("Potential entry delete password is not valid.", "error")
+        return redirect(url_for("staff.index", show_rejected=1))
+
+    db.session.delete(entry)
+    db.session.commit()
+    flash("Rejected potential entry permanently deleted.", "success")
+    return redirect(url_for("staff.index", show_rejected=1))
 
 
 @staff_bp.route("/potential-entries/<int:entry_id>/accept", methods=["POST"])

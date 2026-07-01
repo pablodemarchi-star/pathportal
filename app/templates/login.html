@@ -30,7 +30,21 @@
         </label>
         <label>
           Password
-          <input name="password" type="password" autocomplete="current-password" placeholder="Password" required>
+          <span class="password-field">
+            <input id="login-password" name="password" type="password" autocomplete="current-password" placeholder="Password" required>
+            <button
+              class="password-toggle"
+              type="button"
+              aria-label="Show password"
+              data-password-toggle
+              data-password-input="login-password"
+            >
+              <svg viewBox="0 0 24 24" aria-hidden="true">
+                <path d="M2.5 12s3.5-6 9.5-6 9.5 6 9.5 6-3.5 6-9.5 6-9.5-6-9.5-6Z" />
+                <path d="M12 9a3 3 0 1 1 0 6 3 3 0 0 1 0-6Z" />
+              </svg>
+            </button>
+          </span>
         </label>
         <div class="login-options">
           <label class="remember-option">

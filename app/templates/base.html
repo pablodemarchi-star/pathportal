@@ -13,6 +13,12 @@
         <div class="brand">
           <img class="brand-logo brand-logo-white" src="{{ url_for('static', filename='img/path-logo-white-transparent.png') }}" alt="Path International Examinations">
         </div>
+        {% set logged_user_label = session.get('user_full_name') or session.get('user_email') or g.user %}
+        {% if logged_user_label %}
+          <section class="logged-user-card" aria-label="Logged-in user">
+            <span>Hello, {{ logged_user_label }}</span>
+          </section>
+        {% endif %}
         <nav>
           {% if user_can_view('staff_members') or user_can_view('examiner_certification') or user_can_view('supervisor_certification') or user_can_view('internship_stages') %}
           <section class="nav-group" aria-label="External staff">

@@ -159,6 +159,55 @@ class PotentialInvitationTest(unittest.TestCase):
         html = response.get_data(as_text=True)
         self.assertIn("Moreno, Pumbis", html)
 
+    def test_rejected_potential_entry_shows_permanent_delete_action(self):
+        entry = self.add_entry(is_rejected=True)
+        response = self.client().get("/?show_rejected=1")
+        html = response.get_data(as_text=True)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("Rejected potential entries", html)
+        self.assertIn(f'/potential-entries/{entry.id}/delete', html)
+        self.assertIn("Delete permanently", html)
+        self.assertIn('data-confirm-password-value="Path1234"', html)
+        self.assertIn('name="deletion_password"', html)
+
+        active_response = self.client().get("/")
+        self.assertNotIn(f'/potential-entries/{entry.id}/delete', active_response.get_data(as_text=True))
+
+    def test_rejected_potential_entry_delete_requires_path_password(self):
+        entry = self.add_entry(is_rejected=True)
+        response = self.client().post(
+            f"/potential-entries/{entry.id}/delete",
+            data={"csrf_token": "token", "deletion_password": "wrong"},
+            follow_redirects=True,
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("Potential entry delete password is not valid.", response.get_data(as_text=True))
+        self.assertIsNotNone(db.session.get(PotentialEntry, entry.id))
+
+        response = self.client().post(
+            f"/potential-entries/{entry.id}/delete",
+            data={"csrf_token": "token", "deletion_password": "Path1234"},
+            follow_redirects=True,
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("Rejected potential entry permanently deleted.", response.get_data(as_text=True))
+        self.assertIsNone(db.session.get(PotentialEntry, entry.id))
+
+    def test_non_rejected_potential_entry_cannot_be_deleted(self):
+        entry = self.add_entry(is_rejected=False)
+        response = self.client().post(
+            f"/potential-entries/{entry.id}/delete",
+            data={"csrf_token": "token", "deletion_password": "Path1234"},
+            follow_redirects=True,
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("Only rejected potential entries can be permanently deleted.", response.get_data(as_text=True))
+        self.assertIsNotNone(db.session.get(PotentialEntry, entry.id))
+
     def test_potential_entries_order_by_interview_date_and_time_with_missing_dates_last(self):
         self.add_entry(
             full_name="Far Candidate",

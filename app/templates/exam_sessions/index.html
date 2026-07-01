@@ -734,7 +734,12 @@
           <td class="datetime-cell">{{ session.updated_on|localdt }} h</td>
           <td><button class="mini-button" type="button" data-open-modal="edit-exam-session-{{ session.id }}">Edit</button></td>
           <td>
-            <form method="post" action="{{ url_for('staff.delete_exam_session', session_id=session.id) }}" data-confirm-password-submit="This will permanently delete this exam session. This cannot be undone.">
+            <form
+              method="post"
+              action="{{ url_for('staff.delete_exam_session', session_id=session.id) }}"
+              data-confirm-password-submit="This will permanently delete this exam session. This cannot be undone."
+              data-confirm-password-value="Path1234"
+            >
               <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
               <input type="hidden" name="session_year" value="{{ selected_session_year }}">
               <input type="hidden" name="deletion_password" value="">

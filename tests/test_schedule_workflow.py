@@ -245,6 +245,38 @@ class ScheduleWorkflowTest(unittest.TestCase):
             self.create_package_unit_record(status="Pre-packing", expected=10, actual=10, session_record=session_record)
         return session_record
 
+    def test_exam_session_delete_form_uses_path_password(self):
+        client = self.login_client()
+        response = client.get("/exam-session-planner")
+        html = response.get_data(as_text=True)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn(f'/exam-session-planner/sessions/{self.session_record.id}/delete', html)
+        self.assertIn('data-confirm-password-value="Path1234"', html)
+        self.assertIn('name="deletion_password"', html)
+
+    def test_exam_session_delete_requires_path_password(self):
+        client = self.login_client()
+        response = client.post(
+            f"/exam-session-planner/sessions/{self.session_record.id}/delete",
+            data={"csrf_token": "token", "session_year": "2026", "deletion_password": "7284"},
+            follow_redirects=True,
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("Permanent delete password is not valid.", response.get_data(as_text=True))
+        self.assertIsNotNone(db.session.get(ExamSession, self.session_record.id))
+
+        response = client.post(
+            f"/exam-session-planner/sessions/{self.session_record.id}/delete",
+            data={"csrf_token": "token", "session_year": "2026", "deletion_password": "Path1234"},
+            follow_redirects=True,
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("Exam session deleted successfully.", response.get_data(as_text=True))
+        self.assertIsNone(db.session.get(ExamSession, self.session_record.id))
+
     def create_shipment_bundle_record(self, status="Preparing bundle", dispatch_due_at=None, session_record=None):
         session_record = session_record or self.session_record
         bundle = ExamSessionShipmentBundle(
