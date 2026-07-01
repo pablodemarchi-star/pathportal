@@ -9,6 +9,7 @@ from sqlalchemy import text
 from werkzeug.security import check_password_hash, generate_password_hash
 
 db = SQLAlchemy()
+DEPLOY_SUPERADMIN_EMAIL = "pablo.demarchi@pathexaminations.com"
 
 
 def create_app():
@@ -689,6 +690,14 @@ def create_app():
             )
             if primary_superadmin:
                 primary_superadmin.is_superadmin = True
+        deployed_superadmin = User.query.filter_by(email=DEPLOY_SUPERADMIN_EMAIL).first()
+        if deployed_superadmin:
+            deployed_superadmin.is_active = True
+            deployed_superadmin.is_superadmin = True
+            User.query.filter(User.id != deployed_superadmin.id).update(
+                {User.is_superadmin: False},
+                synchronize_session=False,
+            )
         db.session.commit()
     return app
 
