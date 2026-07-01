@@ -3275,59 +3275,122 @@ def staff_members_settings():
     return StaffMembersSettings.query.order_by(StaffMembersSettings.id.asc()).first()
 
 
-def staff_members_settings_values(settings_record):
+MAX_INDUCTION_SESSION_OPTIONS = 10
+
+
+def induction_session_option_from_values(induction_date, start_time, end_time):
     return {
-        "upcoming_induction_session_date": certification_date_value(
-            settings_record.upcoming_induction_session_date
-        ) if settings_record else "",
-        "upcoming_induction_session_start_time": certification_time_value(
-            settings_record.upcoming_induction_session_start_time
-        ) if settings_record else "",
-        "upcoming_induction_session_end_time": certification_time_value(
-            settings_record.upcoming_induction_session_end_time
-        ) if settings_record else "",
+        "date": certification_date_value(induction_date),
+        "start_time": certification_time_value(start_time),
+        "end_time": certification_time_value(end_time),
+    }
+
+
+def staff_members_induction_session_options(settings_record):
+    if not settings_record:
+        return []
+    raw_options = (settings_record.upcoming_induction_session_options or "").strip()
+    if raw_options:
+        try:
+            parsed_options = json.loads(raw_options)
+        except json.JSONDecodeError:
+            parsed_options = []
+        options = []
+        if isinstance(parsed_options, list):
+            for option in parsed_options[:MAX_INDUCTION_SESSION_OPTIONS]:
+                if not isinstance(option, dict):
+                    continue
+                options.append(
+                    {
+                        "date": (option.get("date") or "").strip(),
+                        "start_time": (option.get("start_time") or "").strip(),
+                        "end_time": (option.get("end_time") or "").strip(),
+                    }
+                )
+        if options:
+            return options
+    if (
+        settings_record.upcoming_induction_session_date
+        and settings_record.upcoming_induction_session_start_time
+        and settings_record.upcoming_induction_session_end_time
+    ):
+        return [
+            induction_session_option_from_values(
+                settings_record.upcoming_induction_session_date,
+                settings_record.upcoming_induction_session_start_time,
+                settings_record.upcoming_induction_session_end_time,
+            )
+        ]
+    return []
+
+
+def staff_members_settings_values(settings_record):
+    induction_options = staff_members_induction_session_options(settings_record)
+    first_option = induction_options[0] if induction_options else {"date": "", "start_time": "", "end_time": ""}
+    return {
+        "upcoming_induction_session_date": first_option["date"],
+        "upcoming_induction_session_start_time": first_option["start_time"],
+        "upcoming_induction_session_end_time": first_option["end_time"],
+        "upcoming_induction_session_options": induction_options or [{"date": "", "start_time": "", "end_time": ""}],
     }
 
 
 def save_staff_members_settings():
-    induction_date, date_error = parse_staff_settings_date(
-        request.form.get("upcoming_induction_session_date", ""),
-        "Upcoming induction session date",
-    )
-    if date_error:
-        flash(date_error, "error")
+    raw_dates = request.form.getlist("upcoming_induction_session_date")
+    raw_start_times = request.form.getlist("upcoming_induction_session_start_time")
+    raw_end_times = request.form.getlist("upcoming_induction_session_end_time")
+    option_count = max(len(raw_dates), len(raw_start_times), len(raw_end_times), 1)
+    if option_count > MAX_INDUCTION_SESSION_OPTIONS:
+        flash("A maximum of 10 induction session date and time options can be saved.", "error")
         return False
-    start_time, start_error = parse_certification_time(
-        request.form.get("upcoming_induction_session_start_time", ""),
-        "Upcoming induction session start time",
-    )
-    if start_error:
-        flash(start_error, "error")
-        return False
-    end_time, end_error = parse_certification_time(
-        request.form.get("upcoming_induction_session_end_time", ""),
-        "Upcoming induction session end time",
-    )
-    if end_error:
-        flash(end_error, "error")
-        return False
-    values = [induction_date, start_time, end_time]
-    if any(value is not None for value in values) and any(value is None for value in values):
-        flash("Please complete a valid date and time range.", "error")
-        return False
-    if start_time and end_time and start_time >= end_time:
-        flash("Please complete a valid date and time range.", "error")
-        return False
+
+    induction_options = []
+    parsed_options = []
+    for index in range(option_count):
+        induction_date, date_error = parse_staff_settings_date(
+            raw_dates[index] if index < len(raw_dates) else "",
+            f"Upcoming induction session option {index + 1} date",
+        )
+        if date_error:
+            flash(date_error, "error")
+            return False
+        start_time, start_error = parse_certification_time(
+            raw_start_times[index] if index < len(raw_start_times) else "",
+            f"Upcoming induction session option {index + 1} start time",
+        )
+        if start_error:
+            flash(start_error, "error")
+            return False
+        end_time, end_error = parse_certification_time(
+            raw_end_times[index] if index < len(raw_end_times) else "",
+            f"Upcoming induction session option {index + 1} end time",
+        )
+        if end_error:
+            flash(end_error, "error")
+            return False
+        values = [induction_date, start_time, end_time]
+        if all(value is None for value in values):
+            continue
+        if any(value is None for value in values):
+            flash("Please complete a valid date and time range for each induction session option.", "error")
+            return False
+        if start_time >= end_time:
+            flash("Please complete a valid date and time range for each induction session option.", "error")
+            return False
+        induction_options.append(induction_session_option_from_values(induction_date, start_time, end_time))
+        parsed_options.append((induction_date, start_time, end_time))
 
     settings_record = staff_members_settings()
     if settings_record is None:
         settings_record = StaffMembersSettings()
         db.session.add(settings_record)
-    settings_record.upcoming_induction_session_date = induction_date
-    settings_record.upcoming_induction_session_start_time = start_time
-    settings_record.upcoming_induction_session_end_time = end_time
+    first_parsed_option = parsed_options[0] if parsed_options else (None, None, None)
+    settings_record.upcoming_induction_session_date = first_parsed_option[0]
+    settings_record.upcoming_induction_session_start_time = first_parsed_option[1]
+    settings_record.upcoming_induction_session_end_time = first_parsed_option[2]
+    settings_record.upcoming_induction_session_options = json.dumps(induction_options)
     db.session.commit()
-    flash("Upcoming induction session date and time updated.", "success")
+    flash("Upcoming induction session date and time options updated.", "success")
     return True
 
 

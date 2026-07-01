@@ -290,6 +290,7 @@ class StaffMembersSettings(db.Model):
     upcoming_induction_session_date = db.Column(db.Date)
     upcoming_induction_session_start_time = db.Column(db.Time)
     upcoming_induction_session_end_time = db.Column(db.Time)
+    upcoming_induction_session_options = db.Column(db.Text)
     created_on = db.Column(db.DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))
     updated_on = db.Column(
         db.DateTime(timezone=True),

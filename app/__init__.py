@@ -175,6 +175,12 @@ def create_app():
         potential_entry_columns = {
             row[1] for row in db.session.execute(text("PRAGMA table_info(potential_entry)"))
         }
+        staff_members_settings_columns = {
+            row[1] for row in db.session.execute(text("PRAGMA table_info(staff_members_settings)"))
+        }
+        if staff_members_settings_columns and "upcoming_induction_session_options" not in staff_members_settings_columns:
+            db.session.execute(text("ALTER TABLE staff_members_settings ADD COLUMN upcoming_induction_session_options TEXT"))
+            db.session.commit()
         if potential_entry_columns and "interview_invitation_sent" not in potential_entry_columns:
             db.session.execute(text("ALTER TABLE potential_entry ADD COLUMN interview_invitation_sent BOOLEAN NOT NULL DEFAULT 0"))
             db.session.commit()

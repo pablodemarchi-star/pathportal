@@ -1,4 +1,6 @@
+import json
 import os
+import subprocess
 import unittest
 from datetime import date, time
 
@@ -77,6 +79,20 @@ class PotentialInvitationTest(unittest.TestCase):
         db.session.add(member)
         db.session.commit()
         return member
+
+    def build_successful_application_email(self, dataset):
+        with open("app/static/js/app.js", encoding="utf-8") as handle:
+            js = handle.read()
+        start = js.index("const cleanEmailValue")
+        end = js.index("const buildUnsuccessfulApplicationEmail")
+        script = (
+            js[start:end]
+            + "\nconst button = { dataset: "
+            + json.dumps(dataset)
+            + " };\nconsole.log(JSON.stringify(buildSuccessfulApplicationEmail(button)));\n"
+        )
+        result = subprocess.run(["node", "-e", script], check=True, capture_output=True, text=True)
+        return json.loads(result.stdout)
 
     def add_session(self, **overrides):
         values = {
@@ -644,8 +660,10 @@ class PotentialInvitationTest(unittest.TestCase):
         self.assertIn("application for the role of Examiner", js)
         self.assertIn("this contract</a>", js)
         self.assertIn("1FfzKcWq8pED3qv5yuzx2L9n_VEx0ZysM", js)
-        self.assertIn("Upcoming induction session date and time is not configured.", js)
-        self.assertIn("Upcoming online induction session", js)
+        self.assertIn("Upcoming induction session date and time options are not configured.", js)
+        self.assertIn("Please complete all induction session options before copying this email.", js)
+        self.assertIn("Confirm your availability for <strong>ONE</strong> of the upcoming online induction sessions:", js)
+        self.assertIn("Confirm your availability for ONE of the upcoming online induction sessions:", js)
         self.assertIn("https://zoom.us/j/7284728472", js)
         self.assertIn("728 472 8472", js)
         self.assertIn("Password: <strong>", js)
@@ -662,6 +680,72 @@ class PotentialInvitationTest(unittest.TestCase):
         self.assertNotIn("Meet", unsuccessful_template)
         self.assertNotIn("Zoom", unsuccessful_template)
         self.assertNotIn("CONTRACT_LINK", unsuccessful_template)
+
+    def test_successful_application_email_lists_sorted_induction_options(self):
+        result = self.build_successful_application_email(
+            {
+                "fullName": "Jane Candidate",
+                "inductionOptions": json.dumps(
+                    [
+                        {"date": "13/08/2026", "start_time": "15:00", "end_time": "17:00"},
+                        {"date": "10/08/2026", "start_time": "10:00", "end_time": "12:00"},
+                        {"date": "10/08/2026", "start_time": "08:00", "end_time": "09:00"},
+                    ]
+                ),
+            }
+        )
+
+        self.assertNotIn("error", result)
+        self.assertIn("Confirm your availability for <strong>ONE</strong> of the upcoming online induction sessions:", result["html"])
+        self.assertIn("Confirm your availability for ONE of the upcoming online induction sessions:", result["text"])
+        self.assertIn('href="https://drive.google.com/file/d/1FfzKcWq8pED3qv5yuzx2L9n_VEx0ZysM/view?usp=sharing"', result["html"])
+        self.assertIn("this contract</a>", result["html"])
+        self.assertIn("https://drive.google.com/file/d/1FfzKcWq8pED3qv5yuzx2L9n_VEx0ZysM/view?usp=sharing", result["text"])
+        self.assertIn("The Zoom access details are as follows:", result["html"])
+        self.assertIn("https://zoom.us/j/7284728472", result["text"])
+        self.assertIn("728 472 8472", result["text"])
+        self.assertIn("Password: path", result["text"])
+        self.assertNotIn("Meet", result["html"])
+        self.assertNotIn("Meet", result["text"])
+
+        first = result["text"].index("Monday 10 August 2026\n08:00–09:00")
+        second = result["text"].index("Monday 10 August 2026\n10:00–12:00")
+        third = result["text"].index("Thursday 13 August 2026\n15:00–17:00")
+        self.assertLess(first, second)
+        self.assertLess(second, third)
+        for output in (result["html"], result["text"]):
+            self.assertIn("Monday 10 August 2026", output)
+            self.assertIn("Thursday 13 August 2026", output)
+            self.assertIn("10:00–12:00", output)
+            self.assertNotIn("2026-08-10", output)
+            self.assertNotIn("undefined", output)
+            self.assertNotIn("null", output)
+            self.assertNotIn("None", output)
+
+    def test_successful_application_email_rejects_missing_induction_options(self):
+        result = self.build_successful_application_email(
+            {
+                "fullName": "Jane Candidate",
+                "inductionOptions": json.dumps([{"date": "", "start_time": "", "end_time": ""}]),
+            }
+        )
+
+        self.assertEqual(result, {"error": "Upcoming induction session date and time options are not configured."})
+
+    def test_successful_application_email_rejects_incomplete_induction_options(self):
+        result = self.build_successful_application_email(
+            {
+                "fullName": "Jane Candidate",
+                "inductionOptions": json.dumps(
+                    [
+                        {"date": "10/08/2026", "start_time": "10:00", "end_time": "12:00"},
+                        {"date": "13/08/2026", "start_time": "", "end_time": "17:00"},
+                    ]
+                ),
+            }
+        )
+
+        self.assertEqual(result, {"error": "Please complete all induction session options before copying this email."})
 
 
 if __name__ == "__main__":

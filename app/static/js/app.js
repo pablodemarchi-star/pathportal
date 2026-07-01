@@ -3800,6 +3800,54 @@ const formatInductionTimeRange = (startTime, endTime) => {
   return `${start}–${end}`;
 };
 
+const parseInductionSessionSortDate = (value) => {
+  const match = cleanEmailValue(value).match(/^(\d{2})\/(\d{2})\/(\d{4})$/);
+  if (!match) return null;
+  const day = Number.parseInt(match[1], 10);
+  const monthIndex = Number.parseInt(match[2], 10) - 1;
+  const year = Number.parseInt(match[3], 10);
+  const date = new Date(year, monthIndex, day);
+  if (Number.isNaN(date.getTime()) || date.getDate() !== day || date.getMonth() !== monthIndex || date.getFullYear() !== year) {
+    return null;
+  }
+  return date;
+};
+
+const getInductionSessionOptions = (button) => {
+  let rawOptions = [];
+  try {
+    rawOptions = JSON.parse(button.dataset.inductionOptions || "[]");
+  } catch (error) {
+    rawOptions = [];
+  }
+  if (!Array.isArray(rawOptions) || rawOptions.length === 0) {
+    rawOptions = [{
+      date: button.dataset.inductionDate,
+      start_time: button.dataset.inductionStartTime,
+      end_time: button.dataset.inductionEndTime,
+    }];
+  }
+  const candidates = rawOptions.filter((option) => option && typeof option === "object");
+  const hasAnyValue = candidates.some((option) => cleanEmailValue(option.date) || cleanEmailValue(option.start_time) || cleanEmailValue(option.end_time));
+  if (!hasAnyValue) {
+    return { options: [], error: "Upcoming induction session date and time options are not configured." };
+  }
+  const options = [];
+  for (const option of candidates) {
+    const sortDate = parseInductionSessionSortDate(option.date);
+    const inductionDate = formatInductionSessionDate(option.date);
+    const inductionTimeRange = formatInductionTimeRange(option.start_time, option.end_time);
+    const startTime = cleanEmailValue(option.start_time);
+    const endTime = cleanEmailValue(option.end_time);
+    if (!sortDate || !inductionDate || !inductionTimeRange || startTime >= endTime) {
+      return { options: [], error: "Please complete all induction session options before copying this email." };
+    }
+    options.push({ date: inductionDate, timeRange: inductionTimeRange, sortDate, startTime });
+  }
+  options.sort((first, second) => first.sortDate - second.sortDate || first.startTime.localeCompare(second.startTime));
+  return { options };
+};
+
 const pathEmailShell = ({ label, title, bodyHtml }) => `
   <div style="margin:0;padding:24px;background:#00506b;font-family:Arial, Helvetica, sans-serif;color:#111115;">
     <div style="max-width:640px;margin:0 auto;background:#ffffff;border:1px solid #d9dfdc;border-radius:16px;padding:26px 28px;">
@@ -3815,15 +3863,25 @@ const pathEmailShell = ({ label, title, bodyHtml }) => `
 const buildSuccessfulApplicationEmail = (button) => {
   const fullName = cleanEmailValue(button.dataset.fullName);
   if (!fullName) return { error: "Potential entry full name is required." };
-  const inductionDate = formatInductionSessionDate(button.dataset.inductionDate);
-  const inductionTimeRange = formatInductionTimeRange(button.dataset.inductionStartTime, button.dataset.inductionEndTime);
-  if (!inductionDate || !inductionTimeRange) {
-    return { error: "Upcoming induction session date and time is not configured." };
+  const { options: inductionOptions, error: inductionOptionsError } = getInductionSessionOptions(button);
+  if (inductionOptionsError) {
+    return { error: inductionOptionsError };
+  }
+  if (!inductionOptions.length) {
+    return { error: "Upcoming induction session date and time options are not configured." };
   }
   const { link: zoomLink, id: zoomId, password: zoomPassword } = POTENTIAL_INTERVIEW_ACCESS_DETAILS.Zoom;
   const safeName = escapeEmailHtml(fullName);
-  const safeDate = escapeEmailHtml(inductionDate);
-  const safeTimeRange = escapeEmailHtml(inductionTimeRange);
+  const inductionOptionsHtml = inductionOptions.map((option, index) => `
+      <div style="${index > 0 ? "margin-top:12px;padding-top:12px;border-top:1px solid #d9dfdc;" : ""}">
+        ${inductionOptions.length > 1 ? `<p style="margin:0 0 4px;color:#62727a;font:700 11px Arial, Helvetica, sans-serif;text-transform:uppercase;">Option ${index + 1}</p>` : ""}
+        <p style="margin:0;color:#00506b;font:700 18px/1.35 Arial, Helvetica, sans-serif;">${escapeEmailHtml(option.date)}</p>
+        <p style="margin:3px 0 0;color:#00506b;font:700 18px/1.35 Arial, Helvetica, sans-serif;">${escapeEmailHtml(option.timeRange)}</p>
+      </div>
+    `).join("");
+  const inductionOptionsText = inductionOptions
+    .map((option, index) => inductionOptions.length > 1 ? `Option ${index + 1}: ${option.date}\n${option.timeRange}` : `${option.date}\n${option.timeRange}`)
+    .join("\n\n");
   const bodyHtml = `
     <p style="margin:0 0 14px;color:#111115;font:400 15px/1.55 Arial, Helvetica, sans-serif;">Dear ${safeName},</p>
     <p style="margin:0 0 16px;color:#111115;font:400 15px/1.55 Arial, Helvetica, sans-serif;">We are delighted to inform you that your application for the role of <strong>Examiner</strong> at Path International Examinations has been accepted. We are confident that you will be a valuable addition to our academic team.</p>
@@ -3831,13 +3889,12 @@ const buildSuccessfulApplicationEmail = (button) => {
       <p style="margin:0 0 10px;color:#00506b;font:700 15px Arial, Helvetica, sans-serif;">To formally accept this offer and secure your place, please complete the following steps within 3 working days:</p>
       <ol style="margin:0;padding-left:20px;color:#111115;font:400 14px/1.55 Arial, Helvetica, sans-serif;">
         <li style="margin-bottom:8px;">Review, complete, sign and return <a href="${escapeEmailAttribute(CONTRACT_LINK)}" style="color:#00506b;font-weight:700;">this contract</a> to <a href="mailto:admin@pathexaminations.com" style="color:#00506b;font-weight:700;">admin@pathexaminations.com</a>, together with a professional profile picture.</li>
-        <li>Confirm your availability for the upcoming online induction session.</li>
+        <li>Confirm your availability for <strong>ONE</strong> of the upcoming online induction sessions.</li>
       </ol>
     </div>
     <div style="margin:0 0 18px;padding:16px 18px;background:#f1f3f2;border:1px solid #d9dfdc;border-radius:12px;">
-      <p style="margin:0 0 6px;color:#62727a;font:700 11px Arial, Helvetica, sans-serif;letter-spacing:.7px;text-transform:uppercase;">Upcoming online induction session</p>
-      <p style="margin:0;color:#00506b;font:700 18px/1.35 Arial, Helvetica, sans-serif;">${safeDate}</p>
-      <p style="margin:3px 0 0;color:#00506b;font:700 18px/1.35 Arial, Helvetica, sans-serif;">${safeTimeRange}</p>
+      <p style="margin:0 0 10px;color:#00506b;font:700 15px Arial, Helvetica, sans-serif;">Confirm your availability for <strong>ONE</strong> of the upcoming online induction sessions:</p>
+      ${inductionOptionsHtml}
     </div>
     <div style="margin:0 0 18px;padding:16px 18px;background:#f1f3f2;border:1px solid #d9dfdc;border-radius:12px;">
       <p style="margin:0 0 10px;color:#00506b;font:700 15px Arial, Helvetica, sans-serif;">The Zoom access details are as follows:</p>
@@ -3853,7 +3910,7 @@ const buildSuccessfulApplicationEmail = (button) => {
     title: "Your application has been accepted",
     bodyHtml,
   });
-  const text = `Dear ${fullName},\n\nWe are delighted to inform you that your application for the role of Examiner at Path International Examinations has been accepted. We are confident that you will be a valuable addition to our academic team.\n\nTo formally accept this offer and secure your place, please complete the following steps within 3 working days:\n\n* Review, complete, sign and return this contract to admin@pathexaminations.com, together with a professional profile picture:\n${CONTRACT_LINK}\n\n* Confirm your availability for the upcoming online induction session:\n\n${inductionDate}\n${inductionTimeRange}\n\nThe Zoom access details are as follows:\n\nLink: ${zoomLink}\nZoom ID: ${zoomId}\nPassword: ${zoomPassword}\n\nShould you have any questions or require any further information, please let us know.\n\nWelcome to Path International Examinations. We look forward to working with you.\n\nBest regards,\n\nPath International Examinations`;
+  const text = `Dear ${fullName},\n\nWe are delighted to inform you that your application for the role of Examiner at Path International Examinations has been accepted. We are confident that you will be a valuable addition to our academic team.\n\nTo formally accept this offer and secure your place, please complete the following steps within 3 working days:\n\n* Review, complete, sign and return this contract to admin@pathexaminations.com, together with a professional profile picture:\n${CONTRACT_LINK}\n\n* Confirm your availability for ONE of the upcoming online induction sessions:\n\n${inductionOptionsText}\n\nThe Zoom access details are as follows:\n\nLink: ${zoomLink}\nZoom ID: ${zoomId}\nPassword: ${zoomPassword}\n\nShould you have any questions or require any further information, please let us know.\n\nWelcome to Path International Examinations. We look forward to working with you.\n\nBest regards,\n\nPath International Examinations`;
   return { html, text };
 };
 
@@ -6369,6 +6426,54 @@ const initProviderHistoryForm = (form) => {
 };
 
 document.querySelectorAll("[data-provider-history-form]").forEach(initProviderHistoryForm);
+
+const updateInductionOptionRows = (root) => {
+  const maxOptions = Number.parseInt(root.dataset.maxOptions || "10", 10);
+  const rows = [...root.querySelectorAll("[data-induction-option-row]")];
+  rows.forEach((row, index) => {
+    row.querySelectorAll("input").forEach((input) => {
+      const field = input.name.includes("start_time") ? "start time" : input.name.includes("end_time") ? "end time" : "date";
+      input.setAttribute("aria-label", `Upcoming induction session option ${index + 1} ${field}`);
+    });
+    const addButton = row.querySelector("[data-add-induction-option]");
+    const removeButton = row.querySelector("[data-remove-induction-option]");
+    if (addButton) addButton.disabled = rows.length >= maxOptions;
+    if (removeButton) removeButton.disabled = rows.length <= 1;
+  });
+};
+
+const initInductionOptions = (root) => {
+  if (!root || root.dataset.inductionOptionsInitialized === "true") return;
+  root.dataset.inductionOptionsInitialized = "true";
+  updateInductionOptionRows(root);
+  root.addEventListener("click", (event) => {
+    const addButton = event.target.closest("[data-add-induction-option]");
+    const removeButton = event.target.closest("[data-remove-induction-option]");
+    const list = root.querySelector("[data-induction-options-list]");
+    if (!list) return;
+    if (addButton) {
+      const rows = [...list.querySelectorAll("[data-induction-option-row]")];
+      const maxOptions = Number.parseInt(root.dataset.maxOptions || "10", 10);
+      if (rows.length >= maxOptions) return;
+      const nextRow = rows[rows.length - 1].cloneNode(true);
+      nextRow.querySelectorAll("input").forEach((input) => {
+        input.value = "";
+      });
+      list.append(nextRow);
+      updateInductionOptionRows(root);
+      nextRow.querySelector("input")?.focus();
+      return;
+    }
+    if (removeButton) {
+      const rows = [...list.querySelectorAll("[data-induction-option-row]")];
+      if (rows.length <= 1) return;
+      removeButton.closest("[data-induction-option-row]")?.remove();
+      updateInductionOptionRows(root);
+    }
+  });
+};
+
+document.querySelectorAll("[data-induction-options]").forEach(initInductionOptions);
 
 document.addEventListener("toggle", (event) => {
   const panel = event.target.closest?.(".incident-impact-form-panel");

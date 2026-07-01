@@ -173,6 +173,7 @@
                     data-induction-date="{{ staff_settings_values.upcoming_induction_session_date }}"
                     data-induction-start-time="{{ staff_settings_values.upcoming_induction_session_start_time }}"
                     data-induction-end-time="{{ staff_settings_values.upcoming_induction_session_end_time }}"
+                    data-induction-options="{{ staff_settings_values.upcoming_induction_session_options|tojson|forceescape }}"
                     aria-label="Copy successful application email for {{ entry.full_name }}"
                   >Accept email</button>
                   <button
@@ -219,38 +220,48 @@
 <section class="certification-year-settings staff-settings-panel" aria-label="Staff members settings">
   <form method="post" action="{{ url_for('staff.update_staff_members_settings') }}" class="certification-year-settings-form">
     <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-    <label>
-      Upcoming induction session date and time
-      <span class="certification-date-time-fields staff-induction-date-time-fields">
-        <input
-          name="upcoming_induction_session_date"
-          value="{{ staff_settings_values.upcoming_induction_session_date }}"
-          placeholder="DD/MM/YYYY"
-          inputmode="numeric"
-          maxlength="10"
-          pattern="\d{2}/\d{2}/\d{4}"
-          aria-label="Upcoming induction session date"
-        >
-        <input
-          name="upcoming_induction_session_start_time"
-          value="{{ staff_settings_values.upcoming_induction_session_start_time }}"
-          placeholder="hh:mm"
-          inputmode="numeric"
-          maxlength="5"
-          pattern="([01]\d|2[0-3]):[0-5]\d"
-          aria-label="Upcoming induction session start time"
-        >
-        <input
-          name="upcoming_induction_session_end_time"
-          value="{{ staff_settings_values.upcoming_induction_session_end_time }}"
-          placeholder="hh:mm"
-          inputmode="numeric"
-          maxlength="5"
-          pattern="([01]\d|2[0-3]):[0-5]\d"
-          aria-label="Upcoming induction session end time"
-        >
-      </span>
-    </label>
+    <div class="staff-induction-options" data-induction-options data-max-options="10">
+      <span class="staff-settings-label">Upcoming induction session date and time options</span>
+      <div class="staff-induction-options-list" data-induction-options-list>
+        {% for option in staff_settings_values.upcoming_induction_session_options %}
+          <div class="staff-induction-option-row" data-induction-option-row>
+            <span class="certification-date-time-fields staff-induction-date-time-fields">
+              <input
+                name="upcoming_induction_session_date"
+                value="{{ option.date }}"
+                placeholder="DD/MM/YYYY"
+                inputmode="numeric"
+                maxlength="10"
+                pattern="\d{2}/\d{2}/\d{4}"
+                aria-label="Upcoming induction session option {{ loop.index }} date"
+              >
+              <input
+                name="upcoming_induction_session_start_time"
+                value="{{ option.start_time }}"
+                placeholder="hh:mm"
+                inputmode="numeric"
+                maxlength="5"
+                pattern="([01]\d|2[0-3]):[0-5]\d"
+                aria-label="Upcoming induction session option {{ loop.index }} start time"
+              >
+              <input
+                name="upcoming_induction_session_end_time"
+                value="{{ option.end_time }}"
+                placeholder="hh:mm"
+                inputmode="numeric"
+                maxlength="5"
+                pattern="([01]\d|2[0-3]):[0-5]\d"
+                aria-label="Upcoming induction session option {{ loop.index }} end time"
+              >
+            </span>
+            <span class="staff-induction-option-actions">
+              <button class="mini-icon-button staff-induction-add-option" type="button" data-add-induction-option aria-label="Add induction session option" title="Add option">+</button>
+              <button class="mini-icon-button staff-induction-remove-option" type="button" data-remove-induction-option aria-label="Remove induction session option" title="Remove option">X</button>
+            </span>
+          </div>
+        {% endfor %}
+      </div>
+    </div>
     <button class="secondary-button compact-action" type="submit">Save settings</button>
   </form>
 </section>

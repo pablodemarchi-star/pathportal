@@ -472,6 +472,48 @@ textarea {
   margin-bottom: 18px;
 }
 
+.staff-induction-options {
+  display: grid;
+  gap: 8px;
+}
+
+.staff-settings-label {
+  color: var(--color-muted);
+  font-size: 12px;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
+.staff-induction-options-list {
+  display: grid;
+  gap: 8px;
+}
+
+.staff-induction-option-row {
+  display: grid;
+  grid-template-columns: minmax(320px, 1fr) 72px;
+  gap: 8px;
+  align-items: center;
+}
+
+.staff-induction-option-actions {
+  display: flex;
+  gap: 6px;
+  min-width: 72px;
+}
+
+.staff-induction-option-actions .mini-icon-button {
+  width: 32px;
+  height: 32px;
+  flex: 0 0 32px;
+}
+
+.staff-induction-option-row:first-child .staff-induction-remove-option,
+.staff-induction-option-row:not(:last-child) .staff-induction-add-option {
+  visibility: hidden;
+  pointer-events: none;
+}
+
 input,
 select,
 textarea {
@@ -8221,6 +8263,11 @@ span.session-marker-chip {
 
 @media (max-width: 980px) {
   .certification-year-settings-form {
+    grid-template-columns: 1fr;
+  }
+
+  .staff-induction-option-row,
+  .staff-induction-date-time-fields {
     grid-template-columns: 1fr;
   }
 

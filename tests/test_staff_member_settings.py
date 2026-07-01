@@ -1,3 +1,4 @@
+import json
 import os
 import unittest
 from datetime import date, time
@@ -35,12 +36,16 @@ class StaffMemberSettingsTest(unittest.TestCase):
         html = response.get_data(as_text=True)
 
         self.assertEqual(response.status_code, 200)
-        self.assertIn("Upcoming induction session date and time", html)
+        self.assertIn("Upcoming induction session date and time options", html)
         self.assertIn('name="upcoming_induction_session_date"', html)
         self.assertIn('name="upcoming_induction_session_start_time"', html)
         self.assertIn('name="upcoming_induction_session_end_time"', html)
-        self.assertLess(html.index("Potential entries"), html.index("Upcoming induction session date and time"))
-        self.assertLess(html.index("Upcoming induction session date and time"), html.index("staff-bulk-export-form"))
+        self.assertIn('data-add-induction-option', html)
+        self.assertIn('data-remove-induction-option', html)
+        self.assertIn('data-max-options="10"', html)
+        self.assertEqual(html.count('data-induction-option-row'), 1)
+        self.assertLess(html.index("Potential entries"), html.index("Upcoming induction session date and time options"))
+        self.assertLess(html.index("Upcoming induction session date and time options"), html.index("staff-bulk-export-form"))
         self.assertNotIn("undefined", html)
         self.assertNotIn("null", html)
         self.assertNotIn("None", html)
@@ -64,12 +69,63 @@ class StaffMemberSettingsTest(unittest.TestCase):
         self.assertEqual(settings.upcoming_induction_session_date, date(2026, 7, 15))
         self.assertEqual(settings.upcoming_induction_session_start_time, time(9, 30))
         self.assertEqual(settings.upcoming_induction_session_end_time, time(11, 0))
+        self.assertEqual(
+            json.loads(settings.upcoming_induction_session_options),
+            [{"date": "15/07/2026", "start_time": "09:30", "end_time": "11:00"}],
+        )
 
         response = client.get("/")
         html = response.get_data(as_text=True)
         self.assertIn('value="15/07/2026"', html)
         self.assertIn('value="09:30"', html)
         self.assertIn('value="11:00"', html)
+
+    def test_staff_members_settings_persist_multiple_options(self):
+        client = self.client()
+        response = client.post(
+            "/staff-members/settings",
+            data={
+                "csrf_token": "token",
+                "upcoming_induction_session_date": ["15/07/2026", "16/07/2026"],
+                "upcoming_induction_session_start_time": ["09:30", "14:00"],
+                "upcoming_induction_session_end_time": ["11:00", "15:30"],
+            },
+            follow_redirects=False,
+        )
+
+        self.assertEqual(response.status_code, 302)
+        settings = StaffMembersSettings.query.one()
+        self.assertEqual(settings.upcoming_induction_session_date, date(2026, 7, 15))
+        self.assertEqual(
+            json.loads(settings.upcoming_induction_session_options),
+            [
+                {"date": "15/07/2026", "start_time": "09:30", "end_time": "11:00"},
+                {"date": "16/07/2026", "start_time": "14:00", "end_time": "15:30"},
+            ],
+        )
+
+        response = client.get("/")
+        html = response.get_data(as_text=True)
+        self.assertEqual(html.count('data-induction-option-row'), 2)
+        self.assertIn('value="16/07/2026"', html)
+        self.assertIn('value="14:00"', html)
+        self.assertIn('value="15:30"', html)
+
+    def test_staff_members_settings_reject_more_than_ten_options(self):
+        client = self.client()
+        response = client.post(
+            "/staff-members/settings",
+            data={
+                "csrf_token": "token",
+                "upcoming_induction_session_date": ["15/07/2026"] * 11,
+                "upcoming_induction_session_start_time": ["09:30"] * 11,
+                "upcoming_induction_session_end_time": ["11:00"] * 11,
+            },
+            follow_redirects=False,
+        )
+
+        self.assertEqual(response.status_code, 302)
+        self.assertEqual(StaffMembersSettings.query.count(), 0)
 
     def test_staff_members_settings_reject_invalid_or_incomplete_range(self):
         client = self.client()
