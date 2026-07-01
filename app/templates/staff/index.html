@@ -325,7 +325,7 @@
           <button class="primary-button compact-action" type="submit">Apply</button>
         </form>
         {% if filters.show_archived %}
-          <form method="post" action="{{ url_for('staff.bulk_update_members') }}" data-bulk-stage-form data-bulk-scope="[data-staff-records-table]" data-bulk-empty-message="Please select at least one archived member before deleting." data-confirm-password-submit="This will permanently delete the selected archived members and all their related records. This cannot be undone.">
+          <form method="post" action="{{ url_for('staff.bulk_update_members') }}" data-bulk-stage-form data-bulk-scope="[data-staff-records-table]" data-bulk-empty-message="Please select at least one archived member before deleting." data-confirm-password-submit="This will permanently delete the selected archived members and all their related records. This cannot be undone." data-confirm-password-value="Path1234">
             <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
             <input type="hidden" name="bulk_action" value="permanent_delete">
             <input type="hidden" name="deletion_password" value="">
@@ -506,7 +506,7 @@
           <div class="row-actions">
             <button class="mini-button" type="button" data-open-modal="edit-member-{{ member.id }}">Edit</button>
             {% if filters.show_archived and member.status == 'Archived' %}
-              <form method="post" action="{{ url_for('staff.delete_member', member_id=member.id) }}" data-confirm-password-submit="This will permanently delete {{ member.full_name }} and all related records. This cannot be undone.">
+              <form method="post" action="{{ url_for('staff.delete_member', member_id=member.id) }}" data-confirm-password-submit="This will permanently delete {{ member.full_name }} and all related records. This cannot be undone." data-confirm-password-value="Path1234">
                 <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
                 <input type="hidden" name="deletion_password" value="">
                 <button class="danger-button compact-action" type="submit">Delete</button>

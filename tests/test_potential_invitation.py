@@ -196,6 +196,35 @@ class PotentialInvitationTest(unittest.TestCase):
         self.assertIn("Rejected potential entry permanently deleted.", response.get_data(as_text=True))
         self.assertIsNone(db.session.get(PotentialEntry, entry.id))
 
+    def test_archived_staff_member_delete_requires_path_password(self):
+        member = self.add_member(status="Archived", full_name="Archived Staff", email="archived@example.com")
+        response = self.client().get("/?show_archived=1")
+        html = response.get_data(as_text=True)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn(f"/members/{member.id}/delete", html)
+        self.assertIn('data-confirm-password-value="Path1234"', html)
+
+        response = self.client().post(
+            f"/members/{member.id}/delete",
+            data={"csrf_token": "token", "deletion_password": "7284"},
+            follow_redirects=True,
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("Permanent delete password is not valid.", response.get_data(as_text=True))
+        self.assertIsNotNone(db.session.get(AcademicStaff, member.id))
+
+        response = self.client().post(
+            f"/members/{member.id}/delete",
+            data={"csrf_token": "token", "deletion_password": "Path1234"},
+            follow_redirects=True,
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("Archived member permanently deleted.", response.get_data(as_text=True))
+        self.assertIsNone(db.session.get(AcademicStaff, member.id))
+
     def test_non_rejected_potential_entry_cannot_be_deleted(self):
         entry = self.add_entry(is_rejected=False)
         response = self.client().post(

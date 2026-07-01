@@ -31,6 +31,9 @@ from app.models import (
     ExamSessionLogistics,
     ExamSessionLogisticsControl,
     ExamSessionLogisticsConcept,
+    ExamSessionLogisticsConceptNote,
+    ExamSessionMonthlyCandidateTotal,
+    ExamSessionMonthlyRegistration,
     ExamSessionPackageChecklistItem,
     ExamSessionPackageEvent,
     ExamSessionPackageUnit,
@@ -257,6 +260,38 @@ class ScheduleWorkflowTest(unittest.TestCase):
 
     def test_exam_session_delete_requires_path_password(self):
         client = self.login_client()
+        self.create_supervisor()
+        self.confirm_staffing()
+        db.session.add(ExamSessionJourneyShare(exam_session_id=self.session_record.id, audience="institution", token="journey-token"))
+        db.session.add(ExamSessionStaffingControl(exam_session_id=self.session_record.id, staffing_due_at=date(2026, 6, 10)))
+        db.session.add(ExamSessionLogisticsControl(exam_session_id=self.session_record.id, logistics_due_at=date(2026, 6, 12)))
+        db.session.add(ExamSessionMonthlyRegistration(exam_session_id=self.session_record.id, month=6, module="Speaking", registration_number=12))
+        db.session.add(ExamSessionMonthlyCandidateTotal(exam_session_id=self.session_record.id, month=6, total_candidates=12))
+        logistics_concept = ExamSessionLogisticsConcept(exam_session_id=self.session_record.id, status="Confirmed", provider="Courier", currency="ARS", fee=100)
+        db.session.add(logistics_concept)
+        db.session.flush()
+        db.session.add(ExamSessionLogisticsConceptNote(logistics_concept_id=logistics_concept.id, comment="Ready"))
+        finance, sinapsis, communications = self.mark_session_external_readiness_ready()
+        db.session.add(ExamSessionFinanceEvent(finance_control_id=finance.id, new_status="Cleared"))
+        db.session.add(ExamSessionSinapsisEvent(sinapsis_control_id=sinapsis.id, new_status="Ready"))
+        db.session.add(ExamSessionCommunicationsEvent(communications_control_id=communications.id, new_status="Completed"))
+        package_unit = self.create_package_unit_record(status="Quality checked", expected=12, actual=12)
+        db.session.add(ExamSessionPackageEvent(package_unit_id=package_unit.id, event_type="status", new_status="Quality checked"))
+        incident_flag = self.create_incident_review_flag_record(status="Needs review")
+        impact_review = ExamSessionIncidentImpactReview(
+            incident_id=incident_flag.incident_id,
+            impact_key=incident_flag.impact_key,
+            affected_area=incident_flag.affected_area,
+            status="Review suggested",
+        )
+        db.session.add(impact_review)
+        shipment_bundle = self.create_shipment_bundle_record(status="Ready to dispatch")
+        db.session.commit()
+        logistics_concept_id = logistics_concept.id
+        package_unit_id = package_unit.id
+        incident_flag_id = incident_flag.id
+        shipment_bundle_id = shipment_bundle.id
+
         response = client.post(
             f"/exam-session-planner/sessions/{self.session_record.id}/delete",
             data={"csrf_token": "token", "session_year": "2026", "deletion_password": "7284"},
@@ -276,6 +311,10 @@ class ScheduleWorkflowTest(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertIn("Exam session deleted successfully.", response.get_data(as_text=True))
         self.assertIsNone(db.session.get(ExamSession, self.session_record.id))
+        self.assertIsNone(db.session.get(ExamSessionLogisticsConcept, logistics_concept_id))
+        self.assertIsNone(db.session.get(ExamSessionPackageUnit, package_unit_id))
+        self.assertIsNone(db.session.get(ExamSessionIncidentReviewFlag, incident_flag_id))
+        self.assertEqual(ExamSessionShipmentBundleSession.query.filter_by(bundle_id=shipment_bundle_id).count(), 0)
 
     def create_shipment_bundle_record(self, status="Preparing bundle", dispatch_due_at=None, session_record=None):
         session_record = session_record or self.session_record

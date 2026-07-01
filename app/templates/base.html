@@ -4,7 +4,7 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>{% block title %}Path Examinations Internal App{% endblock %}</title>
-    <link rel="stylesheet" href="{{ url_for('static', filename='css/styles.css', v='20260630-potential-outcomes-01') }}">
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/styles.css', v='20260701-greeting-weight-01') }}">
   </head>
   <body>
     <div class="app-shell">
@@ -16,7 +16,7 @@
         {% set logged_user_label = session.get('user_full_name') or session.get('user_email') or g.user %}
         {% if logged_user_label %}
           <section class="logged-user-card" aria-label="Logged-in user">
-            <span>Hello, {{ logged_user_label }}</span>
+            <span>Hello, {{ logged_user_label }}!</span>
           </section>
         {% endif %}
         <nav>

@@ -1216,7 +1216,7 @@ document.addEventListener("submit", (event) => {
       event.preventDefault();
       return;
     }
-    const expectedPassword = passwordForm.dataset.confirmPasswordValue || "7284";
+    const expectedPassword = passwordForm.dataset.confirmPasswordValue || "Path1234";
     const password = window.prompt("Enter the confirmation password to continue:");
     if (password !== expectedPassword) {
       event.preventDefault();

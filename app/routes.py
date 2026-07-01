@@ -146,7 +146,7 @@ ANNUAL_MEETING_OPTIONS = ["Attended", "Absent"]
 PAGE_SIZE_OPTIONS = ["5", "10", "25", "50", "all"]
 DEFAULT_PAGE_SIZE = "10"
 USER_STATUS_OPTIONS = ["Active", "Inactive"]
-PERMANENT_DELETE_PASSWORD = "7284"
+PERMANENT_DELETE_PASSWORD = "Path1234"
 EXAM_SESSION_DELETE_PASSWORD = "Path1234"
 REJECTED_POTENTIAL_ENTRY_DELETE_PASSWORD = "Path1234"
 MENU_PERMISSION_PATHS = (
@@ -1531,6 +1531,114 @@ def is_valid_exam_session_delete_password():
 
 def is_valid_rejected_potential_entry_delete_password():
     return request.form.get("deletion_password", "").strip() == REJECTED_POTENTIAL_ENTRY_DELETE_PASSWORD
+
+
+def delete_exam_session_dependencies(session_id):
+    ExamSessionSupervisorAssignment.query.filter_by(exam_session_id=session_id).delete(synchronize_session=False)
+    ExamSessionExaminerAssignment.query.filter_by(exam_session_id=session_id).delete(synchronize_session=False)
+    ExamSessionInternAssignment.query.filter_by(exam_session_id=session_id).delete(synchronize_session=False)
+
+    ExamSessionJourneyShare.query.filter_by(exam_session_id=session_id).delete(synchronize_session=False)
+    ExamSessionStaffingControl.query.filter_by(exam_session_id=session_id).delete(synchronize_session=False)
+    ExamSessionLogisticsControl.query.filter_by(exam_session_id=session_id).delete(synchronize_session=False)
+
+    finance_control_ids = [
+        control_id for (control_id,) in ExamSessionFinanceControl.query.with_entities(ExamSessionFinanceControl.id).filter_by(exam_session_id=session_id).all()
+    ]
+    if finance_control_ids:
+        ExamSessionFinanceEvent.query.filter(
+            ExamSessionFinanceEvent.finance_control_id.in_(finance_control_ids)
+        ).delete(synchronize_session=False)
+    ExamSessionFinanceControl.query.filter_by(exam_session_id=session_id).delete(synchronize_session=False)
+
+    sinapsis_control_ids = [
+        control_id for (control_id,) in ExamSessionSinapsisControl.query.with_entities(ExamSessionSinapsisControl.id).filter_by(exam_session_id=session_id).all()
+    ]
+    if sinapsis_control_ids:
+        ExamSessionSinapsisChecklistItem.query.filter(
+            ExamSessionSinapsisChecklistItem.sinapsis_control_id.in_(sinapsis_control_ids)
+        ).delete(synchronize_session=False)
+        ExamSessionSinapsisEvent.query.filter(
+            ExamSessionSinapsisEvent.sinapsis_control_id.in_(sinapsis_control_ids)
+        ).delete(synchronize_session=False)
+    ExamSessionSinapsisControl.query.filter_by(exam_session_id=session_id).delete(synchronize_session=False)
+
+    communications_control_ids = [
+        control_id for (control_id,) in ExamSessionCommunicationsControl.query.with_entities(ExamSessionCommunicationsControl.id).filter_by(exam_session_id=session_id).all()
+    ]
+    if communications_control_ids:
+        ExamSessionCommunicationsChecklistItem.query.filter(
+            ExamSessionCommunicationsChecklistItem.communications_control_id.in_(communications_control_ids)
+        ).delete(synchronize_session=False)
+        ExamSessionCommunicationsEvent.query.filter(
+            ExamSessionCommunicationsEvent.communications_control_id.in_(communications_control_ids)
+        ).delete(synchronize_session=False)
+    ExamSessionCommunicationsControl.query.filter_by(exam_session_id=session_id).delete(synchronize_session=False)
+
+    incident_ids = [
+        incident_id for (incident_id,) in ExamSessionIncident.query.with_entities(ExamSessionIncident.id).filter_by(exam_session_id=session_id).all()
+    ]
+    if incident_ids:
+        impact_review_ids = [
+            review_id for (review_id,) in ExamSessionIncidentImpactReview.query.with_entities(ExamSessionIncidentImpactReview.id).filter(
+                ExamSessionIncidentImpactReview.incident_id.in_(incident_ids)
+            ).all()
+        ]
+        ExamSessionIncidentReviewFlag.query.filter(
+            db.or_(
+                ExamSessionIncidentReviewFlag.exam_session_id == session_id,
+                ExamSessionIncidentReviewFlag.incident_id.in_(incident_ids),
+            )
+        ).delete(synchronize_session=False)
+        if impact_review_ids:
+            ExamSessionIncidentReviewFlag.query.filter(
+                ExamSessionIncidentReviewFlag.impact_review_id.in_(impact_review_ids)
+            ).delete(synchronize_session=False)
+        ExamSessionIncidentImpactReview.query.filter(
+            ExamSessionIncidentImpactReview.incident_id.in_(incident_ids)
+        ).delete(synchronize_session=False)
+        ExamSessionIncidentChecklistItem.query.filter(
+            ExamSessionIncidentChecklistItem.incident_id.in_(incident_ids)
+        ).delete(synchronize_session=False)
+        ExamSessionIncidentEvent.query.filter(
+            ExamSessionIncidentEvent.incident_id.in_(incident_ids)
+        ).delete(synchronize_session=False)
+    else:
+        ExamSessionIncidentReviewFlag.query.filter_by(exam_session_id=session_id).delete(synchronize_session=False)
+    ExamSessionIncident.query.filter_by(exam_session_id=session_id).delete(synchronize_session=False)
+
+    package_unit_ids = [
+        unit_id for (unit_id,) in ExamSessionPackageUnit.query.with_entities(ExamSessionPackageUnit.id).filter_by(exam_session_id=session_id).all()
+    ]
+    if package_unit_ids:
+        ExamSessionPackageEvent.query.filter(
+            ExamSessionPackageEvent.package_unit_id.in_(package_unit_ids)
+        ).delete(synchronize_session=False)
+        ExamSessionPackageChecklistItem.query.filter(
+            ExamSessionPackageChecklistItem.package_unit_id.in_(package_unit_ids)
+        ).delete(synchronize_session=False)
+    ExamSessionPackageChecklistItem.query.filter_by(exam_session_id=session_id).delete(synchronize_session=False)
+    ExamSessionPackageUnit.query.filter_by(exam_session_id=session_id).delete(synchronize_session=False)
+
+    ExamSessionShipmentBundleSession.query.filter_by(exam_session_id=session_id).delete(synchronize_session=False)
+    ExamSessionLogisticsConceptNote.query.filter(
+        ExamSessionLogisticsConceptNote.logistics_concept_id.in_(
+            db.session.query(ExamSessionLogisticsConcept.id).filter_by(exam_session_id=session_id)
+        )
+    ).delete(synchronize_session=False)
+    ExamSessionLogisticsConcept.query.filter_by(exam_session_id=session_id).delete(synchronize_session=False)
+    ExamSessionLogistics.query.filter_by(exam_session_id=session_id).delete(synchronize_session=False)
+    ExamSessionMonthlyRegistration.query.filter_by(exam_session_id=session_id).delete(synchronize_session=False)
+    ExamSessionMonthlyCandidateTotal.query.filter_by(exam_session_id=session_id).delete(synchronize_session=False)
+
+    workflow_ids = [
+        workflow_id for (workflow_id,) in ExamSessionScheduleWorkflow.query.with_entities(ExamSessionScheduleWorkflow.id).filter_by(exam_session_id=session_id).all()
+    ]
+    if workflow_ids:
+        ExamSessionScheduleEvent.query.filter(
+            ExamSessionScheduleEvent.workflow_id.in_(workflow_ids)
+        ).delete(synchronize_session=False)
+    ExamSessionScheduleWorkflow.query.filter_by(exam_session_id=session_id).delete(synchronize_session=False)
 
 
 def delete_archived_member(member):
@@ -13877,28 +13985,7 @@ def delete_exam_session(session_id):
         return redirect(url_for("staff.exam_session_planner", session_year=selected_year))
 
     session_record = ExamSession.query.get_or_404(session_id)
-    ExamSessionSupervisorAssignment.query.filter_by(exam_session_id=session_record.id).delete(synchronize_session=False)
-    ExamSessionExaminerAssignment.query.filter_by(exam_session_id=session_record.id).delete(synchronize_session=False)
-    ExamSessionInternAssignment.query.filter_by(exam_session_id=session_record.id).delete(synchronize_session=False)
-    concept_ids = [
-        concept_id for (concept_id,) in ExamSessionLogisticsConcept.query.with_entities(ExamSessionLogisticsConcept.id).filter_by(exam_session_id=session_record.id).all()
-    ]
-    if concept_ids:
-        ExamSessionLogisticsConceptNote.query.filter(
-            ExamSessionLogisticsConceptNote.logistics_concept_id.in_(concept_ids)
-        ).delete(synchronize_session=False)
-    ExamSessionLogisticsConcept.query.filter_by(exam_session_id=session_record.id).delete(synchronize_session=False)
-    ExamSessionLogistics.query.filter_by(exam_session_id=session_record.id).delete(synchronize_session=False)
-    ExamSessionMonthlyRegistration.query.filter_by(exam_session_id=session_record.id).delete(synchronize_session=False)
-    ExamSessionMonthlyCandidateTotal.query.filter_by(exam_session_id=session_record.id).delete(synchronize_session=False)
-    workflow_ids = [
-        workflow_id for (workflow_id,) in ExamSessionScheduleWorkflow.query.with_entities(ExamSessionScheduleWorkflow.id).filter_by(exam_session_id=session_record.id).all()
-    ]
-    if workflow_ids:
-        ExamSessionScheduleEvent.query.filter(
-            ExamSessionScheduleEvent.workflow_id.in_(workflow_ids)
-        ).delete(synchronize_session=False)
-    ExamSessionScheduleWorkflow.query.filter_by(exam_session_id=session_record.id).delete(synchronize_session=False)
+    delete_exam_session_dependencies(session_record.id)
     db.session.delete(session_record)
     db.session.commit()
     flash("Exam session deleted successfully.", "success")

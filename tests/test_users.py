@@ -266,8 +266,8 @@ class UsersTest(unittest.TestCase):
         body = response.get_data(as_text=True)
 
         self.assertEqual(response.status_code, 200)
-        self.assertIn("Hello, Pablo &lt;Admin&gt;", body)
-        self.assertNotIn("Hello, Pablo <Admin>", body)
+        self.assertIn("Hello, Pablo &lt;Admin&gt;!", body)
+        self.assertNotIn("Hello, Pablo <Admin>!", body)
 
     def test_logged_in_greeting_falls_back_without_empty_values(self):
         client = self.app.test_client()
@@ -281,7 +281,7 @@ class UsersTest(unittest.TestCase):
         body = response.get_data(as_text=True)
 
         self.assertEqual(response.status_code, 200)
-        self.assertIn("Hello, fallback@example.com", body)
+        self.assertIn("Hello, fallback@example.com!", body)
         self.assertNotIn("Hello, None", body)
         self.assertNotIn("Hello, null", body)
         self.assertNotIn("Hello, undefined", body)
