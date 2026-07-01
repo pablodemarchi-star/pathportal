@@ -91,6 +91,8 @@ def create_app():
         SupervisorCertificationRemoteTrainingSelection,
         SupervisorCertificationYear,
         User,
+        UserMenuPermission,
+        VALID_MENU_PERMISSION_KEYS,
     )
     from app.routes import staff_bp
 
@@ -99,8 +101,14 @@ def create_app():
     @app.before_request
     def load_user():
         g.user = session.get("user")
+        g.user_id = session.get("user_id")
         g.user_department = session.get("user_department")
         g.is_admin = session.get("user_department") == "Admin"
+        g.current_user = None
+        if g.user_id:
+            current_user = User.query.get(g.user_id)
+            if current_user and current_user.email == session.get("user_email"):
+                g.current_user = current_user
 
     @app.after_request
     def set_security_headers(response):
@@ -158,8 +166,36 @@ def create_app():
         session.clear()
         return redirect(url_for("login"))
 
+    @app.errorhandler(403)
+    def access_denied(error):
+        message = getattr(error, "description", None) or "Your account does not have permission to perform this action."
+        return render_template(
+            "errors/403.html",
+            message=message,
+            previous_url=request.referrer,
+            current_menu_key="",
+            current_menu_can_view=False,
+            current_menu_can_edit=False,
+            current_user_is_view_only=False,
+        ), 403
+
     with app.app_context():
         db.create_all()
+        app_user_columns = {
+            row[1] for row in db.session.execute(text("PRAGMA table_info(app_user)"))
+        }
+        if app_user_columns and "is_superadmin" not in app_user_columns:
+            db.session.execute(text("ALTER TABLE app_user ADD COLUMN is_superadmin BOOLEAN NOT NULL DEFAULT 0"))
+            db.session.commit()
+        if app_user_columns and "can_only_be_edited_by_superadmin" not in app_user_columns:
+            db.session.execute(text("ALTER TABLE app_user ADD COLUMN can_only_be_edited_by_superadmin BOOLEAN NOT NULL DEFAULT 0"))
+            db.session.commit()
+        user_menu_permission_columns = {
+            row[1] for row in db.session.execute(text("PRAGMA table_info(user_menu_permission)"))
+        }
+        if user_menu_permission_columns and "can_manage_permissions" not in user_menu_permission_columns:
+            db.session.execute(text("ALTER TABLE user_menu_permission ADD COLUMN can_manage_permissions BOOLEAN NOT NULL DEFAULT 0"))
+            db.session.commit()
         fee_columns = {
             row[1] for row in db.session.execute(text("PRAGMA table_info(fee)"))
         }
@@ -616,6 +652,44 @@ def create_app():
             for selection in legacy_remote_training:
                 selection.status = "Pending"
             db.session.commit()
+        for user in User.query.all():
+            existing_permission_keys = {permission.menu_key for permission in user.menu_permissions}
+            for menu_key in set(VALID_MENU_PERMISSION_KEYS) - existing_permission_keys:
+                db.session.add(
+                    UserMenuPermission(
+                        user_id=user.id,
+                        menu_key=menu_key,
+                        can_view=True,
+                        can_edit=True,
+                    )
+                )
+        db.session.flush()
+        users_edit_user_ids = {
+            permission.user_id
+            for permission in UserMenuPermission.query.filter_by(menu_key="users", can_edit=True).all()
+        }
+        if users_edit_user_ids:
+            UserMenuPermission.query.filter(
+                UserMenuPermission.user_id.in_(users_edit_user_ids)
+            ).update(
+                {UserMenuPermission.can_manage_permissions: True},
+                synchronize_session=False,
+            )
+        active_superadmins = User.query.filter_by(is_superadmin=True, is_active=True).order_by(User.id.asc()).all()
+        if active_superadmins:
+            primary_superadmin = active_superadmins[0]
+            if len(active_superadmins) > 1:
+                for extra_superadmin in active_superadmins[1:]:
+                    extra_superadmin.is_superadmin = False
+        else:
+            primary_superadmin = (
+                User.query.filter_by(is_active=True, department="Admin").order_by(User.id.asc()).first()
+                or User.query.filter_by(is_active=True).order_by(User.id.asc()).first()
+                or User.query.order_by(User.id.asc()).first()
+            )
+            if primary_superadmin:
+                primary_superadmin.is_superadmin = True
+        db.session.commit()
     return app
 
 

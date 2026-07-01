@@ -2,10 +2,26 @@ import json
 from datetime import datetime, timezone
 
 from app import db
+from sqlalchemy import event
 from werkzeug.security import check_password_hash, generate_password_hash
 
 
 USER_DEPARTMENTS = ("Admin", "Admissions", "Finance", "Logistics", "Management")
+MENU_PERMISSIONS = (
+    ("staff_members", "Staff members"),
+    ("examiner_certification", "Examiner certification"),
+    ("supervisor_certification", "Supervisor certification"),
+    ("internship_stages", "Internship stages"),
+    ("exam_session_planner", "Exam session planner"),
+    ("pre_session_control_tower", "Pre-session Control Tower"),
+    ("monthly_exam_session_registrations", "Monthly exam session registrations"),
+    ("staff_payments", "Staff payments"),
+    ("fees", "Fees"),
+    ("providers", "Providers"),
+    ("users", "Users"),
+)
+VALID_MENU_PERMISSION_KEYS = tuple(key for key, _label in MENU_PERMISSIONS)
+VALID_MENU_PERMISSION_KEY_SQL = ", ".join(f"'{key}'" for key in VALID_MENU_PERMISSION_KEYS)
 
 
 class AcademicStaff(db.Model):
@@ -73,6 +89,8 @@ class User(db.Model):
     department = db.Column(db.String(40), nullable=False, index=True)
     password_hash = db.Column(db.String(255), nullable=False)
     is_active = db.Column(db.Boolean, nullable=False, default=True, index=True)
+    is_superadmin = db.Column(db.Boolean, nullable=False, default=False, index=True)
+    can_only_be_edited_by_superadmin = db.Column(db.Boolean, nullable=False, default=False, index=True)
     created_at = db.Column(db.DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))
     updated_at = db.Column(
         db.DateTime(timezone=True),
@@ -86,6 +104,39 @@ class User(db.Model):
 
     def check_password(self, password):
         return check_password_hash(self.password_hash, password)
+
+
+class UserMenuPermission(db.Model):
+    __table_args__ = (
+        db.UniqueConstraint("user_id", "menu_key", name="uq_user_menu_permission_user_menu"),
+        db.CheckConstraint(f"menu_key IN ({VALID_MENU_PERMISSION_KEY_SQL})", name="ck_user_menu_permission_menu_key"),
+        db.CheckConstraint("(can_edit = 0 OR can_view = 1)", name="ck_user_menu_permission_edit_implies_view"),
+    )
+
+    id = db.Column(db.Integer, primary_key=True)
+    user_id = db.Column(db.Integer, db.ForeignKey("app_user.id"), nullable=False, index=True)
+    menu_key = db.Column(db.String(80), nullable=False, index=True)
+    can_view = db.Column(db.Boolean, nullable=False, default=False)
+    can_edit = db.Column(db.Boolean, nullable=False, default=False)
+    can_manage_permissions = db.Column(db.Boolean, nullable=False, default=False)
+    created_at = db.Column(db.DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))
+    updated_at = db.Column(
+        db.DateTime(timezone=True),
+        nullable=False,
+        default=lambda: datetime.now(timezone.utc),
+        onupdate=lambda: datetime.now(timezone.utc),
+    )
+
+    user = db.relationship("User", backref=db.backref("menu_permissions", lazy=True, cascade="all, delete-orphan"))
+
+
+def normalize_user_menu_permission(_mapper, _connection, target):
+    if target.can_edit:
+        target.can_view = True
+
+
+event.listen(UserMenuPermission, "before_insert", normalize_user_menu_permission)
+event.listen(UserMenuPermission, "before_update", normalize_user_menu_permission)
 
 
 class Fee(db.Model):

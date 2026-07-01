@@ -1,0 +1,20 @@
+{% extends "base.html" %}
+
+{% block title %}Access denied | Path Examinations{% endblock %}
+
+{% block content %}
+<section class="access-denied-page" aria-labelledby="access-denied-title">
+  <div class="access-denied-panel">
+    <p class="eyebrow">Access control</p>
+    <h1 id="access-denied-title">Access denied</h1>
+    <p>{{ message or 'Your account does not have permission to perform this action.' }}</p>
+    <div class="access-denied-actions">
+      {% if previous_url %}
+        <a class="primary-button link-button" href="{{ previous_url }}">Back to previous page</a>
+      {% else %}
+        <button class="primary-button" type="button" onclick="window.history.back()">Go back</button>
+      {% endif %}
+    </div>
+  </div>
+</section>
+{% endblock %}

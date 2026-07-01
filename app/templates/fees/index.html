@@ -78,9 +78,11 @@
     <h1>Fees</h1>
     <p>Create and manage fee values by currency, unit of measure and optional role.</p>
   </div>
+  {% if user_can_edit('fees') %}
   <div class="page-actions">
     <button class="primary-button" type="button" data-open-modal="create-fee">Create new fee</button>
   </div>
+  {% endif %}
 </header>
 
 <section class="table-wrap" aria-label="Fees list">
@@ -127,8 +129,13 @@
           </td>
           <td class="datetime-cell">{{ fee.created_on|localdt }} h</td>
           <td class="datetime-cell">{{ fee.updated_on|localdt }} h</td>
-          <td><button class="mini-button" type="button" data-open-modal="edit-fee-{{ fee.id }}">Edit</button></td>
-          <td><button class="danger-button compact-action" type="button" data-open-modal="delete-fee-{{ fee.id }}">Delete</button></td>
+          {% if user_can_edit('fees') %}
+            <td><button class="mini-button" type="button" data-open-modal="edit-fee-{{ fee.id }}">Edit</button></td>
+            <td><button class="danger-button compact-action" type="button" data-open-modal="delete-fee-{{ fee.id }}">Delete</button></td>
+          {% else %}
+            <td><span class="hint">View only</span></td>
+            <td><span class="hint">View only</span></td>
+          {% endif %}
         </tr>
       {% else %}
         <tr>
@@ -141,40 +148,44 @@
 
 {% include "_pagination.html" %}
 
-<div class="modal" id="create-fee" aria-hidden="true">
-  <div class="modal-panel large">
-    <div class="modal-header">
-      <h2>Create new fee</h2>
-      <button class="icon-button" type="button" data-close-modal>&times;</button>
-    </div>
-    {{ fee_form(url_for('staff.create_fee'), 'Create', none, roles, currency_options, unit_options, valid_through_months, csrf_token) }}
-  </div>
-</div>
-
-{% for fee in fees %}
-  <div class="modal" id="edit-fee-{{ fee.id }}" aria-hidden="true">
+{% if user_can_edit('fees') %}
+  <div class="modal" id="create-fee" aria-hidden="true">
     <div class="modal-panel large">
       <div class="modal-header">
-        <h2>Edit fee</h2>
+        <h2>Create new fee</h2>
         <button class="icon-button" type="button" data-close-modal>&times;</button>
       </div>
-      {{ fee_form(url_for('staff.update_fee', fee_id=fee.id), 'Save changes', fee, roles, currency_options, unit_options, valid_through_months, csrf_token) }}
+      {{ fee_form(url_for('staff.create_fee'), 'Create', none, roles, currency_options, unit_options, valid_through_months, csrf_token) }}
     </div>
   </div>
+{% endif %}
 
-  <div class="modal" id="delete-fee-{{ fee.id }}" aria-hidden="true">
-    <div class="modal-panel confirm-panel">
-      <div class="modal-header">
-        <h2>Delete fee</h2>
-        <button class="icon-button" type="button" data-close-modal>&times;</button>
+{% if user_can_edit('fees') %}
+  {% for fee in fees %}
+    <div class="modal" id="edit-fee-{{ fee.id }}" aria-hidden="true">
+      <div class="modal-panel large">
+        <div class="modal-header">
+          <h2>Edit fee</h2>
+          <button class="icon-button" type="button" data-close-modal>&times;</button>
+        </div>
+        {{ fee_form(url_for('staff.update_fee', fee_id=fee.id), 'Save changes', fee, roles, currency_options, unit_options, valid_through_months, csrf_token) }}
       </div>
-      <p>Are you sure you want to delete this fee? This action cannot be undone.</p>
-      <form method="post" action="{{ url_for('staff.delete_fee', fee_id=fee.id) }}" class="form-actions">
-        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-        <button class="secondary-button" type="button" data-close-modal>Cancel</button>
-        <button class="danger-button" type="submit">Delete</button>
-      </form>
     </div>
-  </div>
-{% endfor %}
+
+    <div class="modal" id="delete-fee-{{ fee.id }}" aria-hidden="true">
+      <div class="modal-panel confirm-panel">
+        <div class="modal-header">
+          <h2>Delete fee</h2>
+          <button class="icon-button" type="button" data-close-modal>&times;</button>
+        </div>
+        <p>Are you sure you want to delete this fee? This action cannot be undone.</p>
+        <form method="post" action="{{ url_for('staff.delete_fee', fee_id=fee.id) }}" class="form-actions">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+          <button class="secondary-button" type="button" data-close-modal>Cancel</button>
+          <button class="danger-button" type="submit">Delete</button>
+        </form>
+      </div>
+    </div>
+  {% endfor %}
+{% endif %}
 {% endblock %}

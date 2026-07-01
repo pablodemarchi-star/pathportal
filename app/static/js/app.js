@@ -6489,3 +6489,104 @@ document.addEventListener("click", (event) => {
   if (!closeDetailsButton) return;
   closeDetailsButton.closest("details")?.removeAttribute("open");
 });
+
+document.addEventListener("change", (event) => {
+  const editCheckbox = event.target.closest?.("[data-permission-edit]");
+  if (editCheckbox) {
+    const menuKey = editCheckbox.dataset.permissionEdit;
+    const form = editCheckbox.closest("form") || document;
+    const viewCheckbox = form.querySelector(`[data-permission-view="${CSS.escape(menuKey)}"]`);
+    if (viewCheckbox && editCheckbox.checked) viewCheckbox.checked = true;
+    if (menuKey === "users") updatePermissionManagementScope(form);
+    return;
+  }
+  const viewCheckbox = event.target.closest?.("[data-permission-view]");
+  if (!viewCheckbox) return;
+  const menuKey = viewCheckbox.dataset.permissionView;
+  const form = viewCheckbox.closest("form") || document;
+  const relatedEditCheckbox = form.querySelector(`[data-permission-edit="${CSS.escape(menuKey)}"]`);
+  if (relatedEditCheckbox && !viewCheckbox.checked) relatedEditCheckbox.checked = false;
+  if (menuKey === "users") updatePermissionManagementScope(form);
+});
+
+const updatePermissionManagementScope = (form) => {
+  if (!form) return;
+  const scopeSection = form.querySelector("[data-permission-management-scope]");
+  if (!scopeSection) return;
+  const usersEditCheckbox = form.querySelector("[data-permission-edit='users']");
+  const shouldShow = Boolean(usersEditCheckbox?.checked);
+  const isReadOnly = scopeSection.dataset.permissionReadOnly === "true";
+  scopeSection.hidden = !shouldShow;
+  scopeSection.querySelectorAll("input, select, textarea, button").forEach((control) => {
+    control.disabled = isReadOnly || !shouldShow;
+  });
+};
+
+document.querySelectorAll("form").forEach(updatePermissionManagementScope);
+
+const applyViewOnlyMode = () => {
+  const main = document.querySelector("main[data-current-menu-can-edit='false']");
+  if (!main) return;
+  const viewOnlyTitle = "Edit permission required";
+  const mutatingButtonPattern = /^(new|add|create|edit|save|save and close|delete|remove|archive|unarchive|reset|import|apply|confirm|complete|mark|generate|regenerate|disable|enable|duplicate|restore|send email|copy|ok)$/i;
+  const mutatingTargetPattern = /(^|[-_])(create|edit|delete|archive|reset|import|confirm|generate|regenerate|disable|enable|copy|email|journey|payment|invoice|status|mark)([-_]|$)/i;
+  const disableControl = (element) => {
+    if (!element || element.dataset.viewOnlyAllowed === "true") return;
+    element.classList.add("view-only-disabled");
+    element.setAttribute("aria-disabled", "true");
+    element.setAttribute("title", viewOnlyTitle);
+    if ("disabled" in element) element.disabled = true;
+    if (element.tagName === "A") element.setAttribute("tabindex", "-1");
+  };
+
+  main.querySelectorAll(".modal-panel").forEach((panel) => {
+    if (panel.querySelector(".modal-view-only-banner")) return;
+    const banner = document.createElement("section");
+    banner.className = "modal-view-only-banner";
+    banner.innerHTML = "<h3>View-only access</h3><p>Your account can view this information, but does not have permission to edit it.</p>";
+    const header = panel.querySelector(".modal-header");
+    if (header) header.insertAdjacentElement("afterend", banner);
+    else panel.prepend(banner);
+  });
+
+  main.querySelectorAll("form[method='post' i]").forEach((form) => {
+    form.querySelectorAll("input:not([type='hidden']), select, textarea, button, [role='button']").forEach(disableControl);
+    form.addEventListener("submit", (event) => {
+      event.preventDefault();
+      event.stopImmediatePropagation();
+    }, true);
+  });
+
+  main.querySelectorAll(".modal input:not([type='hidden']), .modal select, .modal textarea").forEach((field) => {
+    field.disabled = true;
+    field.classList.add("view-only-disabled");
+  });
+
+  main.querySelectorAll("button, a, summary, [role='button']").forEach((element) => {
+    const text = (element.textContent || element.getAttribute("aria-label") || element.getAttribute("title") || "").trim();
+    const target = [
+      element.dataset.openModal,
+      element.dataset.copyText,
+      element.dataset.copyInvitationEmail,
+      element.getAttribute("href"),
+      element.getAttribute("data-action"),
+      element.className || "",
+    ].filter(Boolean).join(" ");
+    if (
+      element.matches(".copy-icon-button, [data-copy-text], [data-copy-invitation-email], [data-staff-address-copy], [data-copy-journey-link], [data-bulk-email-link], [data-acceptance-draft-save], [data-delete-logistics-concept], [data-remove-supervisor-row], [data-add-time-range], [data-remove-time-range], [data-disable-km], [data-edit-assignment-fees], [data-clear-selection], [data-provider-type-create-form] button") ||
+      mutatingButtonPattern.test(text) ||
+      mutatingTargetPattern.test(target)
+    ) {
+      disableControl(element);
+    }
+  });
+};
+
+applyViewOnlyMode();
+
+document.addEventListener("click", (event) => {
+  const disabledViewOnlyControl = event.target.closest?.(".view-only-disabled[aria-disabled='true']");
+  if (!disabledViewOnlyControl) return;
+  event.preventDefault();
+  event.stopImmediatePropagation();
+}, true);

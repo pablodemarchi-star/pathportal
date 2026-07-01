@@ -2,7 +2,101 @@
 
 {% block title %}Users | Path Examinations{% endblock %}
 
-{% macro user_form(action, submit_label, user, departments, status_options, csrf_token, include_password) %}
+{% macro permissions_matrix(permission_rows, permissions_map, permissions_read_only=false) %}
+<section class="permissions-section" aria-label="Menu permissions">
+  <h3>Menu permissions</h3>
+  <div class="permissions-table-wrap">
+    <table class="permissions-table">
+      <thead>
+        <tr>
+          <th>Menu</th>
+          <th>View information</th>
+          <th>Edit information</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for menu_key, menu_label in permission_rows %}
+          {% set permission = permissions_map[menu_key] %}
+          <tr>
+            <td>{{ menu_label }}</td>
+            <td>
+              <input
+                type="checkbox"
+                name="permissions[{{ menu_key }}][view]"
+                value="1"
+                data-permission-view="{{ menu_key }}"
+                {% if permission.can_view %}checked{% endif %}
+                {% if permissions_read_only %}disabled{% endif %}
+              >
+            </td>
+            <td>
+              <input
+                type="checkbox"
+                name="permissions[{{ menu_key }}][edit]"
+                value="1"
+                data-permission-edit="{{ menu_key }}"
+                {% if permission.can_edit %}checked{% endif %}
+                {% if permissions_read_only %}disabled{% endif %}
+              >
+            </td>
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    {% if not permission_rows %}
+      <p class="empty-state permissions-empty-state">No menu permissions are available in your permission management scope.</p>
+    {% endif %}
+  </div>
+</section>
+{% endmacro %}
+
+{% macro permission_scope_matrix(permission_rows, permissions_map, permissions_read_only=false) %}
+{% set users_edit_enabled = permissions_map.users.can_edit %}
+<section
+  class="permissions-section"
+  aria-label="Permission management scope"
+  data-permission-management-scope
+  data-permission-read-only="{{ 'true' if permissions_read_only else 'false' }}"
+  {% if not users_edit_enabled %}hidden{% endif %}
+>
+  <h3>Permission management scope</h3>
+  <p class="hint permissions-help">Choose which menu permissions this user is allowed to manage when editing users.</p>
+  <div class="permissions-table-wrap">
+    <table class="permissions-table">
+      <thead>
+        <tr>
+          <th>Menu</th>
+          <th>Can manage permissions</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for menu_key, menu_label in permission_rows %}
+          {% set permission = permissions_map[menu_key] %}
+          <tr>
+            <td>{{ menu_label }}</td>
+            <td>
+              <input
+                type="checkbox"
+                name="scope[{{ menu_key }}][manage]"
+                value="1"
+                data-permission-scope="{{ menu_key }}"
+                {% if permission.can_manage_permissions %}checked{% endif %}
+                {% if not users_edit_enabled or permissions_read_only %}disabled{% endif %}
+              >
+            </td>
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    {% if not permission_rows %}
+      <p class="empty-state permissions-empty-state">You cannot manage permissions for any menu yet.</p>
+    {% endif %}
+  </div>
+</section>
+{% endmacro %}
+
+{% macro user_form(action, submit_label, user, departments, status_options, csrf_token, include_password, permission_rows, permissions_map, current_user_is_superadmin=false, current_user_id=none) %}
+{% set is_self_user = user and current_user_id and user.id == current_user_id %}
 <form method="post" action="{{ action }}" class="form-grid">
   <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
   <label>
@@ -39,6 +133,28 @@
   {% if user %}
     <p class="hint">Leave Reset password empty to keep the current password.</p>
   {% endif %}
+  {% if current_user_is_superadmin %}
+    <label class="checkbox-field full-span">
+      {% if is_self_user %}
+        <input type="checkbox" checked disabled>
+      {% else %}
+        <input name="is_superadmin" type="checkbox" value="1" {% if user and user.is_superadmin %}checked{% endif %}>
+      {% endif %}
+      <span>Superadmin</span>
+    </label>
+    <label class="checkbox-field full-span">
+      <input
+        name="can_only_be_edited_by_superadmin"
+        type="checkbox"
+        value="1"
+        {% if user and user.can_only_be_edited_by_superadmin %}checked{% endif %}
+        {% if is_self_user %}disabled{% endif %}
+      >
+      <span>Can only be edited by superadmin</span>
+    </label>
+  {% endif %}
+  {{ permissions_matrix(permission_rows, permissions_map, is_self_user) }}
+  {{ permission_scope_matrix(permission_rows, permissions_map, is_self_user) }}
   <div class="form-actions">
     <button class="secondary-button" type="button" data-close-modal>Cancel</button>
     <button class="primary-button" type="submit">{{ submit_label }}</button>
@@ -52,8 +168,13 @@
     <p class="eyebrow">Users</p>
     <h1>Users</h1>
     <p>Manage internal users who can access the platform.</p>
+    {% if user_can_edit('users') and permission_rows|length < full_permission_row_count %}
+      <p class="hint">You can only manage permissions for the menus assigned to your permission management scope.</p>
+    {% endif %}
   </div>
-  <button class="primary-button" type="button" data-open-modal="create-user">New user</button>
+  {% if user_can_edit('users') %}
+    <button class="primary-button" type="button" data-open-modal="create-user">New user</button>
+  {% endif %}
 </header>
 
 <section class="table-wrap users-table-wrap" aria-label="Users list">
@@ -76,7 +197,13 @@
           <td><span class="responsible-chip users-department-chip">{{ user.department|upper }}</span></td>
           <td><span class="badge status-{{ user_status_label(user)|lower }}">{{ user_status_label(user) }}</span></td>
           <td>{{ local_datetime(user.created_at) }}</td>
-          <td class="users-actions-cell"><button class="mini-button" type="button" data-open-modal="edit-user-{{ user.id }}">Edit user</button></td>
+          <td class="users-actions-cell">
+            {% if user_can_edit('users') and can_edit_user_record(user) %}
+              <button class="mini-button" type="button" data-open-modal="edit-user-{{ user.id }}">Edit user</button>
+            {% else %}
+              <span class="hint">View only</span>
+            {% endif %}
+          </td>
         </tr>
       {% else %}
         <tr>
@@ -87,25 +214,31 @@
   </table>
 </section>
 
-<div class="modal" id="create-user" aria-hidden="true">
-  <div class="modal-panel large">
-    <div class="modal-header">
-      <h2>New user</h2>
-      <button class="icon-button" type="button" data-close-modal>&times;</button>
-    </div>
-    {{ user_form(url_for('staff.create_user'), 'Create user', none, departments, status_options, csrf_token, true) }}
-  </div>
-</div>
-
-{% for user in users %}
-  <div class="modal" id="edit-user-{{ user.id }}" aria-hidden="true">
+{% if user_can_edit('users') %}
+  <div class="modal" id="create-user" aria-hidden="true">
     <div class="modal-panel large">
       <div class="modal-header">
-        <h2>Edit user</h2>
+        <h2>New user</h2>
         <button class="icon-button" type="button" data-close-modal>&times;</button>
       </div>
-      {{ user_form(url_for('staff.update_user', user_id=user.id), 'Save changes', user, departments, status_options, csrf_token, false) }}
+      {{ user_form(url_for('staff.create_user'), 'Create user', none, departments, status_options, csrf_token, true, permission_rows, empty_permission_map, current_user_is_superadmin, current_user_id) }}
     </div>
   </div>
-{% endfor %}
+{% endif %}
+
+{% if user_can_edit('users') %}
+  {% for user in users %}
+    {% if can_edit_user_record(user) %}
+      <div class="modal" id="edit-user-{{ user.id }}" aria-hidden="true">
+        <div class="modal-panel large">
+          <div class="modal-header">
+            <h2>Edit user</h2>
+            <button class="icon-button" type="button" data-close-modal>&times;</button>
+          </div>
+          {{ user_form(url_for('staff.update_user', user_id=user.id), 'Save changes', user, departments, status_options, csrf_token, false, permission_rows_for_user(user), user_permission_map(user), current_user_is_superadmin, current_user_id) }}
+        </div>
+      </div>
+    {% endif %}
+  {% endfor %}
+{% endif %}
 {% endblock %}

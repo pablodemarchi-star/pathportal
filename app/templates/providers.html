@@ -20,8 +20,10 @@
             {{ provider_type_option(provider_type, provider.provider_type_id if provider else none) }}
           {% endfor %}
         </select>
-        <button class="mini-button provider-type-action" type="button" data-open-modal="create-provider-type" aria-label="Create provider type">+</button>
-        <button class="mini-button provider-type-action" type="button" data-open-modal="manage-provider-types" aria-label="Manage provider types">−</button>
+        {% if user_can_edit('providers') %}
+          <button class="mini-button provider-type-action" type="button" data-open-modal="create-provider-type" aria-label="Create provider type">+</button>
+          <button class="mini-button provider-type-action" type="button" data-open-modal="manage-provider-types" aria-label="Manage provider types">−</button>
+        {% endif %}
       </div>
       <span class="provider-selected-type-preview provider-type-chip provider-type-0" data-provider-type-preview aria-hidden="true">&nbsp;</span>
     </label>
@@ -86,12 +88,17 @@
     <td>
       <div class="provider-rating" role="radiogroup" aria-label="Experience rating" data-provider-rating data-provider-id="{{ provider.id }}" data-rating="{{ provider.experience_rating }}" data-action="{{ url_for('staff.update_provider_experience', provider_id=provider.id) }}">
         {% for rating in range(1, 6) %}
-          <button type="button" class="provider-star" data-rating-value="{{ rating }}" aria-label="{{ rating }} star{{ 's' if rating != 1 else '' }}" aria-pressed="{{ 'true' if provider.experience_rating == rating else 'false' }}">{{ '★' if rating <= provider.experience_rating else '☆' }}</button>
+          <button type="button" class="provider-star" data-rating-value="{{ rating }}" aria-label="{{ rating }} star{{ 's' if rating != 1 else '' }}" aria-pressed="{{ 'true' if provider.experience_rating == rating else 'false' }}" {% if not user_can_edit('providers') %}disabled{% endif %}>{{ '★' if rating <= provider.experience_rating else '☆' }}</button>
         {% endfor %}
       </div>
     </td>
-    <td><button class="mini-button" type="button" data-open-modal="edit-provider-{{ provider.id }}">Edit</button></td>
-    <td><button class="danger-button compact-action" type="button" data-open-modal="delete-provider-{{ provider.id }}">Delete</button></td>
+    {% if user_can_edit('providers') %}
+      <td><button class="mini-button" type="button" data-open-modal="edit-provider-{{ provider.id }}">Edit</button></td>
+      <td><button class="danger-button compact-action" type="button" data-open-modal="delete-provider-{{ provider.id }}">Delete</button></td>
+    {% else %}
+      <td><span class="hint">View only</span></td>
+      <td><span class="hint">View only</span></td>
+    {% endif %}
   </tr>
 {%- endmacro %}
 
@@ -104,9 +111,11 @@
     <h1>Providers</h1>
     <p>Create and manage providers used in exam session logistics.</p>
   </div>
+  {% if user_can_edit('providers') %}
   <div class="page-actions">
     <button class="primary-button" type="button" data-open-modal="create-provider">Create new provider</button>
   </div>
+  {% endif %}
 </header>
 
 <div class="flash-stack providers-feedback" data-provider-feedback hidden></div>
@@ -136,57 +145,64 @@
   </table>
 </section>
 
-<div class="modal" id="create-provider" aria-hidden="true">
-  <div class="modal-panel large">
-    <div class="modal-header">
-      <h2>Create new provider</h2>
-      <button class="icon-button" type="button" data-close-modal>&times;</button>
-    </div>
-    {{ provider_form(url_for('staff.create_provider'), 'Create', none, provider_types, csrf_token) }}
-  </div>
-</div>
-
-<div class="modal" id="create-provider-type" aria-hidden="true">
-  <div class="modal-panel confirm-panel">
-    <div class="modal-header">
-      <h2>Create provider type</h2>
-      <button class="icon-button" type="button" data-close-modal>&times;</button>
-    </div>
-    <form method="post" action="{{ url_for('staff.create_provider_type') }}" class="form-grid one-column" data-provider-type-create-form>
-      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-      <label>
-        Type name
-        <input name="type_name" maxlength="120" required>
-      </label>
-      <div class="form-actions">
-        <button class="secondary-button" type="button" data-close-modal>Cancel</button>
-        <button class="primary-button" type="submit">Create type</button>
+{% if user_can_edit('providers') %}
+  <div class="modal" id="create-provider" aria-hidden="true">
+    <div class="modal-panel large">
+      <div class="modal-header">
+        <h2>Create new provider</h2>
+        <button class="icon-button" type="button" data-close-modal>&times;</button>
       </div>
-    </form>
-  </div>
-</div>
-
-<div class="modal" id="manage-provider-types" aria-hidden="true">
-  <div class="modal-panel">
-    <div class="modal-header">
-      <h2>Manage provider types</h2>
-      <button class="icon-button" type="button" data-close-modal>&times;</button>
+      {{ provider_form(url_for('staff.create_provider'), 'Create', none, provider_types, csrf_token) }}
     </div>
-    <div class="provider-type-list" data-provider-type-list>
-      {% for provider_type in provider_types %}
-        <div class="provider-type-item" data-provider-type-item data-type-id="{{ provider_type.id }}" data-is-system="{{ 'true' if provider_type.is_system else 'false' }}">
-          {{ provider_type_chip(provider_type) }}
-          {% if provider_type.is_system %}
-            <span class="muted">System type</span>
-          {% else %}
-            <button class="danger-button compact-action" type="button" data-delete-provider-type data-action="{{ url_for('staff.delete_provider_type', type_id=provider_type.id) }}">Delete</button>
-          {% endif %}
+  </div>
+{% endif %}
+
+{% if user_can_edit('providers') %}
+  <div class="modal" id="create-provider-type" aria-hidden="true">
+    <div class="modal-panel confirm-panel">
+      <div class="modal-header">
+        <h2>Create provider type</h2>
+        <button class="icon-button" type="button" data-close-modal>&times;</button>
+      </div>
+      <form method="post" action="{{ url_for('staff.create_provider_type') }}" class="form-grid one-column" data-provider-type-create-form>
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <label>
+          Type name
+          <input name="type_name" maxlength="120" required>
+        </label>
+        <div class="form-actions">
+          <button class="secondary-button" type="button" data-close-modal>Cancel</button>
+          <button class="primary-button" type="submit">Create type</button>
         </div>
-      {% endfor %}
+      </form>
     </div>
   </div>
-</div>
+{% endif %}
 
+{% if user_can_edit('providers') %}
+  <div class="modal" id="manage-provider-types" aria-hidden="true">
+    <div class="modal-panel">
+      <div class="modal-header">
+        <h2>Manage provider types</h2>
+        <button class="icon-button" type="button" data-close-modal>&times;</button>
+      </div>
+      <div class="provider-type-list" data-provider-type-list>
+        {% for provider_type in provider_types %}
+          <div class="provider-type-item" data-provider-type-item data-type-id="{{ provider_type.id }}" data-is-system="{{ 'true' if provider_type.is_system else 'false' }}">
+            {{ provider_type_chip(provider_type) }}
+            {% if provider_type.is_system %}
+              <span class="muted">System type</span>
+            {% else %}
+              <button class="danger-button compact-action" type="button" data-delete-provider-type data-action="{{ url_for('staff.delete_provider_type', type_id=provider_type.id) }}">Delete</button>
+            {% endif %}
+          </div>
+        {% endfor %}
+      </div>
+    </div>
+  </div>
+{% endif %}
+
+{% if user_can_edit('providers') %}
 {% for provider in providers %}
   <div class="modal" id="edit-provider-{{ provider.id }}" aria-hidden="true" data-provider-edit-modal data-provider-id="{{ provider.id }}">
     <div class="modal-panel large">
@@ -213,25 +229,31 @@
     </div>
   </div>
 
+{% endfor %}
+{% endif %}
+
+{% for provider in providers %}
   <div class="modal" id="provider-history-{{ provider.id }}" aria-hidden="true" data-provider-history-modal data-provider-id="{{ provider.id }}">
     <div class="modal-panel">
       <div class="modal-header">
         <h2>History</h2>
         <button class="icon-button" type="button" data-close-modal>&times;</button>
       </div>
-      <details class="history-add-panel">
-        <summary class="secondary-button compact-action">Add note</summary>
-        <form method="post" action="{{ url_for('staff.add_provider_note', provider_id=provider.id) }}" class="form-grid one-column history-add-form" data-provider-history-form>
-          <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-          <label>
-            New note
-            <textarea name="interview" rows="4" maxlength="4000" placeholder="Add a new history note" required></textarea>
-          </label>
-          <div class="form-actions">
-            <button class="primary-button" type="submit">Add note</button>
-          </div>
-        </form>
-      </details>
+      {% if user_can_edit('providers') %}
+        <details class="history-add-panel">
+          <summary class="secondary-button compact-action">Add note</summary>
+          <form method="post" action="{{ url_for('staff.add_provider_note', provider_id=provider.id) }}" class="form-grid one-column history-add-form" data-provider-history-form>
+            <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+            <label>
+              New note
+              <textarea name="interview" rows="4" maxlength="4000" placeholder="Add a new history note" required></textarea>
+            </label>
+            <div class="form-actions">
+              <button class="primary-button" type="submit">Add note</button>
+            </div>
+          </form>
+        </details>
+      {% endif %}
       {% set entries = provider_history.get(provider.id, []) %}
       <div class="history-list" data-provider-history-list {% if not entries %}hidden{% endif %}>
         {% for entry in entries|reverse %}

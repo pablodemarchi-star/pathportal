@@ -8,7 +8,7 @@ import calendar
 from io import BytesIO
 from urllib.parse import parse_qs, quote, urlparse
 
-from flask import Blueprint, Response, abort, current_app, flash, has_request_context, jsonify, redirect, render_template, request, session, url_for
+from flask import Blueprint, Response, abort, current_app, flash, g, has_request_context, jsonify, redirect, render_template, request, session, url_for
 from openpyxl import load_workbook
 from openpyxl import Workbook
 from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
@@ -83,7 +83,10 @@ from app.models import (
     SupervisorCertificationRemoteTrainingSelection,
     SupervisorCertificationYear,
     User,
+    UserMenuPermission,
+    MENU_PERMISSIONS,
     USER_DEPARTMENTS,
+    VALID_MENU_PERMISSION_KEYS,
 )
 from app.validators import (
     HAS_CAR,
@@ -144,6 +147,19 @@ PAGE_SIZE_OPTIONS = ["5", "10", "25", "50", "all"]
 DEFAULT_PAGE_SIZE = "10"
 USER_STATUS_OPTIONS = ["Active", "Inactive"]
 PERMANENT_DELETE_PASSWORD = "7284"
+MENU_PERMISSION_PATHS = (
+    ("staff_members", ("/", "/members", "/potential-entries", "/staff-members")),
+    ("examiner_certification", ("/annual-certification-programme",)),
+    ("supervisor_certification", ("/supervisor-certification",)),
+    ("internship_stages", ("/intern-stages",)),
+    ("exam_session_planner", ("/exam-session-planner",)),
+    ("pre_session_control_tower", ("/pre-session-control-tower",)),
+    ("monthly_exam_session_registrations", ("/monthly-exam-session-registrations",)),
+    ("staff_payments", ("/staff-payments",)),
+    ("fees", ("/fees",)),
+    ("providers", ("/providers",)),
+    ("users", ("/users",)),
+)
 EXAM_SESSION_STATUS_OPTIONS = ["Pending", "Confirmed"]
 EXAM_SESSION_CATEGORY_OPTIONS = [
     "Approved Exam Centre",
@@ -319,6 +335,93 @@ COMMUNICATIONS_TRANSITIONS = {
     "Needs follow-up": {"In progress", "Completed", "Not started"},
     "Completed": {"Needs follow-up", "In progress", "Not started"},
 }
+
+
+def menu_key_for_path(path):
+    if path == "/":
+        return "staff_members"
+    for menu_key, prefixes in MENU_PERMISSION_PATHS:
+        if any(path == prefix or path.startswith(f"{prefix}/") for prefix in prefixes if prefix != "/"):
+            return menu_key
+    return None
+
+
+def current_user_permission(menu_key):
+    if menu_key not in VALID_MENU_PERMISSION_KEYS:
+        return None
+    current_user = getattr(g, "current_user", None)
+    if not current_user:
+        return None
+    return next((permission for permission in current_user.menu_permissions if permission.menu_key == menu_key), None)
+
+
+def current_user_is_superadmin():
+    current_user = getattr(g, "current_user", None)
+    return bool(current_user and current_user.is_active and current_user.is_superadmin)
+
+
+def user_can_view(menu_key):
+    if current_user_is_superadmin():
+        return True
+    permission = current_user_permission(menu_key)
+    if permission:
+        return bool(permission.can_view or permission.can_edit)
+    if session.get("user") and not session.get("user_id") and not session.get("user_department"):
+        return True
+    return bool(getattr(g, "is_admin", False) or session.get("user_department") == "Admin")
+
+
+def user_can_edit(menu_key):
+    if current_user_is_superadmin():
+        return True
+    permission = current_user_permission(menu_key)
+    if permission:
+        return bool(permission.can_edit)
+    if session.get("user") and not session.get("user_id") and not session.get("user_department"):
+        return True
+    return bool(getattr(g, "is_admin", False) or session.get("user_department") == "Admin")
+
+
+def require_menu_view(menu_key):
+    if not user_can_view(menu_key):
+        abort(403, description="Your account does not have permission to view this menu.")
+
+
+def require_menu_edit(menu_key):
+    if not user_can_edit(menu_key):
+        abort(403, description="Your account does not have permission to perform this action.")
+
+
+@staff_bp.before_request
+def require_menu_permission_for_request():
+    if not session.get("user"):
+        return None
+    if request.endpoint == "staff.session_journey_public":
+        return None
+    menu_key = menu_key_for_path(request.path)
+    if not menu_key:
+        return None
+    if request.method in {"GET", "HEAD", "OPTIONS"}:
+        require_menu_view(menu_key)
+    else:
+        require_menu_edit(menu_key)
+    return None
+
+
+@staff_bp.app_context_processor
+def inject_menu_permissions():
+    current_menu_key = menu_key_for_path(request.path) if has_request_context() else None
+    current_menu_can_view = user_can_view(current_menu_key) if current_menu_key else True
+    current_menu_can_edit = user_can_edit(current_menu_key) if current_menu_key else True
+    return {
+        "menu_permissions": MENU_PERMISSIONS,
+        "current_menu_key": current_menu_key,
+        "current_menu_can_view": current_menu_can_view,
+        "current_menu_can_edit": current_menu_can_edit,
+        "current_user_is_view_only": bool(current_menu_key and current_menu_can_view and not current_menu_can_edit),
+        "user_can_view": user_can_view,
+        "user_can_edit": user_can_edit,
+    }
 COMMUNICATIONS_GROUPS = [
     ("STAFF_COMMUNICATIONS", "Staff communications"),
     ("EXAM_CENTRE_COMMUNICATIONS", "Exam centre communications"),
@@ -10291,16 +10394,6 @@ def delete_provider(provider_id):
     return jsonify({"ok": True, "message": "Provider deleted successfully.", "provider_id": provider_id})
 
 
-def admin_required(view):
-    def wrapped_view(**kwargs):
-        if session.get("user_department") != "Admin":
-            abort(403)
-        return view(**kwargs)
-
-    wrapped_view.__name__ = view.__name__
-    return wrapped_view
-
-
 def normalize_user_email(value):
     return (value or "").strip().lower()
 
@@ -10343,30 +10436,224 @@ def user_form_errors(form, existing_user=None, require_password=False):
     }
 
 
+def user_menu_permissions_from_form(form):
+    permissions = {}
+    for menu_key in VALID_MENU_PERMISSION_KEYS:
+        can_view = form.get(f"permissions[{menu_key}][view]") == "1"
+        can_edit = form.get(f"permissions[{menu_key}][edit]") == "1"
+        can_manage_permissions = form.get(f"scope[{menu_key}][manage]") == "1"
+        if can_edit:
+            can_view = True
+        permissions[menu_key] = {
+            "can_view": can_view,
+            "can_edit": can_edit,
+            "can_manage_permissions": can_manage_permissions,
+        }
+    return permissions
+
+
+def user_permission_map(user):
+    permission_map = {
+        menu_key: {"can_view": False, "can_edit": False, "can_manage_permissions": False}
+        for menu_key in VALID_MENU_PERMISSION_KEYS
+    }
+    if not user:
+        return permission_map
+    for permission in user.menu_permissions:
+        if permission.menu_key in permission_map:
+            permission_map[permission.menu_key] = {
+                "can_view": bool(permission.can_view or permission.can_edit),
+                "can_edit": bool(permission.can_edit),
+                "can_manage_permissions": bool(permission.can_manage_permissions),
+            }
+    return permission_map
+
+
+def user_permission_management_scope_keys(user=None):
+    if current_user_is_superadmin():
+        return set(VALID_MENU_PERMISSION_KEYS)
+    if session.get("user") and not session.get("user_id") and not session.get("user_department"):
+        return set(VALID_MENU_PERMISSION_KEYS)
+    if not user:
+        user = getattr(g, "current_user", None)
+    if not user:
+        if session.get("user_department") == "Admin":
+            return set(VALID_MENU_PERMISSION_KEYS)
+        return set()
+    return {
+        permission.menu_key
+        for permission in user.menu_permissions
+        if permission.can_manage_permissions
+        and (permission.can_view or permission.can_edit)
+        and permission.menu_key in VALID_MENU_PERMISSION_KEYS
+    }
+
+
+def permission_rows_for_scope(scope_keys):
+    return [(menu_key, label) for menu_key, label in MENU_PERMISSIONS if menu_key in scope_keys]
+
+
+def target_user_permission_keys(user):
+    return {
+        permission.menu_key
+        for permission in user.menu_permissions
+        if permission.menu_key in VALID_MENU_PERMISSION_KEYS
+        and (permission.can_view or permission.can_edit or permission.can_manage_permissions)
+    }
+
+
+def editable_permission_keys_for_user(user, editor_scope_keys=None):
+    if current_user_is_superadmin():
+        return set(VALID_MENU_PERMISSION_KEYS)
+    if editor_scope_keys is None:
+        editor_scope_keys = user_permission_management_scope_keys()
+    return set(editor_scope_keys) & target_user_permission_keys(user)
+
+
+def permission_rows_for_user(user, editor_scope_keys=None):
+    return permission_rows_for_scope(editable_permission_keys_for_user(user, editor_scope_keys))
+
+
+def posted_permission_scope_keys(form):
+    posted_keys = set()
+    patterns = (
+        re.compile(r"^permissions\[([^\]]+)\]\[(view|edit)\]$"),
+        re.compile(r"^scope\[([^\]]+)\]\[manage\]$"),
+    )
+    for field_name in form.keys():
+        for pattern in patterns:
+            match = pattern.match(field_name)
+            if match:
+                posted_keys.add(match.group(1))
+                break
+    return posted_keys
+
+
+def validate_permission_management_scope(form, manageable_keys):
+    posted_keys = posted_permission_scope_keys(form)
+    invalid_keys = posted_keys - set(manageable_keys)
+    invalid_keys.update(key for key in posted_keys if key not in VALID_MENU_PERMISSION_KEYS)
+    if invalid_keys:
+        abort(403, description="Your account does not have permission to perform this action.")
+
+
+def validate_user_permission_form_access(form, user, editor_scope_keys):
+    validate_permission_management_scope(form, editable_permission_keys_for_user(user, editor_scope_keys))
+
+
+def form_has_permission_payload(form):
+    protected_fields = {"is_superadmin", "can_only_be_edited_by_superadmin"}
+    return bool(posted_permission_scope_keys(form) or any(field_name in protected_fields for field_name in form.keys()))
+
+
+def validate_superadmin_form_access(form):
+    protected_fields = {"is_superadmin", "can_only_be_edited_by_superadmin"}
+    if any(field_name in protected_fields for field_name in form.keys()) and not current_user_is_superadmin():
+        abort(403, description="Your account does not have permission to perform this action.")
+
+
+def can_access_user_profile(user):
+    return bool(current_user_is_superadmin() or not user.is_superadmin)
+
+
+def can_edit_user_record(user):
+    if current_user_is_superadmin():
+        return True
+    if user.is_superadmin or user.can_only_be_edited_by_superadmin:
+        return False
+    return True
+
+
+def apply_user_menu_permissions(user, permission_values, manageable_keys):
+    existing_permissions = {permission.menu_key: permission for permission in user.menu_permissions}
+    for menu_key in manageable_keys:
+        values = permission_values.get(menu_key, {"can_view": False, "can_edit": False})
+        permission = existing_permissions.get(menu_key)
+        if not permission:
+            permission = UserMenuPermission(user_id=user.id, menu_key=menu_key)
+            db.session.add(permission)
+        permission.can_edit = bool(values["can_edit"])
+        permission.can_view = bool(values["can_view"] or values["can_edit"])
+        permission.can_manage_permissions = bool(values.get("can_manage_permissions"))
+    db.session.flush()
+    persisted_permissions = UserMenuPermission.query.filter_by(user_id=user.id).all()
+    users_permission = next((permission for permission in persisted_permissions if permission.menu_key == "users"), None)
+    if not users_permission or not users_permission.can_edit:
+        for permission in persisted_permissions:
+            if permission.menu_key in manageable_keys:
+                permission.can_manage_permissions = False
+
+
+def would_remove_last_users_permission_manager(user, permission_values, manageable_keys, is_active):
+    current_users_permission = next(
+        (permission for permission in user.menu_permissions if permission.menu_key == "users"),
+        None,
+    )
+    pre_qualified = bool(
+        user.is_active
+        and current_users_permission
+        and current_users_permission.can_edit
+        and current_users_permission.can_manage_permissions
+    )
+    post_can_edit = bool(current_users_permission and current_users_permission.can_edit)
+    post_can_manage = bool(current_users_permission and current_users_permission.can_manage_permissions)
+    if "users" in manageable_keys:
+        users_permission = permission_values.get("users", {})
+        post_can_edit = bool(users_permission.get("can_edit"))
+        post_can_manage = bool(users_permission.get("can_manage_permissions"))
+    post_qualified = bool(is_active and post_can_edit and post_can_manage)
+    if not pre_qualified or post_qualified:
+        return False
+    editor_ids = {
+        permission.user_id
+        for permission in UserMenuPermission.query.filter_by(menu_key="users", can_edit=True).all()
+        if permission.can_manage_permissions and permission.user and permission.user.is_active
+    }
+    editor_ids.discard(user.id)
+    return not editor_ids
+
+
 @staff_bp.route("/users")
 @login_required
-@admin_required
 def users():
-    user_rows = User.query.order_by(User.full_name.asc()).all()
+    require_menu_view("users")
+    manageable_keys = user_permission_management_scope_keys()
+    permission_rows = permission_rows_for_scope(manageable_keys)
+    user_query = User.query
+    if not current_user_is_superadmin():
+        user_query = user_query.filter(User.is_superadmin == False)
+    user_rows = user_query.order_by(User.full_name.asc()).all()
     return render_template(
         "users/index.html",
         users=user_rows,
+        permission_rows=permission_rows,
+        full_permission_row_count=len(MENU_PERMISSIONS),
+        empty_permission_map=user_permission_map(None),
+        user_permission_map=user_permission_map,
         departments=USER_DEPARTMENTS,
         status_options=USER_STATUS_OPTIONS,
         csrf_token=session.get("csrf_token"),
         user_status_label=user_status_label,
         local_datetime=local_datetime,
+        current_user_id=session.get("user_id"),
+        current_user_is_superadmin=current_user_is_superadmin(),
+        can_edit_user_record=can_edit_user_record,
+        permission_rows_for_user=lambda user: permission_rows_for_user(user, manageable_keys),
     )
 
 
 @staff_bp.route("/users", methods=["POST"])
 @login_required
-@admin_required
 def create_user():
+    require_menu_edit("users")
+    manageable_keys = user_permission_management_scope_keys()
+    validate_superadmin_form_access(request.form)
+    validate_permission_management_scope(request.form, manageable_keys)
     if not validate_csrf():
         flash("Security token expired. Please try again.", "error")
         return redirect(url_for("staff.users"))
     errors, values = user_form_errors(request.form, require_password=True)
+    permission_values = user_menu_permissions_from_form(request.form)
     if errors:
         for error in errors:
             flash(error, "error")
@@ -10376,9 +10663,17 @@ def create_user():
         email=values["email"],
         department=values["department"],
         is_active=True,
+        is_superadmin=current_user_is_superadmin() and request.form.get("is_superadmin") == "1",
+        can_only_be_edited_by_superadmin=(
+            current_user_is_superadmin() and request.form.get("can_only_be_edited_by_superadmin") == "1"
+        ),
     )
+    if user.is_superadmin and User.query.filter_by(is_superadmin=True, is_active=True).first():
+        abort(403, description="Your account does not have permission to perform this action.")
     user.set_password(values["password"])
     db.session.add(user)
+    db.session.flush()
+    apply_user_menu_permissions(user, permission_values, manageable_keys)
     db.session.commit()
     flash("User created successfully.", "success")
     return redirect(url_for("staff.users"))
@@ -10386,13 +10681,28 @@ def create_user():
 
 @staff_bp.route("/users/<int:user_id>", methods=["POST"])
 @login_required
-@admin_required
 def update_user(user_id):
+    require_menu_edit("users")
+    manageable_keys = user_permission_management_scope_keys()
+    validate_superadmin_form_access(request.form)
+    validate_permission_management_scope(request.form, manageable_keys)
     if not validate_csrf():
         flash("Security token expired. Please try again.", "error")
         return redirect(url_for("staff.users"))
     user = User.query.get_or_404(user_id)
+    if not can_access_user_profile(user):
+        abort(403, description="Your account does not have permission to perform this action.")
+    if not can_edit_user_record(user):
+        abort(403, description="Your account does not have permission to perform this action.")
+    validate_user_permission_form_access(request.form, user, manageable_keys)
+    if user.id == session.get("user_id") and form_has_permission_payload(request.form):
+        abort(403, description="Your account does not have permission to perform this action.")
     errors, values = user_form_errors(request.form, existing_user=user)
+    permission_values = user_menu_permissions_from_form(request.form)
+    if would_remove_last_users_permission_manager(user, permission_values, manageable_keys, values["is_active"]):
+        errors.append("At least one active user must keep Edit information and Can manage permissions for Users.")
+    if user.is_superadmin and not values["is_active"]:
+        errors.append("At least one active Superadmin is required.")
     if errors:
         for error in errors:
             flash(error, "error")
@@ -10401,8 +10711,26 @@ def update_user(user_id):
     user.email = values["email"]
     user.department = values["department"]
     user.is_active = values["is_active"]
+    if current_user_is_superadmin() and "is_superadmin" in request.form:
+        next_is_superadmin = request.form.get("is_superadmin") == "1"
+        if user.is_superadmin and not next_is_superadmin:
+            flash("At least one active Superadmin is required.", "error")
+            return redirect(url_for("staff.users"))
+        elif next_is_superadmin and not user.is_superadmin and User.query.filter(
+            User.id != user.id,
+            User.is_superadmin == True,
+            User.is_active == True,
+        ).first():
+            abort(403, description="Your account does not have permission to perform this action.")
+        else:
+            user.is_superadmin = next_is_superadmin
+    elif user.is_superadmin:
+        abort(403, description="Your account does not have permission to perform this action.")
+    if current_user_is_superadmin():
+        user.can_only_be_edited_by_superadmin = request.form.get("can_only_be_edited_by_superadmin") == "1"
     if values["password"]:
         user.set_password(values["password"])
+    apply_user_menu_permissions(user, permission_values, manageable_keys)
     db.session.commit()
     flash("User updated successfully.", "success")
     return redirect(url_for("staff.users"))
