@@ -322,6 +322,17 @@ const openRequestedScheduleModal = () => {
   }
 };
 
+const openRequestedStaffModal = () => {
+  const params = new URLSearchParams(window.location.search);
+  const modalId = params.get("open_staff_modal");
+  if (!modalId) return;
+  openModal(modalId);
+  params.delete("open_staff_modal");
+  const query = params.toString();
+  const nextUrl = `${window.location.pathname}${query ? `?${query}` : ""}${window.location.hash}`;
+  window.history.replaceState({}, "", nextUrl);
+};
+
 const closeScheduleActionPanel = (form, { restoreFocus = true } = {}) => {
   if (!form) return;
   form.hidden = true;
@@ -936,8 +947,44 @@ document.querySelectorAll("[data-communications-control-form]").forEach((form) =
 
 openRequestedSessionModal();
 openRequestedScheduleModal();
+openRequestedStaffModal();
 
 const scrollStateKey = `path-scroll-state:${window.location.pathname}${window.location.search}`;
+const tableSortScrollStateKey = `path-table-sort-scroll-state:${window.location.pathname}`;
+
+const saveTableSortScrollState = () => {
+  const staffTable = document.querySelector("[data-staff-records-table]");
+  sessionStorage.setItem(
+    tableSortScrollStateKey,
+    JSON.stringify({
+      windowX: window.scrollX,
+      windowY: window.scrollY,
+      tableX: staffTable?.scrollLeft || 0,
+      tableY: staffTable?.scrollTop || 0,
+    })
+  );
+};
+
+const restoreTableSortScrollState = () => {
+  const savedState = sessionStorage.getItem(tableSortScrollStateKey);
+  if (!savedState) return;
+  sessionStorage.removeItem(tableSortScrollStateKey);
+  try {
+    const state = JSON.parse(savedState);
+    const staffTable = document.querySelector("[data-staff-records-table]");
+    if (staffTable) {
+      staffTable.scrollLeft = Number(state.tableX) || 0;
+      staffTable.scrollTop = Number(state.tableY) || 0;
+    }
+    window.scrollTo(Number(state.windowX) || 0, Number(state.windowY) || 0);
+  } catch {
+    sessionStorage.removeItem(tableSortScrollStateKey);
+  }
+};
+
+document.querySelectorAll(".table-sort").forEach((sortLink) => {
+  sortLink.addEventListener("click", saveTableSortScrollState);
+});
 
 const saveAnnualTableScrollState = () => {
   const tableWrap = document.querySelector("[data-annual-records-table]");
@@ -972,6 +1019,7 @@ const restoreAnnualTableScrollState = () => {
 };
 
 restoreAnnualTableScrollState();
+restoreTableSortScrollState();
 
 const normalizeFeeInputValue = (value) => {
   let output = "";
@@ -1138,6 +1186,16 @@ document.querySelectorAll(".table-wrap").forEach((tableWrap) => {
   }, { passive: true });
 });
 
+document.addEventListener("click", (event) => {
+  const saveButton = event.target.closest("[data-acceptance-draft-save]");
+  if (!saveButton) return;
+  const form = saveButton.closest("form");
+  const saveAction = saveButton.dataset.acceptanceDraftSave;
+  if (!form || !saveAction) return;
+  form.action = saveAction;
+  form.submit();
+});
+
 document.addEventListener("submit", (event) => {
   const passwordForm = event.target.closest("[data-confirm-password-submit]");
   if (passwordForm) {
@@ -1242,6 +1300,7 @@ document.querySelectorAll("[data-bulk-form], [data-bulk-root]").forEach((form) =
   const selectedCount = form.querySelector("[data-selected-count]");
   const bulkStatus = form.querySelector("[data-bulk-status]");
   const clearButton = form.querySelector("[data-clear-selection]");
+  const emailLinks = Array.from(form.querySelectorAll("[data-bulk-email-link]"));
 
   const syncBulkState = () => {
     const selected = checkboxes.filter((checkbox) => checkbox.checked);
@@ -1254,6 +1313,27 @@ document.querySelectorAll("[data-bulk-form], [data-bulk-root]").forEach((form) =
     if (selectAll) {
       selectAll.checked = count > 0 && count === checkboxes.length;
       selectAll.indeterminate = count > 0 && count < checkboxes.length;
+    }
+    if (emailLinks.length) {
+      const selectedEmails = Array.from(new Set(
+        selected
+          .map((checkbox) => (checkbox.dataset.memberEmail || "").trim().toLowerCase())
+          .filter(Boolean)
+      ));
+      const gmailUrl = `https://mail.google.com/mail/?view=cm&fs=1&bcc=${encodeURIComponent(selectedEmails.join(","))}`;
+      emailLinks.forEach((link) => {
+        if (selectedEmails.length) {
+          link.href = gmailUrl;
+          link.classList.remove("disabled-button");
+          link.removeAttribute("aria-disabled");
+          link.removeAttribute("tabindex");
+        } else {
+          link.removeAttribute("href");
+          link.classList.add("disabled-button");
+          link.setAttribute("aria-disabled", "true");
+          link.setAttribute("tabindex", "-1");
+        }
+      });
     }
   };
 
@@ -1292,6 +1372,14 @@ document.querySelectorAll("[data-bulk-form], [data-bulk-root]").forEach((form) =
   }
 
   syncBulkState();
+});
+
+document.querySelectorAll("[data-bulk-email-link]").forEach((link) => {
+  link.addEventListener("click", (event) => {
+    if (!link.href || link.getAttribute("aria-disabled") === "true") {
+      event.preventDefault();
+    }
+  });
 });
 
 document.querySelectorAll("[data-bulk-stage-form]").forEach((form) => {

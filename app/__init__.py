@@ -178,6 +178,23 @@ def create_app():
         if potential_entry_columns and "interview_invitation_sent" not in potential_entry_columns:
             db.session.execute(text("ALTER TABLE potential_entry ADD COLUMN interview_invitation_sent BOOLEAN NOT NULL DEFAULT 0"))
             db.session.commit()
+        potential_entry_draft_columns = {
+            "acceptance_status": "VARCHAR(40)",
+            "title": "VARCHAR(120)",
+            "seniority": "BOOLEAN NOT NULL DEFAULT 0",
+            "acceptance_roles": "TEXT",
+            "has_car": "VARCHAR(10)",
+            "started_in": "VARCHAR(4)",
+            "full_address_google_maps": "VARCHAR(500)",
+            "country": "VARCHAR(120)",
+            "profile_picture": "VARCHAR(500)",
+            "account_id": "VARCHAR(120)",
+            "account_owner": "VARCHAR(160)",
+        }
+        for column_name, column_type in potential_entry_draft_columns.items():
+            if potential_entry_columns and column_name not in potential_entry_columns:
+                db.session.execute(text(f"ALTER TABLE potential_entry ADD COLUMN {column_name} {column_type}"))
+                db.session.commit()
         journey_share_columns = {
             row[1] for row in db.session.execute(text("PRAGMA table_info(exam_session_journey_share)"))
         }

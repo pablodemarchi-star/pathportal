@@ -16,6 +16,9 @@ from app.models import (
     ExamSessionCommunicationsControl,
     ExamSessionCommunicationsEvent,
     ExamSessionExaminerAssignment,
+    ExaminerCertificationAnnualMeetingSelection,
+    ExaminerCertificationFut1Selection,
+    ExaminerCertificationRemoteTrainingSelection,
     ExamSessionFinanceControl,
     ExamSessionFinanceEvent,
     ExamSessionIncident,
@@ -44,6 +47,14 @@ from app.models import (
     ExamSessionSupervisorAssignment,
     Provider,
     ProviderType,
+    InternStageYear,
+    InternStage2Selection,
+    InternStage3Selection,
+    InternStageFutSelection,
+    InternStageRemoteTrainingSelection,
+    SupervisorCertificationAnnualMeetingSelection,
+    SupervisorCertificationFutSelection,
+    SupervisorCertificationRemoteTrainingSelection,
     SupervisorCertificationYear,
 )
 from app.routes import (
@@ -1914,6 +1925,15 @@ class ScheduleWorkflowTest(unittest.TestCase):
         self.assertIn('placeholder="hh:mm"', examiner_html)
         self.assertIn("/annual-certification-programme/year-settings", examiner_html)
 
+        intern_response = client.get("/intern-stages?certification_year=2026")
+        intern_html = intern_response.get_data(as_text=True)
+        self.assertEqual(intern_response.status_code, 200)
+        self.assertIn("Internship stages", intern_html)
+        self.assertNotIn("Remote training period", intern_html)
+        self.assertNotIn("Annual meeting date & time", intern_html)
+        self.assertNotIn('name="remote_training_period"', intern_html)
+        self.assertNotIn('name="annual_meeting_date"', intern_html)
+
         response = client.post(
             "/annual-certification-programme/year-settings",
             data={
@@ -1964,6 +1984,421 @@ class ScheduleWorkflowTest(unittest.TestCase):
         self.assertEqual(supervisor_config.annual_meeting_time, time(9, 5))
         self.assertEqual(supervisor_config.remote_training_start_date, date(2026, 4, 13))
         self.assertEqual(supervisor_config.remote_training_end_date, date(2026, 4, 18))
+
+    def test_certification_sections_default_to_latest_active_year(self):
+        client = self.login_client()
+        db.session.add_all([
+            ExaminerCertificationYear(year=2026, is_archived=False),
+            ExaminerCertificationYear(year=2027, is_archived=False),
+            SupervisorCertificationYear(year=2026, is_archived=False),
+            SupervisorCertificationYear(year=2027, is_archived=False),
+            InternStageYear(year=2026, is_archived=False),
+            InternStageYear(year=2027, is_archived=False),
+        ])
+        db.session.commit()
+
+        cases = [
+            "/annual-certification-programme",
+            "/supervisor-certification",
+            "/intern-stages",
+        ]
+        for url in cases:
+            with self.subTest(url=url):
+                response = client.get(url)
+                html = response.get_data(as_text=True)
+                self.assertEqual(response.status_code, 200)
+                self.assertRegex(
+                    html,
+                    r'class="year-tab\s+active"[^>]*certification_year=2027[^>]*>2027</a>',
+                )
+
+    def test_intern_stages_email_actions_open_gmail_with_pending_stage_bccs(self):
+        client = self.login_client()
+        stage_1_member = AcademicStaff(
+            status="Active",
+            full_name="Stage One Pending",
+            roles="Intern",
+            email="stage1@example.com",
+        )
+        stage_2_member = AcademicStaff(
+            status="Active",
+            full_name="Stage Two Pending",
+            roles="Intern",
+            email="stage2@example.com",
+        )
+        stage_3_member = AcademicStaff(
+            status="Active",
+            full_name="Stage Three Pending",
+            roles="Intern",
+            email="stage3@example.com",
+        )
+        completed_member = AcademicStaff(
+            status="Active",
+            full_name="Completed Intern",
+            roles="Intern",
+            email="done@example.com",
+        )
+        no_email_member = AcademicStaff(
+            status="Active",
+            full_name="No Email Intern",
+            roles="Intern",
+        )
+        db.session.add_all([
+            stage_1_member,
+            stage_2_member,
+            stage_3_member,
+            completed_member,
+            no_email_member,
+        ])
+        db.session.flush()
+        db.session.add_all([
+            InternStageRemoteTrainingSelection(
+                member_id=stage_2_member.id,
+                year=2026,
+                status="Completed",
+            ),
+            InternStageRemoteTrainingSelection(
+                member_id=stage_3_member.id,
+                year=2026,
+                status="Completed",
+            ),
+            InternStage3Selection(
+                member_id=stage_3_member.id,
+                year=2026,
+                status="Completed",
+            ),
+            InternStageRemoteTrainingSelection(
+                member_id=completed_member.id,
+                year=2026,
+                status="Completed",
+            ),
+            InternStage3Selection(
+                member_id=completed_member.id,
+                year=2026,
+                status="Completed",
+            ),
+            InternStage2Selection(
+                member_id=completed_member.id,
+                year=2026,
+                status="Completed",
+            ),
+        ])
+        db.session.commit()
+
+        response = client.get("/intern-stages?certification_year=2026")
+        html = response.get_data(as_text=True)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("Send email to Stage 1 interns", html)
+        self.assertIn("Send email to Stage 2 interns", html)
+        self.assertIn("Send email to Stage 3 interns", html)
+        self.assertIn("https://mail.google.com/mail/?view=cm&amp;fs=1&amp;bcc=stage1%40example.com", html)
+        self.assertIn("https://mail.google.com/mail/?view=cm&amp;fs=1&amp;bcc=stage2%40example.com", html)
+        self.assertIn("https://mail.google.com/mail/?view=cm&amp;fs=1&amp;bcc=stage3%40example.com", html)
+        self.assertNotIn("done%40example.com", html)
+        self.assertNotIn("no-email", html)
+
+    def test_certification_bulk_actions_include_send_email_for_selected_members(self):
+        client = self.login_client()
+        examiner = AcademicStaff(
+            status="Active",
+            full_name="Email Examiner",
+            roles="Examiner",
+            email="examiner@example.com",
+        )
+        supervisor = AcademicStaff(
+            status="Active",
+            full_name="Email Supervisor",
+            roles="Supervisor",
+            email="supervisor@example.com",
+        )
+        intern = AcademicStaff(
+            status="Active",
+            full_name="Email Intern",
+            roles="Intern",
+            email="intern@example.com",
+        )
+        db.session.add_all([examiner, supervisor, intern])
+        db.session.commit()
+
+        cases = [
+            ("/annual-certification-programme?certification_year=2026", "examiner@example.com"),
+            ("/supervisor-certification?certification_year=2026", "supervisor@example.com"),
+            ("/intern-stages?certification_year=2026", "intern@example.com"),
+        ]
+        for url, email in cases:
+            with self.subTest(url=url):
+                response = client.get(url)
+                html = response.get_data(as_text=True)
+                self.assertEqual(response.status_code, 200)
+                self.assertIn("Bulk actions", html)
+                self.assertIn("Send email", html)
+                self.assertIn("data-bulk-email-link", html)
+                self.assertIn(f'data-member-email="{email}"', html)
+
+    def test_certification_sections_status_filter_and_history_note_counts(self):
+        client = self.login_client()
+        history = "01/01/2026 09:00 - admin\nFirst note\n\n02/01/2026 10:00 - admin\nSecond note\n\n03/01/2026 11:00 - admin\nThird note"
+        examiner = AcademicStaff(
+            status="Active",
+            full_name="Active Examiner Notes",
+            roles="Examiner",
+            email="active-examiner@example.com",
+            interview=history,
+        )
+        supervisor = AcademicStaff(
+            status="Active",
+            full_name="Active Supervisor Notes",
+            roles="Supervisor",
+            email="active-supervisor@example.com",
+            interview=history,
+        )
+        intern = AcademicStaff(
+            status="Active",
+            full_name="Active Intern Notes",
+            roles="Intern",
+            email="active-intern@example.com",
+            interview=history,
+        )
+        db.session.add_all([examiner, supervisor, intern])
+        db.session.commit()
+
+        cases = [
+            ("/annual-certification-programme?certification_year=2026", "Active Examiner Notes", ["Pending", "In progress", "Certified"]),
+            ("/supervisor-certification?certification_year=2026", "Active Supervisor Notes", ["Pending", "In progress", "Certified"]),
+            ("/intern-stages?certification_year=2026", "Active Intern Notes", ["Pending", "In progress", "Completed"]),
+        ]
+        for base_url, member_name, status_options in cases:
+            with self.subTest(base_url=base_url):
+                response = client.get(base_url)
+                html = response.get_data(as_text=True)
+                self.assertEqual(response.status_code, 200)
+                self.assertIn('<select name="status">', html)
+                self.assertIn('<option value="">All statuses</option>', html)
+                for role in ["Examiner", "RSG", "Supervisor", "Intern"]:
+                    self.assertIn(f'name="roles" value="{role}"', html)
+                for status_option in status_options:
+                    self.assertIn(f'<option value="{status_option}"', html)
+
+                pending_response = client.get(f"{base_url}&status=Pending")
+                pending_html = pending_response.get_data(as_text=True)
+                self.assertEqual(pending_response.status_code, 200)
+                self.assertIn(member_name, pending_html)
+                self.assertIn("Notes (3)", pending_html)
+
+                in_progress_response = client.get(f"{base_url}&status=In+progress")
+                in_progress_html = in_progress_response.get_data(as_text=True)
+                self.assertEqual(in_progress_response.status_code, 200)
+                self.assertNotIn(member_name, in_progress_html)
+
+        staff_response = client.get("/")
+        staff_html = staff_response.get_data(as_text=True)
+        self.assertEqual(staff_response.status_code, 200)
+        self.assertIn("Active Examiner Notes", staff_html)
+        self.assertIn("Notes (3)", staff_html)
+
+    def test_staff_members_bulk_email_and_history_sort(self):
+        client = self.login_client()
+        no_notes = AcademicStaff(
+            status="Active",
+            full_name="Alpha No Notes",
+            roles="Examiner",
+            email="alpha@example.com",
+        )
+        one_note = AcademicStaff(
+            status="Active",
+            full_name="Beta One Note",
+            roles="Examiner",
+            email="beta@example.com",
+            interview="01/01/2026 09:00 - admin\nOnly note",
+        )
+        three_notes = AcademicStaff(
+            status="Active",
+            full_name="Gamma Three Notes",
+            roles="Examiner",
+            email="gamma@example.com",
+            interview="01/01/2026 09:00 - admin\nFirst note\n\n02/01/2026 10:00 - admin\nSecond note\n\n03/01/2026 11:00 - admin\nThird note",
+        )
+        db.session.add_all([no_notes, one_note, three_notes])
+        db.session.commit()
+
+        response = client.get("/?sort=history&dir=desc")
+        html = response.get_data(as_text=True)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("data-bulk-email-link", html)
+        self.assertIn("Send email", html)
+        self.assertIn('data-member-email="alpha@example.com"', html)
+        self.assertIn('data-member-email="beta@example.com"', html)
+        self.assertIn('data-member-email="gamma@example.com"', html)
+        self.assertIn("Notes (3)", html)
+        self.assertIn("Notes (1)", html)
+        self.assertLess(html.index("Gamma Three Notes"), html.index("Beta One Note"))
+        self.assertLess(html.index("Beta One Note"), html.index("Alpha No Notes"))
+
+    def test_examiner_and_supervisor_certification_table_sorting(self):
+        client = self.login_client()
+        examiner_low = AcademicStaff(
+            status="Active",
+            full_name="Alpha Examiner",
+            roles="Examiner",
+            email="alpha-examiner@example.com",
+        )
+        examiner_high = AcademicStaff(
+            status="Active",
+            full_name="Beta Examiner",
+            roles="Examiner",
+            email="beta-examiner@example.com",
+            interview="01/01/2026 09:00 - admin\nFirst note\n\n02/01/2026 10:00 - admin\nSecond note",
+        )
+        supervisor_low = AcademicStaff(
+            status="Active",
+            full_name="Alpha Supervisor",
+            roles="Supervisor",
+            email="alpha-supervisor@example.com",
+        )
+        supervisor_high = AcademicStaff(
+            status="Active",
+            full_name="Beta Supervisor",
+            roles="Supervisor",
+            email="beta-supervisor@example.com",
+        )
+        db.session.add_all([examiner_low, examiner_high, supervisor_low, supervisor_high])
+        db.session.flush()
+        db.session.add_all([
+            ExaminerCertificationRemoteTrainingSelection(
+                member_id=examiner_high.id,
+                year=2026,
+                status="Certified",
+            ),
+            ExaminerCertificationAnnualMeetingSelection(
+                member_id=examiner_high.id,
+                year=2026,
+                status="Attended",
+            ),
+            ExaminerCertificationFut1Selection(
+                member_id=examiner_high.id,
+                year=2026,
+                option_name="FUT 1",
+                status="completed",
+            ),
+            ExaminerCertificationFut1Selection(
+                member_id=examiner_high.id,
+                year=2026,
+                option_name="FUT 2",
+                status="pending",
+            ),
+            ExaminerCertificationFut1Selection(
+                member_id=examiner_low.id,
+                year=2026,
+                option_name="FUT 1",
+                status="pending",
+            ),
+            SupervisorCertificationRemoteTrainingSelection(
+                member_id=supervisor_high.id,
+                year=2026,
+                status="Certified",
+            ),
+            SupervisorCertificationAnnualMeetingSelection(
+                member_id=supervisor_high.id,
+                year=2026,
+                status="Attended",
+            ),
+            SupervisorCertificationFutSelection(
+                member_id=supervisor_high.id,
+                year=2026,
+                option_name="FUT 1",
+                status="completed",
+            ),
+            SupervisorCertificationFutSelection(
+                member_id=supervisor_high.id,
+                year=2026,
+                option_name="FUT 2",
+                status="pending",
+            ),
+            SupervisorCertificationFutSelection(
+                member_id=supervisor_low.id,
+                year=2026,
+                option_name="FUT 1",
+                status="pending",
+            ),
+        ])
+        db.session.commit()
+
+        cases = [
+            ("/annual-certification-programme?certification_year=2026&sort=fut&dir=desc", "Beta Examiner", "Alpha Examiner"),
+            ("/supervisor-certification?certification_year=2026&sort=fut&dir=desc", "Beta Supervisor", "Alpha Supervisor"),
+        ]
+        for url, first_name, second_name in cases:
+            with self.subTest(url=url):
+                response = client.get(url)
+                html = response.get_data(as_text=True)
+                self.assertEqual(response.status_code, 200)
+                for sort_column in ["status", "full_name", "history", "annual_meeting", "remote_training", "fut"]:
+                    self.assertIn(f"sort={sort_column}", html)
+                self.assertLess(html.index(first_name), html.index(second_name))
+
+    def test_intern_stages_table_sorting(self):
+        client = self.login_client()
+        intern_low = AcademicStaff(
+            status="Active",
+            full_name="Alpha Intern",
+            roles="Intern",
+            email="alpha-intern@example.com",
+        )
+        intern_high = AcademicStaff(
+            status="Active",
+            full_name="Beta Intern",
+            roles="Intern",
+            email="beta-intern@example.com",
+            interview="01/01/2026 09:00 - admin\nFirst note\n\n02/01/2026 10:00 - admin\nSecond note",
+        )
+        db.session.add_all([intern_low, intern_high])
+        db.session.flush()
+        db.session.add_all([
+            InternStageRemoteTrainingSelection(
+                member_id=intern_high.id,
+                year=2026,
+                status="Completed",
+            ),
+            InternStage3Selection(
+                member_id=intern_high.id,
+                year=2026,
+                status="Completed",
+            ),
+            InternStage2Selection(
+                member_id=intern_high.id,
+                year=2026,
+                status="Completed",
+            ),
+            InternStageFutSelection(
+                member_id=intern_high.id,
+                year=2026,
+                option_name="FUT 1",
+                status="completed",
+            ),
+            InternStageFutSelection(
+                member_id=intern_high.id,
+                year=2026,
+                option_name="FUT 2",
+                status="pending",
+            ),
+            InternStageFutSelection(
+                member_id=intern_low.id,
+                year=2026,
+                option_name="FUT 1",
+                status="pending",
+            ),
+        ])
+        db.session.commit()
+
+        response = client.get("/intern-stages?certification_year=2026&sort=fut&dir=desc")
+        html = response.get_data(as_text=True)
+
+        self.assertEqual(response.status_code, 200)
+        for sort_column in ["status", "full_name", "history", "stage_1", "stage_2", "fut", "stage_3"]:
+            self.assertIn(f"sort={sort_column}", html)
+        self.assertLess(html.index("Beta Intern"), html.index("Alpha Intern"))
 
     def test_certification_year_settings_reject_other_year_and_invalid_range(self):
         client = self.login_client()

@@ -48,10 +48,14 @@
 {% set module_key = module_key|default('certification') %}
 {% set visible_role_filters = visible_role_filters|default([]) %}
 {% set show_annual_meeting_filter = show_annual_meeting_filter|default(true) %}
+{% set show_status_filter = show_status_filter|default(true) %}
 {% set show_role_filter = show_role_filter|default(true) %}
 {% set show_remote_training_filter = show_remote_training_filter|default(true) %}
 {% set show_stage_filters = show_stage_filters|default(false) %}
 {% set fut_requires_stage_certification = fut_requires_stage_certification|default(false) %}
+{% set show_certification_year_settings = show_certification_year_settings|default(true) %}
+{% set intern_stage_email_actions = intern_stage_email_actions|default([]) %}
+{% set show_certification_table_sort = show_certification_table_sort|default(false) %}
 
 {% block title %}{{ page_title }} | Path Examinations{% endblock %}
 
@@ -71,9 +75,9 @@
     {% endif %}
     <input type="hidden" name="page_size" value="{{ pagination.page_size if pagination else '10' }}">
     <input name="q" value="{{ filters.q }}" placeholder="Search name or email...">
-    {% if module_key != 'certification' %}
+    {% if show_status_filter %}
       <select name="status">
-        <option value="">All visible statuses</option>
+        <option value="">All statuses</option>
         {% for status in statuses %}
           <option value="{{ status }}" {% if filters.status == status %}selected{% endif %}>{{ status }}</option>
         {% endfor %}
@@ -215,7 +219,19 @@
 </section>
 {% endif %}
 
-{% if selected_certification_year and module_key == 'certification' %}
+{% if intern_stage_email_actions %}
+<section class="intern-stage-email-actions" aria-label="Internship stage email actions">
+  {% for action in intern_stage_email_actions %}
+    {% if action.emails %}
+      <a class="secondary-button link-button" href="{{ action.url }}" target="_blank" rel="noopener noreferrer">{{ action.label }}</a>
+    {% else %}
+      <span class="secondary-button disabled-button">{{ action.label }}</span>
+    {% endif %}
+  {% endfor %}
+</section>
+{% endif %}
+
+{% if selected_certification_year and module_key == 'certification' and show_certification_year_settings %}
 <section class="certification-year-settings" aria-label="{{ page_title }} annual settings">
   <form method="post" action="{{ url_for(certification_year_settings_endpoint) }}" class="certification-year-settings-form">
     <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
@@ -276,6 +292,7 @@
       <details class="bulk-action-menu">
         <summary class="secondary-button">Bulk actions</summary>
         <div class="bulk-action-panel">
+          <a class="secondary-button link-button bulk-email-link disabled-button" data-bulk-email-link target="_blank" rel="noopener noreferrer" aria-disabled="true">Send email</a>
           <form method="post" action="{{ url_for(bulk_stage_update_endpoint) }}" data-bulk-stage-form data-bulk-scope="[data-annual-records-table]" data-bulk-empty-message="Please select at least one member before applying a bulk action.">
             <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
             <input type="hidden" name="stage" value="stage_1">
@@ -331,6 +348,7 @@
       <details class="bulk-action-menu">
         <summary class="secondary-button">Bulk actions</summary>
         <div class="bulk-action-panel">
+          <a class="secondary-button link-button bulk-email-link disabled-button" data-bulk-email-link target="_blank" rel="noopener noreferrer" aria-disabled="true">Send email</a>
           <form method="post" action="{{ url_for(bulk_certification_update_endpoint) }}" data-bulk-stage-form data-bulk-scope="[data-annual-records-table]" data-bulk-empty-message="Please select at least one member before applying a bulk action.">
             <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
             <input type="hidden" name="bulk_action" value="annual_meeting">
@@ -378,12 +396,56 @@
         <th class="select-column">
           <input class="bulk-checkbox" type="checkbox" data-select-all-members aria-label="Select all visible members">
         </th>
-        <th>Status</th>
-        <th>Full name</th>
+        <th>
+          {% if show_certification_table_sort %}
+            <a class="table-sort {% if filters.sort == 'status' %}is-active{% endif %}" href="{{ certification_sort_url('status') }}">
+              Status
+              <span>{{ '↑' if filters.sort == 'status' and filters.dir == 'asc' else '↓' if filters.sort == 'status' else '↕' }}</span>
+            </a>
+          {% else %}
+            Status
+          {% endif %}
+        </th>
+        <th>
+          {% if show_certification_table_sort %}
+            <a class="table-sort {% if filters.sort == 'full_name' %}is-active{% endif %}" href="{{ certification_sort_url('full_name') }}">
+              Full name
+              <span>{{ '↑' if filters.sort == 'full_name' and filters.dir == 'asc' else '↓' if filters.sort == 'full_name' else '↕' }}</span>
+            </a>
+          {% else %}
+            Full name
+          {% endif %}
+        </th>
         <th>Roles</th>
-        <th>History</th>
+        <th>
+          {% if show_certification_table_sort %}
+            <a class="table-sort {% if filters.sort == 'history' %}is-active{% endif %}" href="{{ certification_sort_url('history') }}">
+              History
+              <span>{{ '↑' if filters.sort == 'history' and filters.dir == 'asc' else '↓' if filters.sort == 'history' else '↕' }}</span>
+            </a>
+          {% else %}
+            History
+          {% endif %}
+        </th>
         {% for certification in certifications %}
-          <th class="certification-heading">{{ certification.label }}</th>
+          <th class="certification-heading">
+            {% set certification_sort_key = certification.key %}
+            {% if show_stage_filters and certification.key == 'remote_training' %}
+              {% set certification_sort_key = 'stage_1' %}
+            {% elif show_stage_filters and certification.key == 'stage_3' %}
+              {% set certification_sort_key = 'stage_2' %}
+            {% elif show_stage_filters and certification.key == 'stage_2' %}
+              {% set certification_sort_key = 'stage_3' %}
+            {% endif %}
+            {% if show_certification_table_sort and certification_sort_key in ['annual_meeting', 'remote_training', 'fut', 'stage_1', 'stage_2', 'stage_3'] %}
+              <a class="table-sort {% if filters.sort == certification_sort_key %}is-active{% endif %}" href="{{ certification_sort_url(certification_sort_key) }}">
+                {{ certification.label }}
+                <span>{{ '↑' if filters.sort == certification_sort_key and filters.dir == 'asc' else '↓' if filters.sort == certification_sort_key else '↕' }}</span>
+              </a>
+            {% else %}
+              {{ certification.label }}
+            {% endif %}
+          </th>
         {% endfor %}
       </tr>
     </thead>
@@ -392,7 +454,7 @@
         {% set member_certifications = certification_years.get(member.id, {}) %}
         <tr>
           <td class="select-column">
-            <input class="bulk-checkbox" type="checkbox" name="member_ids" value="{{ member.id }}" form="{{ bulk_form_id }}" data-member-select aria-label="Select {{ member.full_name }}">
+            <input class="bulk-checkbox" type="checkbox" name="member_ids" value="{{ member.id }}" form="{{ bulk_form_id }}" data-member-select data-member-email="{{ member.email or '' }}" aria-label="Select {{ member.full_name }}">
           </td>
           <td>{{ status_badge(certification_statuses.get(member.id, member.status)) }}</td>
           <td>
@@ -410,7 +472,8 @@
               {% endfor %}
             </div>
           </td>
-          <td><button class="mini-button" type="button" data-open-modal="{{ module_key }}-history-{{ member.id }}">Notes</button></td>
+          {% set member_history_count = member.interview|interview_entries|length %}
+          <td><button class="mini-button" type="button" data-open-modal="{{ module_key }}-history-{{ member.id }}">Notes{% if member_history_count %} ({{ member_history_count }}){% endif %}</button></td>
           {% for certification in certifications %}
             {% set records = member_certifications.get(certification.key, []) %}
             {% set is_certification_available = certification_allowed(member, certification) %}

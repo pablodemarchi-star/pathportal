@@ -1579,12 +1579,23 @@ class ExamSessionLogisticsConceptNote(db.Model):
 class PotentialEntry(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     status = db.Column(db.String(40), nullable=False, index=True)
+    acceptance_status = db.Column(db.String(40), nullable=True)
+    title = db.Column(db.String(120), nullable=True)
     full_name = db.Column(db.String(160), nullable=False, index=True)
+    seniority = db.Column(db.Boolean, nullable=False, default=False)
+    acceptance_roles = db.Column(db.Text, nullable=True)
     phone = db.Column(db.String(80), nullable=True)
     email = db.Column(db.String(160), nullable=True, index=True)
+    has_car = db.Column(db.String(10), nullable=True)
+    started_in = db.Column(db.String(4), nullable=True)
+    full_address_google_maps = db.Column(db.String(500), nullable=True)
     city = db.Column(db.String(120), nullable=True, index=True)
     province = db.Column(db.String(120), nullable=True, index=True)
+    country = db.Column(db.String(120), nullable=True)
     cv = db.Column(db.String(500), nullable=True)
+    profile_picture = db.Column(db.String(500), nullable=True)
+    account_id = db.Column(db.String(120), nullable=True)
+    account_owner = db.Column(db.String(160), nullable=True)
     interview_date = db.Column(db.String(10), nullable=True)
     interview_time = db.Column(db.String(8), nullable=True)
     platform = db.Column(db.String(20), nullable=True)
@@ -1602,4 +1613,4 @@ class PotentialEntry(db.Model):
     )
 
     def roles_list(self):
-        return []
+        return [role.strip() for role in (self.acceptance_roles or "").split(",") if role.strip()]

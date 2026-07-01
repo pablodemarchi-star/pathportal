@@ -5,7 +5,14 @@ from datetime import date, time
 os.environ["DATABASE_URL"] = "sqlite:///:memory:"
 
 from app import create_app, db
-from app.models import PotentialEntry, StaffMembersSettings
+from app.models import (
+    AcademicStaff,
+    ExamSession,
+    ExamSessionExaminerAssignment,
+    ExamSessionSupervisorAssignment,
+    PotentialEntry,
+    StaffMembersSettings,
+)
 
 
 class PotentialInvitationTest(unittest.TestCase):
@@ -46,6 +53,47 @@ class PotentialInvitationTest(unittest.TestCase):
         db.session.commit()
         return entry
 
+    def add_member(self, **overrides):
+        values = {
+            "status": "Active",
+            "title": "Prof.",
+            "full_name": "Jane Staff",
+            "roles": "Examiner",
+            "phone": "555-000",
+            "email": "jane.staff@example.com",
+            "has_car": "Yes",
+            "started_in": "2026",
+            "full_address_google_maps": "742 Evergreen Terrace",
+            "city": "CABA",
+            "province": "Buenos Aires",
+            "country": "Argentina",
+            "cv": "https://example.com/cv.pdf",
+            "account_id": "ACC-1",
+            "account_owner": "Path",
+            "profile_picture": "https://example.com/profile.jpg",
+        }
+        values.update(overrides)
+        member = AcademicStaff(**values)
+        db.session.add(member)
+        db.session.commit()
+        return member
+
+    def add_session(self, **overrides):
+        values = {
+            "exam_session_name": "Future session",
+            "category": "Exam",
+            "status": "Draft",
+            "session_date": date(2026, 7, 20),
+            "shifts": "AM",
+            "modules": "Speaking",
+            "format": "Online",
+        }
+        values.update(overrides)
+        session_record = ExamSession(**values)
+        db.session.add(session_record)
+        db.session.commit()
+        return session_record
+
     def test_interview_arranged_entry_shows_email_invitation_button(self):
         entry = self.add_entry()
         response = self.client().get("/")
@@ -63,8 +111,8 @@ class PotentialInvitationTest(unittest.TestCase):
         self.assertIn('data-interview-date="2026-07-02"', html)
         self.assertIn('data-interview-time="10:00:00"', html)
         self.assertIn('data-platform="Zoom"', html)
-        self.assertNotIn("Successful application email", html)
-        self.assertNotIn("Unsuccessful application email", html)
+        self.assertNotIn("Accept email", html)
+        self.assertNotIn("Reject email", html)
         self.assertNotIn("data-zoom-link", html)
         self.assertNotIn("data-zoom-id", html)
         self.assertNotIn("data-zoom-password", html)
@@ -76,15 +124,65 @@ class PotentialInvitationTest(unittest.TestCase):
         html = response.get_data(as_text=True)
         self.assertNotIn("Email invitation", html)
         self.assertNotIn("data-copy-potential-invitation", html)
-        self.assertNotIn("Successful application email", html)
-        self.assertNotIn("Unsuccessful application email", html)
+        self.assertNotIn("Accept email", html)
+        self.assertNotIn("Reject email", html)
 
-    def test_potential_entry_without_email_does_not_show_gmail_button(self):
-        self.add_entry(email="")
+    def test_potential_entry_missing_contact_details_show_recorded_messages(self):
+        self.add_entry(email="", phone="", city="", province="", cv="")
         response = self.client().get("/")
         html = response.get_data(as_text=True)
         self.assertIn("No email recorded", html)
+        self.assertIn("No phone recorded", html)
+        self.assertIn("No city or province recorded", html)
+        self.assertIn("No CV recorded", html)
         self.assertNotIn("data-potential-gmail-email", html)
+
+    def test_potential_entry_city_and_province_render_on_same_line(self):
+        self.add_entry(city="Moreno", province="Pumbis")
+        response = self.client().get("/")
+        html = response.get_data(as_text=True)
+        self.assertIn("Moreno, Pumbis", html)
+
+    def test_potential_entries_order_by_interview_date_and_time_with_missing_dates_last(self):
+        self.add_entry(
+            full_name="Far Candidate",
+            email="far@example.com",
+            interview_date="2026-07-03",
+            interview_time="09:00:00",
+        )
+        self.add_entry(
+            full_name="No Date Candidate",
+            email="nodate@example.com",
+            interview_date="",
+            interview_time="",
+        )
+        self.add_entry(
+            full_name="Unarranged Candidate",
+            email="unarranged@example.com",
+            status="To be interviewed",
+            interview_date="2026-07-01",
+            interview_time="07:00:00",
+        )
+        self.add_entry(
+            full_name="Near Candidate",
+            email="near@example.com",
+            interview_date="2026-07-01",
+            interview_time="12:00:00",
+        )
+        self.add_entry(
+            full_name="Earliest Candidate",
+            email="earliest@example.com",
+            interview_date="2026-07-01",
+            interview_time="08:00:00",
+        )
+
+        response = self.client().get("/")
+        html = response.get_data(as_text=True)
+
+        self.assertLess(html.index("Earliest Candidate"), html.index("Near Candidate"))
+        self.assertLess(html.index("Near Candidate"), html.index("Far Candidate"))
+        self.assertLess(html.index("Far Candidate"), html.index("No Date Candidate"))
+        self.assertLess(html.index("Far Candidate"), html.index("Unarranged Candidate"))
 
     def test_meet_entry_uses_platform_without_manual_access_data(self):
         self.add_entry(platform="Meet")
@@ -158,6 +256,311 @@ class PotentialInvitationTest(unittest.TestCase):
         self.assertEqual(response.status_code, 302)
         self.assertFalse(db.session.get(PotentialEntry, entry.id).interview_invitation_sent)
 
+    def test_new_member_and_accept_member_forms_mark_complete_fields_required(self):
+        self.add_entry(full_name="Required Candidate")
+        html = self.client().get("/").get_data(as_text=True)
+
+        self.assertIn("Staff members | Path Examinations", html)
+        self.assertIn(">Staff members</p>", html)
+        self.assertIn("<h1>Staff members</h1>", html)
+        self.assertNotIn("<h1>Academic staff</h1>", html)
+        self.assertIn("Accept as staff member", html)
+        self.assertNotIn("Accept as academic staff", html)
+        self.assertIn('data-modal-form="create-member"', html)
+        self.assertIn('name="title" value="" maxlength="120" required', html)
+        self.assertIn('name="phone" value="" maxlength="80" required', html)
+        self.assertIn('name="email" type="email" value="" maxlength="160" required', html)
+        self.assertIn('name="has_car" required', html)
+        self.assertIn('name="started_in" type="text" inputmode="numeric" pattern="\\d{4}" value="" placeholder="2026" maxlength="4" required', html)
+        self.assertIn('name="full_address_google_maps" value="" maxlength="500" required', html)
+        self.assertIn('name="cv" type="url" value="" placeholder="https://example.com/cv" maxlength="500" required', html)
+        self.assertIn('name="profile_picture" type="url" value="" placeholder="https://example.com/profile-picture" maxlength="500" required', html)
+        self.assertIn('name="account_id" value="" maxlength="120" required', html)
+        self.assertIn('name="account_owner" value="" maxlength="160" required', html)
+        self.assertNotIn('name="seniority" type="checkbox" required', html)
+        self.assertNotIn('textarea name="interview" rows="5" maxlength="4000" placeholder="Add a new interview note. It will be saved with date and time." required', html)
+
+    def test_staff_members_can_sort_by_has_car_and_sessions(self):
+        no_car = self.add_member(full_name="No Car Staff", email="no-car@example.com", has_car="No")
+        one_session = self.add_member(full_name="One Session Staff", email="one-session@example.com", has_car="Yes")
+        two_sessions = self.add_member(full_name="Two Sessions Staff", email="two-sessions@example.com", has_car="Yes")
+        inactive = self.add_member(
+            full_name="Inactive Staff",
+            email="inactive-sort@example.com",
+            status="Inactive",
+            has_car="Yes",
+        )
+        first_session = self.add_session(exam_session_name="First counted session", session_date=date(2026, 7, 20))
+        second_session = self.add_session(exam_session_name="Second counted session", session_date=date(2026, 8, 20))
+        db.session.add_all(
+            [
+                ExamSessionExaminerAssignment(
+                    exam_session_id=first_session.id,
+                    team_member_id=one_session.id,
+                    participation_status="Confirmed",
+                ),
+                ExamSessionExaminerAssignment(
+                    exam_session_id=first_session.id,
+                    team_member_id=two_sessions.id,
+                    participation_status="Confirmed",
+                ),
+                ExamSessionSupervisorAssignment(
+                    exam_session_id=second_session.id,
+                    team_member_id=two_sessions.id,
+                    participation_status="Confirmed",
+                ),
+                ExamSessionExaminerAssignment(
+                    exam_session_id=second_session.id,
+                    team_member_id=no_car.id,
+                    participation_status="Pending",
+                ),
+            ]
+        )
+        db.session.commit()
+
+        has_car_html = self.client().get("/?sort=has_car&dir=asc").get_data(as_text=True)
+        self.assertIn("sort=has_car", has_car_html)
+        self.assertLess(has_car_html.index("No Car Staff"), has_car_html.index("One Session Staff"))
+
+        status_html = self.client().get("/?sort=status&dir=desc").get_data(as_text=True)
+        self.assertIn("sort=status", status_html)
+        self.assertLess(status_html.index("Inactive Staff"), status_html.index("No Car Staff"))
+
+        sessions_html = self.client().get("/?sort=sessions&dir=desc").get_data(as_text=True)
+        self.assertIn("sort=sessions", sessions_html)
+        self.assertLess(sessions_html.index("Two Sessions Staff"), sessions_html.index("One Session Staff"))
+        self.assertLess(sessions_html.index("One Session Staff"), sessions_html.index("No Car Staff"))
+
+    def test_create_member_requires_complete_fields_except_seniority_and_history(self):
+        response = self.client().post(
+            "/members",
+            data={
+                "csrf_token": "token",
+                "status": "Active",
+                "title": "Prof.",
+                "full_name": "Incomplete Member",
+                "phone": "555-444",
+            },
+            follow_redirects=True,
+        )
+
+        html = response.get_data(as_text=True)
+        self.assertEqual(AcademicStaff.query.count(), 0)
+        self.assertIn("At least one role is required.", html)
+        self.assertIn('class="modal is-open"', html)
+        self.assertIn('id="create-member"', html)
+        self.assertIn('value="Prof."', html)
+        self.assertIn('value="Incomplete Member"', html)
+        self.assertIn('value="555-444"', html)
+        self.assertIn("Email is required.", html)
+        self.assertIn("Has a car is required.", html)
+        self.assertIn("Started in is required.", html)
+        self.assertIn("Full address is required.", html)
+        self.assertIn("City is required.", html)
+        self.assertIn("Province is required.", html)
+        self.assertIn("Country is required.", html)
+        self.assertIn("CV is required.", html)
+        self.assertIn("Profile picture is required.", html)
+        self.assertIn("Account ID is required.", html)
+        self.assertIn("Account owner is required.", html)
+
+    def test_accept_potential_entry_requires_complete_member_fields_except_seniority_and_history(self):
+        entry = self.add_entry(full_name="Incomplete Accepted Candidate")
+        response = self.client().post(
+            f"/potential-entries/{entry.id}/accept",
+            data={
+                "csrf_token": "token",
+                "status": "Active",
+                "title": "Prof.",
+                "full_name": "Incomplete Accepted Candidate",
+                "seniority": "on",
+                "phone": "555-555",
+                "has_car": "Yes",
+            },
+            follow_redirects=True,
+        )
+
+        html = response.get_data(as_text=True)
+        self.assertEqual(AcademicStaff.query.count(), 0)
+        updated_entry = db.session.get(PotentialEntry, entry.id)
+        self.assertIsNotNone(updated_entry)
+        self.assertEqual(updated_entry.title, "Prof.")
+        self.assertTrue(updated_entry.seniority)
+        self.assertEqual(updated_entry.phone, "555-555")
+        self.assertEqual(updated_entry.has_car, "Yes")
+        self.assertIn('class="modal is-open"', html)
+        self.assertIn(f'id="accept-potential-entry-{entry.id}"', html)
+        self.assertIn('value="Prof."', html)
+        self.assertIn('value="555-555"', html)
+        self.assertIn("At least one role is required.", html)
+        self.assertIn("Email is required.", html)
+
+    def test_member_cannot_be_inactivated_or_archived_when_assigned_to_future_session(self):
+        member = self.add_member(full_name="Future Assigned Staff", email="future-assigned@example.com")
+        session_record = self.add_session(exam_session_name="Future Blocking Session", session_date=date(2026, 7, 20))
+        db.session.add(
+            ExamSessionExaminerAssignment(
+                exam_session_id=session_record.id,
+                team_member_id=member.id,
+                participation_status="Pending",
+            )
+        )
+        db.session.commit()
+
+        response = self.client().post(
+            f"/members/{member.id}",
+            data={
+                "csrf_token": "token",
+                "status": "Inactive",
+                "full_name": "Future Assigned Staff",
+            },
+            follow_redirects=True,
+        )
+
+        html = response.get_data(as_text=True)
+        self.assertIn("Future Blocking Session", html)
+        self.assertIn("Remove the member from those sessions in Exam session planner", html)
+        self.assertEqual(db.session.get(AcademicStaff, member.id).status, "Active")
+
+    def test_bulk_status_change_blocks_members_assigned_to_future_sessions(self):
+        member = self.add_member(full_name="Bulk Future Staff", email="bulk-future@example.com")
+        session_record = self.add_session(exam_session_name="Bulk Future Session", session_date=date(2026, 9, 20))
+        db.session.add(
+            ExamSessionSupervisorAssignment(
+                exam_session_id=session_record.id,
+                team_member_id=member.id,
+                participation_status="Confirmed",
+            )
+        )
+        db.session.commit()
+
+        response = self.client().post(
+            "/members/bulk-update",
+            data={
+                "csrf_token": "token",
+                "member_ids": [str(member.id)],
+                "bulk_action": "status",
+                "status": "Archived",
+            },
+            follow_redirects=True,
+        )
+
+        html = response.get_data(as_text=True)
+        self.assertIn("Bulk Future Session", html)
+        self.assertEqual(db.session.get(AcademicStaff, member.id).status, "Active")
+
+    def test_save_acceptance_draft_persists_without_creating_member(self):
+        entry = self.add_entry(full_name="Draft Candidate")
+        response = self.client().post(
+            f"/potential-entries/{entry.id}/accept-draft",
+            data={
+                "csrf_token": "token",
+                "status": "Active",
+                "title": "Prof.",
+                "full_name": "Draft Candidate Updated",
+                "seniority": "on",
+                "roles": ["Examiner", "Supervisor"],
+                "phone": "555-111",
+                "email": "draft.updated@example.com",
+                "has_car": "Yes",
+                "started_in": "2026",
+                "full_address_google_maps": "742 Evergreen Terrace",
+                "city": "Moreno",
+                "province": "Pumbis",
+                "country": "Argentina",
+                "cv": "https://example.com/cv.pdf",
+                "profile_picture": "https://example.com/profile.jpg",
+                "account_id": "ACC-1",
+                "account_owner": "Path",
+                "interview": "Draft note",
+            },
+            follow_redirects=False,
+        )
+
+        self.assertEqual(response.status_code, 302)
+        self.assertEqual(AcademicStaff.query.count(), 0)
+        updated_entry = db.session.get(PotentialEntry, entry.id)
+        self.assertEqual(updated_entry.acceptance_status, "Active")
+        self.assertEqual(updated_entry.title, "Prof.")
+        self.assertEqual(updated_entry.full_name, "Draft Candidate Updated")
+        self.assertTrue(updated_entry.seniority)
+        self.assertEqual(updated_entry.roles_list(), ["Examiner", "Supervisor"])
+        self.assertEqual(updated_entry.full_address_google_maps, "742 Evergreen Terrace")
+        self.assertEqual(updated_entry.profile_picture, "https://example.com/profile.jpg")
+        self.assertIn("Draft note", updated_entry.interview)
+
+        html = self.client().get("/").get_data(as_text=True)
+        self.assertIn("Save", html)
+        self.assertIn('data-acceptance-draft-save="/potential-entries/1/accept-draft"', html)
+        self.assertIn('value="Draft Candidate Updated"', html)
+        self.assertIn('value="742 Evergreen Terrace"', html)
+        self.assertIn('value="https://example.com/profile.jpg"', html)
+        self.assertIn('value="Examiner" checked', html)
+        self.assertIn('value="Supervisor" checked', html)
+
+    def test_save_acceptance_draft_allows_missing_required_member_fields(self):
+        entry = self.add_entry(full_name="Partial Draft Candidate")
+        response = self.client().post(
+            f"/potential-entries/{entry.id}/accept-draft",
+            data={
+                "csrf_token": "token",
+                "status": "",
+                "full_name": "",
+                "phone": "555-222",
+                "email": "",
+                "has_car": "",
+                "started_in": "",
+                "cv": "",
+                "profile_picture": "",
+            },
+            follow_redirects=False,
+        )
+
+        self.assertEqual(response.status_code, 302)
+        self.assertEqual(AcademicStaff.query.count(), 0)
+        updated_entry = db.session.get(PotentialEntry, entry.id)
+        self.assertEqual(updated_entry.full_name, "Partial Draft Candidate")
+        self.assertEqual(updated_entry.acceptance_status, "")
+        self.assertEqual(updated_entry.phone, "555-222")
+
+    def test_save_acceptance_draft_persists_valid_fields_when_other_fields_are_invalid(self):
+        entry = self.add_entry(
+            full_name="Mixed Draft Candidate",
+            has_car="No",
+            started_in="2025",
+            profile_picture="https://example.com/old.jpg",
+        )
+        response = self.client().post(
+            f"/potential-entries/{entry.id}/accept-draft",
+            data={
+                "csrf_token": "token",
+                "status": "Active",
+                "full_name": "Mixed Draft Candidate",
+                "seniority": "on",
+                "roles": ["Examiner"],
+                "phone": "555-333",
+                "email": "mixed@example.com",
+                "has_car": "Yes",
+                "started_in": "20",
+                "cv": "",
+                "profile_picture": "not-a-url",
+            },
+            follow_redirects=True,
+        )
+
+        html = response.get_data(as_text=True)
+        self.assertIn("Started in must be a four-digit year.", html)
+        self.assertIn("Profile picture must be a valid http or https URL.", html)
+        self.assertIn("Valid accepted form changes were saved.", html)
+        updated_entry = db.session.get(PotentialEntry, entry.id)
+        self.assertTrue(updated_entry.seniority)
+        self.assertEqual(updated_entry.has_car, "Yes")
+        self.assertEqual(updated_entry.acceptance_status, "Active")
+        self.assertEqual(updated_entry.phone, "555-333")
+        self.assertEqual(updated_entry.email, "mixed@example.com")
+        self.assertEqual(updated_entry.started_in, "2025")
+        self.assertEqual(updated_entry.profile_picture, "https://example.com/old.jpg")
+
     def test_sent_interview_invitation_shows_disabled_button_and_outcome_buttons(self):
         entry = self.add_entry(interview_invitation_sent=True)
         db.session.add(
@@ -177,8 +580,8 @@ class PotentialInvitationTest(unittest.TestCase):
         self.assertIn("disabled", html)
         self.assertIn("Invitation sent", html)
         self.assertIn(f"Undo invitation sent for {entry.full_name}", html)
-        self.assertIn("Successful application email", html)
-        self.assertIn("Unsuccessful application email", html)
+        self.assertIn("Accept email", html)
+        self.assertIn("Reject email", html)
         self.assertIn('data-copy-potential-outcome="successful"', html)
         self.assertIn('data-copy-potential-outcome="unsuccessful"', html)
         self.assertIn('data-induction-date="15/07/2026"', html)
@@ -190,8 +593,8 @@ class PotentialInvitationTest(unittest.TestCase):
         response = self.client().get("/")
         html = response.get_data(as_text=True)
 
-        self.assertNotIn("Successful application email", html)
-        self.assertNotIn("Unsuccessful application email", html)
+        self.assertNotIn("Accept email", html)
+        self.assertNotIn("Reject email", html)
 
     def test_potential_form_does_not_show_manual_access_fields(self):
         response = self.client().get("/")
@@ -223,6 +626,8 @@ class PotentialInvitationTest(unittest.TestCase):
         self.assertIn("buildPotentialGmailUrl", js)
         self.assertIn("https://mail.google.com/mail/?view=cm&fs=1&to=", js)
         self.assertIn("data-potential-gmail-email", js)
+        self.assertIn("data-acceptance-draft-save", js)
+        self.assertIn("form.submit()", js)
         gmail_helper = js[js.index("const buildPotentialGmailUrl"):js.index("const initPotentialGmailButtons")]
         self.assertNotIn("subject", gmail_helper)
         self.assertIn("undefined", js)

@@ -6,14 +6,14 @@ from decimal import Decimal, InvalidOperation, ROUND_FLOOR
 from datetime import datetime, timezone, timedelta
 import calendar
 from io import BytesIO
-from urllib.parse import parse_qs, urlparse
+from urllib.parse import parse_qs, quote, urlparse
 
 from flask import Blueprint, Response, abort, current_app, flash, has_request_context, jsonify, redirect, render_template, request, session, url_for
 from openpyxl import load_workbook
 from openpyxl import Workbook
 from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from openpyxl.utils import get_column_letter
-from sqlalchemy import or_
+from sqlalchemy import or_, union_all
 from sqlalchemy.orm import joinedload
 
 from app import db, login_required, validate_csrf
@@ -85,7 +85,17 @@ from app.models import (
     User,
     USER_DEPARTMENTS,
 )
-from app.validators import is_valid_google_maps_url, is_valid_url, validate_member_form, validate_potential_form
+from app.validators import (
+    HAS_CAR,
+    ROLES,
+    STATUSES_CREATE,
+    YEAR_RE,
+    EMAIL_RE,
+    is_valid_google_maps_url,
+    is_valid_url,
+    validate_member_form,
+    validate_potential_form,
+)
 
 staff_bp = Blueprint("staff", __name__)
 LOCAL_TZ = timezone(timedelta(hours=-3))
@@ -1528,59 +1538,62 @@ def apply_exam_session_form(session_record, data):
     session_record.details_url = data["details_url"]
 
 
-def build_academic_staff_export(members, session_counts=None):
+ACADEMIC_STAFF_EXPORT_HEADERS = [
+    "Status",
+    "Title",
+    "Full name",
+    "Roles",
+    "Phone",
+    "Email",
+    "Has a car",
+    "Full address",
+    "City",
+    "Province",
+    "Country",
+    "CV",
+    "History",
+    "Account ID",
+    "Account owner",
+    "Profile picture",
+    "Started in",
+    "Sessions",
+    "Seniority",
+]
+
+
+def academic_staff_export_row(member, session_counts=None):
     session_counts = session_counts or {}
-    headers = [
-        "Status",
-        "Title",
-        "Full name",
-        "Roles",
-        "Phone",
-        "Email",
-        "Has a car",
-        "Full address",
-        "City",
-        "Province",
-        "Country",
-        "CV",
-        "History",
-        "Account ID",
-        "Account owner",
-        "Profile picture",
-        "Started in",
-        "Sessions",
-        "Seniority",
+    return [
+        member.status or "",
+        member.title or "",
+        member.full_name or "",
+        ", ".join(member.roles_list()),
+        member.phone or "",
+        member.email or "",
+        member.has_car or "",
+        member.full_address_google_maps or "",
+        member.city or "",
+        member.province or "",
+        member.country or "",
+        member.cv or "",
+        member.interview or "",
+        member.account_id or "",
+        member.account_owner or "",
+        member.profile_picture or "",
+        member.started_in or "",
+        session_counts.get(member.id, 0),
+        "Yes" if member.seniority else "No",
     ]
-    rows = []
-    for member in members:
-        rows.append([
-            member.status or "",
-            member.title or "",
-            member.full_name or "",
-            ", ".join(member.roles_list()),
-            member.phone or "",
-            member.email or "",
-            member.has_car or "",
-            member.full_address_google_maps or "",
-            member.city or "",
-            member.province or "",
-            member.country or "",
-            member.cv or "",
-            member.interview or "",
-            member.account_id or "",
-            member.account_owner or "",
-            member.profile_picture or "",
-            member.started_in or "",
-            session_counts.get(member.id, 0),
-            "Yes" if member.seniority else "No",
-        ])
+
+
+def build_staff_export_workbook(headers, rows, export_title, sheet_title):
 
     workbook = Workbook()
     sheet = workbook.active
-    sheet.title = "Academic Staff"
+    sheet.title = sheet_title
 
     last_column = len(headers)
-    title_cell = sheet.cell(row=1, column=1, value="Academic Staff Export")
+    title_cell = sheet.cell(row=1, column=1, value=export_title)
     sheet.merge_cells(start_row=1, start_column=1, end_row=1, end_column=last_column)
     exported_cell = sheet.cell(
         row=2,
@@ -1593,8 +1606,9 @@ def build_academic_staff_export(members, session_counts=None):
         sheet.cell(row=3, column=column_index, value=header)
 
     hyperlink_columns = {
-        headers.index("CV") + 1,
-        headers.index("Profile picture") + 1,
+        headers.index(header) + 1
+        for header in ("CV", "Profile picture")
+        if header in headers
     }
 
     for row_index, row in enumerate(rows, start=4):
@@ -1659,6 +1673,17 @@ def build_academic_staff_export(members, session_counts=None):
     return output.getvalue()
 
 
+def build_academic_staff_export(members, session_counts=None):
+    session_counts = session_counts or {}
+    rows = [academic_staff_export_row(member, session_counts) for member in members]
+    return build_staff_export_workbook(
+        ACADEMIC_STAFF_EXPORT_HEADERS,
+        rows,
+        "Academic Staff Export",
+        "Academic Staff",
+    )
+
+
 def certification_export_value(
     member,
     certification,
@@ -1696,6 +1721,63 @@ def certification_export_value(
     if certification["key"] == "fut":
         return ""
     return "No years yet"
+
+
+def build_full_annual_certification_export(
+    members,
+    certification_years,
+    export_title,
+    sheet_title,
+    status_header,
+    certification_types,
+    session_counts=None,
+    fut_selections=None,
+    fut2_selections=None,
+    remote_training_selections=None,
+    annual_meeting_selections=None,
+    stage_2_selections=None,
+    stage_3_selections=None,
+):
+    session_counts = session_counts or {}
+    certification_headers = [certification["label"] for certification in certification_types]
+    headers = ACADEMIC_STAFF_EXPORT_HEADERS + [status_header] + certification_headers
+    rows = []
+    for member in members:
+        if status_header == "Stage status":
+            progress_status = intern_stage_status_label(
+                member.id,
+                remote_training_selections or {},
+                stage_2_selections or {},
+                stage_3_selections or {},
+            )
+        else:
+            progress_status = certification_status_label(
+                member.id,
+                remote_training_selections or {},
+                annual_meeting_selections or {},
+                fut_selections or {},
+                fut2_selections,
+            )
+        rows.append(
+            academic_staff_export_row(member, session_counts)
+            + [progress_status]
+            + [
+                certification_export_value(
+                    member,
+                    certification,
+                    certification_years,
+                    fut_selections,
+                    fut2_selections,
+                    remote_training_selections,
+                    annual_meeting_selections,
+                    stage_2_selections,
+                    stage_3_selections,
+                )
+                for certification in certification_types
+            ]
+        )
+
+    return build_staff_export_workbook(headers, rows, export_title, sheet_title)
 
 
 def build_annual_certification_export(
@@ -1826,28 +1908,28 @@ def build_annual_meetings_export(members, meeting_years):
 
 IMPORT_REQUIRED_HEADERS = {
     "Status",
+    "Title",
     "Full name",
     "Roles",
+    "Phone",
     "Email",
     "Has a car",
+    "Full address",
     "City",
     "Province",
     "Country",
-}
-IMPORT_OPTIONAL_HEADERS = {
-    "Title",
-    "Phone",
-    "Full address",
-    "Street name",
-    "Street number",
-    "Postcode",
-    "Location point",
     "CV",
-    "History",
     "Account ID",
     "Account owner",
     "Profile picture",
     "Started in",
+}
+IMPORT_OPTIONAL_HEADERS = {
+    "Street name",
+    "Street number",
+    "Postcode",
+    "Location point",
+    "History",
     "Sessions",
     "Updated on",
     "Seniority",
@@ -2588,6 +2670,90 @@ def confirmed_session_counts_by_member(member_ids):
     }
 
 
+def staff_member_session_counts_subquery():
+    assignment_rows = union_all(
+        db.session.query(
+            ExamSessionSupervisorAssignment.team_member_id.label("member_id"),
+            ExamSessionSupervisorAssignment.exam_session_id.label("session_id"),
+        )
+        .filter(
+            ExamSessionSupervisorAssignment.team_member_id.isnot(None),
+            ExamSessionSupervisorAssignment.participation_status == "Confirmed",
+        )
+        .statement,
+        db.session.query(
+            ExamSessionExaminerAssignment.team_member_id.label("member_id"),
+            ExamSessionExaminerAssignment.exam_session_id.label("session_id"),
+        )
+        .filter(
+            ExamSessionExaminerAssignment.team_member_id.isnot(None),
+            ExamSessionExaminerAssignment.participation_status == "Confirmed",
+        )
+        .statement,
+        db.session.query(
+            ExamSessionInternAssignment.team_member_id.label("member_id"),
+            ExamSessionInternAssignment.exam_session_id.label("session_id"),
+        )
+        .filter(
+            ExamSessionInternAssignment.team_member_id.isnot(None),
+            ExamSessionInternAssignment.participation_status == "Confirmed",
+        )
+        .statement,
+    ).subquery()
+    return (
+        db.session.query(
+            assignment_rows.c.member_id,
+            db.func.count(db.distinct(assignment_rows.c.session_id)).label("session_count"),
+        )
+        .group_by(assignment_rows.c.member_id)
+        .subquery()
+    )
+
+
+def future_session_names_by_member(member_ids):
+    member_ids = [member_id for member_id in member_ids if member_id]
+    if not member_ids:
+        return {}
+    today = datetime.now(LOCAL_TZ).date()
+    names_by_member = {member_id: set() for member_id in member_ids}
+    assignment_models = (
+        ExamSessionSupervisorAssignment,
+        ExamSessionExaminerAssignment,
+        ExamSessionInternAssignment,
+    )
+    for assignment_model in assignment_models:
+        rows = (
+            db.session.query(assignment_model.team_member_id, ExamSession.exam_session_name)
+            .join(ExamSession, ExamSession.id == assignment_model.exam_session_id)
+            .filter(
+                assignment_model.team_member_id.in_(member_ids),
+                ExamSession.session_date > today,
+            )
+            .all()
+        )
+        for member_id, session_name in rows:
+            names_by_member.setdefault(member_id, set()).add(session_name or "Untitled exam session")
+    return {
+        member_id: sorted(session_names)
+        for member_id, session_names in names_by_member.items()
+        if session_names
+    }
+
+
+def flash_future_session_status_blockers(members):
+    blockers = future_session_names_by_member([member.id for member in members])
+    for member in members:
+        session_names = blockers.get(member.id)
+        if not session_names:
+            continue
+        flash(
+            f"{member.full_name} is assigned to future exam session(s): {', '.join(session_names)}. "
+            "Remove the member from those sessions in Exam session planner before changing the status to Inactive or Archived.",
+            "error",
+        )
+    return bool(blockers)
+
+
 def build_exam_session_cost_summaries(
     session_ids,
     supervisor_assignment_records,
@@ -3001,8 +3167,6 @@ def selected_examiner_certification_year():
         year_number = int(requested_year)
         if any(item.year == year_number for item in active_years):
             return year_number, active_years
-    if any(item.year == 2026 for item in active_years):
-        return 2026, active_years
     return active_years[-1].year, active_years
 
 
@@ -3044,8 +3208,6 @@ def selected_supervisor_certification_year():
         year_number = int(requested_year)
         if any(item.year == year_number for item in active_years):
             return year_number, active_years
-    if any(item.year == 2026 for item in active_years):
-        return 2026, active_years
     return active_years[-1].year, active_years
 
 
@@ -3267,8 +3429,6 @@ def selected_intern_stage_year():
         year_number = int(requested_year)
         if any(item.year == year_number for item in active_years):
             return year_number, active_years
-    if any(item.year == 2026 for item in active_years):
-        return 2026, active_years
     return active_years[-1].year, active_years
 
 
@@ -9156,6 +9316,49 @@ def intern_stage_status_label(member_id, remote_training_selections, stage_2_sel
     return "Pending"
 
 
+def gmail_bcc_url(emails):
+    clean_emails = [email.strip().lower() for email in emails if email and email.strip()]
+    return f"https://mail.google.com/mail/?view=cm&fs=1&bcc={quote(','.join(clean_emails))}"
+
+
+def intern_stage_pending_email_actions(members, remote_training_selections, stage_2_selections, stage_3_selections):
+    stage_1_emails = []
+    stage_2_emails = []
+    stage_3_emails = []
+    for member in members:
+        if not member.email:
+            continue
+        stage_1 = remote_training_selections.get(member.id)
+        stage_2 = stage_3_selections.get(member.id)
+        stage_3 = stage_2_selections.get(member.id)
+        stage_1_status = stage_1.status if stage_1 else "Pending"
+        stage_2_status = stage_2.status if stage_2 else "Pending"
+        stage_3_status = stage_3.status if stage_3 else "Pending"
+        if stage_1_status == "Pending":
+            stage_1_emails.append(member.email)
+        if intern_stage_is_completed(stage_1_status) and stage_2_status == "Pending":
+            stage_2_emails.append(member.email)
+        if intern_stage_is_completed(stage_2_status) and stage_3_status == "Pending":
+            stage_3_emails.append(member.email)
+    return [
+        {
+            "label": "Send email to Stage 1 interns",
+            "emails": stage_1_emails,
+            "url": gmail_bcc_url(stage_1_emails),
+        },
+        {
+            "label": "Send email to Stage 2 interns",
+            "emails": stage_2_emails,
+            "url": gmail_bcc_url(stage_2_emails),
+        },
+        {
+            "label": "Send email to Stage 3 interns",
+            "emails": stage_3_emails,
+            "url": gmail_bcc_url(stage_3_emails),
+        },
+    ]
+
+
 def intern_stage_state(member_id, year):
     stage_3 = InternStage3Selection.query.filter_by(
         member_id=member_id,
@@ -9477,6 +9680,108 @@ def interview_history_entries(history):
     return entries
 
 
+def interview_history_count(history):
+    return len(interview_history_entries(history))
+
+
+def certification_status_sort_rank(status):
+    return {"Pending": 0, "In progress": 1, "Certified": 2}.get(status or "", -1)
+
+
+def remote_training_sort_rank(status):
+    return {"Pending": 0, "With FUT": 1, "Certified": 2}.get(status or "", -1)
+
+
+def annual_meeting_sort_rank(status):
+    return {"Absent": 0, "Attended": 1, "Certified": 2}.get(status or "", -1)
+
+
+def intern_stage_status_sort_rank(status):
+    return {"Pending": 0, "In progress": 1, "Completed": 2}.get(status or "", -1)
+
+
+def intern_stage_step_sort_rank(status):
+    return {
+        "Pending": 0,
+        "Attended meeting": 1,
+        "With FUT": 2,
+        "Completed": 3,
+        "Certified": 3,
+    }.get(status or "", -1)
+
+
+def sort_certification_members(
+    members,
+    sort_by,
+    sort_dir,
+    certification_statuses,
+    annual_meeting_selections,
+    remote_training_selections,
+    fut_selections,
+):
+    if sort_by not in {"status", "full_name", "history", "annual_meeting", "remote_training", "fut"}:
+        return members
+    reverse = sort_dir == "desc"
+
+    def sort_value(member):
+        if sort_by == "status":
+            return certification_status_sort_rank(certification_statuses.get(member.id))
+        if sort_by == "full_name":
+            return (member.full_name or "").casefold()
+        if sort_by == "history":
+            return interview_history_count(member.interview)
+        if sort_by == "annual_meeting":
+            selection = annual_meeting_selections.get(member.id)
+            return annual_meeting_sort_rank(selection.status if selection else "Absent")
+        if sort_by == "remote_training":
+            selection = remote_training_selections.get(member.id)
+            return remote_training_sort_rank(selection.status if selection else "Pending")
+        if sort_by == "fut":
+            return len(fut_selections.get(member.id, []))
+        return ""
+
+    name_sorted_members = sorted(members, key=lambda member: (member.full_name or "").casefold())
+    return sorted(name_sorted_members, key=sort_value, reverse=reverse)
+
+
+def sort_intern_stage_members(
+    members,
+    sort_by,
+    sort_dir,
+    certification_statuses,
+    remote_training_selections,
+    stage_2_selections,
+    stage_3_selections,
+    fut_selections,
+):
+    if sort_by not in {"status", "full_name", "history", "stage_1", "stage_2", "fut", "stage_3"}:
+        return members
+    reverse = sort_dir == "desc"
+
+    def sort_value(member):
+        if sort_by == "status":
+            return intern_stage_status_sort_rank(certification_statuses.get(member.id))
+        if sort_by == "full_name":
+            return (member.full_name or "").casefold()
+        if sort_by == "history":
+            return interview_history_count(member.interview)
+        if sort_by == "stage_1":
+            selection = remote_training_selections.get(member.id)
+            return intern_stage_step_sort_rank(selection.status if selection else "Pending")
+        if sort_by == "stage_2":
+            selection = stage_3_selections.get(member.id)
+            return intern_stage_step_sort_rank(selection.status if selection else "Pending")
+        if sort_by == "fut":
+            return len(fut_selections.get(member.id, []))
+        if sort_by == "stage_3":
+            selection = stage_2_selections.get(member.id)
+            return intern_stage_step_sort_rank(selection.status if selection else "Pending")
+        return ""
+
+    name_sorted_members = sorted(members, key=lambda member: (member.full_name or "").casefold())
+    return sorted(name_sorted_members, key=sort_value, reverse=reverse)
+
+
 def apply_form(member, form):
     member.status = form.get("status", "").strip()
     member.title = form.get("title", "").strip()
@@ -9506,6 +9811,34 @@ def apply_form(member, form):
     member.profile_picture = form.get("profile_picture", "").strip()
 
 
+def member_draft_payload(form):
+    return {
+        "status": form.get("status", "").strip(),
+        "title": form.get("title", "").strip(),
+        "full_name": form.get("full_name", "").strip(),
+        "seniority": form.get("seniority") == "on",
+        "roles": ",".join(form.getlist("roles")),
+        "phone": form.get("phone", "").strip(),
+        "email": form.get("email", "").strip(),
+        "has_car": form.get("has_car", "").strip(),
+        "started_in": form.get("started_in", "").strip(),
+        "full_address_google_maps": form.get("full_address_google_maps", "").strip(),
+        "city": form.get("city", "").strip(),
+        "province": form.get("province", "").strip(),
+        "country": form.get("country", "").strip(),
+        "cv": form.get("cv", "").strip(),
+        "account_id": form.get("account_id", "").strip(),
+        "account_owner": form.get("account_owner", "").strip(),
+        "profile_picture": form.get("profile_picture", "").strip(),
+    }
+
+
+def member_from_draft_payload(payload):
+    if not payload:
+        return None
+    return AcademicStaff(**payload)
+
+
 def apply_potential_form(entry, form):
     entry.status = form.get("status", "").strip()
     entry.full_name = form.get("full_name", "").strip()
@@ -9518,6 +9851,94 @@ def apply_potential_form(entry, form):
     entry.interview_time = form.get("interview_time", "").strip()
     entry.platform = form.get("platform", "").strip()
     entry.interviewer = form.get("interviewer", "").strip()
+
+
+def apply_potential_acceptance_draft_form(entry, form):
+    entry.acceptance_status = form.get("status", "").strip()
+    entry.title = form.get("title", "").strip()
+    full_name = form.get("full_name", "").strip()
+    if full_name:
+        entry.full_name = full_name
+    entry.seniority = form.get("seniority") == "on"
+    entry.acceptance_roles = ",".join(form.getlist("roles"))
+    entry.phone = form.get("phone", "").strip()
+    entry.email = form.get("email", "").strip()
+    entry.has_car = form.get("has_car", "").strip()
+    entry.started_in = form.get("started_in", "").strip()
+    entry.full_address_google_maps = form.get("full_address_google_maps", "").strip()
+    entry.city = form.get("city", "").strip()
+    entry.province = form.get("province", "").strip()
+    entry.country = form.get("country", "").strip()
+    entry.cv = form.get("cv", "").strip()
+    entry.profile_picture = form.get("profile_picture", "").strip()
+    entry.account_id = form.get("account_id", "").strip()
+    entry.account_owner = form.get("account_owner", "").strip()
+    append_potential_interview_note(entry, form)
+
+
+def apply_partial_potential_acceptance_draft_form(entry, form):
+    errors = []
+    status = form.get("status", "").strip()
+    email = form.get("email", "").strip()
+    cv = form.get("cv", "").strip()
+    profile_picture = form.get("profile_picture", "").strip()
+    started_in = form.get("started_in", "").strip()
+    roles = form.getlist("roles")
+    has_car = form.get("has_car", "").strip()
+
+    if status and status not in STATUSES_CREATE:
+        errors.append("Status is invalid.")
+    else:
+        entry.acceptance_status = status
+
+    entry.title = form.get("title", "").strip()
+    full_name = form.get("full_name", "").strip()
+    if full_name:
+        entry.full_name = full_name
+    entry.seniority = form.get("seniority") == "on"
+
+    invalid_roles = [role for role in roles if role not in ROLES]
+    if invalid_roles:
+        errors.append("Roles contains an invalid value.")
+    else:
+        entry.acceptance_roles = ",".join(roles)
+
+    entry.phone = form.get("phone", "").strip()
+
+    if email and not EMAIL_RE.match(email):
+        errors.append("Email must be a valid email address.")
+    else:
+        entry.email = email
+
+    if has_car not in HAS_CAR:
+        errors.append("Has a car contains an invalid value.")
+    else:
+        entry.has_car = has_car
+
+    if started_in and not YEAR_RE.match(started_in):
+        errors.append("Started in must be a four-digit year.")
+    else:
+        entry.started_in = started_in
+
+    entry.full_address_google_maps = form.get("full_address_google_maps", "").strip()
+    entry.city = form.get("city", "").strip()
+    entry.province = form.get("province", "").strip()
+    entry.country = form.get("country", "").strip()
+
+    if cv and not is_valid_url(cv):
+        errors.append("CV must be a valid http or https URL.")
+    else:
+        entry.cv = cv
+
+    if profile_picture and not is_valid_url(profile_picture):
+        errors.append("Profile picture must be a valid http or https URL.")
+    else:
+        entry.profile_picture = profile_picture
+
+    entry.account_id = form.get("account_id", "").strip()
+    entry.account_owner = form.get("account_owner", "").strip()
+    append_potential_interview_note(entry, form)
+    return errors
 
 
 @staff_bp.app_template_filter("localdt")
@@ -14147,13 +14568,17 @@ def index():
     sort_by = request.args.get("sort", "").strip()
     sort_dir = request.args.get("dir", "asc").strip()
     sortable_columns = {
+        "status": AcademicStaff.status,
         "full_name": AcademicStaff.full_name,
         "title": AcademicStaff.title,
+        "has_car": AcademicStaff.has_car,
         "city": AcademicStaff.city,
         "province": AcademicStaff.province,
         "country": AcademicStaff.country,
         "started_in": AcademicStaff.started_in,
         "updated_on": AcademicStaff.updated_on,
+        "sessions": None,
+        "history": None,
     }
     if sort_by not in sortable_columns:
         sort_by = ""
@@ -14191,7 +14616,22 @@ def index():
     if has_car:
         query = query.filter(AcademicStaff.has_car == has_car)
 
-    if sort_by:
+    session_counts_sort = None
+    if sort_by == "sessions":
+        session_counts_sort = staff_member_session_counts_subquery()
+        query = query.outerjoin(session_counts_sort, session_counts_sort.c.member_id == AcademicStaff.id)
+        sort_column = db.func.coalesce(session_counts_sort.c.session_count, 0)
+        sort_expression = sort_column.desc() if sort_dir == "desc" else sort_column.asc()
+        query = query.order_by(sort_expression, AcademicStaff.full_name.asc())
+    elif sort_by == "history":
+        interview_text = db.func.coalesce(AcademicStaff.interview, "")
+        sort_column = db.case(
+            (db.func.length(db.func.trim(interview_text)) == 0, 0),
+            else_=1 + ((db.func.length(interview_text) - db.func.length(db.func.replace(interview_text, "\n\n", ""))) / 2),
+        )
+        sort_expression = sort_column.desc() if sort_dir == "desc" else sort_column.asc()
+        query = query.order_by(sort_expression, AcademicStaff.full_name.asc())
+    elif sort_by:
         if sort_by == "updated_on":
             sort_column = sortable_columns[sort_by]
         elif sort_by == "started_in":
@@ -14218,10 +14658,37 @@ def index():
     confirmed_session_counts = confirmed_session_counts_by_member([member.id for member in members])
     potential_entries = (
         PotentialEntry.query.filter(PotentialEntry.is_rejected == show_rejected)
-        .order_by(PotentialEntry.updated_on.desc())
+        .order_by(
+            db.case(
+                (
+                    db.or_(
+                        PotentialEntry.status.notin_(["Interview arranged", "Interview scheduled"]),
+                        PotentialEntry.interview_date.is_(None),
+                        PotentialEntry.interview_date == "",
+                    ),
+                    1,
+                ),
+                else_=0,
+            ),
+            PotentialEntry.interview_date.asc(),
+            db.case(
+                (
+                    db.or_(
+                        PotentialEntry.interview_time.is_(None),
+                        PotentialEntry.interview_time == "",
+                    ),
+                    "99:99:99",
+                ),
+                else_=PotentialEntry.interview_time,
+            ).asc(),
+            PotentialEntry.full_name.asc(),
+        )
         .all()
     )
     staff_settings = staff_members_settings()
+    create_member_draft = None
+    if request.args.get("open_staff_modal") == "create-member":
+        create_member_draft = member_from_draft_payload(session.pop("create_member_draft", None))
     return render_template(
         "staff/index.html",
         members=members,
@@ -14234,6 +14701,7 @@ def index():
         interviewer_options=INTERVIEWER_OPTIONS,
         confirmed_session_counts=confirmed_session_counts,
         staff_settings_values=staff_members_settings_values(staff_settings),
+        create_member_draft=create_member_draft,
         filters={
             "q": query_text,
             "status": status,
@@ -14279,9 +14747,15 @@ def annual_certification_programme():
     annual_meeting_filter = request.args.get("annual_meeting", "").strip()
     fut_filter = request.args.get("fut", "").strip()
     no_years_yet = request.args.get("no_years_yet", "").strip()
+    sort_by = request.args.get("sort", "").strip()
+    sort_dir = request.args.get("dir", "asc").strip()
     selected_certification_year, examiner_years = selected_examiner_certification_year()
 
-    if status not in {"", "Active"}:
+    if sort_by not in {"status", "full_name", "history", "annual_meeting", "remote_training", "fut"}:
+        sort_by = ""
+    if sort_dir not in {"asc", "desc"}:
+        sort_dir = "asc"
+    if status not in {"", "Pending", "In progress", "Certified"}:
         status = ""
     if completed_certification not in STAFF_YEAR_CERTIFICATION_KEYS:
         completed_certification = ""
@@ -14316,8 +14790,6 @@ def annual_certification_programme():
                 AcademicStaff.account_owner.ilike(like),
             )
         )
-    if status:
-        query = query.filter(AcademicStaff.status == status)
     if selected_roles:
         query = query.filter(
             db.or_(*(AcademicStaff.roles.ilike(f"%{role}%") for role in selected_roles))
@@ -14472,6 +14944,11 @@ def annual_certification_programme():
         )
         for member in members
     }
+    if status:
+        members = [
+            member for member in members
+            if certification_statuses.get(member.id) == status
+        ]
 
     if no_years_yet:
         expected_pending = no_years_yet == "Yes"
@@ -14489,16 +14966,34 @@ def annual_certification_programme():
             ) == expected_pending
         ]
 
+    members = sort_certification_members(
+        members,
+        sort_by,
+        sort_dir,
+        certification_statuses,
+        annual_meeting_selections,
+        remote_training_selections,
+        fut_selections,
+    )
     members, pagination = paginate_items(members)
     year_configuration = certification_year_configuration(EXAMINER_CERTIFICATION_MODULE_KEY, selected_certification_year)
+
+    def certification_sort_url(column):
+        args = request.args.to_dict(flat=False)
+        current_sort = args.get("sort", [""])[0]
+        current_dir = args.get("dir", ["asc"])[0]
+        next_dir = "desc" if current_sort == column and current_dir == "asc" else "asc"
+        args["sort"] = [column]
+        args["dir"] = [next_dir]
+        return url_for("staff.annual_certification_programme", **args)
 
     return render_template(
         "certification/index.html",
         members=members,
         pagination=pagination,
         roles=ROLE_OPTIONS,
-        visible_role_filters=["Examiner", "RSG"],
-        statuses=["Active"],
+        visible_role_filters=ROLE_OPTIONS,
+        statuses=["Pending", "In progress", "Certified"],
         certifications=STAFF_CERTIFICATION_TYPES,
         filter_certifications=STAFF_YEAR_CERTIFICATION_TYPES,
         certification_years=certification_years,
@@ -14525,7 +15020,9 @@ def annual_certification_programme():
         certification_allowed=certification_allowed,
         current_year=current_year(),
         show_certification_bulk_actions=True,
+        show_certification_table_sort=True,
         bulk_certification_update_endpoint="staff.bulk_update_examiner_certification",
+        certification_sort_url=certification_sort_url,
         filters={
             "q": query_text,
             "status": status,
@@ -14537,6 +15034,8 @@ def annual_certification_programme():
             "annual_meeting": annual_meeting_filter,
             "fut": fut_filter,
             "no_years_yet": no_years_yet,
+            "sort": sort_by,
+            "dir": sort_dir,
         },
         csrf_token=session.get("csrf_token"),
     )
@@ -14693,12 +15192,15 @@ def export_annual_certification():
     for selection in fut2_records:
         fut2_selections.setdefault(selection.member_id, []).append(selection)
 
-    workbook = build_annual_certification_export(
+    session_counts = confirmed_session_counts_by_member([member.id for member in members])
+    workbook = build_full_annual_certification_export(
         members,
         certification_years,
         export_title="Examiner Certification Export",
         sheet_title="Examiner Certification",
+        status_header="Certification status",
         certification_types=STAFF_CERTIFICATION_TYPES,
+        session_counts=session_counts,
         fut_selections=fut_selections,
         fut2_selections=fut2_selections,
         remote_training_selections=remote_training_selections,
@@ -15143,12 +15645,21 @@ def add_certification_member_note(member_id):
 @login_required
 def supervisor_certification():
     query_text = request.args.get("q", "").strip()
+    status = request.args.get("status", "").strip()
     selected_roles = [role for role in request.args.getlist("roles") if role in ROLE_OPTIONS]
     remote_training_filter = request.args.get("remote_training", "").strip()
     annual_meeting_filter = request.args.get("annual_meeting", "").strip()
     fut_filter = request.args.get("fut", "").strip()
+    sort_by = request.args.get("sort", "").strip()
+    sort_dir = request.args.get("dir", "asc").strip()
     selected_certification_year, supervisor_years = selected_supervisor_certification_year()
 
+    if sort_by not in {"status", "full_name", "history", "annual_meeting", "remote_training", "fut"}:
+        sort_by = ""
+    if sort_dir not in {"asc", "desc"}:
+        sort_dir = "asc"
+    if status not in {"", "Pending", "In progress", "Certified"}:
+        status = ""
     if remote_training_filter not in {"", "Pending", "With FUT", "Certified"}:
         remote_training_filter = ""
     if annual_meeting_filter not in {"", "Attended", "Absent"}:
@@ -15213,7 +15724,6 @@ def supervisor_certification():
     members = [
         member for member in members if "Supervisor" in member.roles_list()
     ]
-    members, pagination = paginate_items(members)
     member_ids = [member.id for member in members]
 
     remote_training_records = []
@@ -15252,7 +15762,31 @@ def supervisor_certification():
         )
         for member in members
     }
+    if status:
+        members = [
+            member for member in members
+            if certification_statuses.get(member.id) == status
+        ]
+    members = sort_certification_members(
+        members,
+        sort_by,
+        sort_dir,
+        certification_statuses,
+        annual_meeting_selections,
+        remote_training_selections,
+        fut_selections,
+    )
+    members, pagination = paginate_items(members)
     year_configuration = certification_year_configuration(SUPERVISOR_CERTIFICATION_MODULE_KEY, selected_certification_year)
+
+    def certification_sort_url(column):
+        args = request.args.to_dict(flat=False)
+        current_sort = args.get("sort", [""])[0]
+        current_dir = args.get("dir", ["asc"])[0]
+        next_dir = "desc" if current_sort == column and current_dir == "asc" else "asc"
+        args["sort"] = [column]
+        args["dir"] = [next_dir]
+        return url_for("staff.supervisor_certification", **args)
 
     return render_template(
         "certification/index.html",
@@ -15261,8 +15795,8 @@ def supervisor_certification():
         members=members,
         pagination=pagination,
         roles=ROLE_OPTIONS,
-        visible_role_filters=["Supervisor"],
-        statuses=["Active"],
+        visible_role_filters=ROLE_OPTIONS,
+        statuses=["Pending", "In progress", "Certified"],
         certifications=STAFF_CERTIFICATION_TYPES,
         filter_certifications=[],
         certification_years={},
@@ -15303,11 +15837,13 @@ def supervisor_certification():
         bulk_form_id="supervisor-certification-bulk-form",
         bulk_success_message="Supervisor Certification export downloaded successfully.",
         show_certification_bulk_actions=True,
+        show_certification_table_sort=True,
         bulk_certification_update_endpoint="staff.bulk_update_supervisor_certification",
+        certification_sort_url=certification_sort_url,
         module_key="certification",
         filters={
             "q": query_text,
-            "status": "",
+            "status": status,
             "roles": selected_roles,
             "year": "",
             "completed_certification": "",
@@ -15316,6 +15852,8 @@ def supervisor_certification():
             "annual_meeting": annual_meeting_filter,
             "fut": fut_filter,
             "no_years_yet": "",
+            "sort": sort_by,
+            "dir": sort_dir,
         },
         csrf_token=session.get("csrf_token"),
     )
@@ -15388,12 +15926,15 @@ def export_supervisor_certification():
     for selection in fut_records:
         fut_selections.setdefault(selection.member_id, []).append(selection)
 
-    workbook = build_annual_certification_export(
+    session_counts = confirmed_session_counts_by_member(member_ids)
+    workbook = build_full_annual_certification_export(
         members,
         {},
         export_title="Supervisor Certification Export",
         sheet_title="Supervisor Certification",
+        status_header="Certification status",
         certification_types=STAFF_CERTIFICATION_TYPES,
+        session_counts=session_counts,
         fut_selections=fut_selections,
         fut2_selections={},
         remote_training_selections=remote_training_selections,
@@ -15624,6 +16165,7 @@ def add_supervisor_certification_member_note(member_id):
 @login_required
 def intern_stages():
     query_text = request.args.get("q", "").strip()
+    status = request.args.get("status", "").strip()
     selected_roles = [role for role in request.args.getlist("roles") if role in ROLE_OPTIONS]
     remote_training_filter = request.args.get("remote_training", "").strip()
     stage_1_filter = request.args.get("stage_1", "").strip()
@@ -15631,8 +16173,16 @@ def intern_stages():
     stage_3_filter = request.args.get("stage_3", "").strip()
     annual_meeting_filter = request.args.get("annual_meeting", "").strip()
     fut_filter = request.args.get("fut", "").strip()
+    sort_by = request.args.get("sort", "").strip()
+    sort_dir = request.args.get("dir", "asc").strip()
     selected_certification_year, intern_years = selected_intern_stage_year()
 
+    if sort_by not in {"status", "full_name", "history", "stage_1", "stage_2", "fut", "stage_3"}:
+        sort_by = ""
+    if sort_dir not in {"asc", "desc"}:
+        sort_dir = "asc"
+    if status not in {"", "Pending", "In progress", "Completed"}:
+        status = ""
     if stage_1_filter == "Certified":
         stage_1_filter = "Completed"
     if stage_2_filter == "Certified":
@@ -15756,35 +16306,34 @@ def intern_stages():
         elif fut_filter == "With completed FUT":
             query = query.filter(fut_exists, ~fut_pending_exists)
 
-    members = query.order_by(AcademicStaff.full_name.asc()).all()
-    members, pagination = paginate_items(members)
-    member_ids = [member.id for member in members]
+    all_matching_members = query.order_by(AcademicStaff.full_name.asc()).all()
+    all_matching_member_ids = [member.id for member in all_matching_members]
 
     remote_training_records = []
     annual_meeting_records = []
     stage_2_records = []
     stage_3_records = []
     fut_records = []
-    if member_ids:
+    if all_matching_member_ids:
         remote_training_records = InternStageRemoteTrainingSelection.query.filter(
-            InternStageRemoteTrainingSelection.member_id.in_(member_ids),
+            InternStageRemoteTrainingSelection.member_id.in_(all_matching_member_ids),
             InternStageRemoteTrainingSelection.year == selected_certification_year,
         ).all()
         stage_2_records = InternStage2Selection.query.filter(
-            InternStage2Selection.member_id.in_(member_ids),
+            InternStage2Selection.member_id.in_(all_matching_member_ids),
             InternStage2Selection.year == selected_certification_year,
         ).all()
         stage_3_records = InternStage3Selection.query.filter(
-            InternStage3Selection.member_id.in_(member_ids),
+            InternStage3Selection.member_id.in_(all_matching_member_ids),
             InternStage3Selection.year == selected_certification_year,
         ).all()
         annual_meeting_records = InternStageAnnualMeetingSelection.query.filter(
-            InternStageAnnualMeetingSelection.member_id.in_(member_ids),
+            InternStageAnnualMeetingSelection.member_id.in_(all_matching_member_ids),
             InternStageAnnualMeetingSelection.year == selected_certification_year,
         ).all()
         fut_records = (
             InternStageFutSelection.query.filter(
-                InternStageFutSelection.member_id.in_(member_ids),
+                InternStageFutSelection.member_id.in_(all_matching_member_ids),
                 InternStageFutSelection.year == selected_certification_year,
             )
             .order_by(InternStageFutSelection.option_name.asc())
@@ -15799,15 +16348,50 @@ def intern_stages():
     for selection in fut_records:
         fut_selections.setdefault(selection.member_id, []).append(selection)
 
-    certification_statuses = {
+    all_certification_statuses = {
         member.id: intern_stage_status_label(
             member.id,
             remote_training_selections,
             stage_2_selections,
             stage_3_selections,
         )
+        for member in all_matching_members
+    }
+    if status:
+        all_matching_members = [
+            member for member in all_matching_members
+            if all_certification_statuses.get(member.id) == status
+        ]
+    all_matching_members = sort_intern_stage_members(
+        all_matching_members,
+        sort_by,
+        sort_dir,
+        all_certification_statuses,
+        remote_training_selections,
+        stage_2_selections,
+        stage_3_selections,
+        fut_selections,
+    )
+    intern_stage_email_actions = intern_stage_pending_email_actions(
+        all_matching_members,
+        remote_training_selections,
+        stage_2_selections,
+        stage_3_selections,
+    )
+    members, pagination = paginate_items(all_matching_members)
+    certification_statuses = {
+        member.id: all_certification_statuses.get(member.id, member.status)
         for member in members
     }
+
+    def certification_sort_url(column):
+        args = request.args.to_dict(flat=False)
+        current_sort = args.get("sort", [""])[0]
+        current_dir = args.get("dir", ["asc"])[0]
+        next_dir = "desc" if current_sort == column and current_dir == "asc" else "asc"
+        args["sort"] = [column]
+        args["dir"] = [next_dir]
+        return url_for("staff.intern_stages", **args)
 
     return render_template(
         "certification/index.html",
@@ -15816,8 +16400,8 @@ def intern_stages():
         members=members,
         pagination=pagination,
         roles=ROLE_OPTIONS,
-        visible_role_filters=["Examiner", "RSG"],
-        statuses=["Active"],
+        visible_role_filters=ROLE_OPTIONS,
+        statuses=["Pending", "In progress", "Completed"],
         certifications=INTERN_STAGE_CERTIFICATION_TYPES,
         filter_certifications=[],
         certification_years={},
@@ -15859,16 +16443,20 @@ def intern_stages():
         bulk_form_id="intern-stages-bulk-form",
         bulk_success_message="Internship Stages export downloaded successfully.",
         show_intern_bulk_actions=True,
+        intern_stage_email_actions=intern_stage_email_actions,
         bulk_stage_update_endpoint="staff.bulk_update_intern_stages",
+        show_certification_table_sort=True,
+        certification_sort_url=certification_sort_url,
         module_key="certification",
         show_annual_meeting_filter=False,
-        show_role_filter=False,
+        show_role_filter=True,
         show_remote_training_filter=False,
+        show_certification_year_settings=False,
         show_stage_filters=True,
         fut_requires_stage_certification=True,
         filters={
             "q": query_text,
-            "status": "",
+            "status": status,
             "roles": selected_roles,
             "year": "",
             "completed_certification": "",
@@ -15880,6 +16468,8 @@ def intern_stages():
             "annual_meeting": annual_meeting_filter,
             "fut": fut_filter,
             "no_years_yet": "",
+            "sort": sort_by,
+            "dir": sort_dir,
         },
         csrf_token=session.get("csrf_token"),
     )
@@ -15949,12 +16539,15 @@ def export_intern_stages():
     for selection in fut_records:
         fut_selections.setdefault(selection.member_id, []).append(selection)
 
-    workbook = build_annual_certification_export(
+    session_counts = confirmed_session_counts_by_member(member_ids)
+    workbook = build_full_annual_certification_export(
         members,
         {},
         export_title="Intern Stages Export",
         sheet_title="Intern Stages",
+        status_header="Stage status",
         certification_types=INTERN_STAGE_CERTIFICATION_TYPES,
+        session_counts=session_counts,
         fut_selections=fut_selections,
         fut2_selections={},
         remote_training_selections=remote_training_selections,
@@ -16615,11 +17208,12 @@ def create_member():
         flash("Security token expired. Please try again.", "error")
         return redirect(url_for("staff.index"))
 
-    errors = validate_member_form(request.form, allow_archived=False)
+    errors = validate_member_form(request.form, allow_archived=False, require_complete=True)
     if errors:
         for error in errors:
             flash(error, "error")
-        return redirect(url_for("staff.index"))
+        session["create_member_draft"] = member_draft_payload(request.form)
+        return redirect(url_for("staff.index", open_staff_modal="create-member"))
 
     member = AcademicStaff()
     apply_form(member, request.form)
@@ -16707,6 +17301,8 @@ def bulk_update_members():
         status = request.form.get("status", "").strip()
         if status not in EDIT_STATUS_OPTIONS:
             flash("Please select a valid Status.", "error")
+            return redirect(url_for("staff.index"))
+        if status in {"Inactive", "Archived"} and flash_future_session_status_blockers(members):
             return redirect(url_for("staff.index"))
         for member in members:
             member.status = status
@@ -16870,6 +17466,9 @@ def update_member(member_id):
         if request.form.get("confirm_archive") != "yes":
             flash("Archive confirmation is required.", "error")
             return redirect(url_for("staff.index"))
+    if request.form.get("status") in {"Inactive", "Archived"} and previous_status != request.form.get("status"):
+        if flash_future_session_status_blockers([member]):
+            return redirect(url_for("staff.index", show_archived=1 if previous_status == "Archived" else 0))
 
     apply_form(member, request.form)
     db.session.commit()
@@ -16977,11 +17576,16 @@ def accept_potential_entry(entry_id):
         return redirect(url_for("staff.index"))
 
     entry = PotentialEntry.query.get_or_404(entry_id)
-    errors = validate_member_form(request.form, allow_archived=False)
+    errors = validate_member_form(request.form, allow_archived=False, require_complete=True)
     if errors:
+        draft_errors = apply_partial_potential_acceptance_draft_form(entry, request.form)
+        db.session.commit()
         for error in errors:
             flash(error, "error")
-        return redirect(url_for("staff.index"))
+        for error in draft_errors:
+            if error not in errors:
+                flash(error, "error")
+        return redirect(url_for("staff.index", open_staff_modal=f"accept-potential-entry-{entry.id}"))
 
     member = AcademicStaff()
     member.interview = entry.interview
@@ -16990,6 +17594,26 @@ def accept_potential_entry(entry_id):
     db.session.delete(entry)
     db.session.commit()
     flash("Potential entry accepted and moved to academic staff.", "success")
+    return redirect(url_for("staff.index"))
+
+
+@staff_bp.route("/potential-entries/<int:entry_id>/accept-draft", methods=["POST"])
+@login_required
+def save_potential_acceptance_draft(entry_id):
+    if not validate_csrf():
+        flash("Security token expired. Please try again.", "error")
+        return redirect(url_for("staff.index"))
+
+    entry = PotentialEntry.query.get_or_404(entry_id)
+    errors = apply_partial_potential_acceptance_draft_form(entry, request.form)
+    db.session.commit()
+    if errors:
+        for error in errors:
+            flash(error, "error")
+        flash("Valid accepted form changes were saved.", "success")
+        return redirect(url_for("staff.index"))
+
+    flash("Accepted form changes saved.", "success")
     return redirect(url_for("staff.index"))
 
 

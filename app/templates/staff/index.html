@@ -13,13 +13,13 @@
   {% endif %}
 {%- endmacro %}
 
-{% block title %}Academic staff | Path Examinations{% endblock %}
+{% block title %}Staff members | Path Examinations{% endblock %}
 
 {% block content %}
 <header class="page-header">
   <div>
-    <p class="eyebrow">Academic staff</p>
-    <h1>Academic staff</h1>
+    <p class="eyebrow">Staff members</p>
+    <h1>Staff members</h1>
     <p>Manage examiners, supervisors and interns for Path Examinations.</p>
   </div>
   <div class="page-actions">
@@ -121,25 +121,33 @@
                   </button>
                 {% endif %}
               </span>
-              {% if entry.is_rejected %}
-                <span>Rejected on: {{ entry.rejected_on|localdt if entry.rejected_on else '-' }}</span>
-              {% endif %}
-              <span>{{ entry.city or '-' }}{% if entry.province %}, {{ entry.province }}{% endif %}</span>
-              {% if entry.status == 'Interview arranged' or entry.status == 'Interview scheduled' %}
-                <span class="potential-schedule">
+              <span>{{ entry.phone or 'No phone recorded' }}</span>
+              <span>
+                {% if entry.city and entry.province %}
+                  {{ entry.city }}, {{ entry.province }}
+                {% elif entry.city %}
+                  {{ entry.city }}, No province recorded
+                {% elif entry.province %}
+                  {{ entry.province }}
+                {% else %}
+                  No city or province recorded
+                {% endif %}
+              </span>
+              <span class="potential-schedule potential-fixed-row {% if entry.status != 'Interview arranged' and entry.status != 'Interview scheduled' %}potential-placeholder-row{% endif %}">
+                {% if entry.status == 'Interview arranged' or entry.status == 'Interview scheduled' %}
                   {{ entry.interview_date|display_date if entry.interview_date else '-' }} {{ entry.interview_time or '' }}
                   {{ platform_logo(entry.platform) }}
-                </span>
-                {% if entry.interviewer %}
-                  <span>{{ entry.interviewer|display_interviewer }}</span>
                 {% endif %}
-              {% endif %}
+              </span>
+              <span class="potential-fixed-row {% if not entry.interviewer or (entry.status != 'Interview arranged' and entry.status != 'Interview scheduled') %}potential-placeholder-row{% endif %}">
+                {% if entry.interviewer and (entry.status == 'Interview arranged' or entry.status == 'Interview scheduled') %}{{ entry.interviewer|display_interviewer }}{% else %}&nbsp;{% endif %}
+              </span>
             </div>
             <div class="potential-card-actions">
               {% if entry.cv %}
                 <a class="mini-button link-button" href="{{ entry.cv }}" target="_blank" rel="noopener noreferrer">View CV</a>
               {% else %}
-                <span class="mini-button disabled-button">No link</span>
+                <span class="mini-button disabled-button">No CV recorded</span>
               {% endif %}
               <button class="mini-button" type="button" data-open-modal="potential-note-{{ entry.id }}">Add notes</button>
               {% if entry.status == 'Interview arranged' %}
@@ -166,14 +174,14 @@
                     data-induction-start-time="{{ staff_settings_values.upcoming_induction_session_start_time }}"
                     data-induction-end-time="{{ staff_settings_values.upcoming_induction_session_end_time }}"
                     aria-label="Copy successful application email for {{ entry.full_name }}"
-                  >Successful application email</button>
+                  >Accept email</button>
                   <button
                     class="mini-button potential-email-outcome-button"
                     type="button"
                     data-copy-potential-outcome="unsuccessful"
                     data-full-name="{{ entry.full_name }}"
                     aria-label="Copy unsuccessful application email for {{ entry.full_name }}"
-                  >Unsuccessful application email</button>
+                  >Reject email</button>
                 {% else %}
                   <button
                     class="mini-button potential-email-invitation-button"
@@ -260,6 +268,7 @@
     <details class="bulk-action-menu">
       <summary class="secondary-button">Bulk actions</summary>
       <div class="bulk-action-panel">
+        <a class="secondary-button link-button bulk-email-link disabled-button" data-bulk-email-link target="_blank" rel="noopener noreferrer" aria-disabled="true">Send email</a>
         <form method="post" action="{{ url_for('staff.bulk_update_members') }}" data-bulk-stage-form data-bulk-scope="[data-staff-records-table]" data-bulk-empty-message="Please select at least one member before applying a bulk action.">
           <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
           <input type="hidden" name="bulk_action" value="status">
@@ -319,14 +328,19 @@
   </div>
 </section>
 
-<section class="table-wrap" aria-label="Academic staff list" data-staff-records-table>
+<section class="table-wrap" aria-label="Staff members list" data-staff-records-table>
   <table>
     <thead>
       <tr>
         <th class="select-column">
           <input class="bulk-checkbox" type="checkbox" data-select-all-members aria-label="Select all visible members">
         </th>
-        <th>Status</th>
+        <th>
+          <a class="table-sort {% if filters.sort == 'status' %}is-active{% endif %}" href="{{ sort_url('status') }}">
+            Status
+            <span>{{ '↑' if filters.sort == 'status' and filters.dir == 'asc' else '↓' if filters.sort == 'status' else '↕' }}</span>
+          </a>
+        </th>
         <th>
           <a class="table-sort {% if filters.sort == 'title' %}is-active{% endif %}" href="{{ sort_url('title') }}">
             Title
@@ -342,7 +356,12 @@
         <th>Roles</th>
         <th>Phone</th>
         <th>Email</th>
-        <th>Has a car</th>
+        <th>
+          <a class="table-sort {% if filters.sort == 'has_car' %}is-active{% endif %}" href="{{ sort_url('has_car') }}">
+            Has a car
+            <span>{{ '↑' if filters.sort == 'has_car' and filters.dir == 'asc' else '↓' if filters.sort == 'has_car' else '↕' }}</span>
+          </a>
+        </th>
         <th>Full address</th>
         <th>
           <a class="table-sort {% if filters.sort == 'city' %}is-active{% endif %}" href="{{ sort_url('city') }}">
@@ -363,7 +382,12 @@
           </a>
         </th>
         <th>CV</th>
-        <th>History</th>
+        <th>
+          <a class="table-sort {% if filters.sort == 'history' %}is-active{% endif %}" href="{{ sort_url('history') }}">
+            History
+            <span>{{ '↑' if filters.sort == 'history' and filters.dir == 'asc' else '↓' if filters.sort == 'history' else '↕' }}</span>
+          </a>
+        </th>
         <th>Account ID</th>
         <th>Account owner</th>
         <th>Profile picture</th>
@@ -373,7 +397,12 @@
             <span>{{ '↑' if filters.sort == 'started_in' and filters.dir == 'asc' else '↓' if filters.sort == 'started_in' else '↕' }}</span>
           </a>
         </th>
-        <th>Sessions</th>
+        <th>
+          <a class="table-sort {% if filters.sort == 'sessions' %}is-active{% endif %}" href="{{ sort_url('sessions') }}">
+            Sessions
+            <span>{{ '↑' if filters.sort == 'sessions' and filters.dir == 'asc' else '↓' if filters.sort == 'sessions' else '↕' }}</span>
+          </a>
+        </th>
         <th>
           <a class="table-sort {% if filters.sort == 'updated_on' %}is-active{% endif %}" href="{{ sort_url('updated_on') }}">
             Updated on
@@ -387,7 +416,7 @@
       {% for member in members %}
       <tr>
         <td class="select-column">
-          <input class="bulk-checkbox" type="checkbox" name="member_ids" value="{{ member.id }}" form="staff-bulk-export-form" data-member-select aria-label="Select {{ member.full_name }}">
+          <input class="bulk-checkbox" type="checkbox" name="member_ids" value="{{ member.id }}" form="staff-bulk-export-form" data-member-select data-member-email="{{ member.email or '' }}" aria-label="Select {{ member.full_name }}">
         </td>
         <td>{{ status_badge(member.status) }}</td>
         <td>{{ member.title or '-' }}</td>
@@ -437,7 +466,8 @@
             <span class="muted">-</span>
           {% endif %}
         </td>
-        <td><button class="mini-button" type="button" data-open-modal="interview-{{ member.id }}">Notes</button></td>
+        {% set member_history_count = member.interview|interview_entries|length %}
+        <td><button class="mini-button" type="button" data-open-modal="interview-{{ member.id }}">Notes{% if member_history_count %} ({{ member_history_count }}){% endif %}</button></td>
         <td>{{ member.account_id or '-' }}</td>
         <td>{{ member.account_owner or '-' }}</td>
         <td>
@@ -485,13 +515,13 @@
 
 {% include "_pagination.html" %}
 
-<div class="modal" id="create-member" aria-hidden="true">
+<div class="modal {% if request.args.get('open_staff_modal') == 'create-member' %}is-open{% endif %}" id="create-member" aria-hidden="{{ 'false' if request.args.get('open_staff_modal') == 'create-member' else 'true' }}">
   <div class="modal-panel large">
     <div class="modal-header">
       <h2>Add new member</h2>
       <button class="icon-button" type="button" data-close-modal>&times;</button>
     </div>
-    {{ member_form(None, url_for('staff.create_member'), create_statuses, roles, csrf_token, 'Create member', 'create-member') }}
+    {{ member_form(create_member_draft, url_for('staff.create_member'), create_statuses, roles, csrf_token, 'Create member', 'create-member', require_complete=True) }}
   </div>
 </div>
 
@@ -534,15 +564,23 @@
         <strong>Required columns:</strong>
         <ul>
           <li>Status</li>
+          <li>Title</li>
           <li>Full name</li>
           <li>Roles</li>
+          <li>Phone</li>
           <li>Email</li>
           <li>Has a car</li>
+          <li>Full address</li>
           <li>City</li>
           <li>Province</li>
           <li>Country</li>
+          <li>CV</li>
+          <li>Account ID</li>
+          <li>Account owner</li>
+          <li>Profile picture</li>
+          <li>Started in</li>
         </ul>
-        <p>All other columns are optional.</p>
+        <p>Seniority and History are optional.</p>
       </section>
 
       <div class="form-actions">
@@ -578,11 +616,11 @@
       {% endif %}
       <h3>{{ entry.full_name }}</h3>
       <dl>
-        <div><dt>Phone</dt><dd>{{ entry.phone or '-' }}</dd></div>
-        <div><dt>Email</dt><dd>{{ entry.email or '-' }}</dd></div>
-        <div><dt>City</dt><dd>{{ entry.city or '-' }}</dd></div>
-        <div><dt>Province</dt><dd>{{ entry.province or '-' }}</dd></div>
-        <div><dt>CV</dt><dd>{% if entry.cv %}<a class="text-link" href="{{ entry.cv }}" target="_blank" rel="noopener noreferrer">Link</a>{% else %}-{% endif %}</dd></div>
+        <div><dt>Phone</dt><dd>{{ entry.phone or 'No phone recorded' }}</dd></div>
+        <div><dt>Email</dt><dd>{{ entry.email or 'No email recorded' }}</dd></div>
+        <div><dt>City</dt><dd>{{ entry.city or 'No city or province recorded' }}</dd></div>
+        <div><dt>Province</dt><dd>{{ entry.province or 'No province recorded' }}</dd></div>
+        <div><dt>CV</dt><dd>{% if entry.cv %}<a class="text-link" href="{{ entry.cv }}" target="_blank" rel="noopener noreferrer">Link</a>{% else %}No CV recorded{% endif %}</dd></div>
         {% if entry.status == 'Interview arranged' or entry.status == 'Interview scheduled' %}
           <div><dt>Interview date</dt><dd>{{ entry.interview_date|display_date if entry.interview_date else '-' }}</dd></div>
           <div><dt>Interview time</dt><dd>{{ entry.interview_time or '-' }}</dd></div>
@@ -651,13 +689,13 @@
   </div>
 </div>
 
-<div class="modal" id="accept-potential-entry-{{ entry.id }}" aria-hidden="true">
+<div class="modal {% if request.args.get('open_staff_modal') == 'accept-potential-entry-' ~ entry.id %}is-open{% endif %}" id="accept-potential-entry-{{ entry.id }}" aria-hidden="{{ 'false' if request.args.get('open_staff_modal') == 'accept-potential-entry-' ~ entry.id else 'true' }}">
   <div class="modal-panel large">
     <div class="modal-header">
-      <h2>Accept as academic staff</h2>
+      <h2>Accept as staff member</h2>
       <button class="icon-button" type="button" data-close-modal>&times;</button>
     </div>
-    {{ member_form(entry, url_for('staff.accept_potential_entry', entry_id=entry.id), create_statuses, roles, csrf_token, 'Create member', 'accept-potential-entry-' ~ entry.id) }}
+    {{ member_form(entry, url_for('staff.accept_potential_entry', entry_id=entry.id), create_statuses, roles, csrf_token, 'Create member', 'accept-potential-entry-' ~ entry.id, url_for('staff.save_potential_acceptance_draft', entry_id=entry.id), 'Save', entry.acceptance_status, True) }}
   </div>
 </div>
 {% endif %}
