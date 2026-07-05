@@ -1891,13 +1891,13 @@ td .status-inactive {
 }
 
 .potential-status-interview-to-be-arranged {
-  background: var(--badge-purple-bg);
-  color: var(--badge-purple-text);
+  background: var(--badge-yellow-bg);
+  color: var(--badge-yellow-text);
 }
 
 .potential-status-interview-invitation-sent {
-  background: var(--path-blue-50);
-  color: var(--color-primary-dark);
+  background: var(--badge-purple-bg);
+  color: var(--badge-purple-text);
 }
 
 .potential-status-interview-confirmed {
@@ -1907,13 +1907,13 @@ td .status-inactive {
 
 .potential-status-entry-accepted,
 .potential-status-entry-accepted-\(on-hold\) {
-  background: var(--badge-green-bg);
-  color: var(--badge-green-text);
+  background: var(--badge-blue-bg);
+  color: var(--badge-blue-text);
 }
 
 .potential-status-onboarding-email-sent {
-  background: var(--badge-blue-bg);
-  color: var(--badge-blue-text);
+  background: var(--badge-purple-bg);
+  color: var(--badge-purple-text);
 }
 
 .potential-status-induction-confirmed {
