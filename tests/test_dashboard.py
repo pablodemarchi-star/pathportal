@@ -1,5 +1,6 @@
 import os
 import unittest
+from datetime import date, timedelta
 
 os.environ["DATABASE_URL"] = "sqlite:///:memory:"
 
@@ -88,15 +89,38 @@ class DashboardTest(unittest.TestCase):
         self.add_entry("Induction confirmed")
         self.add_entry("Onboarding finalised")
         self.add_entry("Entry rejected", is_rejected=True)
+        self.add_entry("Entry accepted (on hold)").reactivation_date = (date.today() + timedelta(days=7)).isoformat()
+        self.add_entry("Entry accepted (on hold)").reactivation_date = date.today().isoformat()
+        db.session.commit()
 
         response = self.client().get("/")
         body = response.get_data(as_text=True)
 
         self.assertEqual(response.status_code, 200)
         self.assertIn("Potential entries", body)
-        self.assertIn("You have 3 actions to complete in this menu.", body)
-        self.assertIn('href="/potential-entries"', body)
+        self.assertIn("You have 2 actions to complete in this menu.", body)
+        self.assertIn('href="/potential-entries?action_scope=my_actions"', body)
         self.assertIn(">Go to menu<", body)
+
+    def test_management_dashboard_counts_only_management_potential_actions(self):
+        self.add_entry("CV to be reviewed")
+        self.add_entry("Interview confirmed")
+        self.add_entry("Onboarding finalised")
+        self.add_entry("Interview invitation sent")
+        self.add_entry("Induction confirmed")
+        self.add_entry("Archived accepted entry")
+        future_hold = self.add_entry("Entry accepted (on hold)")
+        future_hold.reactivation_date = (date.today() + timedelta(days=7)).isoformat()
+        due_hold = self.add_entry("Entry accepted (on hold)")
+        due_hold.reactivation_date = date.today().isoformat()
+        db.session.commit()
+
+        client = self.permission_client({"staff_members": {"view": True}}, department="Management")
+        response = client.get("/")
+        body = response.get_data(as_text=True)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("You have 4 actions to complete in this menu.", body)
 
     def test_dashboard_hides_potential_entries_card_without_permission(self):
         client = self.permission_client({"fees": {"view": True}})

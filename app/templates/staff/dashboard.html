@@ -41,7 +41,7 @@
           </div>
           <span class="dashboard-count-chip">{{ potential_entries_pending_count }}</span>
         </div>
-        <a class="primary-button link-button dashboard-menu-button" href="{{ url_for('staff.potential_entries') }}">Go to menu</a>
+        <a class="primary-button link-button dashboard-menu-button" href="{{ url_for('staff.potential_entries', action_scope='my_actions') }}">Go to menu</a>
       </article>
     {% endif %}
   </div>

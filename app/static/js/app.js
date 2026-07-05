@@ -6920,6 +6920,32 @@ const normalizeInterviewOptionDate = (value) => {
   return formatInterviewOptionDateTyping(raw);
 };
 
+const parseDdMmYyyyDate = (value) => {
+  const match = String(value || "").trim().match(/^(\d{2})\/(\d{2})\/(\d{4})$/);
+  if (!match) return null;
+  const day = Number.parseInt(match[1], 10);
+  const monthIndex = Number.parseInt(match[2], 10) - 1;
+  const year = Number.parseInt(match[3], 10);
+  const parsed = new Date(year, monthIndex, day);
+  if (
+    Number.isNaN(parsed.getTime()) ||
+    parsed.getDate() !== day ||
+    parsed.getMonth() !== monthIndex ||
+    parsed.getFullYear() !== year
+  ) {
+    return null;
+  }
+  return parsed;
+};
+
+const isFutureDdMmYyyyDate = (value) => {
+  const parsed = parseDdMmYyyyDate(value);
+  if (!parsed) return false;
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  return parsed > today;
+};
+
 const formatInterviewOptionTimeTyping = (value) => {
   const raw = String(value || "").replace(/h\.?/gi, "").trim();
   if (raw.includes(":")) {
@@ -7016,19 +7042,22 @@ const syncPotentialInterviewNoShow = (element) => {
     });
   });
   const acceptedButton = form.querySelector("[data-application-accepted-button]");
+  const acceptedOnHoldButton = form.querySelector("[data-application-accepted-on-hold-button]");
+  const hasCar = Boolean(form.querySelector("input[name='interview_has_car']:checked"));
+  const hasRole = Boolean(form.querySelector("input[name='interview_roles']:checked"));
+  const outcome = form.querySelector("input[name='entry_acceptance_outcome']:checked")?.value || "";
+  const reactivationDate = form.querySelector("[data-reactivation-date]")?.value || "";
+  const canAccept = Boolean(!isNoShow && hasCar && hasRole && outcome === "sessions_pre_confirmation");
+  const canAcceptOnHold = Boolean(!isNoShow && hasCar && hasRole && outcome === "on_hold" && isFutureDdMmYyyyDate(reactivationDate));
   if (acceptedButton) {
-    const hasCar = Boolean(form.querySelector("input[name='interview_has_car']:checked"));
-    const hasRole = Boolean(form.querySelector("input[name='interview_roles']:checked"));
-    const sessionsAdded = Boolean(form.querySelector("input[name='entry_added_in_sessions_pre_confirmation']:checked"));
-    const canAccept = Boolean(!isNoShow && hasCar && hasRole && sessionsAdded);
     acceptedButton.disabled = !canAccept;
-    if (canAccept) {
-      acceptedButton.removeAttribute("title");
-    } else if (isNoShow) {
-      acceptedButton.setAttribute("title", "No-show entries cannot be accepted.");
-    } else {
-      acceptedButton.setAttribute("title", "Complete Has a car, Roles, and session pre-confirmation before accepting.");
-    }
+    if (canAccept) acceptedButton.removeAttribute("title");
+    else acceptedButton.setAttribute("title", isNoShow ? "No-show entries cannot be accepted." : "Complete Has a car, Roles, and session pre-confirmation before accepting.");
+  }
+  if (acceptedOnHoldButton) {
+    acceptedOnHoldButton.disabled = !canAcceptOnHold;
+    if (canAcceptOnHold) acceptedOnHoldButton.removeAttribute("title");
+    else acceptedOnHoldButton.setAttribute("title", isNoShow ? "No-show entries cannot be accepted." : "Complete Has a car, Roles, on-hold selection, and a future reactivation date.");
   }
 };
 
@@ -7146,18 +7175,29 @@ const syncInductionStatusPanels = (element) => {
     return Boolean(field.value?.trim());
   });
   const attendedComplete = selected === "attended" && Boolean(root.querySelector("[data-induction-attended-required]:checked"));
+  const acceptanceOutcome = root.querySelector("input[name='entry_acceptance_outcome']:checked")?.value || "";
+  const reactivationDateField = root.querySelector("[data-reactivation-date-field]");
+  const reactivationDateInput = root.querySelector("[data-reactivation-date]");
+  if (reactivationDateField) reactivationDateField.hidden = acceptanceOutcome !== "on_hold";
   const interviewAttendedComplete = selected === "attended"
     && Boolean(root.querySelector("input[name='interview_has_car']:checked"))
     && Boolean(root.querySelector("input[name='interview_roles']:checked"))
-    && Boolean(root.querySelector("input[name='entry_added_in_sessions_pre_confirmation']:checked"));
+    && acceptanceOutcome === "sessions_pre_confirmation";
+  const interviewOnHoldComplete = selected === "attended"
+    && Boolean(root.querySelector("input[name='interview_has_car']:checked"))
+    && Boolean(root.querySelector("input[name='interview_roles']:checked"))
+    && acceptanceOutcome === "on_hold"
+    && isFutureDdMmYyyyDate(reactivationDateInput?.value || "");
   const rejectButton = form?.querySelector("[data-induction-reject-button]");
   const rescheduleButton = form?.querySelector("[data-induction-reschedule-button]");
   const activateButton = form?.querySelector("[data-induction-activate-button]");
   const acceptedButton = form?.querySelector("[data-application-accepted-button]");
+  const acceptedOnHoldButton = form?.querySelector("[data-application-accepted-on-hold-button]");
   if (rejectButton) rejectButton.disabled = selected !== "no_show";
   if (rescheduleButton) rescheduleButton.disabled = !rescheduleComplete;
   if (activateButton) activateButton.disabled = !attendedComplete;
   if (acceptedButton) acceptedButton.disabled = !interviewAttendedComplete;
+  if (acceptedOnHoldButton) acceptedOnHoldButton.disabled = !interviewOnHoldComplete;
 };
 
 document.querySelectorAll("[data-induction-status-root]").forEach(syncInductionStatusPanels);
@@ -7247,6 +7287,12 @@ document.addEventListener("input", (event) => {
     syncInductionStatusPanels(dateInput);
     return;
   }
+  const reactivationDateInput = event.target.closest("[data-reactivation-date]");
+  if (reactivationDateInput) {
+    reactivationDateInput.value = formatInterviewOptionDateTyping(reactivationDateInput.value);
+    syncInductionStatusPanels(reactivationDateInput);
+    return;
+  }
   const timeInput = event.target.closest("[data-interview-option-time]");
   if (timeInput) {
     timeInput.value = formatInterviewOptionTimeTyping(timeInput.value);
@@ -7282,7 +7328,7 @@ document.addEventListener("change", (event) => {
     syncInterviewInvitationConfirmation(interviewConfirmControl.closest("form"));
     return;
   }
-  const inductionStatusOption = event.target.closest("[data-induction-status-option], [data-induction-reschedule-required], [data-induction-attended-required], input[name='interview_has_car'], input[name='interview_roles'], input[name='entry_added_in_sessions_pre_confirmation']");
+  const inductionStatusOption = event.target.closest("[data-induction-status-option], [data-induction-reschedule-required], [data-induction-attended-required], input[name='interview_has_car'], input[name='interview_roles'], input[name='entry_acceptance_outcome']");
   if (inductionStatusOption) {
     syncInductionStatusPanels(inductionStatusOption);
     return;
@@ -7302,6 +7348,12 @@ document.addEventListener("blur", (event) => {
   if (dateInput) {
     dateInput.value = normalizeInterviewOptionDate(dateInput.value);
     syncProceedInterviewButton(dateInput.closest("form"));
+    return;
+  }
+  const reactivationDateInput = event.target.closest?.("[data-reactivation-date]");
+  if (reactivationDateInput) {
+    reactivationDateInput.value = normalizeInterviewOptionDate(reactivationDateInput.value);
+    syncInductionStatusPanels(reactivationDateInput);
     return;
   }
   const timeInput = event.target.closest?.("[data-interview-option-time]");

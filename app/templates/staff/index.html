@@ -269,6 +269,13 @@
         {% elif workflow_status == 'Entry accepted' %}
           {% set workflow_department = 'ADMIN' %}
           {% set workflow_action = 'Check notes and send successful application email to potential entry' %}
+        {% elif workflow_status == 'Entry accepted (on hold)' %}
+          {% set workflow_department = 'MANAGEMENT' %}
+          {% if entry.reactivation_date and entry.reactivation_date <= potential_today_iso %}
+            {% set workflow_action = 'Reactivation date for accepted entry has been reached' %}
+          {% else %}
+            {% set workflow_action = 'Entry accepted and placed on hold until reativation date' %}
+          {% endif %}
         {% elif workflow_status == 'Onboarding email sent' %}
           {% set workflow_department = 'ADMIN' %}
           {% set workflow_action = 'Follow up onboarding email to confirm or turn down application' %}
@@ -299,6 +306,10 @@
                   <span>{{ entry.interview_date|display_date if entry.interview_date else '-' }}{% if entry.interview_time %} · {{ entry.interview_time|display_time }}{% endif %}</span>
                   <span class="potential-status-platform">{{ platform_logo(entry.platform) }}<span>{{ 'Google Meet' if entry.platform == 'Meet' else entry.platform or '-' }}</span></span>
                   <span>{{ entry.interviewer|display_interviewer if entry.interviewer else '-' }}</span>
+                </span>
+              {% elif entry.status == 'Entry accepted (on hold)' %}
+                <span class="potential-status-meta">
+                  <span>Reactivation date set for {{ entry.reactivation_date|display_date if entry.reactivation_date else '-' }}</span>
                 </span>
               {% elif entry.status == 'Archived rejected entry' %}
                 <span class="potential-archive-result is-rejected">X Rejected</span>
@@ -356,7 +367,7 @@
               <button class="mini-button potential-perform-action" type="button" data-open-modal="interview-arrange-potential-entry-{{ entry.id }}">Perform action</button>
             {% elif entry.status == 'Induction confirmed' %}
               <button class="mini-button potential-perform-action" type="button" data-open-modal="interview-arrange-potential-entry-{{ entry.id }}">Perform action</button>
-            {% elif entry.status == 'Onboarding finalised' %}
+            {% elif entry.status in ['Entry accepted (on hold)', 'Onboarding finalised'] %}
               <button class="mini-button potential-perform-action" type="button" data-open-modal="potential-entry-{{ entry.id }}">Perform action</button>
             {% else %}
               <button class="mini-button potential-perform-action" type="button" data-open-modal="edit-potential-entry-{{ entry.id }}">Perform action</button>
@@ -737,6 +748,11 @@
       {% else %}
         <span class="badge potential-status-{{ entry.status|lower|replace(' ', '-') }}">{{ entry.status }}</span>
       {% endif %}
+      {% if entry.status == 'Entry accepted (on hold)' %}
+        <span class="potential-status-meta">
+          <span>Reactivation date set for {{ entry.reactivation_date|display_date if entry.reactivation_date else '-' }}</span>
+        </span>
+      {% endif %}
       <h3>{{ entry.full_name }}</h3>
       <dl>
         <div><dt>Phone</dt><dd>{{ entry.phone or 'No phone recorded' }}</dd></div>
@@ -767,14 +783,22 @@
         </div>
       {% endif %}
       <div class="potential-actions">
-        {% if entry.status in ['Entry rejected', 'Onboarding finalised'] %}
+        {% if entry.status in ['Entry rejected', 'Entry accepted (on hold)', 'Onboarding finalised'] %}
           <form method="post" action="{{ url_for('staff.archive_potential_entry', entry_id=entry.id) }}" class="form-grid one-column">
             <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
             <label>
               Status
               <select name="archive_status">
                 <option value="{{ entry.status }}">{{ entry.status }}</option>
-                <option value="Archive">Archive</option>
+                {% if entry.status == 'Entry accepted (on hold)' %}
+                  <option value="Interview confirmed">Interview confirmed</option>
+                  <option value="Entry rejected">Entry rejected</option>
+                {% elif entry.status == 'Entry rejected' %}
+                  <option value="CV to be reviewed">CV to be reviewed</option>
+                  <option value="Archive">Archive</option>
+                {% else %}
+                  <option value="Archive">Archive</option>
+                {% endif %}
               </select>
             </label>
             <div class="form-actions">
@@ -1393,9 +1417,20 @@
                         {% endfor %}
                       </div>
                     </fieldset>
-                    <label class="checkbox-field">
-                      <input type="checkbox" name="entry_added_in_sessions_pre_confirmation" value="1" {% if entry.entry_added_in_sessions_pre_confirmation %}checked{% endif %} {% if not current_menu_can_edit %}disabled{% endif %}>
-                      <span>Entry added in sessions for pre-confirmation</span>
+                    <fieldset class="inline-radio-group potential-acceptance-outcome-options">
+                      <legend>Acceptance outcome</legend>
+                      <label>
+                        <input type="radio" name="entry_acceptance_outcome" value="sessions_pre_confirmation" {% if entry.entry_added_in_sessions_pre_confirmation %}checked{% endif %} {% if not current_menu_can_edit %}disabled{% endif %}>
+                        <span>Entry added in sessions for pre-confirmation</span>
+                      </label>
+                      <label>
+                        <input type="radio" name="entry_acceptance_outcome" value="on_hold" {% if entry.reactivation_date %}checked{% endif %} {% if not current_menu_can_edit %}disabled{% endif %}>
+                        <span>Entry accepted and placed on hold</span>
+                      </label>
+                    </fieldset>
+                    <label class="potential-reactivation-date-field" data-reactivation-date-field hidden>
+                      Reactivation date
+                      <input name="reactivation_date" value="{{ entry.reactivation_date|display_date if entry.reactivation_date else '' }}" placeholder="DD/MM/YYYY" inputmode="numeric" maxlength="10" autocomplete="off" data-reactivation-date {% if not current_menu_can_edit %}disabled{% endif %}>
                     </label>
                   </div>
                 </div>
@@ -1772,7 +1807,7 @@
                 >Mark it as Sent</button>
               {% elif entry.status == 'Interview invitation sent' %}
                 <button
-                  class="info-button"
+                  class="success-button"
                   type="submit"
                   formaction="{{ url_for('staff.review_potential_interview_date_time_options', entry_id=entry.id) }}"
                   data-review-date-time-options-button
@@ -1811,6 +1846,14 @@
                   formnovalidate
                   disabled
                 >Reschedule</button>
+                <button
+                  class="info-button"
+                  type="submit"
+                  formaction="{{ url_for('staff.accept_potential_interview_application_on_hold', entry_id=entry.id) }}"
+                  data-application-accepted-on-hold-button
+                  disabled
+                  formnovalidate
+                >Entry accepted (on hold)</button>
                 <button
                   class="success-button"
                   type="submit"
@@ -1897,6 +1940,7 @@
               {% elif entry.status == 'Interview confirmed' %}
                 <button class="danger-button" type="button" disabled>Reject Entry</button>
                 <button class="purple-button" type="button" disabled>Reschedule</button>
+                <button class="info-button" type="button" disabled>Entry accepted (on hold)</button>
                 <button class="success-button" type="button" disabled>Entry accepted</button>
               {% elif entry.status == 'Entry accepted' %}
                 <button class="success-button" type="button" disabled>Onboarding email sent</button>

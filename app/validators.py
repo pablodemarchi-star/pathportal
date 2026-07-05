@@ -10,6 +10,7 @@ POTENTIAL_STATUSES = {
     "Interview invitation sent",
     "Interview confirmed",
     "Entry accepted",
+    "Entry accepted (on hold)",
     "Onboarding email sent",
     "Induction confirmed",
     "Onboarding finalised",

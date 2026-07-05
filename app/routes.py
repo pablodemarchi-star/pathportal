@@ -115,6 +115,7 @@ POTENTIAL_STATUS_OPTIONS = [
     "Interview invitation sent",
     "Interview confirmed",
     "Entry accepted",
+    "Entry accepted (on hold)",
     "Onboarding email sent",
     "Induction confirmed",
     "Onboarding finalised",
@@ -135,7 +136,7 @@ POTENTIAL_ACTION_REQUIRED_STATUSES = [
     "Entry rejected",
     "Onboarding finalised",
 ]
-POTENTIAL_MANAGEMENT_DEPARTMENT_STATUSES = ["CV to be reviewed", "Review interview date and time", "Interview confirmed"]
+POTENTIAL_MANAGEMENT_DEPARTMENT_STATUSES = ["CV to be reviewed", "Review interview date and time", "Interview confirmed", "Entry accepted (on hold)"]
 POTENTIAL_ARCHIVED_STATUSES = {"Archived accepted entry", "Archived rejected entry"}
 POTENTIAL_REACTIVATION_STATUS_OPTIONS = [
     status for status in POTENTIAL_STATUS_OPTIONS if status not in POTENTIAL_ARCHIVED_STATUSES
@@ -147,6 +148,18 @@ INTERVIEWER_OPTIONS = [
     "Prof. Marcela Romero",
     "Prof. Mgter. Pablo Demarchi",
 ]
+
+
+def potential_pending_action_filter():
+    today_iso = datetime.now(LOCAL_TZ).date().isoformat()
+    return db.or_(
+        PotentialEntry.status.in_(POTENTIAL_ACTION_REQUIRED_STATUSES),
+        db.and_(
+            PotentialEntry.status == "Entry accepted (on hold)",
+            PotentialEntry.reactivation_date != "",
+            PotentialEntry.reactivation_date <= today_iso,
+        ),
+    )
 CERTIFICATION_TYPES = [
     {"key": "remote_training", "label": "Remote training", "roles": []},
     {"key": "fut", "label": "FUT", "roles": []},
@@ -10206,6 +10219,18 @@ def normalize_interview_option_date(value):
     return raw, None
 
 
+def normalize_potential_reactivation_date(value):
+    raw, error = normalize_interview_option_date(value)
+    if error:
+        return "", error.replace("interview date", "reactivation date").replace("Interview date", "Reactivation date")
+    if not raw:
+        return "", "Reactivation date is required."
+    parsed = datetime.strptime(raw, "%d/%m/%Y").date()
+    if parsed <= datetime.now(LOCAL_TZ).date():
+        return "", "Reactivation date must be in the future."
+    return parsed.isoformat(), None
+
+
 def normalize_interview_option_time(value):
     raw = (value or "").strip().lower().replace("h.", "").replace("h", "").strip()
     if not raw:
@@ -15428,7 +15453,8 @@ def dashboard():
     if potential_entries_allowed:
         potential_entries_pending_count = PotentialEntry.query.filter(
             PotentialEntry.is_rejected == False,
-            PotentialEntry.status.in_(POTENTIAL_ACTION_REQUIRED_STATUSES),
+            potential_department_expression() == current_user_audit_department(),
+            potential_pending_action_filter(),
         ).count()
     current_user = getattr(g, "current_user", None)
     dashboard_display_name = (
@@ -15611,11 +15637,13 @@ def ordered_potential_entries(show_archived=False, status="", department="", act
         query = query.filter(PotentialEntry.status == status)
     if action_scope == "my_actions":
         department = current_user_audit_department()
+        query = query.filter(PotentialEntry.is_rejected == False, potential_pending_action_filter())
     if department:
         query = query.filter(potential_department_expression() == department)
 
     finalised_sort = db.case(
-        (PotentialEntry.status == "Onboarding finalised", 1),
+        (PotentialEntry.status == "Entry accepted (on hold)", 1),
+        (PotentialEntry.status == "Onboarding finalised", 2),
         else_=0,
     )
     sortable_columns = {
@@ -15695,6 +15723,7 @@ def potential_entries():
         create_statuses=CREATE_STATUS_OPTIONS,
         potential_statuses=POTENTIAL_STATUS_OPTIONS,
         potential_reactivation_statuses=POTENTIAL_REACTIVATION_STATUS_OPTIONS,
+        potential_today_iso=datetime.now(LOCAL_TZ).date().isoformat(),
         potential_department_options=POTENTIAL_DEPARTMENT_OPTIONS,
         potential_toggle_url=url_for("staff.potential_entries", **toggle_args),
         interviewer_options=INTERVIEWER_OPTIONS,
@@ -18631,10 +18660,17 @@ def save_potential_cv_review_changes(
         has_car = request.form.get("interview_has_car", "").strip()
         interview_roles = [] if no_show else request.form.getlist("interview_roles")
         invalid_roles = [role for role in interview_roles if role not in POTENTIAL_INTERVIEW_ROLE_OPTIONS]
+        acceptance_outcome = request.form.get("entry_acceptance_outcome", "").strip()
         if not no_show and has_car and has_car not in {"Yes", "No"}:
             option_errors.append("Has a car contains an invalid value.")
         if invalid_roles:
             option_errors.append("Roles contains an invalid value.")
+        if not no_show and acceptance_outcome and acceptance_outcome not in {"sessions_pre_confirmation", "on_hold"}:
+            option_errors.append("Entry acceptance outcome is invalid.")
+        if not no_show and acceptance_outcome == "on_hold":
+            _, reactivation_error = normalize_potential_reactivation_date(request.form.get("reactivation_date"))
+            if reactivation_error:
+                option_errors.append(reactivation_error)
     if entry.status == "Induction confirmed":
         induction_status = request.form.get("induction_session_status", "").strip()
         if induction_status and induction_status not in {"no_show", "reschedule", "attended"}:
@@ -18649,10 +18685,17 @@ def save_potential_cv_review_changes(
     append_potential_cv_review_notes(entry, request.form)
     if entry.status == "Interview confirmed":
         no_show = request.form.get("interview_outcome_status") == "no_show"
+        acceptance_outcome = request.form.get("entry_acceptance_outcome", "").strip()
+        legacy_sessions_added = request.form.get("entry_added_in_sessions_pre_confirmation") == "1"
+        sessions_pre_confirmation = acceptance_outcome == "sessions_pre_confirmation" or legacy_sessions_added
+        reactivation_date = ""
+        if not no_show and acceptance_outcome == "on_hold":
+            reactivation_date, _ = normalize_potential_reactivation_date(request.form.get("reactivation_date"))
         entry.interview_no_show = no_show
         entry.has_car = "" if no_show else request.form.get("interview_has_car", "").strip()
         entry.acceptance_roles = "" if no_show else ",".join(request.form.getlist("interview_roles"))
-        entry.entry_added_in_sessions_pre_confirmation = False if no_show else request.form.get("entry_added_in_sessions_pre_confirmation") == "1"
+        entry.entry_added_in_sessions_pre_confirmation = False if no_show else sessions_pre_confirmation
+        entry.reactivation_date = "" if no_show or acceptance_outcome != "on_hold" else reactivation_date
     if entry.status == "Induction confirmed":
         induction_status = request.form.get("induction_session_status", "").strip()
         if induction_status in {"no_show", "reschedule", "attended"}:
@@ -19288,7 +19331,9 @@ def accept_potential_interview_application(entry_id):
     if not request.form.getlist("interview_roles"):
         flash("At least one role is required.", "error")
         return redirect(url_for("staff.potential_entries", open_staff_modal=potential_review_modal_id(entry)))
-    if request.form.get("entry_added_in_sessions_pre_confirmation") != "1":
+    acceptance_outcome = request.form.get("entry_acceptance_outcome", "").strip()
+    legacy_sessions_added = request.form.get("entry_added_in_sessions_pre_confirmation") == "1"
+    if acceptance_outcome not in {"sessions_pre_confirmation", ""} or (not legacy_sessions_added and acceptance_outcome != "sessions_pre_confirmation"):
         flash("Entry added in sessions for pre-confirmation is required.", "error")
         return redirect(url_for("staff.potential_entries", open_staff_modal=potential_review_modal_id(entry)))
 
@@ -19296,6 +19341,41 @@ def accept_potential_interview_application(entry_id):
         entry,
         "Application accepted.",
         next_status="Entry accepted",
+    )
+
+
+@staff_bp.route("/potential-entries/<int:entry_id>/cv-review/accept-application-on-hold", methods=["POST"])
+@login_required
+def accept_potential_interview_application_on_hold(entry_id):
+    if not validate_csrf():
+        flash("Security token expired. Please try again.", "error")
+        return redirect(url_for("staff.potential_entries"))
+
+    entry = PotentialEntry.query.get_or_404(entry_id)
+    if entry.status != "Interview confirmed":
+        flash("This application can only be placed on hold after the interview is confirmed.", "error")
+        return redirect(url_for("staff.potential_entries"))
+    if request.form.get("interview_outcome_status") != "attended":
+        flash("Select Attended before placing this entry on hold.", "error")
+        return redirect(url_for("staff.potential_entries", open_staff_modal=potential_review_modal_id(entry)))
+    if request.form.get("interview_has_car", "").strip() not in {"Yes", "No"}:
+        flash("Has a car is required.", "error")
+        return redirect(url_for("staff.potential_entries", open_staff_modal=potential_review_modal_id(entry)))
+    if not request.form.getlist("interview_roles"):
+        flash("At least one role is required.", "error")
+        return redirect(url_for("staff.potential_entries", open_staff_modal=potential_review_modal_id(entry)))
+    if request.form.get("entry_acceptance_outcome", "").strip() != "on_hold":
+        flash("Entry accepted and placed on hold is required.", "error")
+        return redirect(url_for("staff.potential_entries", open_staff_modal=potential_review_modal_id(entry)))
+    _, reactivation_error = normalize_potential_reactivation_date(request.form.get("reactivation_date"))
+    if reactivation_error:
+        flash(reactivation_error, "error")
+        return redirect(url_for("staff.potential_entries", open_staff_modal=potential_review_modal_id(entry)))
+
+    return save_potential_cv_review_changes(
+        entry,
+        "Application accepted and placed on hold.",
+        next_status="Entry accepted (on hold)",
     )
 
 
@@ -19383,12 +19463,33 @@ def archive_potential_entry(entry_id):
     entry = PotentialEntry.query.get_or_404(entry_id)
     archive_status = request.form.get("archive_status", "").strip()
     if archive_status != "Archive":
+        if entry.status == "Entry accepted (on hold)" and archive_status == "Interview confirmed":
+            set_potential_entry_status(entry, "Interview confirmed")
+            entry.reactivation_date = ""
+            db.session.commit()
+            flash("Potential entry saved.", "success")
+            return redirect(url_for("staff.potential_entries"))
+        if entry.status == "Entry accepted (on hold)" and archive_status == "Entry rejected":
+            set_potential_entry_status(entry, "Entry rejected")
+            entry.is_rejected = True
+            entry.rejected_on = datetime.now(timezone.utc)
+            entry.reactivation_date = ""
+            db.session.commit()
+            flash("Potential entry saved.", "success")
+            return redirect(url_for("staff.potential_entries"))
+        if entry.status == "Entry rejected" and archive_status == "CV to be reviewed":
+            set_potential_entry_status(entry, "CV to be reviewed")
+            entry.is_rejected = False
+            entry.rejected_on = None
+            db.session.commit()
+            flash("Potential entry saved.", "success")
+            return redirect(url_for("staff.potential_entries"))
         flash("Potential entry saved.", "success")
         return redirect(url_for("staff.potential_entries"))
     if entry.status == "Entry rejected":
         set_potential_entry_status(entry, "Archived rejected entry")
         entry.is_rejected = True
-    elif entry.status == "Onboarding finalised":
+    elif entry.status in {"Entry accepted (on hold)", "Onboarding finalised"}:
         set_potential_entry_status(entry, "Archived accepted entry")
     else:
         flash("Only rejected or finalised potential entries can be archived.", "error")

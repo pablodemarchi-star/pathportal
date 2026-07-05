@@ -1905,7 +1905,8 @@ td .status-inactive {
   color: var(--badge-blue-text);
 }
 
-.potential-status-entry-accepted {
+.potential-status-entry-accepted,
+.potential-status-entry-accepted-\(on-hold\) {
   background: var(--badge-green-bg);
   color: var(--badge-green-text);
 }
@@ -7970,6 +7971,7 @@ span.session-marker-chip {
 }
 
 .success-button:disabled,
+.info-button:disabled,
 .purple-button:disabled {
   background: var(--badge-grey-bg);
   color: var(--badge-grey-text);
@@ -8185,6 +8187,34 @@ span.session-marker-chip {
   font-size: 13px;
   font-weight: 700;
   white-space: nowrap;
+}
+
+.potential-acceptance-outcome-options {
+  display: grid;
+  gap: 8px;
+  width: 100%;
+}
+
+.potential-acceptance-outcome-options legend {
+  margin-bottom: 6px;
+}
+
+.potential-acceptance-outcome-options label {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: start;
+  width: 100%;
+  white-space: normal;
+}
+
+.potential-acceptance-outcome-options input {
+  margin-top: 2px;
+}
+
+.potential-acceptance-outcome-options span {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  line-height: 1.3;
 }
 
 .potential-interview-role-picker {

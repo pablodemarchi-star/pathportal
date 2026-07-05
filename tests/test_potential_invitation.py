@@ -2,7 +2,7 @@ import json
 import os
 import subprocess
 import unittest
-from datetime import date, datetime, time, timezone
+from datetime import date, datetime, timedelta, time, timezone
 
 os.environ["DATABASE_URL"] = "sqlite:///:memory:"
 
@@ -248,6 +248,7 @@ class PotentialInvitationTest(unittest.TestCase):
             ("Interview invitation sent", "ADMIN", "Follow up invitation to confirm or cancel interview"),
             ("Interview confirmed", "MANAGEMENT", "Hold meeting with potential entry"),
             ("Entry accepted", "ADMIN", "Check notes and send successful application email to potential entry"),
+            ("Entry accepted (on hold)", "MANAGEMENT", "Entry accepted and placed on hold until reativation date"),
             ("Onboarding email sent", "ADMIN", "Follow up onboarding email to confirm or turn down application"),
             ("Induction confirmed", "ADMIN", "Follow up on induction session status to finalise onboarding process"),
             ("Onboarding finalised", "-", "Onboarding process finalised"),
@@ -492,6 +493,22 @@ class PotentialInvitationTest(unittest.TestCase):
         self.assertIn("Onboarding process finalised", row_html)
         self.assertNotIn("Perform action", row_html)
         self.assertNotIn(f'data-open-modal="edit-potential-entry-{entry.id}"', row_html)
+
+    def test_on_hold_entry_perform_action_uses_archive_modal(self):
+        entry = self.add_entry(status="Entry accepted (on hold)", full_name="On Hold Candidate")
+        response = self.client().get("/potential-entries")
+        html = response.get_data(as_text=True)
+        modal_html = html[html.index(f'id="potential-entry-{entry.id}"'):]
+        modal_html = modal_html[:modal_html.index(f'id="potential-note-{entry.id}"')]
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn(
+            f'<button class="mini-button potential-perform-action" type="button" data-open-modal="potential-entry-{entry.id}">Perform action</button>',
+            html,
+        )
+        self.assertNotIn(f'data-open-modal="edit-potential-entry-{entry.id}"', html)
+        self.assertIn('name="archive_status"', modal_html)
+        self.assertIn('<option value="Archive">Archive</option>', modal_html)
 
     def test_create_potential_entry_allows_onboarding_email_sent_status(self):
         response = self.client().post(
@@ -1216,24 +1233,29 @@ class PotentialInvitationTest(unittest.TestCase):
         )
         self.assertIn("Interview confirmed", modal_html)
         self.assertIn("Notes", modal_html)
-        self.assertIn('name="interview_no_show" value="1" data-interview-no-show checked', modal_html)
+        self.assertIn('type="radio" name="interview_outcome_status" value="no_show" data-induction-status-option checked', modal_html)
         self.assertIn("No-show", modal_html)
         self.assertIn("Has a car", modal_html)
-        self.assertIn('type="radio" name="interview_has_car" value="Yes" checked disabled', modal_html)
+        self.assertIn('type="radio" name="interview_has_car" value="Yes" checked', modal_html)
         self.assertIn('type="radio" name="interview_has_car" value="No"', modal_html)
         self.assertIn('class="potential-interview-role-picker"', modal_html)
         self.assertIn('class="staff-fut-options potential-interview-role-options"', modal_html)
-        self.assertIn('type="checkbox" name="interview_roles" value="Examiner" checked disabled', modal_html)
+        self.assertIn('type="checkbox" name="interview_roles" value="Examiner" checked', modal_html)
         self.assertIn('type="checkbox" name="interview_roles" value="RSG"', modal_html)
         self.assertIn('type="checkbox" name="interview_roles" value="Supervisor"', modal_html)
-        self.assertIn('type="checkbox" name="interview_roles" value="Other" checked disabled', modal_html)
-        self.assertIn('name="entry_added_in_sessions_pre_confirmation"', modal_html)
-        self.assertIn('name="entry_added_in_sessions_pre_confirmation"\n                      value="1"\n                      checked\n                      disabled', modal_html)
+        self.assertIn('type="checkbox" name="interview_roles" value="Other" checked', modal_html)
+        self.assertIn('type="radio" name="entry_acceptance_outcome" value="sessions_pre_confirmation" checked', modal_html)
+        self.assertIn('type="radio" name="entry_acceptance_outcome" value="on_hold"', modal_html)
+        self.assertIn('name="reactivation_date"', modal_html)
         self.assertIn("Entry added in sessions for pre-confirmation", modal_html)
-        self.assertIn("Entry rejected", modal_html)
+        self.assertIn("Entry accepted and placed on hold", modal_html)
+        self.assertIn("Reject Entry", modal_html)
         self.assertIn(f'/potential-entries/{entry.id}/cv-review/decline-application', modal_html)
+        self.assertIn("Entry accepted (on hold)", modal_html)
+        self.assertIn(f'/potential-entries/{entry.id}/cv-review/accept-application-on-hold', modal_html)
         self.assertIn("Entry accepted", modal_html)
         self.assertIn(f'/potential-entries/{entry.id}/cv-review/accept-application', modal_html)
+        self.assertIn('data-application-accepted-on-hold-button', modal_html)
         self.assertIn('data-application-accepted-button', modal_html)
         self.assertIn('disabled title="No-show entries cannot be accepted."', modal_html)
         self.assertNotIn("Save and close", modal_html)
@@ -1287,6 +1309,7 @@ class PotentialInvitationTest(unittest.TestCase):
                 "csrf_token": "token",
                 "cv_review_notes": "Candidate is ready to continue.",
                 "cv_review_note_department": "Management",
+                "interview_outcome_status": "attended",
                 "interview_has_car": "Yes",
                 "interview_roles": ["RSG", "Supervisor"],
                 "entry_added_in_sessions_pre_confirmation": "1",
@@ -1306,12 +1329,68 @@ class PotentialInvitationTest(unittest.TestCase):
         self.assertEqual(updated_entry.roles_list(), ["RSG", "Supervisor"])
         self.assertIn("CV review - Management: Candidate is ready to continue.", updated_entry.interview)
 
+    def test_interview_confirmed_application_accepted_on_hold_saves_reactivation_date(self):
+        entry = self.add_entry(
+            status="Interview confirmed",
+            interview="",
+            has_car="No",
+            acceptance_roles="",
+            interview_no_show=False,
+        )
+        future_date = (date.today() + timedelta(days=7)).strftime("%d/%m/%Y")
+        response = self.client().post(
+            f"/potential-entries/{entry.id}/cv-review/accept-application-on-hold",
+            data={
+                "csrf_token": "token",
+                "cv_review_notes": "Candidate accepted but will be contacted later.",
+                "cv_review_note_department": "Management",
+                "interview_outcome_status": "attended",
+                "interview_has_car": "Yes",
+                "interview_roles": ["Examiner"],
+                "entry_acceptance_outcome": "on_hold",
+                "reactivation_date": future_date,
+            },
+            follow_redirects=True,
+        )
+        html = response.get_data(as_text=True)
+        updated_entry = db.session.get(PotentialEntry, entry.id)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("Application accepted and placed on hold.", html)
+        self.assertEqual(updated_entry.status, "Entry accepted (on hold)")
+        self.assertFalse(updated_entry.entry_added_in_sessions_pre_confirmation)
+        self.assertEqual(updated_entry.has_car, "Yes")
+        self.assertEqual(updated_entry.roles_list(), ["Examiner"])
+        self.assertEqual(updated_entry.reactivation_date, (date.today() + timedelta(days=7)).isoformat())
+        self.assertIn("Reactivation date set for", html)
+
+    def test_interview_confirmed_application_accepted_on_hold_requires_future_reactivation_date(self):
+        entry = self.add_entry(status="Interview confirmed")
+        response = self.client().post(
+            f"/potential-entries/{entry.id}/cv-review/accept-application-on-hold",
+            data={
+                "csrf_token": "token",
+                "interview_outcome_status": "attended",
+                "interview_has_car": "Yes",
+                "interview_roles": ["Examiner"],
+                "entry_acceptance_outcome": "on_hold",
+                "reactivation_date": date.today().strftime("%d/%m/%Y"),
+            },
+            follow_redirects=True,
+        )
+        updated_entry = db.session.get(PotentialEntry, entry.id)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("Reactivation date must be in the future.", response.get_data(as_text=True))
+        self.assertEqual(updated_entry.status, "Interview confirmed")
+
     def test_interview_confirmed_application_accepted_requires_outcome_fields(self):
         entry = self.add_entry(status="Interview confirmed")
         response = self.client().post(
             f"/potential-entries/{entry.id}/cv-review/accept-application",
             data={
                 "csrf_token": "token",
+                "interview_outcome_status": "attended",
                 "interview_has_car": "Yes",
                 "interview_roles": ["Examiner"],
             },
@@ -1994,7 +2073,7 @@ class PotentialInvitationTest(unittest.TestCase):
 
     def test_rejected_potential_entry_shows_permanent_delete_action(self):
         entry = self.add_entry(is_rejected=True)
-        response = self.client().get("/potential-entries?show_rejected=1")
+        response = self.client().get("/potential-entries")
         html = response.get_data(as_text=True)
 
         self.assertEqual(response.status_code, 200)
@@ -2040,6 +2119,79 @@ class PotentialInvitationTest(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertIn("Rejected potential entry permanently deleted.", response.get_data(as_text=True))
         self.assertIsNone(db.session.get(PotentialEntry, entry.id))
+
+    def test_rejected_potential_entry_archive_modal_can_return_to_cv_review(self):
+        entry = self.add_entry(status="Entry rejected", is_rejected=True)
+        response = self.client().get("/potential-entries")
+        html = response.get_data(as_text=True)
+        modal_html = html[html.index(f'id="potential-entry-{entry.id}"'):]
+        modal_html = modal_html[:modal_html.index(f'id="potential-note-{entry.id}"')]
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn('<option value="Entry rejected">Entry rejected</option>', modal_html)
+        self.assertIn('<option value="CV to be reviewed">CV to be reviewed</option>', modal_html)
+        self.assertIn('<option value="Archive">Archive</option>', modal_html)
+
+        response = self.client().post(
+            f"/potential-entries/{entry.id}/archive",
+            data={"csrf_token": "token", "archive_status": "CV to be reviewed"},
+            follow_redirects=True,
+        )
+        updated_entry = db.session.get(PotentialEntry, entry.id)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(updated_entry.status, "CV to be reviewed")
+        self.assertFalse(updated_entry.is_rejected)
+        self.assertIsNone(updated_entry.rejected_on)
+
+    def test_on_hold_archive_modal_can_move_to_interview_confirmed(self):
+        entry = self.add_entry(
+            status="Entry accepted (on hold)",
+            full_name="On Hold Candidate",
+            reactivation_date="2026-10-20",
+        )
+        response = self.client().get("/potential-entries")
+        html = response.get_data(as_text=True)
+        modal_html = html[html.index(f'id="potential-entry-{entry.id}"'):]
+        modal_html = modal_html[:modal_html.index(f'id="potential-note-{entry.id}"')]
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn('<option value="Entry accepted (on hold)">Entry accepted (on hold)</option>', modal_html)
+        self.assertIn('<option value="Interview confirmed">Interview confirmed</option>', modal_html)
+        self.assertIn('<option value="Entry rejected">Entry rejected</option>', modal_html)
+        self.assertNotIn('<option value="Entry accepted">Entry accepted</option>', modal_html)
+        self.assertNotIn('<option value="Archive">Archive</option>', modal_html)
+
+        response = self.client().post(
+            f"/potential-entries/{entry.id}/archive",
+            data={"csrf_token": "token", "archive_status": "Interview confirmed"},
+            follow_redirects=True,
+        )
+        updated_entry = db.session.get(PotentialEntry, entry.id)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(updated_entry.status, "Interview confirmed")
+        self.assertEqual(updated_entry.reactivation_date, "")
+
+    def test_on_hold_archive_modal_can_move_to_entry_rejected(self):
+        entry = self.add_entry(
+            status="Entry accepted (on hold)",
+            full_name="On Hold Candidate",
+            reactivation_date="2026-10-20",
+        )
+
+        response = self.client().post(
+            f"/potential-entries/{entry.id}/archive",
+            data={"csrf_token": "token", "archive_status": "Entry rejected"},
+            follow_redirects=True,
+        )
+        updated_entry = db.session.get(PotentialEntry, entry.id)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(updated_entry.status, "Entry rejected")
+        self.assertTrue(updated_entry.is_rejected)
+        self.assertIsNotNone(updated_entry.rejected_on)
+        self.assertEqual(updated_entry.reactivation_date, "")
 
     def test_archived_potential_entry_modal_shows_delete_with_path_password(self):
         entry = self.add_entry(status="Archived accepted entry", full_name="Archived Candidate")
@@ -2242,6 +2394,13 @@ class PotentialInvitationTest(unittest.TestCase):
             updated_on=datetime(2026, 7, 2, 9, 0, tzinfo=timezone.utc),
         )
         self.add_entry(
+            full_name="On Hold Candidate",
+            email="on-hold@example.com",
+            status="Entry accepted (on hold)",
+            reactivation_date="2026-07-20",
+            updated_on=datetime(2026, 7, 5, 9, 0, tzinfo=timezone.utc),
+        )
+        self.add_entry(
             full_name="Finalised Candidate",
             email="finalised@example.com",
             status="Onboarding finalised",
@@ -2255,7 +2414,8 @@ class PotentialInvitationTest(unittest.TestCase):
 
         self.assertLess(html.index("Newest Candidate"), html.index("Middle Candidate"))
         self.assertLess(html.index("Middle Candidate"), html.index("Older Candidate"))
-        self.assertLess(html.index("Older Candidate"), html.index("Finalised Candidate"))
+        self.assertLess(html.index("Older Candidate"), html.index("On Hold Candidate"))
+        self.assertLess(html.index("On Hold Candidate"), html.index("Finalised Candidate"))
 
     def test_updated_potential_entry_moves_to_top_of_default_table(self):
         edited_entry = self.add_entry(
@@ -2316,6 +2476,31 @@ class PotentialInvitationTest(unittest.TestCase):
         self.assertIn('<option value="Interview to be arranged" selected>Interview to be arranged</option>', status_html)
         self.assertIn("Admin Candidate", status_html)
         self.assertNotIn("Management Candidate", status_html)
+
+    def test_my_actions_hides_on_hold_entries_until_reactivation_date(self):
+        client, _user = self.permission_client(can_view=True, can_edit=True, department="Management")
+        self.add_entry(full_name="Management Candidate", email="management-action@example.com", status="CV to be reviewed")
+        self.add_entry(full_name="Admin Candidate", email="admin-action@example.com", status="Interview to be arranged")
+        future_hold = self.add_entry(full_name="Future Hold Candidate", email="future-hold@example.com", status="Entry accepted (on hold)")
+        future_hold.reactivation_date = (date.today() + timedelta(days=7)).isoformat()
+        due_hold = self.add_entry(full_name="Due Hold Candidate", email="due-hold@example.com", status="Entry accepted (on hold)")
+        due_hold.reactivation_date = date.today().isoformat()
+        archived = self.add_entry(full_name="Archived Candidate", email="archived-action@example.com", status="Archived accepted entry")
+        db.session.add_all([future_hold, due_hold, archived])
+        db.session.commit()
+
+        response = client.get("/potential-entries?action_scope=my_actions")
+        html = response.get_data(as_text=True)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn('class="scope-tab is-active"', html)
+        self.assertIn("Management Candidate", html)
+        self.assertIn("Due Hold Candidate", html)
+        self.assertIn("Reactivation date for accepted entry has been reached", html)
+        self.assertNotIn("Entry accepted and placed on hold until reativation date", html)
+        self.assertNotIn("Future Hold Candidate", html)
+        self.assertNotIn("Admin Candidate", html)
+        self.assertNotIn("Archived Candidate", html)
 
     def test_potential_entries_sort_links_and_ordering(self):
         self.add_entry(full_name="Zulu Candidate", email="zulu@example.com", status="Interview to be arranged", city="Rosario", province="Santa Fe")

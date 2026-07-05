@@ -245,6 +245,7 @@ def create_app():
             "cv_review_interview_options": "TEXT",
             "interview_no_show": "BOOLEAN NOT NULL DEFAULT 0",
             "entry_added_in_sessions_pre_confirmation": "BOOLEAN NOT NULL DEFAULT 0",
+            "reactivation_date": "VARCHAR(10)",
             "entry_accepted_notes_checked": "BOOLEAN NOT NULL DEFAULT 0",
             "entry_accepted_email_sent": "BOOLEAN NOT NULL DEFAULT 0",
             "entry_accepted_whatsapp_sent": "BOOLEAN NOT NULL DEFAULT 0",

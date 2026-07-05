@@ -1659,6 +1659,7 @@ class PotentialEntry(db.Model):
     interview_invitation_sent = db.Column(db.Boolean, nullable=False, default=False, index=True)
     interview_no_show = db.Column(db.Boolean, nullable=False, default=False, index=True)
     entry_added_in_sessions_pre_confirmation = db.Column(db.Boolean, nullable=False, default=False, index=True)
+    reactivation_date = db.Column(db.String(10), nullable=True)
     entry_accepted_notes_checked = db.Column(db.Boolean, nullable=False, default=False, index=True)
     entry_accepted_email_sent = db.Column(db.Boolean, nullable=False, default=False, index=True)
     entry_accepted_whatsapp_sent = db.Column(db.Boolean, nullable=False, default=False, index=True)
