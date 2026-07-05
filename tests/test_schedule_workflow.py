@@ -2262,7 +2262,7 @@ class ScheduleWorkflowTest(unittest.TestCase):
                 self.assertEqual(in_progress_response.status_code, 200)
                 self.assertNotIn(member_name, in_progress_html)
 
-        staff_response = client.get("/")
+        staff_response = client.get("/staff-members")
         staff_html = staff_response.get_data(as_text=True)
         self.assertEqual(staff_response.status_code, 200)
         self.assertIn("Active Examiner Notes", staff_html)
@@ -2293,7 +2293,7 @@ class ScheduleWorkflowTest(unittest.TestCase):
         db.session.add_all([no_notes, one_note, three_notes])
         db.session.commit()
 
-        response = client.get("/?sort=history&dir=desc")
+        response = client.get("/staff-members?sort=history&dir=desc")
         html = response.get_data(as_text=True)
 
         self.assertEqual(response.status_code, 200)

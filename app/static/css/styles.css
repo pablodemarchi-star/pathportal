@@ -110,6 +110,137 @@ textarea {
   overflow-wrap: anywhere;
 }
 
+.dashboard-page {
+  display: grid;
+  gap: 22px;
+  width: 100%;
+  max-width: 1180px;
+  margin: 0 auto;
+}
+
+.dashboard-hero {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 18px;
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  background: var(--color-surface);
+  padding: 28px;
+}
+
+.dashboard-hero-copy {
+  display: grid;
+  gap: 8px;
+}
+
+.dashboard-hero h1 {
+  margin: 0;
+  color: var(--color-primary-dark);
+  font-size: 34px;
+  font-weight: 900;
+  letter-spacing: 0;
+  line-height: 1.12;
+}
+
+.dashboard-hero p,
+.dashboard-card p,
+.dashboard-empty-state span {
+  margin: 0;
+  color: var(--color-muted);
+  font-size: 14px;
+  line-height: 1.45;
+}
+
+.dashboard-department-chip {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 999px;
+  padding: 6px 10px;
+  font-size: 11px;
+  font-weight: 900;
+  line-height: 1.2;
+  white-space: nowrap;
+}
+
+.dashboard-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 18px;
+}
+
+.dashboard-card {
+  display: grid;
+  align-content: space-between;
+  gap: 22px;
+  min-width: 0;
+  min-height: 220px;
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  background: var(--color-surface);
+  padding: 22px;
+}
+
+.dashboard-card-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  min-width: 0;
+}
+
+.dashboard-card-header > div {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+}
+
+.dashboard-card h2 {
+  margin: 0;
+  color: var(--color-primary-dark);
+  font-size: 20px;
+  font-weight: 900;
+  letter-spacing: 0;
+  line-height: 1.2;
+}
+
+.dashboard-empty-state {
+  display: grid;
+  gap: 5px;
+  align-self: end;
+  border-left: 4px solid var(--path-ochre);
+  background: var(--path-ochre-50);
+  padding: 14px 16px;
+}
+
+.dashboard-empty-state strong {
+  color: var(--color-primary-dark);
+  font-size: 14px;
+  font-weight: 900;
+  line-height: 1.25;
+}
+
+.dashboard-count-chip {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 42px;
+  min-height: 42px;
+  border-radius: 8px;
+  background: var(--path-sage-50);
+  color: var(--badge-green-text);
+  font-size: 18px;
+  font-weight: 900;
+  line-height: 1;
+}
+
+.dashboard-menu-button {
+  justify-self: start;
+}
+
 .brand {
   flex-direction: column;
   align-items: flex-start;
@@ -227,6 +358,10 @@ textarea {
   justify-content: flex-end;
 }
 
+.potential-actions-header {
+  justify-content: flex-end;
+}
+
 .page-header h1,
 .login-card h1 {
   margin: 0;
@@ -245,8 +380,7 @@ textarea {
 .toolbar,
 .year-toolbar,
 .archived-year-panel,
-.table-wrap,
-.potential-section {
+.table-wrap {
   background: var(--color-surface);
   border: 1px solid var(--color-border);
   border-radius: 8px;
@@ -1063,11 +1197,6 @@ textarea {
   font-weight: 800;
 }
 
-.potential-section {
-  margin-bottom: 18px;
-  padding: 16px;
-}
-
 .section-heading {
   display: flex;
   align-items: flex-start;
@@ -1105,15 +1234,232 @@ textarea {
   text-align: center;
 }
 
-.potential-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(0, min(86mm, 100%)));
-  justify-content: start;
-  gap: 12px;
+.potential-toolbar .toolbar-actions {
+  justify-content: space-between;
+  width: 100%;
 }
 
-.potential-content[hidden] {
-  display: none;
+.potential-filters {
+  grid-template-columns: minmax(190px, 1fr) minmax(170px, 0.8fr) auto;
+}
+
+.potential-entry-create-form {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.compact-section-heading {
+  margin-bottom: 0;
+}
+
+.potential-table {
+  min-width: 0;
+  table-layout: fixed;
+}
+
+.potential-table th,
+.potential-table td {
+  padding: 11px 9px;
+  white-space: normal;
+}
+
+.potential-table th:nth-child(1),
+.potential-table td:nth-child(1) {
+  width: 14%;
+}
+
+.potential-table th:nth-child(2),
+.potential-table td:nth-child(2) {
+  width: 19%;
+  max-width: none;
+}
+
+.potential-table th:nth-child(3),
+.potential-table td:nth-child(3),
+.potential-table th:nth-child(4),
+.potential-table td:nth-child(4) {
+  width: 8%;
+}
+
+.potential-table th:nth-child(5),
+.potential-table td:nth-child(5) {
+  width: 6%;
+}
+
+.potential-table th:nth-child(6),
+.potential-table td:nth-child(6) {
+  width: 10%;
+}
+
+.potential-table th:nth-child(7),
+.potential-table td:nth-child(7) {
+  width: 21%;
+  max-width: none;
+}
+
+.potential-table th:nth-child(8),
+.potential-table td:nth-child(8) {
+  width: 14%;
+}
+
+.potential-row-actions {
+  justify-content: flex-start;
+  max-width: 520px;
+}
+
+.status-track-panel {
+  grid-column: 1 / -1;
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  background: var(--path-grey-50);
+  padding: 10px 12px;
+}
+
+.potential-review-summary > .status-track-panel {
+  margin-top: 22px;
+}
+
+.status-track-toggle {
+  border: 0;
+  background: transparent;
+  padding: 0;
+  cursor: pointer;
+  color: var(--color-primary-dark);
+  font-size: 13px;
+  font-weight: 900;
+  line-height: 1.2;
+}
+
+.status-track-toggle::before {
+  content: "+";
+  display: inline-flex;
+  width: 16px;
+  margin-right: 4px;
+  color: var(--color-accent);
+  font-weight: 900;
+}
+
+.status-track-toggle[aria-expanded="true"]::before {
+  content: "-";
+}
+
+.status-track-list {
+  display: grid;
+  gap: 8px;
+  max-height: 220px;
+  margin-top: 10px;
+  overflow-y: auto;
+  overflow-x: hidden;
+}
+
+.status-track-item {
+  display: grid;
+  gap: 4px;
+  border-radius: 8px;
+  background: white;
+  padding: 9px 10px;
+}
+
+.status-track-item strong {
+  color: var(--color-primary-dark);
+  font-size: 13px;
+  font-weight: 900;
+  line-height: 1.25;
+  overflow-wrap: anywhere;
+}
+
+.status-track-item span,
+.status-track-empty {
+  margin: 0;
+  color: var(--color-muted);
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 1.35;
+}
+
+.status-track-empty {
+  margin-top: 10px;
+}
+
+.potential-action-text {
+  display: inline-block;
+  max-width: 100%;
+  color: var(--color-muted);
+  font-size: 13px;
+  font-weight: 400;
+  line-height: 1.35;
+  white-space: normal;
+}
+
+.potential-status-meta {
+  display: grid;
+  gap: 2px;
+  margin-top: 5px;
+  color: var(--color-muted);
+  font-size: 13px;
+  font-weight: 400;
+  line-height: 1.25;
+}
+
+.potential-status-platform {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+}
+
+.potential-status-platform .platform-logo-img {
+  flex: 0 0 auto;
+}
+
+.potential-archive-result {
+  display: block;
+  margin-top: 5px;
+  font-size: 12px;
+  font-weight: 800;
+  line-height: 1.2;
+}
+
+.potential-archive-result.is-rejected {
+  color: var(--badge-red-text);
+}
+
+.potential-archive-result.is-accepted {
+  color: var(--badge-green-text);
+}
+
+.potential-contact-meta {
+  display: grid;
+  gap: 0;
+  margin-top: 1px;
+  color: var(--color-muted);
+  font-size: 13px;
+  font-weight: 400;
+  line-height: 1.18;
+  overflow-wrap: anywhere;
+}
+
+.potential-perform-action {
+  border-radius: 999px;
+  padding: 4px 9px;
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 1.2;
+  white-space: normal;
+}
+
+.text-button {
+  border: 0;
+  padding: 0;
+  background: transparent;
+  color: var(--color-primary-dark);
+  cursor: pointer;
+  font: inherit;
+  text-align: left;
+}
+
+.text-button:hover {
+  color: var(--color-primary);
+  text-decoration: underline;
 }
 
 .potential-card {
@@ -1165,15 +1511,18 @@ textarea {
 }
 
 .potential-email-row {
-  display: inline-flex;
+  display: flex;
   align-items: center;
   gap: 6px;
   min-width: 0;
+  max-width: 100%;
 }
 
 .potential-email-row > span {
   min-width: 0;
-  overflow-wrap: anywhere;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .potential-gmail-button {
@@ -1526,13 +1875,108 @@ td .status-inactive {
   color: var(--badge-yellow-text);
 }
 
-.potential-status-to-be-interviewed {
-  background: var(--badge-red-bg);
-  color: var(--badge-red-text);
+.potential-status-cv-to-be-reviewed {
+  background: var(--badge-yellow-bg);
+  color: var(--badge-yellow-text);
 }
 
-.potential-card .potential-status-to-be-interviewed,
-.potential-card .potential-status-interview-arranged {
+.potential-status-review-interview-date-and-time {
+  background: var(--badge-yellow-bg);
+  color: var(--badge-yellow-text);
+  max-width: 100%;
+  justify-content: flex-start;
+  text-align: left;
+  white-space: normal;
+  line-height: 1.15;
+}
+
+.potential-status-interview-to-be-arranged {
+  background: var(--badge-purple-bg);
+  color: var(--badge-purple-text);
+}
+
+.potential-status-interview-invitation-sent {
+  background: var(--path-blue-50);
+  color: var(--color-primary-dark);
+}
+
+.potential-status-interview-confirmed {
+  background: var(--path-cyan-50);
+  color: var(--badge-blue-text);
+}
+
+.potential-status-entry-accepted {
+  background: var(--badge-green-bg);
+  color: var(--badge-green-text);
+}
+
+.potential-status-onboarding-email-sent {
+  background: var(--badge-blue-bg);
+  color: var(--badge-blue-text);
+}
+
+.potential-status-induction-confirmed {
+  background: var(--path-cyan-50);
+  color: var(--badge-blue-text);
+}
+
+.potential-status-onboarding-finalised {
+  background: var(--badge-green-bg);
+  color: var(--badge-green-text);
+}
+
+.potential-status-entry-rejected {
+  background: var(--badge-grey-bg);
+  color: var(--badge-grey-text);
+}
+
+.potential-status-archived-accepted-entry,
+.potential-status-archived-rejected-entry {
+  background: var(--badge-grey-bg);
+  color: var(--badge-grey-text);
+}
+
+.potential-scope-tabs {
+  display: flex;
+  gap: 8px;
+  margin: 14px 0;
+}
+
+.scope-tab {
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  padding: 8px 12px;
+  background: white;
+  color: var(--color-primary-dark);
+  font-size: 13px;
+  font-weight: 800;
+  text-decoration: none;
+}
+
+.scope-tab.is-active {
+  border-color: var(--color-accent);
+  background: var(--path-cyan-50);
+  color: var(--badge-blue-text);
+}
+
+.potential-cv-chip {
+  background: var(--path-cyan-50);
+  color: var(--badge-blue-text);
+  text-decoration: none;
+}
+
+.potential-cv-chip:hover {
+  color: var(--color-primary-dark);
+}
+
+.potential-card .potential-status-cv-to-be-reviewed,
+.potential-card .potential-status-interview-to-be-arranged,
+.potential-card .potential-status-interview-invitation-sent,
+.potential-card .potential-status-interview-confirmed,
+.potential-card .potential-status-entry-accepted,
+.potential-card .potential-status-onboarding-email-sent,
+.potential-card .potential-status-induction-confirmed,
+.potential-card .potential-status-entry-rejected {
   box-sizing: border-box;
   justify-content: center;
   width: 38mm;
@@ -1540,16 +1984,6 @@ td .status-inactive {
   padding: 0 9px;
   overflow: hidden;
   text-overflow: ellipsis;
-}
-
-.potential-status-interview-scheduled {
-  background: var(--badge-yellow-bg);
-  color: var(--badge-yellow-text);
-}
-
-.potential-status-interview-arranged {
-  background: var(--badge-blue-bg);
-  color: var(--badge-blue-text);
 }
 
 .potential-status-rejected {
@@ -6388,7 +6822,8 @@ span.session-marker-chip {
 }
 
 .primary-button:disabled,
-.secondary-button:disabled {
+.secondary-button:disabled,
+.danger-button:disabled {
   cursor: not-allowed;
   opacity: 0.55;
 }
@@ -6430,6 +6865,11 @@ span.session-marker-chip {
   background: var(--badge-red-bg);
   color: var(--badge-red-text);
   padding: 10px 13px;
+}
+
+.danger-button:disabled {
+  background: var(--badge-grey-bg);
+  color: var(--badge-grey-text);
 }
 
 .mini-button {
@@ -7288,6 +7728,578 @@ span.session-marker-chip {
   justify-content: flex-end;
   gap: 10px;
   flex-wrap: wrap;
+}
+
+.potential-review-modal {
+  width: min(980px, calc(100vw - 32px));
+}
+
+.potential-review-header {
+  align-items: flex-start;
+}
+
+.potential-review-header > div {
+  display: grid;
+  gap: 8px;
+}
+
+.potential-review-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  align-items: start;
+  gap: 14px;
+}
+
+.potential-review-summary,
+.potential-cv-review-section {
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  padding: 18px;
+  background: white;
+  box-shadow: 0 10px 24px rgba(0, 80, 107, 0.06);
+}
+
+.potential-review-summary {
+  grid-column: 1 / -1;
+}
+
+.potential-review-summary h3,
+.potential-cv-review-section h3 {
+  margin: 0;
+  color: var(--color-primary-dark);
+  font-size: 16px;
+}
+
+.potential-cv-review-section h3 {
+  margin-bottom: 14px;
+}
+
+.potential-review-card-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 14px;
+}
+
+.potential-cv-review-section {
+  grid-column: 1 / -1;
+}
+
+.potential-review-info-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+  margin: 0;
+}
+
+.potential-review-info-grid div {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  padding: 10px 12px;
+  background: var(--color-surface);
+}
+
+.potential-review-info-grid dt {
+  color: var(--color-muted);
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.potential-review-info-grid dd {
+  min-width: 0;
+  margin: 0;
+  overflow-wrap: anywhere;
+  color: var(--color-primary-dark);
+  font-weight: 700;
+}
+
+.potential-cv-review-form {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 16px;
+  align-items: stretch;
+}
+
+.potential-cv-review-fields {
+  display: grid;
+  grid-template-columns: minmax(0, 2fr) minmax(0, 1fr);
+  align-items: start;
+  gap: 14px;
+  min-width: 0;
+}
+
+.potential-interview-arrangement-fields {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.potential-cv-review-form label,
+.interview-options-group,
+.cv-review-notes-box,
+.interview-confirmed-fields-box {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+  color: var(--color-primary-dark);
+  font-weight: 700;
+}
+
+.cv-review-notes-panel {
+  display: grid;
+  gap: 10px;
+  min-height: 188px;
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  padding: 12px;
+  background: var(--color-surface);
+}
+
+.cv-review-notes-panel textarea {
+  width: 100%;
+  min-height: 132px;
+  min-width: 0;
+  resize: vertical;
+}
+
+.add-note-button {
+  justify-self: end;
+}
+
+.cv-review-note-actions {
+  display: grid;
+  grid-template-columns: minmax(0, 210px) auto;
+  justify-content: end;
+  align-items: end;
+  gap: 10px;
+}
+
+.cv-review-note-actions label {
+  font-size: 12px;
+}
+
+.potential-review-summary .history-list {
+  margin-top: 22px;
+  padding-top: 18px;
+  border-top: 1px solid var(--color-border);
+}
+
+.potential-note-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.potential-note-department-chip {
+  background: var(--path-cyan-50);
+  color: var(--badge-blue-text);
+}
+
+.potential-note-delete-form {
+  margin-left: auto;
+}
+
+.potential-info-edit-form {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  margin-top: 12px;
+}
+
+.success-button,
+.info-button,
+.purple-button {
+  border: 0;
+  border-radius: 8px;
+  padding: 10px 16px;
+  font-weight: 800;
+  cursor: pointer;
+}
+
+.success-button {
+  background: var(--badge-green-bg);
+  color: var(--badge-green-text);
+}
+
+.success-button:hover {
+  filter: brightness(0.98);
+}
+
+.info-button {
+  background: var(--path-cyan-50);
+  color: var(--badge-blue-text);
+}
+
+.info-button:hover {
+  color: var(--color-primary-dark);
+}
+
+.purple-button {
+  background: var(--badge-purple-bg);
+  color: var(--badge-purple-text);
+}
+
+.purple-button:hover {
+  color: var(--color-primary-dark);
+}
+
+.success-button:disabled,
+.info-button:disabled,
+.purple-button:disabled {
+  cursor: not-allowed;
+  opacity: 0.6;
+}
+
+.success-button:disabled,
+.purple-button:disabled {
+  background: var(--badge-grey-bg);
+  color: var(--badge-grey-text);
+}
+
+.interview-options-group {
+  align-content: start;
+}
+
+.interview-options-title {
+  display: block;
+}
+
+.interview-options-fieldset {
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  padding: 12px;
+  background: var(--path-cyan-50);
+  min-height: 188px;
+}
+
+.interview-options-list {
+  display: grid;
+  gap: 8px;
+}
+
+.potential-readonly-invitation {
+  display: grid;
+  gap: 12px;
+}
+
+.potential-readonly-options-list {
+  display: grid;
+  gap: 8px;
+}
+
+.potential-readonly-option {
+  display: grid;
+  gap: 3px;
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  padding: 10px 12px;
+  background: white;
+}
+
+.selectable-readonly-option {
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
+  cursor: pointer;
+}
+
+.selectable-readonly-option input {
+  margin: 0;
+}
+
+.selectable-readonly-option:has(input:checked) {
+  border-color: var(--color-accent);
+  background: var(--path-cyan-50);
+}
+
+.potential-readonly-option-label,
+.potential-readonly-meta-label {
+  color: var(--color-muted);
+  font-size: 11px;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
+.potential-readonly-option span:last-child,
+.potential-readonly-meeting-fields > div > span:last-child {
+  color: var(--color-primary-dark);
+  font-size: 14px;
+  font-weight: 700;
+}
+
+.potential-readonly-meeting-fields {
+  border-top: 1px solid var(--color-border);
+  padding-top: 10px;
+}
+
+.potential-email-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  padding-top: 2px;
+}
+
+.potential-email-actions .bulk-status {
+  min-height: 18px;
+}
+
+.potential-email-actions .bulk-status.is-error {
+  color: var(--badge-red-text);
+}
+
+.potential-interview-outcome-fields {
+  display: grid;
+  gap: 12px;
+}
+
+.induction-status-panel {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+}
+
+.onboarding-follow-up-wrap {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+  width: 100%;
+}
+
+.onboarding-follow-up-group {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+  width: 100%;
+}
+
+.onboarding-follow-up-column {
+  display: grid;
+  align-content: start;
+  gap: 8px;
+}
+
+.potential-cv-review-form .onboarding-follow-up-title {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  justify-self: start;
+  color: var(--color-primary-dark);
+  font-size: 14px;
+  font-weight: 800;
+}
+
+.potential-cv-review-form .onboarding-follow-up-title input {
+  flex: 0 0 auto;
+  margin: 0;
+}
+
+.onboarding-follow-up-fieldset {
+  display: grid;
+  gap: 12px;
+  min-height: 188px;
+  margin: 0;
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  padding: 12px;
+  background: var(--path-grey-50);
+  color: var(--color-muted);
+  opacity: 0.68;
+}
+
+.onboarding-follow-up-column.is-active .onboarding-follow-up-fieldset {
+  background: var(--path-cyan-50);
+  color: var(--color-text);
+  opacity: 1;
+}
+
+.onboarding-confirm-fields {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.onboarding-confirm-fields label,
+.onboarding-induction-group label {
+  display: grid;
+  gap: 5px;
+  color: var(--color-primary-dark);
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.onboarding-confirm-fields .full-span {
+  grid-column: 1 / -1;
+}
+
+.onboarding-induction-group .interview-options-fieldset {
+  min-height: 0;
+}
+
+@media (max-width: 920px) {
+  .onboarding-follow-up-group {
+    grid-template-columns: 1fr;
+  }
+}
+
+.inline-radio-group {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+  margin: 0;
+  border: 0;
+  padding: 0;
+}
+
+.inline-radio-group legend {
+  width: 100%;
+  color: var(--color-primary-dark);
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.inline-radio-group label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--color-primary-dark);
+  font-size: 13px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.potential-interview-role-picker {
+  display: grid;
+  gap: 6px;
+  margin: 0;
+  border: 0;
+  padding: 0;
+}
+
+.potential-interview-role-picker legend {
+  color: var(--color-primary-dark);
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.potential-interview-role-options {
+  max-height: none;
+  overflow: visible;
+  padding-right: 0;
+}
+
+.potential-interview-role-options span {
+  border: 1px solid var(--path-blue-50);
+  background: #fff;
+}
+
+.potential-interview-role-options label:hover span {
+  border-color: var(--path-cyan);
+  background: var(--path-cyan-50);
+}
+
+.potential-interview-role-options input:checked + span {
+  border-color: var(--color-primary);
+  background: var(--color-primary);
+  color: #fff;
+}
+
+.potential-interview-role-options input:disabled + span,
+.potential-interview-role-options input:checked:disabled + span {
+  border-color: var(--color-border);
+  background: var(--path-grey-50);
+  color: var(--color-muted);
+  text-decoration: none;
+  opacity: 0.75;
+}
+
+.potential-interview-role-options input:focus-visible + span {
+  outline: 2px solid var(--path-cyan);
+  outline-offset: 2px;
+}
+
+.interview-option-row {
+  display: grid;
+  grid-template-columns: minmax(155px, 1.25fr) minmax(105px, 0.75fr) 34px;
+  gap: 8px;
+  align-items: end;
+  min-width: 0;
+}
+
+.interview-option-row label,
+.interview-option-row select,
+.interview-option-row input {
+  min-width: 0;
+  width: 100%;
+}
+
+.interview-option-row > button {
+  align-self: center;
+}
+
+.interview-option-row.is-extra .interview-option-label {
+  display: none;
+}
+
+.interview-option-row > [data-remove-interview-option] {
+  grid-column: 3;
+  grid-row: 1;
+}
+
+.time-suffix-field {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 6px;
+}
+
+.time-suffix-field span {
+  color: var(--color-muted);
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.interview-option-platform-field {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 6px;
+}
+
+.interview-option-platform-preview {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  justify-self: start;
+  min-height: 20px;
+  color: var(--color-primary-dark);
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.interview-option-shared-fields {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 8px;
+}
+
+.interview-option-shared-fields label,
+.interview-option-shared-fields select {
+  min-width: 0;
+  width: 100%;
+}
+
+.add-interview-option-button {
+  justify-self: start;
+  min-width: 36px;
+}
+
+.potential-cv-review-actions {
+  display: flex;
+  flex-direction: row;
+  justify-content: flex-end;
+  gap: 10px;
+  min-width: 0;
 }
 
 .compact-history {
@@ -8488,6 +9500,10 @@ span.session-marker-chip {
     max-width: 260px;
   }
 
+  .dashboard-grid {
+    grid-template-columns: 1fr;
+  }
+
   .filters,
   .form-grid {
     grid-template-columns: 1fr;
@@ -8569,6 +9585,28 @@ span.session-marker-chip {
   .main-content,
   .modal {
     padding: 14px;
+  }
+
+  .dashboard-page {
+    gap: 16px;
+  }
+
+  .dashboard-hero {
+    flex-direction: column;
+    padding: 20px;
+  }
+
+  .dashboard-hero h1 {
+    font-size: 28px;
+  }
+
+  .dashboard-card {
+    min-height: 0;
+    padding: 18px;
+  }
+
+  .dashboard-card-header {
+    flex-direction: column;
   }
 
   .main-content.centered {
@@ -8666,6 +9704,27 @@ span.session-marker-chip {
 
   .supported-format ul {
     grid-template-columns: 1fr;
+  }
+
+  .potential-cv-review-form {
+    grid-template-columns: 1fr;
+  }
+
+  .potential-review-layout,
+  .potential-cv-review-fields,
+  .cv-review-note-actions {
+    grid-template-columns: 1fr;
+  }
+
+  .potential-review-info-grid,
+  .interview-option-row,
+  .potential-info-edit-form {
+    grid-template-columns: 1fr;
+  }
+
+  .potential-cv-review-actions {
+    flex-direction: column;
+    align-items: stretch;
   }
 
   .certification-filters input[name="q"],

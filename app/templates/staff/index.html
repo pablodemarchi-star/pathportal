@@ -13,9 +13,43 @@
   {% endif %}
 {%- endmacro %}
 
-{% block title %}Staff members | Path Examinations{% endblock %}
+{% macro status_track_panel(entry, suffix) -%}
+  <section class="status-track-panel" aria-label="Status track">
+    <button
+      class="status-track-toggle"
+      type="button"
+      aria-expanded="false"
+      aria-controls="status-track-{{ entry.id }}-{{ suffix }}"
+      data-status-track-toggle
+    >Status track</button>
+    <div id="status-track-{{ entry.id }}-{{ suffix }}" class="status-track-content" hidden>
+    {% set tracks = entry.status_tracks|sort(attribute='changed_at', reverse=True) %}
+    {% if tracks %}
+      <div class="status-track-list">
+        {% for track in tracks %}
+          <article class="status-track-item">
+            <strong>{{ track.previous_status }} → {{ track.new_status }}</strong>
+            <span>{{ track.changed_at|status_track_dt }} · {{ track.changed_by_department or 'Unknown department' }}</span>
+          </article>
+        {% endfor %}
+      </div>
+    {% else %}
+      <p class="status-track-empty">No status changes recorded yet.</p>
+    {% endif %}
+    </div>
+  </section>
+{%- endmacro %}
+
+{% block title %}{% if page_mode == 'potential_entries' %}Potential entries{% else %}Staff members{% endif %} | Path Examinations{% endblock %}
 
 {% block content %}
+{% if page_mode == 'potential_entries' %}
+<header class="page-header potential-actions-header">
+  <div class="page-actions">
+    <button class="potential-button" type="button" data-open-modal="create-potential-entry">Add potential entry</button>
+  </div>
+</header>
+{% else %}
 <header class="page-header">
   <div>
     <p class="eyebrow">Staff members</p>
@@ -24,11 +58,13 @@
   </div>
   <div class="page-actions">
     <button class="secondary-button" type="button" data-open-modal="import-members">Import</button>
-    <button class="potential-button" type="button" data-open-modal="create-potential-entry">Add potential entry</button>
     <button class="primary-button" type="button" data-open-modal="create-member">Add new member</button>
   </div>
 </header>
 
+{% endif %}
+
+{% if page_mode == 'staff' %}
 <section class="toolbar">
   <div class="toolbar-actions">
     <form method="get" class="filters" data-auto-filter>
@@ -75,145 +111,43 @@
     </form>
   </div>
 </section>
+{% endif %}
 
-<section class="potential-section" aria-label="Potential entries">
-  <div class="section-heading">
-    <div>
-      <h2>{% if filters.show_rejected %}Rejected potential entries{% else %}Potential entries{% endif %}</h2>
-      <p>{% if filters.show_rejected %}Hidden selection records kept for audit and follow-up.{% else %}Track prospective staff members before they join the team.{% endif %}</p>
-    </div>
+{% if page_mode == 'potential_entries' %}
+<section class="toolbar potential-toolbar" aria-label="Potential entries controls">
+  <div class="toolbar-actions">
+    <form method="get" class="filters potential-filters" data-auto-filter>
+      {% if filters.show_archived %}
+        <input type="hidden" name="show_archived" value="1">
+      {% endif %}
+      {% if filters.action_scope and filters.action_scope != 'all' %}
+        <input type="hidden" name="action_scope" value="{{ filters.action_scope }}">
+      {% endif %}
+      {% if filters.sort %}
+        <input type="hidden" name="sort" value="{{ filters.sort }}">
+        <input type="hidden" name="dir" value="{{ filters.dir }}">
+      {% endif %}
+      <select name="status" aria-label="Filter potential entries by status">
+        <option value="">All statuses</option>
+        {% for status in potential_statuses %}
+          <option value="{{ status }}" {% if filters.status == status %}selected{% endif %}>{{ status }}</option>
+        {% endfor %}
+      </select>
+      <select name="department" aria-label="Filter potential entries by department">
+        <option value="">All departments</option>
+        {% for department in potential_department_options %}
+          <option value="{{ department }}" {% if filters.department == department %}selected{% endif %}>{{ department }}</option>
+        {% endfor %}
+      </select>
+      <a class="text-link" href="{{ url_for('staff.potential_entries', show_archived=1) if filters.show_archived else url_for('staff.potential_entries') }}">Reset</a>
+    </form>
     <div class="section-actions">
-      <span class="count-pill">{{ potential_entries|length }}</span>
-      <button class="collapse-button" type="button" data-toggle-section="potential-entries-content" aria-expanded="true">Hide</button>
-      {% if filters.show_rejected %}
-        <a class="secondary-button link-button" href="{{ url_for('staff.index') }}">Show active entries</a>
+      {% if filters.show_archived %}
+        <a class="secondary-button link-button" href="{{ potential_toggle_url }}">Show active entries</a>
       {% else %}
-        <a class="secondary-button link-button" href="{{ url_for('staff.index', show_rejected=1) }}">Show rejected entries</a>
+        <a class="secondary-button link-button" href="{{ potential_toggle_url }}">Show archived entries</a>
       {% endif %}
     </div>
-  </div>
-  <div class="potential-content" id="potential-entries-content">
-    {% if potential_entries %}
-      <div class="potential-grid">
-        {% for entry in potential_entries %}
-          <article class="potential-card">
-            <div class="potential-card-main" role="button" tabindex="0" data-open-modal="potential-entry-{{ entry.id }}">
-              {% if entry.is_rejected %}
-                <span class="badge potential-status-rejected">Rejected</span>
-              {% else %}
-                <span class="badge potential-status-{{ entry.status|lower|replace(' ', '-') }}">{{ entry.status }}</span>
-              {% endif %}
-              <strong>{{ entry.full_name }}</strong>
-              <span class="potential-email-row">
-                <span>{{ entry.email or 'No email recorded' }}</span>
-                {% if entry.email %}
-                  <button
-                    class="copy-icon-button potential-gmail-button"
-                    type="button"
-                    data-potential-gmail-email="{{ entry.email }}"
-                    aria-label="Open Gmail compose for {{ entry.full_name }}"
-                    title="Open Gmail compose"
-                  >
-                    <svg viewBox="0 0 24 24" aria-hidden="true">
-                      <rect x="9" y="9" width="10" height="10" rx="2"></rect>
-                      <path d="M5 15V7a2 2 0 0 1 2-2h8"></path>
-                    </svg>
-                  </button>
-                {% endif %}
-              </span>
-              <span>{{ entry.phone or 'No phone recorded' }}</span>
-              <span>
-                {% if entry.city and entry.province %}
-                  {{ entry.city }}, {{ entry.province }}
-                {% elif entry.city %}
-                  {{ entry.city }}, No province recorded
-                {% elif entry.province %}
-                  {{ entry.province }}
-                {% else %}
-                  No city or province recorded
-                {% endif %}
-              </span>
-              <span class="potential-schedule potential-fixed-row {% if entry.status != 'Interview arranged' and entry.status != 'Interview scheduled' %}potential-placeholder-row{% endif %}">
-                {% if entry.status == 'Interview arranged' or entry.status == 'Interview scheduled' %}
-                  {{ entry.interview_date|display_date if entry.interview_date else '-' }} {{ entry.interview_time or '' }}
-                  {{ platform_logo(entry.platform) }}
-                {% endif %}
-              </span>
-              <span class="potential-fixed-row {% if not entry.interviewer or (entry.status != 'Interview arranged' and entry.status != 'Interview scheduled') %}potential-placeholder-row{% endif %}">
-                {% if entry.interviewer and (entry.status == 'Interview arranged' or entry.status == 'Interview scheduled') %}{{ entry.interviewer|display_interviewer }}{% else %}&nbsp;{% endif %}
-              </span>
-            </div>
-            <div class="potential-card-actions">
-              {% if entry.cv %}
-                <a class="mini-button link-button" href="{{ entry.cv }}" target="_blank" rel="noopener noreferrer">View CV</a>
-              {% else %}
-                <span class="mini-button disabled-button">No CV recorded</span>
-              {% endif %}
-              <button class="mini-button" type="button" data-open-modal="potential-note-{{ entry.id }}">Add notes</button>
-              {% if entry.status == 'Interview arranged' %}
-                {% if entry.interview_invitation_sent %}
-                  <button
-                    class="mini-button potential-email-invitation-button disabled-button"
-                    type="button"
-                    disabled
-                    title="Interview invitation already sent."
-                  >Email invitation</button>
-                  <form class="potential-inline-action-form" method="post" action="{{ url_for('staff.update_potential_interview_invitation_sent', entry_id=entry.id) }}">
-                    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-                    <input type="hidden" name="next" value="{{ request.full_path }}">
-                    <input type="hidden" name="interview_invitation_sent" value="0">
-                    <span class="potential-sent-pill">Invitation sent</span>
-                    <button class="mini-icon-button" type="submit" aria-label="Undo invitation sent for {{ entry.full_name }}" title="Undo invitation sent">X</button>
-                  </form>
-                  <button
-                    class="mini-button potential-email-outcome-button"
-                    type="button"
-                    data-copy-potential-outcome="successful"
-                    data-full-name="{{ entry.full_name }}"
-                    data-induction-date="{{ staff_settings_values.upcoming_induction_session_date }}"
-                    data-induction-start-time="{{ staff_settings_values.upcoming_induction_session_start_time }}"
-                    data-induction-end-time="{{ staff_settings_values.upcoming_induction_session_end_time }}"
-                    data-induction-options="{{ staff_settings_values.upcoming_induction_session_options|tojson|forceescape }}"
-                    aria-label="Copy successful application email for {{ entry.full_name }}"
-                  >Accept email</button>
-                  <button
-                    class="mini-button potential-email-outcome-button"
-                    type="button"
-                    data-copy-potential-outcome="unsuccessful"
-                    data-full-name="{{ entry.full_name }}"
-                    aria-label="Copy unsuccessful application email for {{ entry.full_name }}"
-                  >Reject email</button>
-                {% else %}
-                  <button
-                    class="mini-button potential-email-invitation-button"
-                    type="button"
-                    data-copy-potential-invitation
-                    data-full-name="{{ entry.full_name }}"
-                    data-interview-date="{{ entry.interview_date or '' }}"
-                    data-interview-time="{{ entry.interview_time or '' }}"
-                    data-platform="{{ entry.platform or '' }}"
-                  >Email invitation</button>
-                  <form class="potential-inline-action-form" method="post" action="{{ url_for('staff.update_potential_interview_invitation_sent', entry_id=entry.id) }}">
-                    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-                    <input type="hidden" name="next" value="{{ request.full_path }}">
-                    <input type="hidden" name="interview_invitation_sent" value="1">
-                    <button
-                      class="mini-button invitation-sent-action"
-                      type="submit"
-                      data-invitation-sent-action
-                      disabled
-                      title="Copy the email invitation first."
-                    >Invitation sent</button>
-                  </form>
-                {% endif %}
-              {% endif %}
-            </div>
-          </article>
-        {% endfor %}
-      </div>
-    {% else %}
-      <div class="potential-empty">No potential entries yet.</div>
-    {% endif %}
   </div>
 </section>
 
@@ -266,6 +200,178 @@
   </form>
 </section>
 
+<section class="potential-scope-tabs" aria-label="Potential entries scope">
+  {% set scope_base_args = {'status': filters.status, 'sort': filters.sort, 'dir': filters.dir} %}
+  {% if filters.show_archived %}
+    {% set _ = scope_base_args.update({'show_archived': 1}) %}
+  {% endif %}
+  <a class="scope-tab {% if filters.action_scope == 'all' %}is-active{% endif %}" href="{{ url_for('staff.potential_entries', department=filters.department, **scope_base_args) }}">All entries</a>
+  <a class="scope-tab {% if filters.action_scope == 'my_actions' %}is-active{% endif %}" href="{{ url_for('staff.potential_entries', action_scope='my_actions', **scope_base_args) }}">My actions</a>
+</section>
+
+<section class="table-wrap potential-table-wrap" aria-label="Potential entries">
+  <table class="potential-table">
+    <thead>
+      <tr>
+        <th>
+          <a class="table-sort {% if filters.sort == 'status' %}is-active{% endif %}" href="{{ sort_url('status') }}">
+            Status
+            <span>{{ '↑' if filters.sort == 'status' and filters.dir == 'asc' else '↓' if filters.sort == 'status' else '↕' }}</span>
+          </a>
+        </th>
+        <th>
+          <a class="table-sort {% if filters.sort == 'full_name' %}is-active{% endif %}" href="{{ sort_url('full_name') }}">
+            Full name
+            <span>{{ '↑' if filters.sort == 'full_name' and filters.dir == 'asc' else '↓' if filters.sort == 'full_name' else '↕' }}</span>
+          </a>
+        </th>
+        <th>
+          <a class="table-sort {% if filters.sort == 'city' %}is-active{% endif %}" href="{{ sort_url('city') }}">
+            City
+            <span>{{ '↑' if filters.sort == 'city' and filters.dir == 'asc' else '↓' if filters.sort == 'city' else '↕' }}</span>
+          </a>
+        </th>
+        <th>
+          <a class="table-sort {% if filters.sort == 'province' %}is-active{% endif %}" href="{{ sort_url('province') }}">
+            Province
+            <span>{{ '↑' if filters.sort == 'province' and filters.dir == 'asc' else '↓' if filters.sort == 'province' else '↕' }}</span>
+          </a>
+        </th>
+        <th>CV</th>
+        <th>
+          <a class="table-sort {% if filters.sort == 'department' %}is-active{% endif %}" href="{{ sort_url('department') }}">
+            Department
+            <span>{{ '↑' if filters.sort == 'department' and filters.dir == 'asc' else '↓' if filters.sort == 'department' else '↕' }}</span>
+          </a>
+        </th>
+        <th>Action description</th>
+        <th>Action</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for entry in potential_entries %}
+        {% set workflow_status = entry.status %}
+        {% if workflow_status == 'CV to be reviewed' %}
+          {% set workflow_department = 'MANAGEMENT' %}
+          {% set workflow_action = 'Review CV for Admin to arrange interview' %}
+        {% elif workflow_status == 'Review interview date and time' %}
+          {% set workflow_department = 'MANAGEMENT' %}
+          {% set workflow_action = 'Review date and time options for initial interview' %}
+        {% elif workflow_status == 'Interview to be arranged' %}
+          {% set workflow_department = 'ADMIN' %}
+          {% set workflow_action = 'Send interview invitation to potential entry' %}
+        {% elif workflow_status == 'Interview invitation sent' %}
+          {% set workflow_department = 'ADMIN' %}
+          {% set workflow_action = 'Follow up invitation to confirm or cancel interview' %}
+        {% elif workflow_status == 'Interview confirmed' %}
+          {% set workflow_department = 'MANAGEMENT' %}
+          {% set workflow_action = 'Hold meeting with potential entry' %}
+        {% elif workflow_status == 'Entry accepted' %}
+          {% set workflow_department = 'ADMIN' %}
+          {% set workflow_action = 'Check notes and send successful application email to potential entry' %}
+        {% elif workflow_status == 'Onboarding email sent' %}
+          {% set workflow_department = 'ADMIN' %}
+          {% set workflow_action = 'Follow up onboarding email to confirm or turn down application' %}
+        {% elif workflow_status == 'Induction confirmed' %}
+          {% set workflow_department = 'ADMIN' %}
+          {% set workflow_action = 'Follow up on induction session status to finalise onboarding process' %}
+        {% elif workflow_status == 'Onboarding finalised' %}
+          {% set workflow_department = 'MANAGEMENT' %}
+          {% set workflow_action = 'Onboarding process finalised' %}
+        {% elif workflow_status == 'Entry rejected' %}
+          {% set workflow_department = 'MANAGEMENT' %}
+          {% set workflow_action = 'Review rejected potential entry' %}
+        {% elif workflow_status in ['Archived accepted entry', 'Archived rejected entry'] %}
+          {% set workflow_department = 'MANAGEMENT' %}
+          {% set workflow_action = 'Archived potential entry' %}
+        {% else %}
+          {% set workflow_department = 'ADMIN' %}
+          {% set workflow_action = '-' %}
+        {% endif %}
+        <tr>
+          <td>
+            {% if entry.is_rejected and entry.status == 'Entry rejected' %}
+              <span class="badge potential-status-entry-rejected">Entry rejected</span>
+            {% else %}
+              <span class="badge potential-status-{{ entry.status|lower|replace(' ', '-') }}">{{ entry.status }}</span>
+              {% if entry.status in ['Interview confirmed', 'Induction confirmed'] %}
+                <span class="potential-status-meta">
+                  <span>{{ entry.interview_date|display_date if entry.interview_date else '-' }}{% if entry.interview_time %} · {{ entry.interview_time|display_time }}{% endif %}</span>
+                  <span class="potential-status-platform">{{ platform_logo(entry.platform) }}<span>{{ 'Google Meet' if entry.platform == 'Meet' else entry.platform or '-' }}</span></span>
+                  <span>{{ entry.interviewer|display_interviewer if entry.interviewer else '-' }}</span>
+                </span>
+              {% elif entry.status == 'Archived rejected entry' %}
+                <span class="potential-archive-result is-rejected">X Rejected</span>
+              {% elif entry.status == 'Archived accepted entry' %}
+                <span class="potential-archive-result is-accepted">✓ Accepted</span>
+              {% endif %}
+            {% endif %}
+          </td>
+          <td>
+            <div class="name-cell">
+              <button class="text-button strong" type="button" data-open-modal="potential-entry-{{ entry.id }}">{{ entry.full_name }}</button>
+              <span class="potential-contact-meta">
+                <span class="potential-email-row">
+                  <span>{{ entry.email or 'No email recorded' }}</span>
+                </span>
+                <span>{{ entry.phone or 'No phone recorded' }}</span>
+              </span>
+            </div>
+          </td>
+          <td>{{ entry.city or '-' }}</td>
+          <td>{{ entry.province or '-' }}</td>
+          <td>
+            {% if entry.cv %}
+              <a class="responsible-chip potential-cv-chip" href="{{ entry.cv }}" target="_blank" rel="noopener noreferrer">View</a>
+            {% else %}
+              <span class="muted">-</span>
+            {% endif %}
+          </td>
+          <td>
+            {% if workflow_department == '-' %}
+              <span class="muted">-</span>
+            {% else %}
+              <span class="responsible-chip users-department-chip">{{ workflow_department }}</span>
+            {% endif %}
+          </td>
+          <td>
+            <span class="potential-action-text">{{ workflow_action }}</span>
+          </td>
+          <td>
+            {% if entry.is_rejected %}
+              <button class="mini-button potential-perform-action" type="button" data-open-modal="potential-entry-{{ entry.id }}">Perform action</button>
+            {% elif entry.status in ['CV to be reviewed', 'Review interview date and time'] %}
+              <button class="mini-button potential-perform-action" type="button" data-open-modal="cv-review-potential-entry-{{ entry.id }}">Perform action</button>
+            {% elif entry.status == 'Interview to be arranged' %}
+              <button class="mini-button potential-perform-action" type="button" data-open-modal="interview-arrange-potential-entry-{{ entry.id }}">Perform action</button>
+            {% elif entry.status == 'Interview invitation sent' %}
+              <button class="mini-button potential-perform-action" type="button" data-open-modal="interview-arrange-potential-entry-{{ entry.id }}">Perform action</button>
+            {% elif entry.status == 'Interview confirmed' %}
+              <button class="mini-button potential-perform-action" type="button" data-open-modal="interview-arrange-potential-entry-{{ entry.id }}">Perform action</button>
+            {% elif entry.status == 'Entry accepted' %}
+              <button class="mini-button potential-perform-action" type="button" data-open-modal="interview-arrange-potential-entry-{{ entry.id }}">Perform action</button>
+            {% elif entry.status == 'Onboarding email sent' %}
+              <button class="mini-button potential-perform-action" type="button" data-open-modal="interview-arrange-potential-entry-{{ entry.id }}">Perform action</button>
+            {% elif entry.status == 'Induction confirmed' %}
+              <button class="mini-button potential-perform-action" type="button" data-open-modal="interview-arrange-potential-entry-{{ entry.id }}">Perform action</button>
+            {% elif entry.status == 'Onboarding finalised' %}
+              <button class="mini-button potential-perform-action" type="button" data-open-modal="potential-entry-{{ entry.id }}">Perform action</button>
+            {% else %}
+              <button class="mini-button potential-perform-action" type="button" data-open-modal="edit-potential-entry-{{ entry.id }}">Perform action</button>
+            {% endif %}
+          </td>
+        </tr>
+      {% else %}
+        <tr>
+          <td colspan="8" class="empty-state">No potential entries found.</td>
+        </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</section>
+{% endif %}
+
+{% if page_mode == 'staff' %}
 <form id="staff-bulk-export-form" method="post" action="{{ url_for('staff.export_members') }}" data-bulk-form data-bulk-scope="[data-staff-records-table]">
   <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
 </form>
@@ -525,7 +631,9 @@
 </section>
 
 {% include "_pagination.html" %}
+{% endif %}
 
+{% if page_mode == 'staff' %}
 <div class="modal {% if request.args.get('open_staff_modal') == 'create-member' %}is-open{% endif %}" id="create-member" aria-hidden="{{ 'false' if request.args.get('open_staff_modal') == 'create-member' else 'true' }}">
   <div class="modal-panel large">
     <div class="modal-header">
@@ -601,7 +709,9 @@
     </form>
   </div>
 </div>
+{% endif %}
 
+{% if page_mode == 'potential_entries' %}
 <div class="modal" id="create-potential-entry" aria-hidden="true">
   <div class="modal-panel large">
     <div class="modal-header">
@@ -620,8 +730,8 @@
       <button class="icon-button" type="button" data-close-modal>&times;</button>
     </div>
     <div class="potential-detail">
-      {% if entry.is_rejected %}
-        <span class="badge potential-status-rejected">Rejected</span>
+      {% if entry.is_rejected and entry.status == 'Entry rejected' %}
+        <span class="badge potential-status-entry-rejected">Entry rejected</span>
       {% else %}
         <span class="badge potential-status-{{ entry.status|lower|replace(' ', '-') }}">{{ entry.status }}</span>
       {% endif %}
@@ -632,7 +742,7 @@
         <div><dt>City</dt><dd>{{ entry.city or 'No city or province recorded' }}</dd></div>
         <div><dt>Province</dt><dd>{{ entry.province or 'No province recorded' }}</dd></div>
         <div><dt>CV</dt><dd>{% if entry.cv %}<a class="text-link" href="{{ entry.cv }}" target="_blank" rel="noopener noreferrer">Link</a>{% else %}No CV recorded{% endif %}</dd></div>
-        {% if entry.status == 'Interview arranged' or entry.status == 'Interview scheduled' %}
+        {% if entry.status in ['Interview invitation sent', 'Interview confirmed'] %}
           <div><dt>Interview date</dt><dd>{{ entry.interview_date|display_date if entry.interview_date else '-' }}</dd></div>
           <div><dt>Interview time</dt><dd>{{ entry.interview_time or '-' }}</dd></div>
           <div><dt>Platform</dt><dd>{{ platform_logo(entry.platform) }}</dd></div>
@@ -642,6 +752,7 @@
           <div><dt>Rejected on</dt><dd>{{ entry.rejected_on|localdt if entry.rejected_on else '-' }}</dd></div>
         {% endif %}
       </dl>
+      {{ status_track_panel(entry, 'detail') }}
       {% set potential_interview_entries = entry.interview|interview_entries %}
       {% if potential_interview_entries %}
         <div class="history-list compact-history">
@@ -654,18 +765,23 @@
         </div>
       {% endif %}
       <div class="potential-actions">
-        {% if entry.is_rejected %}
-          <span class="muted">This rejected record is kept for audit.</span>
-          <form
-            method="post"
-            action="{{ url_for('staff.delete_rejected_potential_entry', entry_id=entry.id) }}"
-            data-confirm-password-submit="This will permanently delete {{ entry.full_name }}. This cannot be undone."
-            data-confirm-password-value="Path1234"
-          >
+        {% if entry.status in ['Entry rejected', 'Onboarding finalised'] %}
+          <form method="post" action="{{ url_for('staff.archive_potential_entry', entry_id=entry.id) }}" class="form-grid one-column">
             <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-            <input type="hidden" name="deletion_password" value="">
-            <button class="danger-button" type="submit">Delete permanently</button>
+            <label>
+              Status
+              <select name="archive_status">
+                <option value="{{ entry.status }}">{{ entry.status }}</option>
+                <option value="Archive">Archive</option>
+              </select>
+            </label>
+            <div class="form-actions">
+              <button class="secondary-button" type="button" data-close-modal>Close</button>
+              <button class="primary-button" type="submit">Save and close</button>
+            </div>
           </form>
+        {% elif entry.status in ['Archived accepted entry', 'Archived rejected entry'] %}
+          <span class="muted">This archived record is kept for audit.</span>
         {% else %}
           <button class="secondary-button" type="button" data-open-modal="edit-potential-entry-{{ entry.id }}">Edit</button>
           <form method="post" action="{{ url_for('staff.reject_potential_entry', entry_id=entry.id) }}">
@@ -678,6 +794,1098 @@
     </div>
   </div>
 </div>
+
+{% if not entry.is_rejected and entry.status in ['CV to be reviewed', 'Review interview date and time'] %}
+{% set cv_review_drafts = session.get('potential_cv_review_drafts', {}) %}
+{% set cv_review_draft = cv_review_drafts.get(entry.id|string) if cv_review_drafts else none %}
+{% set cv_review_option_rows = cv_review_draft.options if cv_review_draft else entry.cv_review_interview_options|potential_cv_review_options %}
+<div class="modal {% if request.args.get('open_staff_modal') == 'cv-review-potential-entry-' ~ entry.id %}is-open{% endif %}" id="cv-review-potential-entry-{{ entry.id }}" aria-hidden="{{ 'false' if request.args.get('open_staff_modal') == 'cv-review-potential-entry-' ~ entry.id else 'true' }}">
+  <div class="modal-panel large potential-review-modal">
+    <div class="modal-header potential-review-header">
+      <div>
+        <h2>Potential entry review</h2>
+        <span class="badge potential-status-{{ entry.status|lower|replace(' ', '-') }}">{{ entry.status }}</span>
+      </div>
+      <button class="icon-button" type="button" data-close-modal>&times;</button>
+    </div>
+    <div class="potential-review-layout">
+      <section class="potential-review-summary" aria-label="Potential entry information">
+        <div class="potential-review-card-heading">
+          <h3>Potential entry information</h3>
+          {% if current_menu_can_edit %}
+            <button class="mini-button" type="button" data-edit-potential-info>Edit</button>
+          {% endif %}
+        </div>
+        <dl class="potential-review-info-grid" data-potential-info-view>
+          <div><dt>Full name</dt><dd>{{ entry.full_name }}</dd></div>
+          <div><dt>Email</dt><dd>{{ entry.email or 'No email recorded' }}</dd></div>
+          <div><dt>Phone</dt><dd>{{ entry.phone or 'No phone recorded' }}</dd></div>
+          <div><dt>City</dt><dd>{{ entry.city or '-' }}</dd></div>
+          <div><dt>Province</dt><dd>{{ entry.province or '-' }}</dd></div>
+          <div><dt>CV</dt><dd>{% if entry.cv %}<a class="responsible-chip potential-cv-chip" href="{{ entry.cv }}" target="_blank" rel="noopener noreferrer">View</a>{% else %}<span class="muted">No CV recorded</span>{% endif %}</dd></div>
+        </dl>
+        {% if current_menu_can_edit %}
+          <form method="post" action="{{ url_for('staff.update_potential_entry', entry_id=entry.id) }}" class="potential-info-edit-form" data-potential-info-edit hidden>
+            <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+            <input type="hidden" name="status" value="{{ entry.status }}">
+            <label>
+              Full name
+              <input name="full_name" value="{{ entry.full_name }}" required maxlength="160">
+            </label>
+            <label>
+              Email
+              <input name="email" type="email" value="{{ entry.email or '' }}" maxlength="160">
+            </label>
+            <label>
+              Phone
+              <input name="phone" value="{{ entry.phone or '' }}" maxlength="80">
+            </label>
+            <label>
+              City
+              <input name="city" value="{{ entry.city or '' }}" maxlength="120">
+            </label>
+            <label>
+              Province
+              <input name="province" value="{{ entry.province or '' }}" maxlength="120">
+            </label>
+            <label>
+              CV
+              <input name="cv" type="url" value="{{ entry.cv or '' }}" placeholder="https://example.com/cv" maxlength="500">
+            </label>
+            <input type="hidden" name="interview_date" value="{{ entry.interview_date or '' }}">
+            <input type="hidden" name="interview_time" value="{{ entry.interview_time or '' }}">
+            <input type="hidden" name="platform" value="{{ entry.platform or '' }}">
+            <input type="hidden" name="interviewer" value="{{ entry.interviewer|display_interviewer if entry.interviewer else '' }}">
+            <div class="form-actions full-span">
+              <button class="secondary-button" type="button" data-cancel-potential-info-edit>Cancel</button>
+              <button class="primary-button" type="submit">Save</button>
+            </div>
+          </form>
+        {% endif %}
+        {% set cv_review_entries = entry.interview|interview_entries %}
+        {% if cv_review_entries %}
+          <div class="history-list compact-history">
+            {% for note in cv_review_entries|reverse %}
+              {% set note_parts = note.note|potential_cv_review_note_parts %}
+              <article class="history-entry">
+                <div class="potential-note-header">
+                  <time>{{ note.date }}</time>
+                  {% if note_parts.department %}
+                    <span class="responsible-chip potential-note-department-chip">{{ note_parts.department }}</span>
+                  {% endif %}
+                  {% if current_menu_can_edit %}
+                    <form method="post" action="{{ url_for('staff.delete_potential_cv_review_note', entry_id=entry.id) }}" class="potential-note-delete-form" data-potential-note-delete hidden>
+                      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                      <input type="hidden" name="note_index" value="{{ note.index }}">
+                      <button class="mini-icon-button" type="submit" aria-label="Delete note" title="Delete note">X</button>
+                    </form>
+                  {% endif %}
+                </div>
+                <p>{{ note_parts.text }}</p>
+              </article>
+            {% endfor %}
+          </div>
+        {% endif %}
+        {{ status_track_panel(entry, 'cv-review') }}
+      </section>
+      <section class="potential-cv-review-section" aria-labelledby="cv-review-title-{{ entry.id }}">
+        <h3 id="cv-review-title-{{ entry.id }}">CV review</h3>
+        <form method="post" action="{{ url_for('staff.proceed_potential_cv_review', entry_id=entry.id) }}" class="potential-cv-review-form" data-confirm-submit>
+          <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+          <div class="potential-cv-review-fields">
+            <div class="cv-review-notes-box">
+              <label for="cv-review-notes-{{ entry.id }}">Notes</label>
+              <div class="cv-review-notes-panel">
+                <textarea id="cv-review-notes-{{ entry.id }}" name="cv_review_notes" rows="7" maxlength="4000" placeholder="Add internal notes about this application..." {% if not current_menu_can_edit %}disabled{% endif %}>{{ cv_review_draft.notes if cv_review_draft else '' }}</textarea>
+                {% if current_menu_can_edit %}
+                  <div class="cv-review-note-actions">
+                    <label>
+                      Department
+                      <select name="cv_review_note_department" required>
+                        <option value="">Select department</option>
+                        {% for department in ['Admin', 'Admissions', 'Finance', 'Logistics', 'Management'] %}
+                          <option value="{{ department }}" {% if cv_review_draft and cv_review_draft.department == department %}selected{% endif %}>{{ department }}</option>
+                        {% endfor %}
+                      </select>
+                    </label>
+                    <button
+                      class="mini-button add-note-button"
+                      type="submit"
+                      formaction="{{ url_for('staff.add_potential_cv_review_note', entry_id=entry.id) }}"
+                    >Add</button>
+                  </div>
+                {% endif %}
+              </div>
+            </div>
+            <div class="interview-options-group" data-interview-options-root data-max-options="5">
+              <span class="interview-options-title">Date and time options for interview</span>
+              <div class="interview-options-fieldset">
+              <div class="interview-options-list" data-interview-options-list>
+                {% set shared_platform = cv_review_option_rows[0].platform if cv_review_option_rows else '' %}
+                {% set shared_interviewer = cv_review_option_rows[0].interviewer if cv_review_option_rows else '' %}
+                {% for option in cv_review_option_rows[:5] %}
+                  <div class="interview-option-row {% if not loop.first %}is-extra{% endif %}" data-interview-option-row>
+                    <label>
+                      <span class="interview-option-label">Date</span>
+                      <input
+                        name="interview_option_date"
+                        value="{{ option.date }}"
+                        placeholder="DD/MM/YYYY"
+                        inputmode="numeric"
+                        maxlength="10"
+                        autocomplete="off"
+                        data-interview-option-date
+                        {% if not current_menu_can_edit %}disabled{% endif %}
+                      >
+                    </label>
+                    <label>
+                      <span class="interview-option-label">Time</span>
+                      <span class="time-suffix-field">
+                        <input
+                          name="interview_option_time"
+                          value="{{ option.time }}"
+                          placeholder="HH:mm"
+                          inputmode="numeric"
+                          maxlength="5"
+                          autocomplete="off"
+                          data-interview-option-time
+                          {% if not current_menu_can_edit %}disabled{% endif %}
+                        >
+                        <span aria-hidden="true">h.</span>
+                      </span>
+                    </label>
+                    <button class="mini-icon-button" type="button" data-remove-interview-option aria-label="Remove interview date and time option" title="Remove option" {% if loop.first %}hidden{% endif %} {% if not current_menu_can_edit %}disabled{% endif %}>X</button>
+                  </div>
+                {% endfor %}
+                <button class="mini-button add-interview-option-button" type="button" data-add-interview-option aria-label="Add interview date and time option" {% if not current_menu_can_edit %}disabled{% endif %}>+ Add option</button>
+                <div class="interview-option-shared-fields">
+                  <label>
+                    Platform
+                    <span class="interview-option-platform-field">
+                      <span class="interview-option-platform-preview" data-interview-option-platform-preview>
+                        {{ platform_logo(shared_platform) }}
+                        <span>{{ shared_platform or 'Select platform' }}</span>
+                      </span>
+                      <select name="interview_option_platform" data-interview-option-platform {% if not current_menu_can_edit %}disabled{% endif %}>
+                        <option value="">Select platform</option>
+                        <option value="Zoom" {% if shared_platform == 'Zoom' %}selected{% endif %}>Zoom</option>
+                        <option value="Meet" {% if shared_platform == 'Meet' %}selected{% endif %}>Meet</option>
+                      </select>
+                    </span>
+                  </label>
+                  <label>
+                    Interviewer
+                    <select name="interview_option_interviewer" {% if not current_menu_can_edit %}disabled{% endif %}>
+                      <option value="">Select interviewer</option>
+                      {% for interviewer in interviewer_options %}
+                        <option value="{{ interviewer }}" {% if shared_interviewer|display_interviewer == interviewer %}selected{% endif %}>{{ interviewer|display_interviewer }}</option>
+                      {% endfor %}
+                    </select>
+                  </label>
+                </div>
+              </div>
+              </div>
+            </div>
+          </div>
+          <div class="potential-cv-review-actions">
+            {% if current_menu_can_edit %}
+              <button class="secondary-button" type="button" data-close-modal>Cancel</button>
+              <button
+                class="info-button"
+                type="submit"
+                formaction="{{ url_for('staff.save_potential_cv_review', entry_id=entry.id) }}"
+                formnovalidate
+              >Save and close</button>
+              <button
+                class="danger-button"
+                type="submit"
+                formaction="{{ url_for('staff.reject_potential_cv_review', entry_id=entry.id) }}"
+                data-confirm-submit="Are you sure you want to reject this application?"
+                formnovalidate
+              >Reject application</button>
+              <button
+                class="success-button"
+                type="submit"
+                formaction="{{ url_for('staff.proceed_potential_cv_review', entry_id=entry.id) }}"
+                data-confirm-submit="Are you sure you want to proceed to interview?"
+                data-proceed-interview-button
+                formnovalidate
+                disabled
+              >Proceed to interview</button>
+            {% elif entry.status != 'Onboarding email sent' %}
+              <span class="muted">Your account can view this entry but cannot perform review actions.</span>
+              <button class="secondary-button" type="button" data-close-modal>Cancel</button>
+              <button class="info-button" type="button" disabled>Save and close</button>
+              <button class="danger-button" type="button" disabled>Reject application</button>
+              <button class="success-button" type="button" disabled>Proceed to interview</button>
+            {% endif %}
+          </div>
+        </form>
+      </section>
+    </div>
+  </div>
+</div>
+{% endif %}
+
+{% if not entry.is_rejected and entry.status in ['Interview to be arranged', 'Interview invitation sent', 'Interview confirmed', 'Entry accepted', 'Onboarding email sent', 'Induction confirmed'] %}
+{% set invitation_raw_options = entry.cv_review_interview_options|potential_cv_review_options %}
+{% set invitation_display_options = entry.cv_review_interview_options|potential_invitation_options %}
+{% set invitation_shared_platform = invitation_raw_options[0].platform if invitation_raw_options else '' %}
+{% set invitation_shared_interviewer = invitation_raw_options[0].interviewer if invitation_raw_options else '' %}
+{% set invitation_platform = entry.platform or invitation_shared_platform %}
+{% set invitation_interviewer = (entry.interviewer or invitation_shared_interviewer)|display_interviewer or current_user_full_name or 'our team' %}
+<div class="modal {% if request.args.get('open_staff_modal') == 'interview-arrange-potential-entry-' ~ entry.id %}is-open{% endif %}" id="interview-arrange-potential-entry-{{ entry.id }}" aria-hidden="{{ 'false' if request.args.get('open_staff_modal') == 'interview-arrange-potential-entry-' ~ entry.id else 'true' }}">
+  <div class="modal-panel large potential-review-modal">
+    <div class="modal-header potential-review-header">
+      <div>
+        <h2>Potential entry review</h2>
+        <span class="badge potential-status-{{ entry.status|lower|replace(' ', '-') }}">{{ entry.status }}</span>
+      </div>
+      <button class="icon-button" type="button" data-close-modal>&times;</button>
+    </div>
+    <div class="potential-review-layout">
+      <section class="potential-review-summary" aria-label="Potential entry information">
+        <div class="potential-review-card-heading">
+          <h3>Potential entry information</h3>
+          {% if current_menu_can_edit %}
+            <button class="mini-button" type="button" data-edit-potential-info>Edit</button>
+          {% endif %}
+        </div>
+        <dl class="potential-review-info-grid" data-potential-info-view>
+          <div><dt>Full name</dt><dd>{{ entry.full_name }}</dd></div>
+          <div><dt>Email</dt><dd>{{ entry.email or 'No email recorded' }}</dd></div>
+          <div><dt>Phone</dt><dd>{{ entry.phone or 'No phone recorded' }}</dd></div>
+          <div><dt>City</dt><dd>{{ entry.city or '-' }}</dd></div>
+          <div><dt>Province</dt><dd>{{ entry.province or '-' }}</dd></div>
+          <div><dt>CV</dt><dd>{% if entry.cv %}<a class="responsible-chip potential-cv-chip" href="{{ entry.cv }}" target="_blank" rel="noopener noreferrer">View</a>{% else %}<span class="muted">No CV recorded</span>{% endif %}</dd></div>
+        </dl>
+        {% if current_menu_can_edit %}
+          <form method="post" action="{{ url_for('staff.update_potential_entry', entry_id=entry.id) }}" class="potential-info-edit-form" data-potential-info-edit hidden>
+            <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+            <input type="hidden" name="status" value="{{ entry.status }}">
+            <label>
+              Full name
+              <input name="full_name" value="{{ entry.full_name }}" required maxlength="160">
+            </label>
+            <label>
+              Email
+              <input name="email" type="email" value="{{ entry.email or '' }}" maxlength="160">
+            </label>
+            <label>
+              Phone
+              <input name="phone" value="{{ entry.phone or '' }}" maxlength="80">
+            </label>
+            <label>
+              City
+              <input name="city" value="{{ entry.city or '' }}" maxlength="120">
+            </label>
+            <label>
+              Province
+              <input name="province" value="{{ entry.province or '' }}" maxlength="120">
+            </label>
+            <label>
+              CV
+              <input name="cv" type="url" value="{{ entry.cv or '' }}" placeholder="https://example.com/cv" maxlength="500">
+            </label>
+            <input type="hidden" name="interview_date" value="{{ entry.interview_date or '' }}">
+            <input type="hidden" name="interview_time" value="{{ entry.interview_time or '' }}">
+            <input type="hidden" name="platform" value="{{ entry.platform or '' }}">
+            <input type="hidden" name="interviewer" value="{{ entry.interviewer|display_interviewer if entry.interviewer else '' }}">
+            <div class="form-actions full-span">
+              <button class="secondary-button" type="button" data-cancel-potential-info-edit>Cancel</button>
+              <button class="primary-button" type="submit">Save</button>
+            </div>
+          </form>
+        {% endif %}
+        {% set invitation_review_entries = entry.interview|interview_entries %}
+        {% if invitation_review_entries %}
+          <div class="history-list compact-history">
+            {% for note in invitation_review_entries|reverse %}
+              {% set note_parts = note.note|potential_cv_review_note_parts %}
+              <article class="history-entry">
+                <div class="potential-note-header">
+                  <time>{{ note.date }}</time>
+                  {% if note_parts.department %}
+                    <span class="responsible-chip potential-note-department-chip">{{ note_parts.department }}</span>
+                  {% endif %}
+                </div>
+                <p>{{ note_parts.text }}</p>
+              </article>
+            {% endfor %}
+          </div>
+        {% endif %}
+        {{ status_track_panel(entry, 'review') }}
+      </section>
+      <section class="potential-cv-review-section" aria-labelledby="interview-arrange-title-{{ entry.id }}">
+        <h3 id="interview-arrange-title-{{ entry.id }}">CV review</h3>
+        <form method="post" action="{{ url_for('staff.add_potential_cv_review_note', entry_id=entry.id) }}" class="potential-cv-review-form">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+          <div class="potential-cv-review-fields{% if entry.status == 'Onboarding email sent' %} potential-interview-arrangement-fields{% endif %}">
+            <div class="cv-review-notes-box">
+              <label for="interview-arrange-notes-{{ entry.id }}">Notes</label>
+              <div class="cv-review-notes-panel">
+                <textarea id="interview-arrange-notes-{{ entry.id }}" name="cv_review_notes" rows="7" maxlength="4000" placeholder="Add internal notes about this application..." {% if not current_menu_can_edit %}disabled{% endif %}></textarea>
+                {% if current_menu_can_edit %}
+                  <div class="cv-review-note-actions">
+                    <label>
+                      Department
+                      <select name="cv_review_note_department" required>
+                        <option value="">Select department</option>
+                        {% for department in ['Admin', 'Admissions', 'Finance', 'Logistics', 'Management'] %}
+                          <option value="{{ department }}">{{ department }}</option>
+                        {% endfor %}
+                      </select>
+                    </label>
+                    <button
+                      class="mini-button add-note-button"
+                      type="submit"
+                    >Add</button>
+                  </div>
+                {% endif %}
+              </div>
+            </div>
+            {% if entry.status == 'Entry accepted' %}
+              {% set entry_whatsapp_phone = entry.phone|whatsapp_phone %}
+              <div class="interview-options-group">
+                <span class="interview-options-title">Entry accepted action</span>
+                <div
+                  class="interview-options-fieldset potential-readonly-invitation"
+                  data-entry-accepted-email-root
+                  data-full-name="{{ entry.full_name or '' }}"
+                  data-email="{{ entry.email or '' }}"
+                  data-phone="{{ entry.phone or '' }}"
+                  data-induction-options='{{ staff_settings_values.upcoming_induction_session_options[:5]|tojson }}'
+                >
+                  <label class="checkbox-field">
+                    <input
+                      type="checkbox"
+                      name="entry_accepted_notes_checked"
+                      value="1"
+                      data-entry-accepted-check
+                      data-entry-accepted-notes-checked
+                      data-action="{{ url_for('staff.update_entry_accepted_notes_checked', entry_id=entry.id) }}"
+                      {% if entry.entry_accepted_notes_checked %}checked{% endif %}
+                      {% if not current_menu_can_edit %}disabled{% endif %}
+                    >
+                    <span>Notes have been checked</span>
+                  </label>
+                  <div class="potential-email-actions">
+                    {% if current_menu_can_edit %}
+                      <button
+                        class="info-button"
+                        type="button"
+                        data-send-entry-accepted-email
+                      >Send email</button>
+                      <button
+                        class="copy-icon-button email-invitation-copy-button"
+                        type="button"
+                        data-copy-entry-accepted-email
+                        aria-label="Copy application acceptance email"
+                        title="Copy application acceptance email"
+                      >
+                        <svg viewBox="0 0 24 24" aria-hidden="true">
+                          <rect x="9" y="9" width="10" height="10" rx="2"></rect>
+                          <path d="M5 15V7a2 2 0 0 1 2-2h8"></path>
+                        </svg>
+                      </button>
+                    {% else %}
+                      <button class="info-button" type="button" disabled>Send email</button>
+                      <button class="copy-icon-button email-invitation-copy-button" type="button" aria-label="Copy application acceptance email" title="Copy application acceptance email" disabled>
+                        <svg viewBox="0 0 24 24" aria-hidden="true">
+                          <rect x="9" y="9" width="10" height="10" rx="2"></rect>
+                          <path d="M5 15V7a2 2 0 0 1 2-2h8"></path>
+                        </svg>
+                      </button>
+                    {% endif %}
+                    <span class="bulk-status" data-entry-accepted-email-status></span>
+                  </div>
+                  <label class="checkbox-field">
+                    <input
+                      type="checkbox"
+                      name="entry_accepted_email_sent"
+                      value="1"
+                      data-entry-accepted-check
+                      data-action="{{ url_for('staff.update_entry_accepted_notes_checked', entry_id=entry.id) }}"
+                      {% if entry.entry_accepted_email_sent %}checked{% endif %}
+                      {% if not current_menu_can_edit %}disabled{% endif %}
+                    >
+                    <span>Mark as email sent</span>
+                  </label>
+                  <div class="potential-email-actions">
+                    {% if current_menu_can_edit %}
+                      {% if entry_whatsapp_phone %}
+                        <a
+                          class="info-button link-button"
+                          href="https://wa.me/{{ entry_whatsapp_phone }}"
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          data-send-entry-accepted-whatsapp
+                        >Send WhatsApp</a>
+                      {% else %}
+                        <button
+                          class="info-button"
+                          type="button"
+                          disabled
+                          title="No phone number available."
+                        >Send WhatsApp</button>
+                      {% endif %}
+                      <button
+                        class="copy-icon-button email-invitation-copy-button"
+                        type="button"
+                        data-copy-entry-accepted-whatsapp
+                        aria-label="Copy WhatsApp message"
+                        title="Copy WhatsApp message"
+                      >
+                        <svg viewBox="0 0 24 24" aria-hidden="true">
+                          <rect x="9" y="9" width="10" height="10" rx="2"></rect>
+                          <path d="M5 15V7a2 2 0 0 1 2-2h8"></path>
+                        </svg>
+                      </button>
+                    {% else %}
+                      <button class="info-button" type="button" disabled>Send WhatsApp</button>
+                      <button class="copy-icon-button email-invitation-copy-button" type="button" aria-label="Copy WhatsApp message" title="Copy WhatsApp message" disabled>
+                        <svg viewBox="0 0 24 24" aria-hidden="true">
+                          <rect x="9" y="9" width="10" height="10" rx="2"></rect>
+                          <path d="M5 15V7a2 2 0 0 1 2-2h8"></path>
+                        </svg>
+                      </button>
+                    {% endif %}
+                    {% if not entry_whatsapp_phone %}
+                      <span class="muted">No phone number available.</span>
+                    {% endif %}
+                    <span class="bulk-status" data-entry-accepted-whatsapp-status></span>
+                  </div>
+                  <label class="checkbox-field">
+                    <input
+                      type="checkbox"
+                      name="entry_accepted_whatsapp_sent"
+                      value="1"
+                      data-entry-accepted-check
+                      data-action="{{ url_for('staff.update_entry_accepted_notes_checked', entry_id=entry.id) }}"
+                      {% if entry.entry_accepted_whatsapp_sent %}checked{% endif %}
+                      {% if not current_menu_can_edit %}disabled{% endif %}
+                    >
+                    <span>Mark as WhatsApp sent</span>
+                  </label>
+                </div>
+              </div>
+            {% elif entry.status == 'Interview confirmed' %}
+              <div class="interview-confirmed-fields-box" data-induction-status-root>
+                <span class="interview-options-title">Interview outcome details</span>
+                <div class="interview-options-fieldset potential-interview-outcome-fields">
+                  <fieldset class="inline-radio-group induction-status-options">
+                    <legend>Interview outcome</legend>
+                    <label>
+                      <input type="radio" name="interview_outcome_status" value="no_show" data-induction-status-option {% if entry.interview_no_show %}checked{% endif %} {% if not current_menu_can_edit %}disabled{% endif %}>
+                      <span>No-show</span>
+                    </label>
+                    <label>
+                      <input type="radio" name="interview_outcome_status" value="reschedule" data-induction-status-option {% if not current_menu_can_edit %}disabled{% endif %}>
+                      <span>Reschedule</span>
+                    </label>
+                    <label>
+                      <input type="radio" name="interview_outcome_status" value="attended" data-induction-status-option {% if not entry.interview_no_show %}checked{% endif %} {% if not current_menu_can_edit %}disabled{% endif %}>
+                      <span>Attended</span>
+                    </label>
+                  </fieldset>
+                  <div class="induction-status-panel" data-induction-status-panel="reschedule" hidden>
+                    <span class="interview-options-title">Set new date and time</span>
+                    <div class="interview-options-fieldset" data-interview-options-root data-max-options="1">
+                      <div class="interview-options-list" data-interview-options-list>
+                        <div class="interview-option-row" data-interview-option-row>
+                          <label>
+                            <span class="interview-option-label">Date</span>
+                            <input name="interview_option_date" value="{{ entry.interview_date|display_date if entry.interview_date else '' }}" placeholder="DD/MM/YYYY" inputmode="numeric" maxlength="10" autocomplete="off" data-interview-option-date data-induction-reschedule-required {% if not current_menu_can_edit %}disabled{% endif %}>
+                          </label>
+                          <label>
+                            <span class="interview-option-label">Time</span>
+                            <span class="time-suffix-field">
+                              <input name="interview_option_time" value="{{ entry.interview_time|display_time if entry.interview_time else '' }}" placeholder="HH:mm" inputmode="numeric" maxlength="5" autocomplete="off" data-interview-option-time data-induction-reschedule-required {% if not current_menu_can_edit %}disabled{% endif %}>
+                              <span aria-hidden="true">h.</span>
+                            </span>
+                          </label>
+                          <button class="mini-icon-button" type="button" data-remove-interview-option aria-label="Remove interview date and time option" title="Remove option" hidden {% if not current_menu_can_edit %}disabled{% endif %}>X</button>
+                        </div>
+                        <div class="interview-option-shared-fields">
+                          <label>
+                            Platform
+                            <span class="interview-option-platform-field">
+                              <span class="interview-option-platform-preview" data-interview-option-platform-preview>
+                                {{ platform_logo(entry.platform) }}
+                                <span>{{ entry.platform or 'Select platform' }}</span>
+                              </span>
+                              <select name="interview_option_platform" data-interview-option-platform data-induction-reschedule-required {% if not current_menu_can_edit %}disabled{% endif %}>
+                                <option value="">Select platform</option>
+                                <option value="Zoom" {% if entry.platform == 'Zoom' %}selected{% endif %}>Zoom</option>
+                                <option value="Meet" {% if entry.platform == 'Meet' %}selected{% endif %}>Meet</option>
+                              </select>
+                            </span>
+                          </label>
+                          <label>
+                            Interviewer
+                            <select name="interview_option_interviewer" data-induction-reschedule-required {% if not current_menu_can_edit %}disabled{% endif %}>
+                              <option value="">Select interviewer</option>
+                              {% for interviewer in interviewer_options %}
+                                <option value="{{ interviewer }}" {% if entry.interviewer|display_interviewer == interviewer %}selected{% endif %}>{{ interviewer|display_interviewer }}</option>
+                              {% endfor %}
+                            </select>
+                          </label>
+                          <label class="checkbox-field full-span">
+                            <input type="checkbox" name="interview_reschedule_interviewer_notified" value="1" data-induction-reschedule-required {% if not current_menu_can_edit %}disabled{% endif %}>
+                            <span>The interviewer has been notified of this change</span>
+                          </label>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                  <div class="induction-status-panel" data-induction-status-panel="attended" hidden>
+                    <fieldset class="inline-radio-group">
+                      <legend>Has a car</legend>
+                      <label>
+                        <input type="radio" name="interview_has_car" value="Yes" {% if entry.has_car == 'Yes' %}checked{% endif %} {% if not current_menu_can_edit %}disabled{% endif %}>
+                        <span>Yes</span>
+                      </label>
+                      <label>
+                        <input type="radio" name="interview_has_car" value="No" {% if entry.has_car == 'No' %}checked{% endif %} {% if not current_menu_can_edit %}disabled{% endif %}>
+                        <span>No</span>
+                      </label>
+                    </fieldset>
+                    <fieldset class="potential-interview-role-picker">
+                      <legend>Roles</legend>
+                      <div class="staff-fut-options potential-interview-role-options">
+                        {% for role in ['Examiner', 'RSG', 'Supervisor', 'Other'] %}
+                          <label>
+                            <input type="checkbox" name="interview_roles" value="{{ role }}" {% if role in entry.roles_list() %}checked{% endif %} {% if not current_menu_can_edit %}disabled{% endif %}>
+                            <span>{{ role }}</span>
+                          </label>
+                        {% endfor %}
+                      </div>
+                    </fieldset>
+                    <label class="checkbox-field">
+                      <input type="checkbox" name="entry_added_in_sessions_pre_confirmation" value="1" {% if entry.entry_added_in_sessions_pre_confirmation %}checked{% endif %} {% if not current_menu_can_edit %}disabled{% endif %}>
+                      <span>Entry added in sessions for pre-confirmation</span>
+                    </label>
+                  </div>
+                </div>
+              </div>
+            {% elif entry.status == 'Induction confirmed' %}
+              <div class="interview-confirmed-fields-box" data-induction-status-root>
+                <span class="interview-options-title">Induction session status</span>
+                <div class="interview-options-fieldset potential-interview-outcome-fields">
+                  <fieldset class="inline-radio-group induction-status-options">
+                    <legend>Induction outcome</legend>
+                    <label>
+                      <input type="radio" name="induction_session_status" value="no_show" data-induction-status-option {% if entry.induction_session_status == 'no_show' %}checked{% endif %} {% if not current_menu_can_edit %}disabled{% endif %}>
+                      <span>No-show</span>
+                    </label>
+                    <label>
+                      <input type="radio" name="induction_session_status" value="reschedule" data-induction-status-option {% if entry.induction_session_status == 'reschedule' %}checked{% endif %} {% if not current_menu_can_edit %}disabled{% endif %}>
+                      <span>Reschedule</span>
+                    </label>
+                    <label>
+                      <input type="radio" name="induction_session_status" value="attended" data-induction-status-option {% if entry.induction_session_status == 'attended' %}checked{% endif %} {% if not current_menu_can_edit %}disabled{% endif %}>
+                      <span>Attended</span>
+                    </label>
+                  </fieldset>
+                  <div class="induction-status-panel" data-induction-status-panel="reschedule" hidden>
+                    <span class="interview-options-title">Set new date and time</span>
+                    <div class="interview-options-fieldset" data-interview-options-root data-max-options="1">
+                      <div class="interview-options-list" data-interview-options-list>
+                        <div class="interview-option-row" data-interview-option-row>
+                          <label>
+                            <span class="interview-option-label">Date</span>
+                            <input
+                              name="interview_option_date"
+                              value="{{ entry.interview_date|display_date if entry.interview_date else '' }}"
+                              placeholder="DD/MM/YYYY"
+                              inputmode="numeric"
+                              maxlength="10"
+                              autocomplete="off"
+                              data-interview-option-date
+                              data-induction-reschedule-required
+                              {% if not current_menu_can_edit %}disabled{% endif %}
+                            >
+                          </label>
+                          <label>
+                            <span class="interview-option-label">Time</span>
+                            <span class="time-suffix-field">
+                              <input
+                                name="interview_option_time"
+                                value="{{ entry.interview_time|display_time if entry.interview_time else '' }}"
+                                placeholder="HH:mm"
+                                inputmode="numeric"
+                                maxlength="5"
+                                autocomplete="off"
+                                data-interview-option-time
+                                data-induction-reschedule-required
+                                {% if not current_menu_can_edit %}disabled{% endif %}
+                              >
+                              <span aria-hidden="true">h.</span>
+                            </span>
+                          </label>
+                          <button class="mini-icon-button" type="button" data-remove-interview-option aria-label="Remove induction date and time option" title="Remove option" hidden {% if not current_menu_can_edit %}disabled{% endif %}>X</button>
+                        </div>
+                        <div class="interview-option-shared-fields">
+                          <label>
+                            Platform
+                            <span class="interview-option-platform-field">
+                              <span class="interview-option-platform-preview" data-interview-option-platform-preview>
+                                {{ platform_logo(entry.platform) }}
+                                <span>{{ entry.platform or 'Select platform' }}</span>
+                              </span>
+                              <select name="interview_option_platform" data-interview-option-platform data-induction-reschedule-required {% if not current_menu_can_edit %}disabled{% endif %}>
+                                <option value="">Select platform</option>
+                                <option value="Zoom" {% if entry.platform == 'Zoom' %}selected{% endif %}>Zoom</option>
+                                <option value="Meet" {% if entry.platform == 'Meet' %}selected{% endif %}>Meet</option>
+                              </select>
+                            </span>
+                          </label>
+                          <label>
+                            Trainer
+                            <select name="interview_option_interviewer" data-induction-reschedule-required {% if not current_menu_can_edit %}disabled{% endif %}>
+                              <option value="">Select trainer</option>
+                              {% for interviewer in interviewer_options %}
+                                <option value="{{ interviewer }}" {% if entry.interviewer|display_interviewer == interviewer %}selected{% endif %}>{{ interviewer|display_interviewer }}</option>
+                              {% endfor %}
+                            </select>
+                          </label>
+                          <label class="checkbox-field full-span">
+                            <input
+                              type="checkbox"
+                              name="induction_reschedule_trainer_notified"
+                              value="1"
+                              data-induction-reschedule-required
+                              {% if not current_menu_can_edit %}disabled{% endif %}
+                            >
+                            <span>The trainer has been notified of this change</span>
+                          </label>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                  <div class="induction-status-panel" data-induction-status-panel="attended" hidden>
+                    <label class="checkbox-field">
+                      <input
+                        type="checkbox"
+                        name="exam_session_participation_statuses_pre_confirmed"
+                        value="1"
+                        data-induction-attended-required
+                        {% if entry.exam_session_participation_statuses_pre_confirmed %}checked{% endif %}
+                        {% if not current_menu_can_edit %}disabled{% endif %}
+                      >
+                      <span>Exam session participation statuses have been updated to Pre-confirmed</span>
+                    </label>
+                  </div>
+                </div>
+              </div>
+            {% elif entry.status in ['Interview to be arranged', 'Interview invitation sent'] %}
+              <div class="interview-options-group">
+                <span class="interview-options-title">{% if entry.status == 'Interview invitation sent' %}Confirm the interview date and time{% else %}Information for interview arrangement{% endif %}</span>
+                <div class="interview-options-fieldset potential-readonly-invitation"
+                  {% if entry.status == 'Interview invitation sent' %}data-interview-confirm-root{% endif %}
+                  data-interview-invitation-email-root
+                  data-full-name="{{ entry.full_name or '' }}"
+                  data-email="{{ entry.email or '' }}"
+                  data-platform="{{ invitation_platform or '' }}"
+                  data-interviewer="{{ invitation_interviewer }}"
+                  data-options='{{ invitation_raw_options[:5]|tojson }}'
+                >
+                  {% if entry.status == 'Interview invitation sent' %}
+                    <label class="checkbox-field">
+                      <input
+                        type="checkbox"
+                        name="interview_no_reply"
+                        value="1"
+                        data-interview-no-reply
+                        {% if not current_menu_can_edit %}disabled{% endif %}
+                      >
+                      <span>No reply</span>
+                    </label>
+                  {% endif %}
+                  {% if invitation_display_options %}
+                    <div class="potential-readonly-options-list">
+                      {% for option in invitation_display_options %}
+                        {% if entry.status == 'Interview invitation sent' %}
+                          <label class="potential-readonly-option selectable-readonly-option">
+                            <input
+                              type="checkbox"
+                              name="selected_interview_option"
+                              value="{{ loop.index0 }}"
+                              data-interview-option-choice
+                              {% if not current_menu_can_edit %}disabled{% endif %}
+                            >
+                            <span>
+                              <span class="potential-readonly-option-label">Option {{ loop.index }}</span>
+                              <span>{{ option.label }}</span>
+                            </span>
+                          </label>
+                        {% else %}
+                          <article class="potential-readonly-option">
+                            <span class="potential-readonly-option-label">Option {{ loop.index }}</span>
+                            <span>{{ option.label }}</span>
+                          </article>
+                        {% endif %}
+                      {% endfor %}
+                    </div>
+                  {% else %}
+                    <p class="muted potential-readonly-message">Interview date and time options are not configured.</p>
+                  {% endif %}
+                  <div class="interview-option-shared-fields potential-readonly-meeting-fields">
+                    <div>
+                      <span class="potential-readonly-meta-label">Platform</span>
+                      <span class="interview-option-platform-preview">
+                        {{ platform_logo(invitation_platform) }}
+                        <span>{{ 'Google Meet' if invitation_platform == 'Meet' else invitation_platform or '-' }}</span>
+                      </span>
+                    </div>
+                    <div>
+                      <span class="potential-readonly-meta-label">Interviewer</span>
+                      <span>{{ invitation_interviewer }}</span>
+                    </div>
+                  </div>
+                  <div class="potential-email-actions">
+                    {% if current_menu_can_edit %}
+                      <button
+                        class="info-button"
+                        type="button"
+                        data-send-interview-invitation-email
+                      >Send email</button>
+                      <button
+                        class="copy-icon-button email-invitation-copy-button"
+                        type="button"
+                        data-copy-interview-invitation-email
+                        aria-label="Copy interview invitation email"
+                        title="Copy interview invitation email"
+                      >
+                        <svg viewBox="0 0 24 24" aria-hidden="true">
+                          <rect x="9" y="9" width="10" height="10" rx="2"></rect>
+                          <path d="M5 15V7a2 2 0 0 1 2-2h8"></path>
+                        </svg>
+                      </button>
+                    {% else %}
+                      <button class="info-button" type="button" disabled>Send email</button>
+                      <button class="copy-icon-button email-invitation-copy-button" type="button" aria-label="Copy interview invitation email" title="Copy interview invitation email" disabled>
+                        <svg viewBox="0 0 24 24" aria-hidden="true">
+                          <rect x="9" y="9" width="10" height="10" rx="2"></rect>
+                          <path d="M5 15V7a2 2 0 0 1 2-2h8"></path>
+                        </svg>
+                      </button>
+                    {% endif %}
+                    <span class="bulk-status" data-interview-invitation-email-status></span>
+                  </div>
+                </div>
+              </div>
+            {% endif %}
+          </div>
+          {% if entry.status == 'Onboarding email sent' %}
+            <div class="onboarding-follow-up-wrap">
+              <div class="onboarding-follow-up-group" data-onboarding-follow-up>
+                <div class="onboarding-follow-up-column" data-onboarding-panel="confirm">
+                  <label class="onboarding-follow-up-title">
+                    <input
+                      type="radio"
+                      name="onboarding_follow_up_choice"
+                      value="confirm"
+                      data-onboarding-choice
+                      {% if entry.onboarding_follow_up_choice == 'confirm' %}checked{% endif %}
+                      {% if not current_menu_can_edit %}disabled{% endif %}
+                    >
+                    <span>Confirm application</span>
+                  </label>
+                  <fieldset class="onboarding-follow-up-fieldset" data-onboarding-fieldset="confirm" {% if entry.onboarding_follow_up_choice != 'confirm' or not current_menu_can_edit %}disabled{% endif %}>
+                    <div class="onboarding-confirm-fields">
+                      <label>
+                        Title *
+                        <input name="title" value="{{ entry.title or '' }}" maxlength="120" data-onboarding-confirm-required>
+                      </label>
+                      <label class="full-span">
+                        Full address copied from Google Maps *
+                        <input name="full_address_google_maps" value="{{ entry.full_address_google_maps or '' }}" maxlength="500" data-onboarding-confirm-required>
+                      </label>
+                      <label>
+                        Country *
+                        <input name="country" value="{{ entry.country or '' }}" maxlength="120" data-onboarding-confirm-required>
+                      </label>
+                      <label>
+                        Profile picture *
+                        <input name="profile_picture" type="url" value="{{ entry.profile_picture or '' }}" maxlength="500" placeholder="https://example.com/profile-picture" data-onboarding-confirm-required>
+                      </label>
+                      <label>
+                        Bank account number *
+                        <input name="account_id" value="{{ entry.account_id or '' }}" maxlength="120" data-onboarding-confirm-required>
+                      </label>
+                      <label>
+                        Bank account holder's full name *
+                        <input name="account_owner" value="{{ entry.account_owner or '' }}" maxlength="160" data-onboarding-confirm-required>
+                      </label>
+                      <label>
+                        Bank account holder's ID *
+                        <input name="account_owner_id" value="{{ entry.account_owner_id or '' }}" maxlength="120" data-onboarding-confirm-required>
+                      </label>
+                    </div>
+                    <div class="interview-options-group onboarding-induction-group">
+                      <span class="interview-options-title">Confirmed induction session date and time</span>
+                      <div class="interview-options-fieldset">
+                        <div class="interview-options-list">
+                          <div class="interview-option-row">
+                            <label>
+                              <span class="interview-option-label">Date</span>
+                              <input
+                                name="interview_date"
+                                type="date"
+                                value="{{ entry.interview_date or '' }}"
+                                data-onboarding-confirm-required
+                              >
+                            </label>
+                            <label>
+                              <span class="interview-option-label">Time</span>
+                              <span class="time-suffix-field">
+                                <input
+                                  name="interview_time"
+                                  value="{{ entry.interview_time|display_time if entry.interview_time else '' }}"
+                                  placeholder="HH:mm"
+                                  inputmode="numeric"
+                                  maxlength="5"
+                                  autocomplete="off"
+                                  data-interview-option-time
+                                  data-onboarding-confirm-required
+                                >
+                                <span aria-hidden="true">h.</span>
+                              </span>
+                            </label>
+                          </div>
+                          <div class="interview-option-shared-fields">
+                            <label>
+                              Platform
+                              <span class="interview-option-platform-field">
+                                <span class="interview-option-platform-preview" data-interview-option-platform-preview>
+                                  {{ platform_logo(entry.platform) }}
+                                  <span>{{ entry.platform or 'Select platform' }}</span>
+                                </span>
+                                <select name="platform" data-interview-option-platform data-onboarding-confirm-required>
+                                  <option value="">Select platform</option>
+                                  <option value="Zoom" {% if entry.platform == 'Zoom' %}selected{% endif %}>Zoom</option>
+                                  <option value="Meet" {% if entry.platform == 'Meet' %}selected{% endif %}>Meet</option>
+                                </select>
+                              </span>
+                            </label>
+                            <label>
+                              Trainer
+                              <select name="interviewer" data-onboarding-confirm-required>
+                                <option value="">Select trainer</option>
+                                {% for interviewer in interviewer_options %}
+                                  <option value="{{ interviewer }}" {% if entry.interviewer|display_interviewer == interviewer %}selected{% endif %}>{{ interviewer|display_interviewer }}</option>
+                                {% endfor %}
+                              </select>
+                            </label>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  </fieldset>
+                </div>
+                <div class="onboarding-follow-up-column" data-onboarding-panel="turn_down">
+                  <label class="onboarding-follow-up-title">
+                    <input
+                      type="radio"
+                      name="onboarding_follow_up_choice"
+                      value="turn_down"
+                      data-onboarding-choice
+                      {% if entry.onboarding_follow_up_choice == 'turn_down' %}checked{% endif %}
+                      {% if not current_menu_can_edit %}disabled{% endif %}
+                    >
+                    <span>Turn down application</span>
+                  </label>
+                  <fieldset class="onboarding-follow-up-fieldset" data-onboarding-fieldset="turn_down" {% if entry.onboarding_follow_up_choice != 'turn_down' or not current_menu_can_edit %}disabled{% endif %}>
+                    <label class="checkbox-field">
+                      <input
+                        type="checkbox"
+                        name="onboarding_turn_down_sessions_removed"
+                        value="1"
+                        data-onboarding-turn-down-required
+                        {% if entry.onboarding_turn_down_sessions_removed %}checked{% endif %}
+                      >
+                      <span>The Entry has been removed from all pre-assigned exam session participations.</span>
+                    </label>
+                    <label class="checkbox-field">
+                      <input
+                        type="checkbox"
+                        name="onboarding_turn_down_trainer_notified"
+                        value="1"
+                        data-onboarding-turn-down-required
+                        {% if entry.onboarding_turn_down_trainer_notified %}checked{% endif %}
+                      >
+                      <span>The Trainer has been notified that the Entry will not attend the induction session.</span>
+                    </label>
+                  </fieldset>
+                </div>
+              </div>
+            </div>
+          {% endif %}
+          <div class="potential-cv-review-actions">
+            <button class="secondary-button" type="button" data-close-modal>Cancel</button>
+            {% if current_menu_can_edit %}
+              {% if entry.status == 'Interview to be arranged' %}
+                <button
+                  class="info-button"
+                  type="submit"
+                  formaction="{{ url_for('staff.save_potential_cv_review', entry_id=entry.id) }}"
+                  formnovalidate
+                >Save and close</button>
+                <button
+                  class="success-button"
+                  type="submit"
+                  formaction="{{ url_for('staff.mark_potential_interview_invitation_sent', entry_id=entry.id) }}"
+                  formnovalidate
+                >Mark it as Sent</button>
+              {% elif entry.status == 'Interview invitation sent' %}
+                <button
+                  class="info-button"
+                  type="submit"
+                  formaction="{{ url_for('staff.review_potential_interview_date_time_options', entry_id=entry.id) }}"
+                  data-review-date-time-options-button
+                  formnovalidate
+                >Review date/time options</button>
+                <button
+                  class="danger-button"
+                  type="submit"
+                  formaction="{{ url_for('staff.turn_down_potential_interview_invitation', entry_id=entry.id) }}"
+                  data-interview-turn-down-button
+                  disabled
+                  formnovalidate
+                >Turn down application</button>
+                <button
+                  class="success-button"
+                  type="submit"
+                  formaction="{{ url_for('staff.confirm_potential_interview', entry_id=entry.id) }}"
+                  data-interview-confirm-button
+                  disabled
+                  formnovalidate
+                >Interview confirmed</button>
+              {% elif entry.status == 'Interview confirmed' %}
+                <button
+                  class="danger-button"
+                  type="submit"
+                  formaction="{{ url_for('staff.decline_potential_interview_application', entry_id=entry.id) }}"
+                  data-induction-reject-button
+                  formnovalidate
+                  disabled
+                >Reject Entry</button>
+                <button
+                  class="purple-button"
+                  type="submit"
+                  formaction="{{ url_for('staff.reschedule_potential_interview', entry_id=entry.id) }}"
+                  data-induction-reschedule-button
+                  formnovalidate
+                  disabled
+                >Reschedule</button>
+                <button
+                  class="success-button"
+                  type="submit"
+                  formaction="{{ url_for('staff.accept_potential_interview_application', entry_id=entry.id) }}"
+                  data-application-accepted-button
+                  {% if entry.interview_no_show or not (entry.has_car in ['Yes', 'No'] and entry.roles_list() and entry.entry_added_in_sessions_pre_confirmation) %}disabled title="{% if entry.interview_no_show %}No-show entries cannot be accepted.{% else %}Complete Has a car, Roles, and session pre-confirmation before accepting.{% endif %}"{% endif %}
+                  formnovalidate
+                >Entry accepted</button>
+              {% elif entry.status == 'Entry accepted' %}
+                <button
+                  class="success-button"
+                  type="submit"
+                  formaction="{{ url_for('staff.mark_potential_onboarding_email_sent', entry_id=entry.id) }}"
+                  data-onboarding-email-sent-button
+                  {% if not (entry.entry_accepted_notes_checked and entry.entry_accepted_email_sent and entry.entry_accepted_whatsapp_sent) %}disabled title="Complete all three checks before marking onboarding email as sent."{% endif %}
+                  formnovalidate
+                >Onboarding email sent</button>
+              {% elif entry.status == 'Onboarding email sent' %}
+                <button
+                  class="info-button"
+                  type="submit"
+                  formaction="{{ url_for('staff.save_potential_onboarding_follow_up', entry_id=entry.id) }}"
+                  formnovalidate
+                >Save and close</button>
+                <button
+                  class="danger-button"
+                  type="submit"
+                  formaction="{{ url_for('staff.turn_down_potential_onboarding_application', entry_id=entry.id) }}"
+                  data-onboarding-turn-down-button
+                  disabled
+                  formnovalidate
+                >Turn down application</button>
+                <button
+                  class="success-button"
+                  type="submit"
+                  formaction="{{ url_for('staff.confirm_potential_onboarding_application', entry_id=entry.id) }}"
+                  data-onboarding-confirm-button
+                  disabled
+                  formnovalidate
+                >Confirm application</button>
+              {% elif entry.status == 'Induction confirmed' %}
+                <button
+                  class="info-button"
+                  type="submit"
+                  formaction="{{ url_for('staff.save_potential_cv_review', entry_id=entry.id) }}"
+                  formnovalidate
+                >Save and close</button>
+                <button
+                  class="danger-button"
+                  type="submit"
+                  formaction="{{ url_for('staff.reject_potential_induction', entry_id=entry.id) }}"
+                  data-induction-reject-button
+                  data-confirm-submit="Are you sure you want to reject this entry?"
+                  disabled
+                  formnovalidate
+                >Reject entry</button>
+                <button
+                  class="purple-button"
+                  type="submit"
+                  formaction="{{ url_for('staff.reschedule_potential_induction', entry_id=entry.id) }}"
+                  data-induction-reschedule-button
+                  data-confirm-submit="Are you sure you want to reschedule this induction?"
+                  disabled
+                  formnovalidate
+                >Reschedule</button>
+                <button
+                  class="success-button"
+                  type="submit"
+                  formaction="{{ url_for('staff.activate_potential_as_staff_member', entry_id=entry.id) }}"
+                  data-induction-activate-button
+                  data-confirm-submit="Are you sure you want to activate this entry as a Staff member?"
+                  disabled
+                  formnovalidate
+                >Activate as Staff member</button>
+              {% endif %}
+            {% else %}
+              {% if entry.status == 'Interview to be arranged' %}
+                <button class="info-button" type="button" disabled>Save and close</button>
+                <button class="success-button" type="button" disabled>Mark it as Sent</button>
+              {% elif entry.status == 'Interview invitation sent' %}
+                <button class="info-button" type="button" disabled>Review date/time options</button>
+                <button class="danger-button" type="button" disabled>Turn down application</button>
+                <button class="success-button" type="button" disabled>Interview confirmed</button>
+              {% elif entry.status == 'Interview confirmed' %}
+                <button class="danger-button" type="button" disabled>Reject Entry</button>
+                <button class="purple-button" type="button" disabled>Reschedule</button>
+                <button class="success-button" type="button" disabled>Entry accepted</button>
+              {% elif entry.status == 'Entry accepted' %}
+                <button class="success-button" type="button" disabled>Onboarding email sent</button>
+              {% elif entry.status == 'Onboarding email sent' %}
+                <button class="info-button" type="button" disabled>Save and close</button>
+                <button class="danger-button" type="button" disabled>Turn down application</button>
+                <button class="success-button" type="button" disabled>Confirm application</button>
+              {% elif entry.status == 'Induction confirmed' %}
+                <button class="info-button" type="button" disabled>Save and close</button>
+                <button class="danger-button" type="button" disabled>Reject entry</button>
+                <button class="purple-button" type="button" disabled>Reschedule</button>
+                <button class="success-button" type="button" disabled>Activate as Staff member</button>
+              {% endif %}
+            {% endif %}
+          </div>
+        </form>
+      </section>
+    </div>
+  </div>
+</div>
+{% endif %}
 
 <div class="modal" id="potential-note-{{ entry.id }}" aria-hidden="true">
   <div class="modal-panel">
@@ -721,7 +1929,9 @@
 </div>
 {% endif %}
 {% endfor %}
+{% endif %}
 
+{% if page_mode == 'staff' %}
 {% for member in members %}
 <div class="modal" id="interview-{{ member.id }}" aria-hidden="true">
   <div class="modal-panel">
@@ -768,4 +1978,5 @@
   </div>
 </div>
 {% endfor %}
+{% endif %}
 {% endblock %}

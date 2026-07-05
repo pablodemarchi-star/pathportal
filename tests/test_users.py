@@ -252,7 +252,7 @@ class UsersTest(unittest.TestCase):
         self.assertIn('aria-label="Show password"', body)
         self.assertNotIn("Hello,", body)
 
-    def test_logged_in_layout_shows_escaped_full_name_greeting(self):
+    def test_logged_in_layout_hides_full_name_greeting(self):
         user = self.create_user_record(email="hello@example.com", password="secret123", department="Logistics")
         user.full_name = "Pablo <Admin>"
         db.session.add(UserMenuPermission(user_id=user.id, menu_key="staff_members", can_view=True))
@@ -266,10 +266,10 @@ class UsersTest(unittest.TestCase):
         body = response.get_data(as_text=True)
 
         self.assertEqual(response.status_code, 200)
-        self.assertIn("Hello, Pablo &lt;Admin&gt;!", body)
+        self.assertNotIn("Hello, Pablo &lt;Admin&gt;!", body)
         self.assertNotIn("Hello, Pablo <Admin>!", body)
 
-    def test_logged_in_greeting_falls_back_without_empty_values(self):
+    def test_logged_in_layout_does_not_show_empty_greeting_values(self):
         client = self.app.test_client()
         with client.session_transaction() as user_session:
             user_session["user"] = "fallback@example.com"
@@ -281,7 +281,7 @@ class UsersTest(unittest.TestCase):
         body = response.get_data(as_text=True)
 
         self.assertEqual(response.status_code, 200)
-        self.assertIn("Hello, fallback@example.com!", body)
+        self.assertNotIn("Hello, fallback@example.com!", body)
         self.assertNotIn("Hello, None", body)
         self.assertNotIn("Hello, null", body)
         self.assertNotIn("Hello, undefined", body)
@@ -959,7 +959,11 @@ class UsersTest(unittest.TestCase):
             "providers": {"view": True},
             "users": {"view": True},
         })
-        for url in ("/", "/exam-session-planner", "/pre-session-control-tower", "/fees", "/providers", "/users"):
+        dashboard_response = view_only_client.get("/")
+        self.assertEqual(dashboard_response.status_code, 200)
+        self.assertNotIn("View-only access", dashboard_response.get_data(as_text=True))
+
+        for url in ("/staff-members", "/exam-session-planner", "/pre-session-control-tower", "/fees", "/providers", "/users"):
             response = view_only_client.get(url)
             self.assertEqual(response.status_code, 200, url)
             self.assertIn("View-only access", response.get_data(as_text=True), url)
@@ -970,7 +974,7 @@ class UsersTest(unittest.TestCase):
             "providers": {"edit": True},
             "users": {"edit": True},
         }, email="edit-perm@example.com")
-        for url in ("/", "/fees", "/providers", "/users"):
+        for url in ("/staff-members", "/fees", "/providers", "/users"):
             response = edit_client.get(url)
             self.assertEqual(response.status_code, 200, url)
             self.assertNotIn("View-only access", response.get_data(as_text=True), url)

@@ -32,10 +32,14 @@ class StaffMemberSettingsTest(unittest.TestCase):
         return client
 
     def test_staff_members_settings_render_empty_without_creating_record(self):
-        response = self.client().get("/")
+        staff_response = self.client().get("/staff-members")
+        staff_html = staff_response.get_data(as_text=True)
+        response = self.client().get("/potential-entries")
         html = response.get_data(as_text=True)
 
+        self.assertEqual(staff_response.status_code, 200)
         self.assertEqual(response.status_code, 200)
+        self.assertNotIn("Upcoming induction session date and time options", staff_html)
         self.assertIn("Upcoming induction session date and time options", html)
         self.assertIn('name="upcoming_induction_session_date"', html)
         self.assertIn('name="upcoming_induction_session_start_time"', html)
@@ -44,8 +48,8 @@ class StaffMemberSettingsTest(unittest.TestCase):
         self.assertIn('data-remove-induction-option', html)
         self.assertIn('data-max-options="10"', html)
         self.assertEqual(html.count('data-induction-option-row'), 1)
-        self.assertLess(html.index("Potential entries"), html.index("Upcoming induction session date and time options"))
-        self.assertLess(html.index("Upcoming induction session date and time options"), html.index("staff-bulk-export-form"))
+        self.assertLess(html.index("<span>Potential entries</span>"), html.index("<span>Staff members</span>"))
+        self.assertIn('aria-label="Potential entries"', html)
         self.assertNotIn("undefined", html)
         self.assertNotIn("null", html)
         self.assertNotIn("None", html)
@@ -74,7 +78,9 @@ class StaffMemberSettingsTest(unittest.TestCase):
             [{"date": "15/07/2026", "start_time": "09:30", "end_time": "11:00"}],
         )
 
-        response = client.get("/")
+        self.assertEqual(response.headers["Location"], "/potential-entries")
+
+        response = client.get("/potential-entries")
         html = response.get_data(as_text=True)
         self.assertIn('value="15/07/2026"', html)
         self.assertIn('value="09:30"', html)
@@ -104,7 +110,9 @@ class StaffMemberSettingsTest(unittest.TestCase):
             ],
         )
 
-        response = client.get("/")
+        self.assertEqual(response.headers["Location"], "/potential-entries")
+
+        response = client.get("/potential-entries")
         html = response.get_data(as_text=True)
         self.assertEqual(html.count('data-induction-option-row'), 2)
         self.assertIn('value="16/07/2026"', html)
@@ -156,7 +164,7 @@ class StaffMemberSettingsTest(unittest.TestCase):
 
     def test_staff_members_settings_does_not_modify_staff_or_potential_entries(self):
         staff_member = AcademicStaff(status="Active", full_name="Staff Person", roles="Examiner")
-        potential_entry = PotentialEntry(status="To be interviewed", full_name="Potential Person")
+        potential_entry = PotentialEntry(status="Interview to be arranged", full_name="Potential Person")
         db.session.add_all([staff_member, potential_entry])
         db.session.commit()
         staff_id = staff_member.id

@@ -3,7 +3,7 @@ import os
 import re
 import secrets
 from decimal import Decimal, InvalidOperation, ROUND_FLOOR
-from datetime import datetime, timezone, timedelta
+from datetime import date, datetime, timezone, timedelta
 import calendar
 from io import BytesIO
 from urllib.parse import parse_qs, quote, urlparse
@@ -70,6 +70,7 @@ from app.models import (
     InternStageRemoteTrainingSelection,
     InternStageYear,
     PotentialEntry,
+    PotentialEntryStatusTrack,
     Provider,
     ProviderHistory,
     ProviderType,
@@ -90,6 +91,8 @@ from app.models import (
 )
 from app.validators import (
     HAS_CAR,
+    INTERVIEWERS,
+    PLATFORMS,
     ROLES,
     STATUSES_CREATE,
     YEAR_RE,
@@ -105,12 +108,41 @@ LOCAL_TZ = timezone(timedelta(hours=-3))
 CREATE_STATUS_OPTIONS = ["Inactive", "Active"]
 EDIT_STATUS_OPTIONS = ["Archived", "Inactive", "Active"]
 ROLE_OPTIONS = ["Examiner", "RSG", "Supervisor", "Intern"]
-POTENTIAL_STATUS_OPTIONS = ["To be interviewed", "Interview arranged"]
+POTENTIAL_STATUS_OPTIONS = [
+    "CV to be reviewed",
+    "Review interview date and time",
+    "Interview to be arranged",
+    "Interview invitation sent",
+    "Interview confirmed",
+    "Entry accepted",
+    "Onboarding email sent",
+    "Induction confirmed",
+    "Onboarding finalised",
+    "Entry rejected",
+    "Archived accepted entry",
+    "Archived rejected entry",
+]
+POTENTIAL_INTERVIEW_DETAIL_STATUSES = ["Interview invitation sent", "Interview confirmed", "Induction confirmed"]
+POTENTIAL_ACTION_REQUIRED_STATUSES = [
+    "CV to be reviewed",
+    "Review interview date and time",
+    "Interview to be arranged",
+    "Interview invitation sent",
+    "Interview confirmed",
+    "Entry accepted",
+    "Onboarding email sent",
+    "Induction confirmed",
+    "Entry rejected",
+    "Onboarding finalised",
+]
+POTENTIAL_MANAGEMENT_DEPARTMENT_STATUSES = ["CV to be reviewed", "Review interview date and time", "Interview confirmed"]
+POTENTIAL_ARCHIVED_STATUSES = {"Archived accepted entry", "Archived rejected entry"}
+POTENTIAL_DEPARTMENT_OPTIONS = ["ADMIN", "MANAGEMENT"]
 INTERVIEWER_OPTIONS = [
-    "Prof. Mgter. Pablo Demarchi | Managing Director",
-    "Prof. Lic. Agustina Savini | Team Leader",
-    "Prof. Brenda Sartori | Customer Experience Officer",
-    "Prof. Marcela Romero | Admissions Officer",
+    "Prof. Lic. Agustina Savini",
+    "Prof. Brenda Sartori",
+    "Prof. Marcela Romero",
+    "Prof. Mgter. Pablo Demarchi",
 ]
 CERTIFICATION_TYPES = [
     {"key": "remote_training", "label": "Remote training", "roles": []},
@@ -150,7 +182,7 @@ PERMANENT_DELETE_PASSWORD = "Path1234"
 EXAM_SESSION_DELETE_PASSWORD = "Path1234"
 REJECTED_POTENTIAL_ENTRY_DELETE_PASSWORD = "Path1234"
 MENU_PERMISSION_PATHS = (
-    ("staff_members", ("/", "/members", "/potential-entries", "/staff-members")),
+    ("staff_members", ("/members", "/potential-entries", "/staff-members")),
     ("examiner_certification", ("/annual-certification-programme",)),
     ("supervisor_certification", ("/supervisor-certification",)),
     ("internship_stages", ("/intern-stages",)),
@@ -341,7 +373,7 @@ COMMUNICATIONS_TRANSITIONS = {
 
 def menu_key_for_path(path):
     if path == "/":
-        return "staff_members"
+        return None
     for menu_key, prefixes in MENU_PERMISSION_PATHS:
         if any(path == prefix or path.startswith(f"{prefix}/") for prefix in prefixes if prefix != "/"):
             return menu_key
@@ -415,12 +447,14 @@ def inject_menu_permissions():
     current_menu_key = menu_key_for_path(request.path) if has_request_context() else None
     current_menu_can_view = user_can_view(current_menu_key) if current_menu_key else True
     current_menu_can_edit = user_can_edit(current_menu_key) if current_menu_key else True
+    current_user = getattr(g, "current_user", None)
     return {
         "menu_permissions": MENU_PERMISSIONS,
         "current_menu_key": current_menu_key,
         "current_menu_can_view": current_menu_can_view,
         "current_menu_can_edit": current_menu_can_edit,
         "current_user_is_view_only": bool(current_menu_key and current_menu_can_view and not current_menu_can_edit),
+        "current_user_full_name": getattr(current_user, "full_name", "") or session.get("user", ""),
         "user_can_view": user_can_view,
         "user_can_edit": user_can_edit,
     }
@@ -1099,6 +1133,16 @@ def local_datetime(value):
     if value.tzinfo is None:
         value = value.replace(tzinfo=timezone.utc)
     return value.astimezone(LOCAL_TZ).strftime("%d/%m/%Y %H:%M GMT-3")
+
+
+def status_track_datetime(value):
+    if not value:
+        return ""
+    if value.tzinfo is None:
+        value = value.replace(tzinfo=timezone.utc)
+    local_value = value.astimezone(LOCAL_TZ)
+    hour = local_value.strftime("%I").lstrip("0") or "0"
+    return f"{local_value.strftime('%d/%m/%Y')} · {hour}:{local_value.strftime('%M')} {local_value.strftime('%p').lower()}"
 
 
 def export_datetime(value):
@@ -2412,8 +2456,57 @@ def long_session_date_filter(value):
 def display_interviewer(value):
     if not value:
         return ""
-    parts = [part.strip() for part in value.split("|")]
-    return " | ".join(parts[:2]) if len(parts) >= 2 else value
+    raw = str(value).strip()
+    name = raw.split("|", 1)[0].strip()
+    for option in INTERVIEWER_OPTIONS:
+        if name.casefold() == option.casefold():
+            return option
+    return name
+
+
+def display_time(value):
+    raw = str(value or "").strip()
+    match = re.fullmatch(r"(\d{2}:\d{2})(?::\d{2})?", raw)
+    return match.group(1) if match else raw
+
+
+def normalize_whatsapp_phone(value):
+    return re.sub(r"\D+", "", str(value or ""))
+
+
+@staff_bp.app_template_filter("whatsapp_phone")
+def whatsapp_phone_filter(value):
+    return normalize_whatsapp_phone(value)
+
+
+def current_user_audit_department():
+    current_user = getattr(g, "current_user", None)
+    department = getattr(current_user, "department", "") or session.get("user_department") or ""
+    department = str(department).strip()
+    return department.upper() if department else "Unknown department"
+
+
+def record_potential_status_change(entry, previous_status, new_status):
+    if not previous_status or not new_status or previous_status == new_status:
+        return None
+    current_user = getattr(g, "current_user", None)
+    track = PotentialEntryStatusTrack(
+        potential_entry=entry,
+        previous_status=previous_status,
+        new_status=new_status,
+        changed_at=datetime.now(timezone.utc),
+        changed_by_user_id=getattr(current_user, "id", None),
+        changed_by_full_name=getattr(current_user, "full_name", None) or session.get("user_full_name") or session.get("user"),
+        changed_by_department=current_user_audit_department(),
+    )
+    db.session.add(track)
+    return track
+
+
+def set_potential_entry_status(entry, new_status):
+    previous_status = entry.status
+    entry.status = new_status
+    return record_potential_status_change(entry, previous_status, new_status)
 
 
 def years_since(started_in):
@@ -9945,7 +10038,7 @@ def meetings_redirect():
 
 
 def format_interview_entry(note):
-    timestamp = datetime.now(timezone.utc).astimezone(LOCAL_TZ).strftime("%d/%m/%Y %H")
+    timestamp = datetime.now(timezone.utc).astimezone(LOCAL_TZ).strftime("%d/%m/%Y - %H:%M h.")
     return f"{timestamp}\n{note.strip()}"
 
 
@@ -9971,19 +10064,262 @@ def append_potential_interview_note(entry, form):
         entry.interview = history_entry
 
 
+def append_potential_cv_review_notes(entry, form):
+    note = form.get("cv_review_notes", "").strip()
+    if not note:
+        return
+    department = form.get("cv_review_note_department", "").strip()
+    department_label = f" - {department}" if department in USER_DEPARTMENTS else ""
+    history_entry = format_interview_entry(f"CV review{department_label}: {note}")
+    if entry.interview:
+        entry.interview = f"{entry.interview.strip()}\n\n{history_entry}"
+    else:
+        entry.interview = history_entry
+
+
+def potential_cv_review_draft_key(entry_id):
+    return str(entry_id)
+
+
+def potential_cv_review_drafts():
+    drafts = session.get("potential_cv_review_drafts")
+    return drafts if isinstance(drafts, dict) else {}
+
+
+def save_potential_cv_review_draft(entry_id, form):
+    dates = form.getlist("interview_option_date")[:5]
+    times = form.getlist("interview_option_time")[:5]
+    platform = form.get("interview_option_platform", "").strip()
+    interviewer = form.get("interview_option_interviewer", "").strip()
+    max_length = max(len(dates), len(times), 1)
+    options = []
+    for index in range(max_length):
+        options.append({
+            "date": dates[index].strip() if index < len(dates) else "",
+            "time": times[index].strip() if index < len(times) else "",
+            "platform": platform,
+            "interviewer": interviewer,
+        })
+    drafts = dict(potential_cv_review_drafts())
+    drafts[potential_cv_review_draft_key(entry_id)] = {
+        "notes": form.get("cv_review_notes", "").strip(),
+        "department": form.get("cv_review_note_department", "").strip(),
+        "options": options,
+    }
+    session["potential_cv_review_drafts"] = drafts
+    session.modified = True
+
+
+def clear_potential_cv_review_draft(entry_id):
+    drafts = dict(potential_cv_review_drafts())
+    if drafts.pop(potential_cv_review_draft_key(entry_id), None) is not None:
+        session["potential_cv_review_drafts"] = drafts
+        session.modified = True
+
+
+def potential_cv_review_options_from_json(value):
+    if not value:
+        return []
+    try:
+        options = json.loads(value)
+    except (TypeError, ValueError):
+        return []
+    if not isinstance(options, list):
+        return []
+    cleaned = []
+    for option in options[:5]:
+        if not isinstance(option, dict):
+            continue
+        cleaned.append({
+            "date": str(option.get("date") or "").strip(),
+            "time": str(option.get("time") or "").strip(),
+            "platform": str(option.get("platform") or "").strip(),
+            "interviewer": display_interviewer(option.get("interviewer") or ""),
+        })
+    return cleaned
+
+
+def parse_potential_invitation_option_date(value):
+    raw = (value or "").strip()
+    match = re.fullmatch(r"(\d{2})/(\d{2})/(\d{4})", raw)
+    if not match:
+        return None
+    day, month, year = (int(part) for part in match.groups())
+    try:
+        return date(year, month, day)
+    except ValueError:
+        return None
+
+
+def format_potential_invitation_option_date(value):
+    parsed = parse_potential_invitation_option_date(value)
+    if not parsed:
+        return ""
+    return f"{parsed.strftime('%A')} {parsed.day} {parsed.strftime('%B')} {parsed.year}"
+
+
+def potential_invitation_option_rows(value):
+    rows = []
+    for option in potential_cv_review_options_from_json(value):
+        raw_date = option.get("date", "")
+        raw_time = option.get("time", "")
+        parsed_date = parse_potential_invitation_option_date(raw_date)
+        time_match = re.fullmatch(r"([01]\d|2[0-3]):[0-5]\d", raw_time)
+        if not parsed_date or not time_match:
+            continue
+        rows.append({
+            "date": raw_date,
+            "time": raw_time,
+            "label": f"{format_potential_invitation_option_date(raw_date)}, {raw_time}",
+            "sort_date": parsed_date,
+            "sort_time": raw_time,
+        })
+    rows.sort(key=lambda row: (row["sort_date"], row["sort_time"]))
+    return [{key: value for key, value in row.items() if not key.startswith("sort_")} for row in rows[:5]]
+
+
+def normalize_interview_option_date(value):
+    raw = (value or "").strip()
+    if not raw:
+        return "", None
+    digits = re.sub(r"\D", "", raw)
+    if len(digits) == 8:
+        raw = f"{digits[:2]}/{digits[2:4]}/{digits[4:]}"
+    else:
+        parts = [part for part in re.split(r"\D+", raw) if part]
+        if len(parts) == 3 and len(parts[2]) == 4:
+            raw = f"{parts[0].zfill(2)}/{parts[1].zfill(2)}/{parts[2]}"
+    if not re.fullmatch(r"\d{2}/\d{2}/\d{4}", raw):
+        return "", "Please enter a valid interview date."
+    day, month, year = raw.split("/")
+    if not (1 <= int(day) <= 31 and 1 <= int(month) <= 12):
+        return "", "Please enter a valid interview date."
+    try:
+        parsed = datetime.strptime(raw, "%d/%m/%Y").date()
+    except ValueError:
+        return "", "Please enter a valid interview date."
+    if parsed < date.today():
+        return "", "Interview date cannot be in the past."
+    return raw, None
+
+
+def normalize_interview_option_time(value):
+    raw = (value or "").strip().lower().replace("h.", "").replace("h", "").strip()
+    if not raw:
+        return "", None
+    digits = re.sub(r"\D", "", raw)
+    if ":" in raw:
+        parts = raw.split(":", 1)
+        hour = re.sub(r"\D", "", parts[0])
+        minute = re.sub(r"\D", "", parts[1])
+    elif len(digits) <= 2:
+        hour = digits
+        minute = "00"
+    elif len(digits) == 3:
+        hour = digits[:1]
+        minute = digits[1:]
+    elif len(digits) == 4:
+        hour = digits[:2]
+        minute = digits[2:]
+    else:
+        return "", "Please enter a valid interview time."
+    if not hour or len(hour) > 2 or len(minute) != 2:
+        return "", "Please enter a valid interview time."
+    hour = hour.zfill(2)
+    if not re.fullmatch(r"\d{2}", hour) or not re.fullmatch(r"\d{2}", minute):
+        return "", "Please enter a valid interview time."
+    if int(hour) > 24 or int(minute) > 60:
+        return "", "Please enter a valid interview time."
+    return f"{hour}:{minute}", None
+
+
+def validate_potential_cv_review_options(form, require_shared_fields=False):
+    dates = form.getlist("interview_option_date")
+    times = form.getlist("interview_option_time")
+    platform = form.get("interview_option_platform", "").strip()
+    interviewer = form.get("interview_option_interviewer", "").strip()
+    if max(len(dates), len(times)) > 5:
+        return [], ["A maximum of 5 interview options is allowed."]
+    max_length = max(len(dates), len(times), 1)
+    options = []
+    errors = []
+    if not platform and require_shared_fields:
+        errors.append("Please select a valid platform.")
+    elif platform not in PLATFORMS:
+        errors.append("Please select a valid platform.")
+    if not interviewer and require_shared_fields:
+        errors.append("Please select an interviewer.")
+    elif interviewer and interviewer not in INTERVIEWERS:
+        errors.append("Please select a valid interviewer.")
+    for index in range(max_length):
+        raw_date = dates[index].strip() if index < len(dates) else ""
+        raw_time = times[index].strip() if index < len(times) else ""
+        if not raw_date and not raw_time:
+            continue
+        if not raw_date or not raw_time:
+            if "Please complete both date and time for each interview option." not in errors:
+                errors.append("Please complete both date and time for each interview option.")
+            continue
+        normalized_date, date_error = normalize_interview_option_date(raw_date)
+        normalized_time, time_error = normalize_interview_option_time(raw_time)
+        for error in (date_error, time_error):
+            if error and error not in errors:
+                errors.append(error)
+        if not date_error and not time_error:
+            options.append({
+                "date": normalized_date,
+                "time": normalized_time,
+                "platform": platform,
+                "interviewer": interviewer,
+            })
+    return options, errors
+
+
+@staff_bp.app_template_filter("potential_cv_review_options")
+def potential_cv_review_options_filter(value):
+    options = potential_cv_review_options_from_json(value)
+    return options or [{"date": "", "time": ""}]
+
+
+@staff_bp.app_template_filter("potential_invitation_options")
+def potential_invitation_options_filter(value):
+    return potential_invitation_option_rows(value)
+
+
 def interview_history_entries(history):
     if not history:
         return []
     entries = []
-    for block in history.strip().split("\n\n"):
+    for index, block in enumerate(history.strip().split("\n\n")):
         lines = [line for line in block.splitlines() if line.strip()]
         if not lines:
             continue
         if len(lines) == 1:
-            entries.append({"date": "Legacy note", "note": lines[0]})
+            entries.append({"index": index, "date": "Legacy note", "note": lines[0]})
         else:
-            entries.append({"date": lines[0], "note": "\n".join(lines[1:])})
+            entries.append({"index": index, "date": lines[0], "note": "\n".join(lines[1:])})
     return entries
+
+
+def delete_interview_history_entry(history, note_index):
+    if not history:
+        return history
+    blocks = [block for block in history.strip().split("\n\n") if block.strip()]
+    if note_index < 0 or note_index >= len(blocks):
+        return history
+    del blocks[note_index]
+    return "\n\n".join(blocks)
+
+
+@staff_bp.app_template_filter("potential_cv_review_note_parts")
+def potential_cv_review_note_parts_filter(value):
+    text = value or ""
+    match = re.match(r"^CV review - ([^:]+):\s*(.*)$", text, flags=re.S)
+    if match:
+        return {"department": match.group(1).strip(), "text": match.group(2).strip()}
+    if text.startswith("CV review:"):
+        return {"department": "", "text": text.replace("CV review:", "", 1).strip()}
+    return {"department": "", "text": text}
 
 
 def interview_history_count(history):
@@ -10146,17 +10482,25 @@ def member_from_draft_payload(payload):
 
 
 def apply_potential_form(entry, form):
-    entry.status = form.get("status", "").strip()
+    new_status = form.get("status", "").strip() or (entry.status if entry.id else "CV to be reviewed")
+    if entry.id and entry.status != new_status:
+        set_potential_entry_status(entry, new_status)
+    else:
+        entry.status = new_status
     entry.full_name = form.get("full_name", "").strip()
     entry.phone = form.get("phone", "").strip()
     entry.email = form.get("email", "").strip()
     entry.city = form.get("city", "").strip()
     entry.province = form.get("province", "").strip()
     entry.cv = form.get("cv", "").strip()
-    entry.interview_date = form.get("interview_date", "").strip()
-    entry.interview_time = form.get("interview_time", "").strip()
-    entry.platform = form.get("platform", "").strip()
-    entry.interviewer = form.get("interviewer", "").strip()
+    if "interview_date" in form:
+        entry.interview_date = form.get("interview_date", "").strip()
+    if "interview_time" in form:
+        entry.interview_time = form.get("interview_time", "").strip()
+    if "platform" in form:
+        entry.platform = form.get("platform", "").strip()
+    if "interviewer" in form:
+        entry.interviewer = display_interviewer(form.get("interviewer", "").strip())
 
 
 def apply_potential_acceptance_draft_form(entry, form):
@@ -10252,6 +10596,11 @@ def localdt_filter(value):
     return local_datetime(value)
 
 
+@staff_bp.app_template_filter("status_track_dt")
+def status_track_dt_filter(value):
+    return status_track_datetime(value)
+
+
 @staff_bp.app_template_filter("display_date")
 def display_date_filter(value):
     return display_date(value)
@@ -10260,6 +10609,11 @@ def display_date_filter(value):
 @staff_bp.app_template_filter("display_interviewer")
 def display_interviewer_filter(value):
     return display_interviewer(value)
+
+
+@staff_bp.app_template_filter("display_time")
+def display_time_filter(value):
+    return display_time(value)
 
 
 @staff_bp.app_template_filter("tenure_label")
@@ -15065,6 +15419,37 @@ def delete_exam_session_year(year):
 
 @staff_bp.route("/")
 @login_required
+def dashboard():
+    potential_entries_allowed = user_can_view("staff_members")
+    potential_entries_pending_count = 0
+    if potential_entries_allowed:
+        potential_entries_pending_count = PotentialEntry.query.filter(
+            PotentialEntry.is_rejected == False,
+            PotentialEntry.status.in_(POTENTIAL_ACTION_REQUIRED_STATUSES),
+        ).count()
+    current_user = getattr(g, "current_user", None)
+    dashboard_full_name = (
+        getattr(current_user, "full_name", "")
+        or session.get("user_full_name")
+        or session.get("user")
+        or "admin"
+    )
+    dashboard_department = (
+        getattr(current_user, "department", "")
+        or session.get("user_department")
+        or ""
+    )
+    return render_template(
+        "staff/dashboard.html",
+        dashboard_full_name=dashboard_full_name,
+        dashboard_department=dashboard_department,
+        potential_entries_allowed=potential_entries_allowed,
+        potential_entries_pending_count=potential_entries_pending_count,
+    )
+
+
+@staff_bp.route("/staff-members")
+@login_required
 def index():
     query_text = request.args.get("q", "").strip()
     status = request.args.get("status", "").strip()
@@ -15166,44 +15551,16 @@ def index():
 
     members, pagination = paginate_query(query)
     confirmed_session_counts = confirmed_session_counts_by_member([member.id for member in members])
-    potential_entries = (
-        PotentialEntry.query.filter(PotentialEntry.is_rejected == show_rejected)
-        .order_by(
-            db.case(
-                (
-                    db.or_(
-                        PotentialEntry.status.notin_(["Interview arranged", "Interview scheduled"]),
-                        PotentialEntry.interview_date.is_(None),
-                        PotentialEntry.interview_date == "",
-                    ),
-                    1,
-                ),
-                else_=0,
-            ),
-            PotentialEntry.interview_date.asc(),
-            db.case(
-                (
-                    db.or_(
-                        PotentialEntry.interview_time.is_(None),
-                        PotentialEntry.interview_time == "",
-                    ),
-                    "99:99:99",
-                ),
-                else_=PotentialEntry.interview_time,
-            ).asc(),
-            PotentialEntry.full_name.asc(),
-        )
-        .all()
-    )
     staff_settings = staff_members_settings()
     create_member_draft = None
     if request.args.get("open_staff_modal") == "create-member":
         create_member_draft = member_from_draft_payload(session.pop("create_member_draft", None))
     return render_template(
         "staff/index.html",
+        page_mode="staff",
         members=members,
         pagination=pagination,
-        potential_entries=potential_entries,
+        potential_entries=[],
         roles=ROLE_OPTIONS,
         statuses=EDIT_STATUS_OPTIONS,
         create_statuses=CREATE_STATUS_OPTIONS,
@@ -15227,14 +15584,137 @@ def index():
     )
 
 
+def potential_department_expression():
+    return db.case(
+        (PotentialEntry.status.in_(["Entry rejected", "Onboarding finalised", "Archived accepted entry", "Archived rejected entry"]), "MANAGEMENT"),
+        (PotentialEntry.status.in_(POTENTIAL_MANAGEMENT_DEPARTMENT_STATUSES), "MANAGEMENT"),
+        else_="ADMIN",
+    )
+
+
+def ordered_potential_entries(show_archived=False, status="", department="", action_scope="", sort_by="", sort_dir="asc"):
+    if show_archived:
+        query = PotentialEntry.query.filter(PotentialEntry.status.in_(POTENTIAL_ARCHIVED_STATUSES))
+    else:
+        query = PotentialEntry.query.filter(~PotentialEntry.status.in_(POTENTIAL_ARCHIVED_STATUSES))
+    if status:
+        query = query.filter(PotentialEntry.status == status)
+    if action_scope == "my_actions":
+        department = current_user_audit_department()
+    if department:
+        query = query.filter(potential_department_expression() == department)
+
+    finalised_sort = db.case(
+        (PotentialEntry.status == "Onboarding finalised", 1),
+        else_=0,
+    )
+    sortable_columns = {
+        "status": db.func.lower(PotentialEntry.status),
+        "full_name": db.func.lower(PotentialEntry.full_name),
+        "city": db.func.lower(PotentialEntry.city),
+        "province": db.func.lower(PotentialEntry.province),
+        "department": db.func.lower(potential_department_expression()),
+    }
+    if sort_by in sortable_columns:
+        sort_expression = sortable_columns[sort_by].desc() if sort_dir == "desc" else sortable_columns[sort_by].asc()
+        query = query.order_by(finalised_sort, sort_expression, PotentialEntry.full_name.asc())
+    else:
+        query = query.order_by(
+            finalised_sort,
+            db.func.coalesce(PotentialEntry.updated_on, PotentialEntry.created_on).desc(),
+            PotentialEntry.full_name.asc(),
+        )
+    return query.all()
+
+
+@staff_bp.route("/potential-entries", methods=["GET"])
+@login_required
+def potential_entries():
+    show_archived = request.args.get("show_archived") == "1" or request.args.get("show_rejected") == "1"
+    status = request.args.get("status", "").strip()
+    department = request.args.get("department", "").strip().upper()
+    action_scope = request.args.get("action_scope", "all").strip()
+    sort_by = request.args.get("sort", "").strip()
+    sort_dir = request.args.get("dir", "asc").strip()
+    if status not in POTENTIAL_STATUS_OPTIONS:
+        status = ""
+    if department not in POTENTIAL_DEPARTMENT_OPTIONS:
+        department = ""
+    if action_scope not in {"all", "my_actions"}:
+        action_scope = "all"
+    if sort_by not in {"status", "full_name", "city", "province", "department"}:
+        sort_by = ""
+    if sort_dir not in {"asc", "desc"}:
+        sort_dir = "asc"
+
+    def potential_sort_url(column):
+        args = request.args.to_dict(flat=False)
+        args.pop("open_staff_modal", None)
+        if "show_rejected" in args:
+            args.pop("show_rejected", None)
+            args["show_archived"] = ["1"]
+        current_sort = args.get("sort", [""])[0]
+        current_dir = args.get("dir", ["asc"])[0]
+        next_dir = "desc" if current_sort == column and current_dir == "asc" else "asc"
+        args["sort"] = [column]
+        args["dir"] = [next_dir]
+        return url_for("staff.potential_entries", **args)
+
+    toggle_args = {}
+    if status:
+        toggle_args["status"] = status
+    if department:
+        toggle_args["department"] = department
+    if sort_by:
+        toggle_args["sort"] = sort_by
+        toggle_args["dir"] = sort_dir
+    if action_scope != "all":
+        toggle_args["action_scope"] = action_scope
+    if not show_archived:
+        toggle_args["show_archived"] = 1
+
+    staff_settings = staff_members_settings()
+    return render_template(
+        "staff/index.html",
+        page_mode="potential_entries",
+        members=[],
+        pagination=None,
+        potential_entries=ordered_potential_entries(show_archived, status, department, action_scope, sort_by, sort_dir),
+        roles=ROLE_OPTIONS,
+        statuses=EDIT_STATUS_OPTIONS,
+        create_statuses=CREATE_STATUS_OPTIONS,
+        potential_statuses=POTENTIAL_STATUS_OPTIONS,
+        potential_department_options=POTENTIAL_DEPARTMENT_OPTIONS,
+        potential_toggle_url=url_for("staff.potential_entries", **toggle_args),
+        interviewer_options=INTERVIEWER_OPTIONS,
+        confirmed_session_counts={},
+        staff_settings_values=staff_members_settings_values(staff_settings),
+        create_member_draft=None,
+        filters={
+            "q": "",
+            "status": status,
+            "roles": [],
+            "has_car": "",
+            "show_archived": show_archived,
+            "show_rejected": show_archived,
+            "department": department,
+            "action_scope": action_scope,
+            "sort": sort_by,
+            "dir": sort_dir,
+        },
+        sort_url=potential_sort_url,
+        csrf_token=session.get("csrf_token"),
+    )
+
+
 @staff_bp.route("/staff-members/settings", methods=["POST"])
 @login_required
 def update_staff_members_settings():
     if not validate_csrf():
         flash("Security token expired. Please try again.", "error")
-        return redirect(url_for("staff.index"))
+        return redirect(url_for("staff.potential_entries"))
     save_staff_members_settings()
-    return redirect(url_for("staff.index"))
+    return redirect(url_for("staff.potential_entries"))
 
 
 def staff_return_redirect():
@@ -18009,20 +18489,20 @@ def add_member_note(member_id):
 def create_potential_entry():
     if not validate_csrf():
         flash("Security token expired. Please try again.", "error")
-        return redirect(url_for("staff.index"))
+        return redirect(url_for("staff.potential_entries"))
 
-    errors = validate_potential_form(request.form)
+    errors = validate_potential_form(request.form, require_status=False, require_cv=True)
     if errors:
         for error in errors:
             flash(error, "error")
-        return redirect(url_for("staff.index"))
+        return redirect(url_for("staff.potential_entries"))
 
     entry = PotentialEntry()
     apply_potential_form(entry, request.form)
     db.session.add(entry)
     db.session.commit()
     flash("Potential entry created successfully.", "success")
-    return redirect(url_for("staff.index"))
+    return redirect(url_for("staff.potential_entries"))
 
 
 @staff_bp.route("/potential-entries/<int:entry_id>", methods=["POST"])
@@ -18030,19 +18510,19 @@ def create_potential_entry():
 def update_potential_entry(entry_id):
     if not validate_csrf():
         flash("Security token expired. Please try again.", "error")
-        return redirect(url_for("staff.index"))
+        return redirect(url_for("staff.potential_entries"))
 
     entry = PotentialEntry.query.get_or_404(entry_id)
     errors = validate_potential_form(request.form)
     if errors:
         for error in errors:
             flash(error, "error")
-        return redirect(url_for("staff.index"))
+        return redirect(url_for("staff.potential_entries"))
 
     apply_potential_form(entry, request.form)
     db.session.commit()
     flash("Potential entry updated successfully.", "success")
-    return redirect(url_for("staff.index"))
+    return redirect(url_for("staff.potential_entries"))
 
 
 @staff_bp.route("/potential-entries/<int:entry_id>/interview-invitation-sent", methods=["POST"])
@@ -18050,7 +18530,7 @@ def update_potential_entry(entry_id):
 def update_potential_interview_invitation_sent(entry_id):
     if not validate_csrf():
         flash("Security token expired. Please try again.", "error")
-        return redirect(url_for("staff.index"))
+        return redirect(url_for("staff.potential_entries"))
 
     entry = PotentialEntry.query.get_or_404(entry_id)
     invitation_sent = request.form.get("interview_invitation_sent") == "1"
@@ -18063,19 +18543,849 @@ def update_potential_interview_invitation_sent(entry_id):
     return staff_return_redirect()
 
 
+CV_REVIEW_ACTION_STATUSES = {"CV to be reviewed", "Review interview date and time"}
+
+
+def apply_potential_cv_review_action(entry, next_status, success_message, require_interview_option=False):
+    if entry.is_rejected or entry.status not in CV_REVIEW_ACTION_STATUSES:
+        flash("This application can only be reviewed while its status is CV to be reviewed or Review interview date and time.", "error")
+        return redirect(url_for("staff.potential_entries"))
+
+    interview_options, option_errors = validate_potential_cv_review_options(
+        request.form,
+        require_shared_fields=require_interview_option,
+    )
+    if require_interview_option and not interview_options:
+        option_errors.append("Please configure at least one interview date and time option before proceeding to interview.")
+    note = request.form.get("cv_review_notes", "").strip()
+    note_department = request.form.get("cv_review_note_department", "").strip()
+    if note and note_department not in USER_DEPARTMENTS:
+        option_errors.append("Department is required.")
+    if option_errors:
+        save_potential_cv_review_draft(entry.id, request.form)
+        for error in option_errors:
+            flash(error, "error")
+        return redirect(url_for("staff.potential_entries", open_staff_modal=f"cv-review-potential-entry-{entry.id}"))
+
+    append_potential_cv_review_notes(entry, request.form)
+    entry.cv_review_interview_options = json.dumps(interview_options)
+    set_potential_entry_status(entry, next_status)
+    if next_status == "Entry rejected":
+        entry.is_rejected = True
+        entry.rejected_on = datetime.now(timezone.utc)
+    db.session.commit()
+    clear_potential_cv_review_draft(entry.id)
+    flash(success_message, "success")
+    return redirect(url_for("staff.potential_entries"))
+
+
+def potential_review_modal_id(entry):
+    if entry.status in {"Interview to be arranged", "Interview invitation sent", "Interview confirmed", "Entry accepted", "Onboarding email sent", "Induction confirmed"}:
+        return f"interview-arrange-potential-entry-{entry.id}"
+    return f"cv-review-potential-entry-{entry.id}"
+
+
+POTENTIAL_INTERVIEW_ROLE_OPTIONS = {"Examiner", "RSG", "Supervisor", "Other"}
+
+
+def save_potential_cv_review_changes(
+    entry,
+    success_message,
+    reopen_modal=False,
+    require_note=False,
+    next_status=None,
+    mark_rejected=False,
+):
+    if entry.is_rejected or entry.status not in {"CV to be reviewed", "Review interview date and time", "Interview to be arranged", "Interview invitation sent", "Interview confirmed", "Entry accepted", "Onboarding email sent", "Induction confirmed"}:
+        flash("This application can only be reviewed while its status is CV to be reviewed, Review interview date and time, Interview to be arranged, Interview invitation sent, Interview confirmed, Entry accepted, Onboarding email sent or Induction confirmed.", "error")
+        return redirect(url_for("staff.potential_entries"))
+
+    is_induction_reschedule = entry.status == "Induction confirmed" and request.form.get("induction_session_status") == "reschedule"
+    is_arrangement_note_only = entry.status in {"Interview to be arranged", "Interview invitation sent", "Interview confirmed", "Entry accepted", "Onboarding email sent", "Induction confirmed"} and not is_induction_reschedule
+    interview_options, option_errors = (
+        (potential_cv_review_options_from_json(entry.cv_review_interview_options), [])
+        if is_arrangement_note_only
+        else validate_potential_cv_review_options(request.form, require_shared_fields=is_induction_reschedule)
+    )
+    if is_induction_reschedule and not interview_options:
+        option_errors.append("Please configure a new induction date and time before saving.")
+    note = request.form.get("cv_review_notes", "").strip()
+    if require_note and not note:
+        option_errors.append("Notes cannot be empty.")
+    note_department = request.form.get("cv_review_note_department", "").strip()
+    if note and note_department not in USER_DEPARTMENTS:
+        option_errors.append("Department is required.")
+    if entry.status == "Interview confirmed":
+        no_show = request.form.get("interview_outcome_status") == "no_show"
+        has_car = request.form.get("interview_has_car", "").strip()
+        interview_roles = [] if no_show else request.form.getlist("interview_roles")
+        invalid_roles = [role for role in interview_roles if role not in POTENTIAL_INTERVIEW_ROLE_OPTIONS]
+        if not no_show and has_car and has_car not in {"Yes", "No"}:
+            option_errors.append("Has a car contains an invalid value.")
+        if invalid_roles:
+            option_errors.append("Roles contains an invalid value.")
+    if entry.status == "Induction confirmed":
+        induction_status = request.form.get("induction_session_status", "").strip()
+        if induction_status and induction_status not in {"no_show", "reschedule", "attended"}:
+            option_errors.append("Induction session status is invalid.")
+    if option_errors:
+        if not is_arrangement_note_only:
+            save_potential_cv_review_draft(entry.id, request.form)
+        for error in option_errors:
+            flash(error, "error")
+        return redirect(url_for("staff.potential_entries", open_staff_modal=potential_review_modal_id(entry)))
+
+    append_potential_cv_review_notes(entry, request.form)
+    if entry.status == "Interview confirmed":
+        no_show = request.form.get("interview_outcome_status") == "no_show"
+        entry.interview_no_show = no_show
+        entry.has_car = "" if no_show else request.form.get("interview_has_car", "").strip()
+        entry.acceptance_roles = "" if no_show else ",".join(request.form.getlist("interview_roles"))
+        entry.entry_added_in_sessions_pre_confirmation = False if no_show else request.form.get("entry_added_in_sessions_pre_confirmation") == "1"
+    if entry.status == "Induction confirmed":
+        induction_status = request.form.get("induction_session_status", "").strip()
+        if induction_status in {"no_show", "reschedule", "attended"}:
+            entry.induction_session_status = induction_status
+        entry.exam_session_participation_statuses_pre_confirmed = (
+            induction_status == "attended"
+            and request.form.get("exam_session_participation_statuses_pre_confirmed") == "1"
+        )
+    if is_induction_reschedule and interview_options:
+        first_option = interview_options[0]
+        entry.interview_date = datetime.strptime(first_option["date"], "%d/%m/%Y").date().isoformat()
+        entry.interview_time = f'{first_option["time"]}:00'
+        entry.platform = first_option["platform"]
+        entry.interviewer = first_option["interviewer"]
+        entry.cv_review_interview_options = json.dumps(interview_options)
+    if not is_arrangement_note_only:
+        entry.cv_review_interview_options = json.dumps(interview_options)
+    if next_status:
+        set_potential_entry_status(entry, next_status)
+    if mark_rejected:
+        entry.is_rejected = True
+        entry.rejected_on = datetime.now(timezone.utc)
+    db.session.commit()
+    if not is_arrangement_note_only:
+        clear_potential_cv_review_draft(entry.id)
+    flash(success_message, "success")
+    if reopen_modal:
+        return redirect(url_for("staff.potential_entries", open_staff_modal=potential_review_modal_id(entry)))
+    return redirect(url_for("staff.potential_entries"))
+
+
+def potential_entry_to_active_member(entry):
+    member = AcademicStaff()
+    member.status = "Active"
+    member.title = (entry.title or "").strip()
+    member.full_name = (entry.full_name or "").strip()
+    member.seniority = bool(entry.seniority)
+    member.roles = ",".join(entry.roles_list())
+    member.phone = (entry.phone or "").strip()
+    member.email = (entry.email or "").strip()
+    member.has_car = (entry.has_car or "").strip()
+    member.started_in = (entry.started_in or str(datetime.now(LOCAL_TZ).year)).strip()
+    member.full_address_google_maps = (entry.full_address_google_maps or "").strip()
+    member.city = (entry.city or "").strip()
+    member.province = (entry.province or "").strip()
+    member.country = (entry.country or "").strip()
+    member.cv = (entry.cv or "").strip()
+    member.interview = entry.interview
+    member.account_id = (entry.account_id or "").strip()
+    member.account_owner = (entry.account_owner or "").strip()
+    member.profile_picture = (entry.profile_picture or "").strip()
+    return member
+
+
+def active_member_errors_from_potential_entry(entry):
+    member = potential_entry_to_active_member(entry)
+    errors = []
+    if not member.title:
+        errors.append("Title is required.")
+    if not member.full_name:
+        errors.append("Full name is required.")
+    if not member.roles:
+        errors.append("At least one role is required.")
+    if not member.phone:
+        errors.append("Phone is required.")
+    if not member.email:
+        errors.append("Email is required.")
+    if not member.has_car:
+        errors.append("Has a car is required.")
+    if not member.started_in:
+        errors.append("Started in is required.")
+    if not member.full_address_google_maps:
+        errors.append("Full address is required.")
+    if not member.city:
+        errors.append("City is required.")
+    if not member.province:
+        errors.append("Province is required.")
+    if not member.country:
+        errors.append("Country is required.")
+    if not member.cv:
+        errors.append("CV is required.")
+    if not member.profile_picture:
+        errors.append("Profile picture is required.")
+    if not member.account_id:
+        errors.append("Account ID is required.")
+    if not member.account_owner:
+        errors.append("Account owner is required.")
+    if member.email and not EMAIL_RE.match(member.email):
+        errors.append("Email must be a valid email address.")
+    if member.cv and not is_valid_url(member.cv):
+        errors.append("CV must be a valid http or https URL.")
+    if member.profile_picture and not is_valid_url(member.profile_picture):
+        errors.append("Profile picture must be a valid http or https URL.")
+    if member.started_in and not YEAR_RE.match(member.started_in):
+        errors.append("Started in must be a four-digit year.")
+    if any(role not in ROLES for role in member.roles_list()):
+        errors.append("Roles contains an invalid value.")
+    if member.has_car not in {"Yes", "No"}:
+        errors.append("Has a car contains an invalid value.")
+    return member, errors
+
+
+@staff_bp.route("/potential-entries/<int:entry_id>/cv-review/add-note", methods=["POST"])
+@login_required
+def add_potential_cv_review_note(entry_id):
+    if not validate_csrf():
+        flash("Security token expired. Please try again.", "error")
+        return redirect(url_for("staff.potential_entries"))
+
+    entry = PotentialEntry.query.get_or_404(entry_id)
+    return save_potential_cv_review_changes(entry, "Note added.", reopen_modal=True, require_note=True)
+
+
+@staff_bp.route("/potential-entries/<int:entry_id>/cv-review/save", methods=["POST"])
+@login_required
+def save_potential_cv_review(entry_id):
+    if not validate_csrf():
+        flash("Security token expired. Please try again.", "error")
+        return redirect(url_for("staff.potential_entries"))
+
+    entry = PotentialEntry.query.get_or_404(entry_id)
+    return save_potential_cv_review_changes(entry, "CV review saved.")
+
+
+@staff_bp.route("/potential-entries/<int:entry_id>/induction/reject", methods=["POST"])
+@login_required
+def reject_potential_induction(entry_id):
+    if not validate_csrf():
+        flash("Security token expired. Please try again.", "error")
+        return redirect(url_for("staff.potential_entries"))
+
+    entry = PotentialEntry.query.get_or_404(entry_id)
+    if entry.is_rejected or entry.status != "Induction confirmed":
+        flash("Only confirmed inductions can be rejected here.", "error")
+        return redirect(url_for("staff.potential_entries"))
+    if request.form.get("induction_session_status") != "no_show":
+        flash("Select No-show before rejecting this entry.", "error")
+        return redirect(url_for("staff.potential_entries", open_staff_modal=potential_review_modal_id(entry)))
+
+    return save_potential_cv_review_changes(
+        entry,
+        "Entry rejected.",
+        next_status="Entry rejected",
+        mark_rejected=True,
+    )
+
+
+@staff_bp.route("/potential-entries/<int:entry_id>/induction/reschedule", methods=["POST"])
+@login_required
+def reschedule_potential_induction(entry_id):
+    if not validate_csrf():
+        flash("Security token expired. Please try again.", "error")
+        return redirect(url_for("staff.potential_entries"))
+
+    entry = PotentialEntry.query.get_or_404(entry_id)
+    if entry.is_rejected or entry.status != "Induction confirmed":
+        flash("Only confirmed inductions can be rescheduled here.", "error")
+        return redirect(url_for("staff.potential_entries"))
+    if request.form.get("induction_session_status") != "reschedule":
+        flash("Select Reschedule before rescheduling this induction.", "error")
+        return redirect(url_for("staff.potential_entries", open_staff_modal=potential_review_modal_id(entry)))
+    if request.form.get("induction_reschedule_trainer_notified") != "1":
+        flash("Confirm that the trainer has been notified of this change before rescheduling.", "error")
+        return redirect(url_for("staff.potential_entries", open_staff_modal=potential_review_modal_id(entry)))
+
+    return save_potential_cv_review_changes(entry, "Induction rescheduled.")
+
+
+@staff_bp.route("/potential-entries/<int:entry_id>/induction/activate", methods=["POST"])
+@login_required
+def activate_potential_as_staff_member(entry_id):
+    if not validate_csrf():
+        flash("Security token expired. Please try again.", "error")
+        return redirect(url_for("staff.potential_entries"))
+
+    entry = PotentialEntry.query.get_or_404(entry_id)
+    if entry.is_rejected or entry.status != "Induction confirmed":
+        flash("Only confirmed inductions can be activated as Staff members.", "error")
+        return redirect(url_for("staff.potential_entries"))
+    if request.form.get("induction_session_status") != "attended":
+        flash("Select Attended before activating this entry as a Staff member.", "error")
+        return redirect(url_for("staff.potential_entries", open_staff_modal=potential_review_modal_id(entry)))
+    if request.form.get("exam_session_participation_statuses_pre_confirmed") != "1":
+        flash("Exam session participation statuses must be updated to Pre-confirmed before activation.", "error")
+        return redirect(url_for("staff.potential_entries", open_staff_modal=potential_review_modal_id(entry)))
+
+    member, errors = active_member_errors_from_potential_entry(entry)
+    if errors:
+        for error in errors:
+            flash(error, "error")
+        return redirect(url_for("staff.potential_entries", open_staff_modal=potential_review_modal_id(entry)))
+
+    append_potential_cv_review_notes(entry, request.form)
+    entry.induction_session_status = "attended"
+    entry.exam_session_participation_statuses_pre_confirmed = True
+    set_potential_entry_status(entry, "Onboarding finalised")
+    db.session.add(member)
+    db.session.commit()
+    flash("Entry activated as Staff member.", "success")
+    return redirect(url_for("staff.index"))
+
+
+@staff_bp.route("/potential-entries/<int:entry_id>/entry-accepted/notes-checked", methods=["POST"])
+@login_required
+def update_entry_accepted_notes_checked(entry_id):
+    if not validate_csrf():
+        if request.headers.get("X-Requested-With") == "XMLHttpRequest":
+            return jsonify({"error": "Security token expired. Please try again."}), 400
+        flash("Security token expired. Please try again.", "error")
+        return redirect(url_for("staff.potential_entries"))
+
+    entry = PotentialEntry.query.get_or_404(entry_id)
+    if entry.is_rejected or entry.status != "Entry accepted":
+        if request.headers.get("X-Requested-With") == "XMLHttpRequest":
+            return jsonify({"error": "Only accepted entries can update this checkbox."}), 400
+        flash("Only accepted entries can update this checkbox.", "error")
+        return redirect(url_for("staff.potential_entries"))
+
+    allowed_fields = {
+        "entry_accepted_notes_checked",
+        "entry_accepted_email_sent",
+        "entry_accepted_whatsapp_sent",
+    }
+    changed = False
+    for field_name in allowed_fields:
+        if field_name in request.form:
+            setattr(entry, field_name, request.form.get(field_name) == "1")
+            changed = True
+    if not changed:
+        entry.entry_accepted_notes_checked = False
+    db.session.commit()
+    if request.headers.get("X-Requested-With") == "XMLHttpRequest":
+        return jsonify({
+            "ok": True,
+            "entry_accepted_notes_checked": entry.entry_accepted_notes_checked,
+            "entry_accepted_email_sent": entry.entry_accepted_email_sent,
+            "entry_accepted_whatsapp_sent": entry.entry_accepted_whatsapp_sent,
+        })
+    return redirect(url_for("staff.potential_entries", open_staff_modal=potential_review_modal_id(entry)))
+
+
+@staff_bp.route("/potential-entries/<int:entry_id>/entry-accepted/onboarding-email-sent", methods=["POST"])
+@login_required
+def mark_potential_onboarding_email_sent(entry_id):
+    if not validate_csrf():
+        flash("Security token expired. Please try again.", "error")
+        return redirect(url_for("staff.potential_entries"))
+
+    entry = PotentialEntry.query.get_or_404(entry_id)
+    if entry.is_rejected or entry.status != "Entry accepted":
+        flash("Only accepted entries can be marked as onboarding email sent.", "error")
+        return redirect(url_for("staff.potential_entries"))
+    if not (
+        entry.entry_accepted_notes_checked
+        and entry.entry_accepted_email_sent
+        and entry.entry_accepted_whatsapp_sent
+    ):
+        flash("Complete all three checks before marking onboarding email as sent.", "error")
+        return redirect(url_for("staff.potential_entries", open_staff_modal=potential_review_modal_id(entry)))
+
+    set_potential_entry_status(entry, "Onboarding email sent")
+    db.session.commit()
+    flash("Onboarding email sent.", "success")
+    return redirect(url_for("staff.potential_entries"))
+
+
+def validate_and_apply_onboarding_follow_up(entry, form, require_action=None):
+    errors = []
+    choice = form.get("onboarding_follow_up_choice", "").strip()
+    if choice and choice not in {"confirm", "turn_down"}:
+        errors.append("Follow-up option is invalid.")
+        choice = ""
+    if require_action and choice != require_action:
+        errors.append("Select the required follow-up option.")
+    entry.onboarding_follow_up_choice = choice
+
+    if choice == "confirm":
+        title = form.get("title", "").strip()
+        full_address = form.get("full_address_google_maps", "").strip()
+        country = form.get("country", "").strip()
+        profile_picture = form.get("profile_picture", "").strip()
+        account_id = form.get("account_id", "").strip()
+        account_owner = form.get("account_owner", "").strip()
+        account_owner_id = form.get("account_owner_id", "").strip()
+        induction_date = form.get("interview_date", "").strip()
+        induction_time = form.get("interview_time", "").strip()
+        platform = form.get("platform", "").strip()
+        trainer = display_interviewer(form.get("interviewer", "").strip())
+
+        required_values = {
+            "Title is required.": title,
+            "Full address is required.": full_address,
+            "Country is required.": country,
+            "Profile picture is required.": profile_picture,
+            "Bank account number is required.": account_id,
+            "Bank account holder's full name is required.": account_owner,
+            "Bank account holder's ID is required.": account_owner_id,
+            "Confirmed induction session date is required.": induction_date,
+            "Confirmed induction session time is required.": induction_time,
+            "Platform is required.": platform,
+            "Trainer is required.": trainer,
+        }
+        for message, value in required_values.items():
+            if not value:
+                errors.append(message)
+        if profile_picture and not is_valid_url(profile_picture):
+            errors.append("Profile picture must be a valid http or https URL.")
+        if induction_date and not re.fullmatch(r"\d{4}-\d{2}-\d{2}", induction_date):
+            errors.append("Confirmed induction session date is invalid.")
+        time_match = re.fullmatch(r"([01]\d|2[0-3]):[0-5]\d(?::[0-5]\d)?", induction_time)
+        if induction_time and not time_match:
+            errors.append("Confirmed induction session time must use HH:MM 24-hour format.")
+        if platform and platform not in {"Zoom", "Meet"}:
+            errors.append("Platform is required.")
+        if trainer and trainer not in INTERVIEWER_OPTIONS:
+            errors.append("Trainer is required.")
+        if induction_date and re.fullmatch(r"\d{4}-\d{2}-\d{2}", induction_date) and time_match:
+            induction_time_value = f"{induction_time[:5]}:00" if len(induction_time) == 5 else induction_time
+            induction_datetime = datetime.strptime(f"{induction_date} {induction_time_value}", "%Y-%m-%d %H:%M:%S").replace(tzinfo=LOCAL_TZ)
+            if induction_datetime < datetime.now(LOCAL_TZ):
+                errors.append("Confirmed induction session date and time cannot be in the past.")
+
+        entry.title = title
+        entry.full_address_google_maps = full_address
+        entry.country = country
+        entry.profile_picture = profile_picture
+        entry.account_id = account_id
+        entry.account_owner = account_owner
+        entry.account_owner_id = account_owner_id
+        entry.interview_date = induction_date
+        entry.interview_time = f"{induction_time[:5]}:00" if time_match and len(induction_time) == 5 else induction_time
+        entry.platform = platform
+        entry.interviewer = trainer
+    elif choice == "turn_down":
+        entry.onboarding_turn_down_sessions_removed = form.get("onboarding_turn_down_sessions_removed") == "1"
+        entry.onboarding_turn_down_trainer_notified = form.get("onboarding_turn_down_trainer_notified") == "1"
+        if require_action == "turn_down":
+            if not entry.onboarding_turn_down_sessions_removed:
+                errors.append("The Entry has been removed from all pre-assigned exam session participations is required.")
+            if not entry.onboarding_turn_down_trainer_notified:
+                errors.append("The Trainer has been notified that the Entry will not attend the induction session is required.")
+
+    return errors
+
+
+def save_onboarding_notes_if_present(entry, form, errors):
+    note = form.get("cv_review_notes", "").strip()
+    note_department = form.get("cv_review_note_department", "").strip()
+    if note and note_department not in USER_DEPARTMENTS:
+        errors.append("Department is required.")
+        return
+    append_potential_cv_review_notes(entry, form)
+
+
+@staff_bp.route("/potential-entries/<int:entry_id>/onboarding/save", methods=["POST"])
+@login_required
+def save_potential_onboarding_follow_up(entry_id):
+    if not validate_csrf():
+        flash("Security token expired. Please try again.", "error")
+        return redirect(url_for("staff.potential_entries"))
+
+    entry = PotentialEntry.query.get_or_404(entry_id)
+    if entry.is_rejected or entry.status != "Onboarding email sent":
+        flash("Only onboarding email sent entries can be updated here.", "error")
+        return redirect(url_for("staff.potential_entries"))
+
+    errors = validate_and_apply_onboarding_follow_up(entry, request.form)
+    save_onboarding_notes_if_present(entry, request.form, errors)
+    if errors:
+        for error in errors:
+            flash(error, "error")
+        return redirect(url_for("staff.potential_entries", open_staff_modal=potential_review_modal_id(entry)))
+    db.session.commit()
+    flash("Onboarding follow-up saved.", "success")
+    return redirect(url_for("staff.potential_entries"))
+
+
+@staff_bp.route("/potential-entries/<int:entry_id>/onboarding/confirm", methods=["POST"])
+@login_required
+def confirm_potential_onboarding_application(entry_id):
+    if not validate_csrf():
+        flash("Security token expired. Please try again.", "error")
+        return redirect(url_for("staff.potential_entries"))
+
+    entry = PotentialEntry.query.get_or_404(entry_id)
+    if entry.is_rejected or entry.status != "Onboarding email sent":
+        flash("Only onboarding email sent entries can be confirmed.", "error")
+        return redirect(url_for("staff.potential_entries"))
+
+    errors = validate_and_apply_onboarding_follow_up(entry, request.form, require_action="confirm")
+    save_onboarding_notes_if_present(entry, request.form, errors)
+    if errors:
+        for error in errors:
+            flash(error, "error")
+        return redirect(url_for("staff.potential_entries", open_staff_modal=potential_review_modal_id(entry)))
+    set_potential_entry_status(entry, "Induction confirmed")
+    db.session.commit()
+    flash("Induction confirmed.", "success")
+    return redirect(url_for("staff.potential_entries"))
+
+
+@staff_bp.route("/potential-entries/<int:entry_id>/onboarding/turn-down", methods=["POST"])
+@login_required
+def turn_down_potential_onboarding_application(entry_id):
+    if not validate_csrf():
+        flash("Security token expired. Please try again.", "error")
+        return redirect(url_for("staff.potential_entries"))
+
+    entry = PotentialEntry.query.get_or_404(entry_id)
+    if entry.is_rejected or entry.status != "Onboarding email sent":
+        flash("Only onboarding email sent entries can be turned down.", "error")
+        return redirect(url_for("staff.potential_entries"))
+
+    errors = validate_and_apply_onboarding_follow_up(entry, request.form, require_action="turn_down")
+    save_onboarding_notes_if_present(entry, request.form, errors)
+    if errors:
+        for error in errors:
+            flash(error, "error")
+        return redirect(url_for("staff.potential_entries", open_staff_modal=potential_review_modal_id(entry)))
+    set_potential_entry_status(entry, "Entry rejected")
+    entry.is_rejected = True
+    entry.rejected_on = datetime.now(timezone.utc)
+    db.session.commit()
+    flash("Application turned down.", "success")
+    return redirect(url_for("staff.potential_entries"))
+
+
+@staff_bp.route("/potential-entries/<int:entry_id>/interview-invitation/mark-sent", methods=["POST"])
+@login_required
+def mark_potential_interview_invitation_sent(entry_id):
+    if not validate_csrf():
+        flash("Security token expired. Please try again.", "error")
+        return redirect(url_for("staff.potential_entries"))
+
+    entry = PotentialEntry.query.get_or_404(entry_id)
+    if entry.is_rejected or entry.status != "Interview to be arranged":
+        flash("Only interview arrangements can be marked as sent.", "error")
+        return redirect(url_for("staff.potential_entries"))
+
+    option_errors = []
+    note = request.form.get("cv_review_notes", "").strip()
+    note_department = request.form.get("cv_review_note_department", "").strip()
+    if note and note_department not in USER_DEPARTMENTS:
+        option_errors.append("Department is required.")
+    if option_errors:
+        for error in option_errors:
+            flash(error, "error")
+        return redirect(url_for("staff.potential_entries", open_staff_modal=potential_review_modal_id(entry)))
+
+    append_potential_cv_review_notes(entry, request.form)
+    set_potential_entry_status(entry, "Interview invitation sent")
+    entry.interview_invitation_sent = True
+    db.session.commit()
+    flash("Interview invitation marked as sent.", "success")
+    return redirect(url_for("staff.potential_entries"))
+
+
+def selected_potential_interview_option(entry):
+    options = potential_cv_review_options_from_json(entry.cv_review_interview_options)
+    try:
+        selected_index = int(request.form.get("selected_interview_option", ""))
+    except ValueError:
+        return None
+    if selected_index < 0 or selected_index >= len(options):
+        return None
+    option = options[selected_index]
+    if not all((option.get("date"), option.get("time"), option.get("platform"), option.get("interviewer"))):
+        return None
+    return option
+
+
+def apply_selected_potential_interview_option(entry, option):
+    entry.interview_date = datetime.strptime(option["date"], "%d/%m/%Y").date().isoformat()
+    entry.interview_time = f'{option["time"]}:00'
+    entry.platform = option["platform"]
+    entry.interviewer = option["interviewer"]
+
+
+@staff_bp.route("/potential-entries/<int:entry_id>/interview/review-date-time-options", methods=["POST"])
+@login_required
+def review_potential_interview_date_time_options(entry_id):
+    if not validate_csrf():
+        flash("Security token expired. Please try again.", "error")
+        return redirect(url_for("staff.potential_entries"))
+
+    entry = PotentialEntry.query.get_or_404(entry_id)
+    if entry.is_rejected or entry.status != "Interview invitation sent":
+        flash("Only sent interview invitations can be reviewed here.", "error")
+        return redirect(url_for("staff.potential_entries"))
+    if request.form.get("interview_no_reply") == "1":
+        flash("Review date/time options cannot be selected when No reply is checked.", "error")
+        return redirect(url_for("staff.potential_entries", open_staff_modal=potential_review_modal_id(entry)))
+    if request.form.get("selected_interview_option", "").strip():
+        flash("Clear the selected date/time option before requesting a date/time review.", "error")
+        return redirect(url_for("staff.potential_entries", open_staff_modal=potential_review_modal_id(entry)))
+
+    append_potential_cv_review_notes(entry, request.form)
+    set_potential_entry_status(entry, "Review interview date and time")
+    db.session.commit()
+    flash("Interview date/time options moved to review.", "success")
+    return redirect(url_for("staff.potential_entries"))
+
+
+@staff_bp.route("/potential-entries/<int:entry_id>/interview/turn-down", methods=["POST"])
+@login_required
+def turn_down_potential_interview_invitation(entry_id):
+    if not validate_csrf():
+        flash("Security token expired. Please try again.", "error")
+        return redirect(url_for("staff.potential_entries"))
+
+    entry = PotentialEntry.query.get_or_404(entry_id)
+    if entry.is_rejected or entry.status != "Interview invitation sent":
+        flash("Only sent interview invitations can be turned down here.", "error")
+        return redirect(url_for("staff.potential_entries"))
+    if request.form.get("interview_no_reply") != "1":
+        flash("Select No reply before turning down this application.", "error")
+        return redirect(url_for("staff.potential_entries", open_staff_modal=potential_review_modal_id(entry)))
+
+    append_potential_cv_review_notes(entry, request.form)
+    set_potential_entry_status(entry, "Entry rejected")
+    entry.is_rejected = True
+    entry.rejected_on = datetime.now(timezone.utc)
+    db.session.commit()
+    flash("Application turned down.", "success")
+    return redirect(url_for("staff.potential_entries"))
+
+
+@staff_bp.route("/potential-entries/<int:entry_id>/interview/confirm", methods=["POST"])
+@login_required
+def confirm_potential_interview(entry_id):
+    if not validate_csrf():
+        flash("Security token expired. Please try again.", "error")
+        return redirect(url_for("staff.potential_entries"))
+
+    entry = PotentialEntry.query.get_or_404(entry_id)
+    if entry.is_rejected or entry.status != "Interview invitation sent":
+        flash("Only sent interview invitations can be confirmed.", "error")
+        return redirect(url_for("staff.potential_entries"))
+    if request.form.get("interview_no_reply") == "1":
+        flash("A date/time option cannot be confirmed when No reply is checked.", "error")
+        return redirect(url_for("staff.potential_entries", open_staff_modal=potential_review_modal_id(entry)))
+
+    option_errors = []
+    selected_option = selected_potential_interview_option(entry)
+    if not selected_option:
+        option_errors.append("Select one interview date and time option before confirming the interview.")
+    note = request.form.get("cv_review_notes", "").strip()
+    note_department = request.form.get("cv_review_note_department", "").strip()
+    if note and note_department not in USER_DEPARTMENTS:
+        option_errors.append("Department is required.")
+    if option_errors:
+        for error in option_errors:
+            flash(error, "error")
+        return redirect(url_for("staff.potential_entries", open_staff_modal=potential_review_modal_id(entry)))
+
+    append_potential_cv_review_notes(entry, request.form)
+    apply_selected_potential_interview_option(entry, selected_option)
+    set_potential_entry_status(entry, "Interview confirmed")
+    db.session.commit()
+    flash("Interview confirmed.", "success")
+    return redirect(url_for("staff.potential_entries"))
+
+
+@staff_bp.route("/potential-entries/<int:entry_id>/cv-review/notes/delete", methods=["POST"])
+@login_required
+def delete_potential_cv_review_note(entry_id):
+    if not validate_csrf():
+        flash("Security token expired. Please try again.", "error")
+        return redirect(url_for("staff.potential_entries"))
+
+    entry = PotentialEntry.query.get_or_404(entry_id)
+    try:
+        note_index = int(request.form.get("note_index", "-1"))
+    except ValueError:
+        note_index = -1
+    entry.interview = delete_interview_history_entry(entry.interview, note_index)
+    db.session.commit()
+    flash("Note deleted.", "success")
+    return redirect(url_for("staff.potential_entries", open_staff_modal=f"cv-review-potential-entry-{entry.id}"))
+
+
+@staff_bp.route("/potential-entries/<int:entry_id>/cv-review/reject", methods=["POST"])
+@login_required
+def reject_potential_cv_review(entry_id):
+    if not validate_csrf():
+        flash("Security token expired. Please try again.", "error")
+        return redirect(url_for("staff.potential_entries"))
+
+    entry = PotentialEntry.query.get_or_404(entry_id)
+    return apply_potential_cv_review_action(entry, "Entry rejected", "Application rejected.")
+
+
+@staff_bp.route("/potential-entries/<int:entry_id>/cv-review/decline-application", methods=["POST"])
+@login_required
+def decline_potential_interview_application(entry_id):
+    if not validate_csrf():
+        flash("Security token expired. Please try again.", "error")
+        return redirect(url_for("staff.potential_entries"))
+
+    entry = PotentialEntry.query.get_or_404(entry_id)
+    if entry.status != "Interview confirmed":
+        flash("This application can only be declined after the interview is confirmed.", "error")
+        return redirect(url_for("staff.potential_entries"))
+    if request.form.get("interview_outcome_status") != "no_show":
+        flash("Select No-show before rejecting this entry.", "error")
+        return redirect(url_for("staff.potential_entries", open_staff_modal=potential_review_modal_id(entry)))
+
+    return save_potential_cv_review_changes(
+        entry,
+        "Application declined.",
+        next_status="Entry rejected",
+        mark_rejected=True,
+    )
+
+
+@staff_bp.route("/potential-entries/<int:entry_id>/cv-review/accept-application", methods=["POST"])
+@login_required
+def accept_potential_interview_application(entry_id):
+    if not validate_csrf():
+        flash("Security token expired. Please try again.", "error")
+        return redirect(url_for("staff.potential_entries"))
+
+    entry = PotentialEntry.query.get_or_404(entry_id)
+    if entry.status != "Interview confirmed":
+        flash("This application can only be accepted after the interview is confirmed.", "error")
+        return redirect(url_for("staff.potential_entries"))
+    if request.form.get("interview_outcome_status") != "attended":
+        flash("Select Attended before accepting this entry.", "error")
+        return redirect(url_for("staff.potential_entries", open_staff_modal=potential_review_modal_id(entry)))
+    if request.form.get("interview_has_car", "").strip() not in {"Yes", "No"}:
+        flash("Has a car is required.", "error")
+        return redirect(url_for("staff.potential_entries", open_staff_modal=potential_review_modal_id(entry)))
+    if not request.form.getlist("interview_roles"):
+        flash("At least one role is required.", "error")
+        return redirect(url_for("staff.potential_entries", open_staff_modal=potential_review_modal_id(entry)))
+    if request.form.get("entry_added_in_sessions_pre_confirmation") != "1":
+        flash("Entry added in sessions for pre-confirmation is required.", "error")
+        return redirect(url_for("staff.potential_entries", open_staff_modal=potential_review_modal_id(entry)))
+
+    return save_potential_cv_review_changes(
+        entry,
+        "Application accepted.",
+        next_status="Entry accepted",
+    )
+
+
+@staff_bp.route("/potential-entries/<int:entry_id>/interview/reschedule", methods=["POST"])
+@login_required
+def reschedule_potential_interview(entry_id):
+    if not validate_csrf():
+        flash("Security token expired. Please try again.", "error")
+        return redirect(url_for("staff.potential_entries"))
+
+    entry = PotentialEntry.query.get_or_404(entry_id)
+    if entry.is_rejected or entry.status != "Interview confirmed":
+        flash("Only confirmed interviews can be rescheduled here.", "error")
+        return redirect(url_for("staff.potential_entries"))
+    if request.form.get("interview_outcome_status") != "reschedule":
+        flash("Select Reschedule before rescheduling this interview.", "error")
+        return redirect(url_for("staff.potential_entries", open_staff_modal=potential_review_modal_id(entry)))
+    if request.form.get("interview_reschedule_interviewer_notified") != "1":
+        flash("Confirm that the interviewer has been notified of this change before rescheduling.", "error")
+        return redirect(url_for("staff.potential_entries", open_staff_modal=potential_review_modal_id(entry)))
+
+    interview_options, option_errors = validate_potential_cv_review_options(request.form, require_shared_fields=True)
+    if not interview_options:
+        option_errors.append("Please configure a new interview date and time before rescheduling.")
+    note = request.form.get("cv_review_notes", "").strip()
+    note_department = request.form.get("cv_review_note_department", "").strip()
+    if note and note_department not in USER_DEPARTMENTS:
+        option_errors.append("Department is required.")
+    if option_errors:
+        for error in option_errors:
+            flash(error, "error")
+        return redirect(url_for("staff.potential_entries", open_staff_modal=potential_review_modal_id(entry)))
+
+    append_potential_cv_review_notes(entry, request.form)
+    first_option = interview_options[0]
+    entry.interview_date = datetime.strptime(first_option["date"], "%d/%m/%Y").date().isoformat()
+    entry.interview_time = f'{first_option["time"]}:00'
+    entry.platform = first_option["platform"]
+    entry.interviewer = first_option["interviewer"]
+    entry.cv_review_interview_options = json.dumps(interview_options)
+    db.session.commit()
+    flash("Interview rescheduled.", "success")
+    return redirect(url_for("staff.potential_entries"))
+
+
+@staff_bp.route("/potential-entries/<int:entry_id>/cv-review/proceed", methods=["POST"])
+@login_required
+def proceed_potential_cv_review(entry_id):
+    if not validate_csrf():
+        flash("Security token expired. Please try again.", "error")
+        return redirect(url_for("staff.potential_entries"))
+
+    entry = PotentialEntry.query.get_or_404(entry_id)
+    return apply_potential_cv_review_action(
+        entry,
+        "Interview to be arranged",
+        "Application moved to interview stage.",
+        require_interview_option=True,
+    )
+
+
 @staff_bp.route("/potential-entries/<int:entry_id>/reject", methods=["POST"])
 @login_required
 def reject_potential_entry(entry_id):
     if not validate_csrf():
         flash("Security token expired. Please try again.", "error")
-        return redirect(url_for("staff.index"))
+        return redirect(url_for("staff.potential_entries"))
 
     entry = PotentialEntry.query.get_or_404(entry_id)
+    set_potential_entry_status(entry, "Entry rejected")
     entry.is_rejected = True
     entry.rejected_on = datetime.now(timezone.utc)
     db.session.commit()
     flash("Potential entry rejected and archived.", "success")
-    return redirect(url_for("staff.index"))
+    return redirect(url_for("staff.potential_entries"))
+
+
+@staff_bp.route("/potential-entries/<int:entry_id>/archive", methods=["POST"])
+@login_required
+def archive_potential_entry(entry_id):
+    if not validate_csrf():
+        flash("Security token expired. Please try again.", "error")
+        return redirect(url_for("staff.potential_entries"))
+
+    entry = PotentialEntry.query.get_or_404(entry_id)
+    archive_status = request.form.get("archive_status", "").strip()
+    if archive_status != "Archive":
+        flash("Potential entry saved.", "success")
+        return redirect(url_for("staff.potential_entries"))
+    if entry.status == "Entry rejected":
+        set_potential_entry_status(entry, "Archived rejected entry")
+        entry.is_rejected = True
+    elif entry.status == "Onboarding finalised":
+        set_potential_entry_status(entry, "Archived accepted entry")
+    else:
+        flash("Only rejected or finalised potential entries can be archived.", "error")
+        return redirect(url_for("staff.potential_entries"))
+
+    db.session.commit()
+    flash("Potential entry archived.", "success")
+    return redirect(url_for("staff.potential_entries"))
 
 
 @staff_bp.route("/potential-entries/<int:entry_id>/delete", methods=["POST"])
@@ -18083,20 +19393,20 @@ def reject_potential_entry(entry_id):
 def delete_rejected_potential_entry(entry_id):
     if not validate_csrf():
         flash("Security token expired. Please try again.", "error")
-        return redirect(url_for("staff.index", show_rejected=1))
+        return redirect(url_for("staff.potential_entries", show_rejected=1))
 
     entry = PotentialEntry.query.get_or_404(entry_id)
     if not entry.is_rejected:
         flash("Only rejected potential entries can be permanently deleted.", "error")
-        return redirect(url_for("staff.index"))
+        return redirect(url_for("staff.potential_entries"))
     if not is_valid_rejected_potential_entry_delete_password():
         flash("Potential entry delete password is not valid.", "error")
-        return redirect(url_for("staff.index", show_rejected=1))
+        return redirect(url_for("staff.potential_entries", show_rejected=1))
 
     db.session.delete(entry)
     db.session.commit()
     flash("Rejected potential entry permanently deleted.", "success")
-    return redirect(url_for("staff.index", show_rejected=1))
+    return redirect(url_for("staff.potential_entries", show_rejected=1))
 
 
 @staff_bp.route("/potential-entries/<int:entry_id>/accept", methods=["POST"])
@@ -18104,7 +19414,7 @@ def delete_rejected_potential_entry(entry_id):
 def accept_potential_entry(entry_id):
     if not validate_csrf():
         flash("Security token expired. Please try again.", "error")
-        return redirect(url_for("staff.index"))
+        return redirect(url_for("staff.potential_entries"))
 
     entry = PotentialEntry.query.get_or_404(entry_id)
     errors = validate_member_form(request.form, allow_archived=False, require_complete=True)
@@ -18116,7 +19426,7 @@ def accept_potential_entry(entry_id):
         for error in draft_errors:
             if error not in errors:
                 flash(error, "error")
-        return redirect(url_for("staff.index", open_staff_modal=f"accept-potential-entry-{entry.id}"))
+        return redirect(url_for("staff.potential_entries", open_staff_modal=f"accept-potential-entry-{entry.id}"))
 
     member = AcademicStaff()
     member.interview = entry.interview
@@ -18133,7 +19443,7 @@ def accept_potential_entry(entry_id):
 def save_potential_acceptance_draft(entry_id):
     if not validate_csrf():
         flash("Security token expired. Please try again.", "error")
-        return redirect(url_for("staff.index"))
+        return redirect(url_for("staff.potential_entries"))
 
     entry = PotentialEntry.query.get_or_404(entry_id)
     errors = apply_partial_potential_acceptance_draft_form(entry, request.form)
@@ -18142,10 +19452,10 @@ def save_potential_acceptance_draft(entry_id):
         for error in errors:
             flash(error, "error")
         flash("Valid accepted form changes were saved.", "success")
-        return redirect(url_for("staff.index"))
+        return redirect(url_for("staff.potential_entries"))
 
     flash("Accepted form changes saved.", "success")
-    return redirect(url_for("staff.index"))
+    return redirect(url_for("staff.potential_entries"))
 
 
 @staff_bp.route("/potential-entries/<int:entry_id>/notes", methods=["POST"])
@@ -18153,14 +19463,14 @@ def save_potential_acceptance_draft(entry_id):
 def add_potential_note(entry_id):
     if not validate_csrf():
         flash("Security token expired. Please try again.", "error")
-        return redirect(url_for("staff.index"))
+        return redirect(url_for("staff.potential_entries"))
 
     entry = PotentialEntry.query.get_or_404(entry_id)
     if not request.form.get("interview", "").strip():
         flash("Interview note cannot be empty.", "error")
-        return redirect(url_for("staff.index"))
+        return redirect(url_for("staff.potential_entries"))
 
     append_potential_interview_note(entry, request.form)
     db.session.commit()
     flash("Interview note added successfully.", "success")
-    return redirect(url_for("staff.index"))
+    return redirect(url_for("staff.potential_entries"))

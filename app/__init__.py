@@ -79,6 +79,7 @@ def create_app():
         InternStageRemoteTrainingSelection,
         InternStageYear,
         PotentialEntry,
+        PotentialEntryStatusTrack,
         Provider,
         ProviderHistory,
         ProviderType,
@@ -122,7 +123,7 @@ def create_app():
     @app.route("/login", methods=["GET", "POST"])
     def login():
         if g.user:
-            return redirect(url_for("staff.index"))
+            return redirect(url_for("staff.dashboard"))
 
         error = None
         if request.method == "POST":
@@ -140,7 +141,7 @@ def create_app():
                     session["user_email"] = user.email
                     session["user_department"] = user.department
                     session["csrf_token"] = secrets.token_urlsafe(32)
-                    return redirect(url_for("staff.index"))
+                    return redirect(url_for("staff.dashboard"))
                 error = "Invalid email or password."
             else:
                 expected_username = os.getenv("ADMIN_USERNAME", "admin")
@@ -156,7 +157,7 @@ def create_app():
                     session["user_email"] = ""
                     session["user_department"] = "Admin"
                     session["csrf_token"] = secrets.token_urlsafe(32)
-                    return redirect(url_for("staff.index"))
+                    return redirect(url_for("staff.dashboard"))
 
                 error = "Invalid email or password."
 
@@ -221,6 +222,13 @@ def create_app():
         if potential_entry_columns and "interview_invitation_sent" not in potential_entry_columns:
             db.session.execute(text("ALTER TABLE potential_entry ADD COLUMN interview_invitation_sent BOOLEAN NOT NULL DEFAULT 0"))
             db.session.commit()
+        if potential_entry_columns and "department" not in potential_entry_columns:
+            db.session.execute(text("ALTER TABLE potential_entry ADD COLUMN department VARCHAR(40) NOT NULL DEFAULT 'Admissions'"))
+            db.session.commit()
+        if potential_entry_columns and "updated_on" not in potential_entry_columns:
+            db.session.execute(text("ALTER TABLE potential_entry ADD COLUMN updated_on DATETIME"))
+            db.session.execute(text("UPDATE potential_entry SET updated_on = COALESCE(created_on, CURRENT_TIMESTAMP) WHERE updated_on IS NULL"))
+            db.session.commit()
         potential_entry_draft_columns = {
             "acceptance_status": "VARCHAR(40)",
             "title": "VARCHAR(120)",
@@ -233,6 +241,18 @@ def create_app():
             "profile_picture": "VARCHAR(500)",
             "account_id": "VARCHAR(120)",
             "account_owner": "VARCHAR(160)",
+            "account_owner_id": "VARCHAR(120)",
+            "cv_review_interview_options": "TEXT",
+            "interview_no_show": "BOOLEAN NOT NULL DEFAULT 0",
+            "entry_added_in_sessions_pre_confirmation": "BOOLEAN NOT NULL DEFAULT 0",
+            "entry_accepted_notes_checked": "BOOLEAN NOT NULL DEFAULT 0",
+            "entry_accepted_email_sent": "BOOLEAN NOT NULL DEFAULT 0",
+            "entry_accepted_whatsapp_sent": "BOOLEAN NOT NULL DEFAULT 0",
+            "onboarding_follow_up_choice": "VARCHAR(20)",
+            "onboarding_turn_down_sessions_removed": "BOOLEAN NOT NULL DEFAULT 0",
+            "onboarding_turn_down_trainer_notified": "BOOLEAN NOT NULL DEFAULT 0",
+            "induction_session_status": "VARCHAR(20)",
+            "exam_session_participation_statuses_pre_confirmed": "BOOLEAN NOT NULL DEFAULT 0",
         }
         for column_name, column_type in potential_entry_draft_columns.items():
             if potential_entry_columns and column_name not in potential_entry_columns:

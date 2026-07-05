@@ -1,0 +1,49 @@
+{% extends "base.html" %}
+
+{% block title %}Dashboard | Path Examinations{% endblock %}
+
+{% block content %}
+<section class="dashboard-page" aria-label="Dashboard">
+  <header class="dashboard-hero">
+    <div class="dashboard-hero-copy">
+      <h1>Hello, {{ dashboard_full_name }}!</h1>
+      <p>Welcome back — here’s what needs your attention today.</p>
+    </div>
+    {% if dashboard_department %}
+      <span class="dashboard-department-chip users-department-chip">{{ dashboard_department|upper }}</span>
+    {% endif %}
+  </header>
+
+  <div class="dashboard-grid">
+    <article class="dashboard-card">
+      <div class="dashboard-card-header">
+        <div>
+          <h2>Path news</h2>
+          <p>Internal updates and announcements will appear here.</p>
+        </div>
+      </div>
+      <div class="dashboard-empty-state">
+        <strong>No news available yet.</strong>
+        <span>This space will be used to share important Path updates with the team.</span>
+      </div>
+    </article>
+
+    {% if potential_entries_allowed %}
+      <article class="dashboard-card dashboard-action-card">
+        <div class="dashboard-card-header">
+          <div>
+            <h2>Potential entries</h2>
+            {% if potential_entries_pending_count %}
+              <p>You have {{ potential_entries_pending_count }} actions to complete in this menu.</p>
+            {% else %}
+              <p>Everything is up to date in this menu.</p>
+            {% endif %}
+          </div>
+          <span class="dashboard-count-chip">{{ potential_entries_pending_count }}</span>
+        </div>
+        <a class="primary-button link-button dashboard-menu-button" href="{{ url_for('staff.potential_entries') }}">Go to menu</a>
+      </article>
+    {% endif %}
+  </div>
+</section>
+{% endblock %}

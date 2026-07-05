@@ -1634,6 +1634,7 @@ class PotentialEntry(db.Model):
     acceptance_status = db.Column(db.String(40), nullable=True)
     title = db.Column(db.String(120), nullable=True)
     full_name = db.Column(db.String(160), nullable=False, index=True)
+    department = db.Column(db.String(40), nullable=False, default="Admissions", index=True)
     seniority = db.Column(db.Boolean, nullable=False, default=False)
     acceptance_roles = db.Column(db.Text, nullable=True)
     phone = db.Column(db.String(80), nullable=True)
@@ -1648,12 +1649,24 @@ class PotentialEntry(db.Model):
     profile_picture = db.Column(db.String(500), nullable=True)
     account_id = db.Column(db.String(120), nullable=True)
     account_owner = db.Column(db.String(160), nullable=True)
+    account_owner_id = db.Column(db.String(120), nullable=True)
     interview_date = db.Column(db.String(10), nullable=True)
     interview_time = db.Column(db.String(8), nullable=True)
     platform = db.Column(db.String(20), nullable=True)
     interviewer = db.Column(db.String(220), nullable=True)
     interview = db.Column(db.Text, nullable=True)
+    cv_review_interview_options = db.Column(db.Text, nullable=True)
     interview_invitation_sent = db.Column(db.Boolean, nullable=False, default=False, index=True)
+    interview_no_show = db.Column(db.Boolean, nullable=False, default=False, index=True)
+    entry_added_in_sessions_pre_confirmation = db.Column(db.Boolean, nullable=False, default=False, index=True)
+    entry_accepted_notes_checked = db.Column(db.Boolean, nullable=False, default=False, index=True)
+    entry_accepted_email_sent = db.Column(db.Boolean, nullable=False, default=False, index=True)
+    entry_accepted_whatsapp_sent = db.Column(db.Boolean, nullable=False, default=False, index=True)
+    onboarding_follow_up_choice = db.Column(db.String(20), nullable=True)
+    onboarding_turn_down_sessions_removed = db.Column(db.Boolean, nullable=False, default=False, index=True)
+    onboarding_turn_down_trainer_notified = db.Column(db.Boolean, nullable=False, default=False, index=True)
+    induction_session_status = db.Column(db.String(20), nullable=True)
+    exam_session_participation_statuses_pre_confirmed = db.Column(db.Boolean, nullable=False, default=False, index=True)
     is_rejected = db.Column(db.Boolean, nullable=False, default=False, index=True)
     rejected_on = db.Column(db.DateTime(timezone=True), nullable=True)
     created_on = db.Column(db.DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))
@@ -1666,3 +1679,27 @@ class PotentialEntry(db.Model):
 
     def roles_list(self):
         return [role.strip() for role in (self.acceptance_roles or "").split(",") if role.strip()]
+
+
+class PotentialEntryStatusTrack(db.Model):
+    __tablename__ = "potential_entry_status_track"
+
+    id = db.Column(db.Integer, primary_key=True)
+    potential_entry_id = db.Column(
+        db.Integer,
+        db.ForeignKey("potential_entry.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    previous_status = db.Column(db.String(40), nullable=False)
+    new_status = db.Column(db.String(40), nullable=False)
+    changed_at = db.Column(db.DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc), index=True)
+    changed_by_user_id = db.Column(db.Integer, db.ForeignKey("app_user.id"), nullable=True, index=True)
+    changed_by_full_name = db.Column(db.String(160), nullable=True)
+    changed_by_department = db.Column(db.String(40), nullable=False, default="Unknown department")
+    created_at = db.Column(db.DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))
+
+    potential_entry = db.relationship(
+        "PotentialEntry",
+        backref=db.backref("status_tracks", lazy=True, cascade="all, delete-orphan"),
+    )

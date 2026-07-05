@@ -3,18 +3,27 @@ from urllib.parse import urlparse
 
 STATUSES_CREATE = {"Inactive", "Active"}
 STATUSES_EDIT = {"Archived", "Inactive", "Active"}
-POTENTIAL_STATUSES = {"To be interviewed", "Interview arranged", "Interview scheduled"}
-ARRANGED_STATUSES = {"Interview arranged", "Interview scheduled"}
+POTENTIAL_STATUSES = {
+    "CV to be reviewed",
+    "Review interview date and time",
+    "Interview to be arranged",
+    "Interview invitation sent",
+    "Interview confirmed",
+    "Entry accepted",
+    "Onboarding email sent",
+    "Induction confirmed",
+    "Onboarding finalised",
+    "Entry rejected",
+    "Archived accepted entry",
+    "Archived rejected entry",
+}
+ARRANGED_STATUSES = {"Interview invitation sent", "Interview confirmed", "Induction confirmed"}
 PLATFORMS = {"Zoom", "Meet", ""}
 INTERVIEWERS = {
-    "Prof. Mgter. Pablo Demarchi | Managing Director",
-    "Prof. Lic. Agustina Savini | Team Leader",
-    "Prof. Brenda Sartori | Customer Experience Officer",
-    "Prof. Marcela Romero | Admissions Officer",
-    "Prof. Mgter. Pablo Demarchi | Managing Director | pablo.demarchi@pathexaminations.com",
-    "Prof. Lic. Agustina Savini | Team Leader | agustina.savini@pathexaminations.com",
-    "Prof. Brenda Sartori | Customer Experience Officer | admin@pathexaminations.com",
-    "Prof. Marcela Romero | Admissions Officer | admissions@pathexaminations.com",
+    "Prof. Lic. Agustina Savini",
+    "Prof. Brenda Sartori",
+    "Prof. Marcela Romero",
+    "Prof. Mgter. Pablo Demarchi",
     "",
 }
 ROLES = {"Examiner", "Supervisor", "Intern", "RSG"}
@@ -150,7 +159,7 @@ def validate_potential_acceptance_draft_form(form):
     return errors
 
 
-def validate_potential_form(form):
+def validate_potential_form(form, require_status=True, require_cv=False):
     errors = []
     status = form.get("status", "").strip()
     full_name = form.get("full_name", "").strip()
@@ -161,12 +170,14 @@ def validate_potential_form(form):
     platform = form.get("platform", "").strip()
     interviewer = form.get("interviewer", "").strip()
 
-    if not status or status not in POTENTIAL_STATUSES:
+    if require_status and (not status or status not in POTENTIAL_STATUSES):
         errors.append("Status is required.")
     if not full_name:
         errors.append("Full name is required.")
     if email and not EMAIL_RE.match(email):
         errors.append("Email must be a valid email address.")
+    if require_cv and not cv:
+        errors.append("CV is required.")
     if cv and not is_valid_url(cv):
         errors.append("CV must be a valid http or https URL.")
     if status in ARRANGED_STATUSES:

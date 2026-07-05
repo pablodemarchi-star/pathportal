@@ -12,6 +12,17 @@ document.querySelectorAll("[data-password-toggle]").forEach((button) => {
   });
 });
 
+document.querySelectorAll("[data-status-track-toggle]").forEach((button) => {
+  const panel = document.getElementById(button.getAttribute("aria-controls") || "");
+  if (!panel) return;
+
+  button.addEventListener("click", () => {
+    const shouldOpen = panel.hidden;
+    panel.hidden = !shouldOpen;
+    button.setAttribute("aria-expanded", String(shouldOpen));
+  });
+});
+
 const getFocusableElements = (container) => Array.from(container.querySelectorAll(
   'a[href], button:not([disabled]), textarea:not([disabled]), input:not([disabled]):not([type="hidden"]), select:not([disabled]), details summary, [tabindex]:not([tabindex="-1"])'
 )).filter((element) => {
@@ -205,10 +216,17 @@ const focusModalTarget = (targetId) => {
 };
 
 const closeModal = (modal) => {
+  modal.querySelectorAll("form").forEach((form) => {
+    form.reset();
+  });
   modal.classList.remove("is-open");
   modal.setAttribute("aria-hidden", "true");
   clearFocusedMode(modal);
   resetControlSectionsToDefault(modal);
+  modal.querySelectorAll("[data-interview-confirm-root]").forEach((root) => syncInterviewInvitationConfirmation(root.closest("form")));
+  modal.querySelectorAll("[data-induction-status-root]").forEach(syncInductionStatusPanels);
+  modal.querySelectorAll("[data-onboarding-follow-up]").forEach((root) => syncOnboardingFollowUpControls(root.closest("form")));
+  modal.querySelectorAll("[data-interview-no-show]").forEach((checkbox) => syncPotentialInterviewNoShow(checkbox.closest("form")));
   const opener = modalOpeners.get(modal);
   if (opener && document.contains(opener)) opener.focus();
 };
@@ -1229,7 +1247,8 @@ document.addEventListener("submit", (event) => {
 
   const confirmForm = event.target.closest("[data-confirm-submit]");
   if (confirmForm) {
-    const message = confirmForm.dataset.confirmSubmit || "Are you sure?";
+    const submitterMessage = event.submitter?.dataset?.confirmSubmit;
+    const message = submitterMessage || confirmForm.dataset.confirmSubmit || "Are you sure?";
     if (!window.confirm(message)) {
       event.preventDefault();
       return;
@@ -3787,7 +3806,206 @@ const buildPotentialInvitationEmail = (button) => {
   return { html, text };
 };
 
+const INTERVIEW_INVITATION_SUBJECT = "Interview invitation: Path International Examinations";
+
+const parseInterviewInvitationDate = (value) => {
+  const match = cleanEmailValue(value).match(/^(\d{2})\/(\d{2})\/(\d{4})$/);
+  if (!match) return null;
+  const day = Number.parseInt(match[1], 10);
+  const monthIndex = Number.parseInt(match[2], 10) - 1;
+  const year = Number.parseInt(match[3], 10);
+  const date = new Date(year, monthIndex, day);
+  if (Number.isNaN(date.getTime()) || date.getDate() !== day || date.getMonth() !== monthIndex || date.getFullYear() !== year) {
+    return null;
+  }
+  return date;
+};
+
+const formatInterviewInvitationDate = (value) => {
+  const date = parseInterviewInvitationDate(value);
+  if (!date) return "";
+  const weekday = date.toLocaleDateString("en-US", { weekday: "long" });
+  const month = date.toLocaleDateString("en-US", { month: "long" });
+  return `${weekday} ${date.getDate()} ${month} ${date.getFullYear()}`;
+};
+
+const getInterviewInvitationOptions = (root) => {
+  let rawOptions = [];
+  try {
+    rawOptions = JSON.parse(root?.dataset.options || "[]");
+  } catch (error) {
+    rawOptions = [];
+  }
+  const candidates = Array.isArray(rawOptions) ? rawOptions.slice(0, 5) : [];
+  const hasAnyValue = candidates.some((option) => (
+    cleanEmailValue(option?.date) ||
+    cleanEmailValue(option?.time)
+  ));
+  if (!hasAnyValue) {
+    return { options: [], error: "Interview date and time options are not configured." };
+  }
+  const options = [];
+  for (const option of candidates) {
+    const dateValue = cleanEmailValue(option?.date);
+    const timeValue = cleanEmailValue(option?.time);
+    if (!dateValue && !timeValue) continue;
+    const sortDate = parseInterviewInvitationDate(dateValue);
+    const displayDate = formatInterviewInvitationDate(dateValue);
+    if (!displayDate || !sortDate || !/^([01]\d|2[0-3]):[0-5]\d$/.test(timeValue)) {
+      return { options: [], error: "Please complete all interview date and time options before sending the email." };
+    }
+    options.push({
+      label: `${displayDate}, ${timeValue}`,
+      sortDate,
+      sortTime: timeValue,
+    });
+  }
+  if (!options.length) {
+    return { options: [], error: "Interview date and time options are not configured." };
+  }
+  options.sort((first, second) => first.sortDate - second.sortDate || first.sortTime.localeCompare(second.sortTime));
+  return { options };
+};
+
+const interviewInvitationPlatformDetails = (platform) => {
+  if (platform === "Zoom") {
+    const { link, id, password } = POTENTIAL_INTERVIEW_ACCESS_DETAILS.Zoom;
+    return {
+      label: "Zoom",
+      text: `👉 Link: ${link}\n👉 ID de la reunión: ${id}\n👉 Password: ${password}`,
+      html: `
+        <p style="margin:0 0 6px;color:#111115;font:400 14px/1.5 Arial, Helvetica, sans-serif;">👉 Link: <a href="${escapeEmailAttribute(link)}" style="color:#00506b;font-weight:700;">${escapeEmailHtml(link)}</a></p>
+        <p style="margin:0 0 6px;color:#111115;font:400 14px/1.5 Arial, Helvetica, sans-serif;">👉 ID de la reunión: <strong>${escapeEmailHtml(id)}</strong></p>
+        <p style="margin:0;color:#111115;font:400 14px/1.5 Arial, Helvetica, sans-serif;">👉 Password: <strong>${escapeEmailHtml(password)}</strong></p>
+      `,
+    };
+  }
+  if (platform === "Meet") {
+    const { link } = POTENTIAL_INTERVIEW_ACCESS_DETAILS.Meet;
+    return {
+      label: "Google Meet",
+      text: `👉 Link: ${link}`,
+      html: `
+        <p style="margin:0;color:#111115;font:400 14px/1.5 Arial, Helvetica, sans-serif;">👉 Link: <a href="${escapeEmailAttribute(link)}" style="color:#00506b;font-weight:700;">${escapeEmailHtml(link)}</a></p>
+      `,
+    };
+  }
+  return null;
+};
+
+const buildInterviewInvitationEmail = (button) => {
+  const root = button.closest("[data-interview-invitation-email-root]");
+  const fullName = cleanEmailValue(root?.dataset.fullName);
+  const email = cleanEmailValue(root?.dataset.email);
+  const platform = cleanEmailValue(root?.dataset.platform);
+  const interviewer = cleanEmailValue(root?.dataset.interviewer) || "our team";
+  if (!fullName) return { error: "Potential entry full name is required." };
+  if (!email) return { error: "Potential entry email is required." };
+  const platformDetails = interviewInvitationPlatformDetails(platform);
+  if (!platformDetails) return { error: "Interview platform is not configured." };
+  const { options, error } = getInterviewInvitationOptions(root);
+  if (error) return { error };
+
+  const optionsText = options.map((option, index) => `Option ${index + 1}: ${option.label}`).join("\n");
+  const optionsHtml = options.map((option, index) => `
+    <div style="${index > 0 ? "margin-top:12px;padding-top:12px;border-top:1px solid #d9dfdc;" : ""}">
+      <p style="margin:0 0 4px;color:#62727a;font:700 11px Arial, Helvetica, sans-serif;text-transform:uppercase;">Option ${index + 1}</p>
+      <p style="margin:0;color:#00506b;font:700 17px/1.35 Arial, Helvetica, sans-serif;">${escapeEmailHtml(option.label)}</p>
+    </div>
+  `).join("");
+  const safeName = escapeEmailHtml(fullName);
+  const safeInterviewer = escapeEmailHtml(interviewer);
+  const bodyHtml = `
+    <p style="margin:0 0 14px;color:#111115;font:400 15px/1.55 Arial, Helvetica, sans-serif;">Dear ${safeName},</p>
+    <p style="margin:0 0 14px;color:#111115;font:400 15px/1.55 Arial, Helvetica, sans-serif;">Thank you for your application at Path International Examinations.</p>
+    <p style="margin:0 0 14px;color:#111115;font:400 15px/1.55 Arial, Helvetica, sans-serif;">We have reviewed your CV and we believe your profile aligns well with what we are looking for.</p>
+    <p style="margin:0 0 16px;color:#111115;font:400 15px/1.55 Arial, Helvetica, sans-serif;">We would like to invite you to an initial online interview with ${safeInterviewer}. This will be a great opportunity for us to discuss your experience in more detail and for you to learn more about us.</p>
+    <div style="margin:0 0 18px;padding:16px 18px;background:#e6f0f3;border-left:4px solid #00506b;border-radius:12px;">
+      <p style="margin:0 0 10px;color:#00506b;font:700 15px Arial, Helvetica, sans-serif;">Please review the following options and reply to let us know which date and time works best for you:</p>
+      ${optionsHtml}
+    </div>
+    <p style="margin:0 0 18px;color:#111115;font:400 15px/1.55 Arial, Helvetica, sans-serif;">If none of these times work for you, please let me know and we can find an alternative that fits your schedule.</p>
+    <div style="margin:0 0 18px;padding:16px 18px;background:#f1f3f2;border:1px solid #d9dfdc;border-radius:12px;">
+      <p style="margin:0 0 10px;color:#00506b;font:700 15px Arial, Helvetica, sans-serif;">Meeting details</p>
+      <p style="margin:0 0 12px;color:#111115;font:400 14px/1.5 Arial, Helvetica, sans-serif;">We will be meeting via ${escapeEmailHtml(platformDetails.label)}. You can use the following link to join the interview at your confirmed time:</p>
+      ${platformDetails.html}
+    </div>
+    <p style="margin:0;color:#111115;font:400 15px/1.55 Arial, Helvetica, sans-serif;">We look forward to speaking with you!</p>
+  `;
+  const html = pathEmailShell({
+    label: "Interview invitation",
+    title: "Initial online interview invitation",
+    bodyHtml,
+  });
+  const text = `Dear ${fullName},\n\nThank you for your application at Path International Examinations.\n\nWe have reviewed your CV and we believe your profile aligns well with what we are looking for.\n\nWe would like to invite you to an initial online interview with ${interviewer}. This will be a great opportunity for us to discuss your experience in more detail and for you to learn more about us.\n\nPlease review the following options and reply to let us know which date and time works best for you:\n\n${optionsText}\n\nIf none of these times work for you, please let me know and we can find an alternative that fits your schedule.\n\nMeeting details:\nWe will be meeting via ${platformDetails.label}. You can use the following link to join the interview at your confirmed time:\n\n${platformDetails.text}\n\nWe look forward to speaking with you!\n\nBest regards,`;
+  return { html, text, email, subject: INTERVIEW_INVITATION_SUBJECT };
+};
+
+const showInterviewInvitationEmailStatus = (button, message, isError = false) => {
+  const status = button.closest("[data-interview-invitation-email-root]")?.querySelector("[data-interview-invitation-email-status]");
+  if (!status) return;
+  status.textContent = message;
+  status.classList.toggle("is-error", isError);
+  window.setTimeout(() => {
+    status.textContent = "";
+    status.classList.remove("is-error");
+  }, isError ? 2600 : 1900);
+};
+
+const buildInterviewInvitationGmailUrl = ({ email, subject }) => (
+  `https://mail.google.com/mail/?view=cm&fs=1&to=${encodeURIComponent(email)}&su=${encodeURIComponent(subject)}`
+);
+
+const initInterviewInvitationEmailButtons = (root = document) => {
+  root.querySelectorAll("[data-send-interview-invitation-email]").forEach((button) => {
+    if (button.dataset.interviewInvitationSendInitialized === "true") return;
+    button.dataset.interviewInvitationSendInitialized = "true";
+    button.addEventListener("click", async (event) => {
+      event.preventDefault();
+      const payload = buildInterviewInvitationEmail(button);
+      if (payload.error) {
+        showInterviewInvitationEmailStatus(button, payload.error, true);
+        return;
+      }
+      let copied = false;
+      try {
+        await copyRichTextToClipboard(payload);
+        copied = true;
+      } catch (error) {
+        copied = false;
+      }
+      window.open(buildInterviewInvitationGmailUrl(payload), "_blank", "noopener,noreferrer");
+      showInterviewInvitationEmailStatus(
+        button,
+        copied
+          ? "Interview invitation copied. Paste it into Gmail to keep the design."
+          : "Gmail opened. If the invitation was not copied, use the copy button and paste it manually.",
+        !copied,
+      );
+    });
+  });
+  root.querySelectorAll("[data-copy-interview-invitation-email]").forEach((button) => {
+    if (button.dataset.interviewInvitationCopyInitialized === "true") return;
+    button.dataset.interviewInvitationCopyInitialized = "true";
+    button.addEventListener("click", async (event) => {
+      event.preventDefault();
+      const payload = buildInterviewInvitationEmail(button);
+      if (payload.error) {
+        showInterviewInvitationEmailStatus(button, payload.error, true);
+        return;
+      }
+      try {
+        await copyRichTextToClipboard(payload);
+        showInterviewInvitationEmailStatus(button, "Interview invitation email copied.");
+      } catch (error) {
+        showInterviewInvitationEmailStatus(button, "Could not copy the email. Please try again.", true);
+      }
+    });
+  });
+};
+
 const CONTRACT_LINK = "https://drive.google.com/file/d/1FfzKcWq8pED3qv5yuzx2L9n_VEx0ZysM/view?usp=sharing";
+const ACCEPTED_APPLICATION_SUBJECT = "Your application has been accepted";
 
 const formatInductionSessionDate = (value) => {
   const match = cleanEmailValue(value).match(/^(\d{2})\/(\d{2})\/(\d{4})$/);
@@ -3874,9 +4092,12 @@ const pathEmailShell = ({ label, title, bodyHtml }) => `
 `;
 
 const buildSuccessfulApplicationEmail = (button) => {
-  const fullName = cleanEmailValue(button.dataset.fullName);
+  const source = button?.dataset?.fullName
+    ? button
+    : button?.closest?.("[data-entry-accepted-email-root]") || button;
+  const fullName = cleanEmailValue(source.dataset.fullName);
   if (!fullName) return { error: "Potential entry full name is required." };
-  const { options: inductionOptions, error: inductionOptionsError } = getInductionSessionOptions(button);
+  const { options: inductionOptions, error: inductionOptionsError } = getInductionSessionOptions(source);
   if (inductionOptionsError) {
     return { error: inductionOptionsError };
   }
@@ -3902,11 +4123,11 @@ const buildSuccessfulApplicationEmail = (button) => {
       <p style="margin:0 0 10px;color:#00506b;font:700 15px Arial, Helvetica, sans-serif;">To formally accept this offer and secure your place, please complete the following steps within 3 working days:</p>
       <ol style="margin:0;padding-left:20px;color:#111115;font:400 14px/1.55 Arial, Helvetica, sans-serif;">
         <li style="margin-bottom:8px;">Review, complete, sign and return <a href="${escapeEmailAttribute(CONTRACT_LINK)}" style="color:#00506b;font-weight:700;">this contract</a> to <a href="mailto:admin@pathexaminations.com" style="color:#00506b;font-weight:700;">admin@pathexaminations.com</a>, together with a professional profile picture.</li>
-        <li>Confirm your availability for <strong>ONE</strong> of the upcoming online induction sessions.</li>
+        <li>Confirm your availability for <strong>ONE</strong> of the upcoming online induction session.</li>
       </ol>
     </div>
     <div style="margin:0 0 18px;padding:16px 18px;background:#f1f3f2;border:1px solid #d9dfdc;border-radius:12px;">
-      <p style="margin:0 0 10px;color:#00506b;font:700 15px Arial, Helvetica, sans-serif;">Confirm your availability for <strong>ONE</strong> of the upcoming online induction sessions:</p>
+      <p style="margin:0 0 10px;color:#00506b;font:700 15px Arial, Helvetica, sans-serif;">Confirm your availability for <strong>ONE</strong> of the upcoming online induction session:</p>
       ${inductionOptionsHtml}
     </div>
     <div style="margin:0 0 18px;padding:16px 18px;background:#f1f3f2;border:1px solid #d9dfdc;border-radius:12px;">
@@ -3916,14 +4137,14 @@ const buildSuccessfulApplicationEmail = (button) => {
       <p style="margin:0;color:#111115;font:400 14px/1.5 Arial, Helvetica, sans-serif;">Password: <strong>${escapeEmailHtml(zoomPassword)}</strong></p>
     </div>
     <p style="margin:0 0 14px;color:#111115;font:400 15px/1.55 Arial, Helvetica, sans-serif;">Should you have any questions or require any further information, please let us know.</p>
-    <p style="margin:0;color:#111115;font:400 15px/1.55 Arial, Helvetica, sans-serif;">Welcome to Path International Examinations. We look forward to working with you.</p>
+    <p style="margin:0;color:#111115;font:400 15px/1.55 Arial, Helvetica, sans-serif;">Welcome to Path International Examinations. We look forward to working with you!</p>
   `;
   const html = pathEmailShell({
     label: "Successful application",
-    title: "Your application has been accepted",
+    title: ACCEPTED_APPLICATION_SUBJECT,
     bodyHtml,
   });
-  const text = `Dear ${fullName},\n\nWe are delighted to inform you that your application for the role of Examiner at Path International Examinations has been accepted. We are confident that you will be a valuable addition to our academic team.\n\nTo formally accept this offer and secure your place, please complete the following steps within 3 working days:\n\n* Review, complete, sign and return this contract to admin@pathexaminations.com, together with a professional profile picture:\n${CONTRACT_LINK}\n\n* Confirm your availability for ONE of the upcoming online induction sessions:\n\n${inductionOptionsText}\n\nThe Zoom access details are as follows:\n\nLink: ${zoomLink}\nZoom ID: ${zoomId}\nPassword: ${zoomPassword}\n\nShould you have any questions or require any further information, please let us know.\n\nWelcome to Path International Examinations. We look forward to working with you.\n\nBest regards,\n\nPath International Examinations`;
+  const text = `Dear ${fullName},\n\nWe are delighted to inform you that your application for the role of Examiner at Path International Examinations has been accepted. We are confident that you will be a valuable addition to our academic team.\n\nTo formally accept this offer and secure your place, please complete the following steps within 3 working days:\n\n* Review, complete, sign and return this contract to admin@pathexaminations.com, together with a professional profile picture:\n${CONTRACT_LINK}\n\n* Confirm your availability for ONE of the upcoming online induction session:\n\n${inductionOptionsText}\n\nThe Zoom access details are as follows:\n\nLink: ${zoomLink}\nZoom ID: ${zoomId}\nPassword: ${zoomPassword}\n\nShould you have any questions or require any further information, please let us know.\n\nWelcome to Path International Examinations. We look forward to working with you!\n\nBest regards,\n\nPath International Examinations`;
   return { html, text };
 };
 
@@ -4009,6 +4230,143 @@ const initPotentialOutcomeEmailButtons = (root = document) => {
         }, 1800);
       } catch (error) {
         potentialInvitationError(button, "Could not copy the email. Please try again.");
+      }
+    });
+  });
+};
+
+const showEntryAcceptedEmailStatus = (button, message, isError = false) => {
+  const status = button.closest("[data-entry-accepted-email-root]")?.querySelector("[data-entry-accepted-email-status]");
+  if (!status) return;
+  status.textContent = message;
+  status.classList.toggle("is-error", isError);
+  window.setTimeout(() => {
+    status.textContent = "";
+    status.classList.remove("is-error");
+  }, isError ? 2600 : 1900);
+};
+
+const buildEntryAcceptedApplicationEmail = (button, requireEmail = false) => {
+  const root = button.closest("[data-entry-accepted-email-root]");
+  const payload = buildSuccessfulApplicationEmail(root || button);
+  if (payload.error) return payload;
+  const email = cleanEmailValue(root?.dataset.email);
+  if (requireEmail && !email) return { error: "Potential entry email is required." };
+  return {
+    ...payload,
+    email,
+    subject: ACCEPTED_APPLICATION_SUBJECT,
+  };
+};
+
+const buildEntryAcceptedGmailUrl = ({ email, subject }) => (
+  `https://mail.google.com/mail/?view=cm&fs=1&to=${encodeURIComponent(email)}&su=${encodeURIComponent(subject)}`
+);
+
+const initEntryAcceptedEmailButtons = (root = document) => {
+  root.querySelectorAll("[data-send-entry-accepted-email]").forEach((button) => {
+    if (button.dataset.entryAcceptedSendInitialized === "true") return;
+    button.dataset.entryAcceptedSendInitialized = "true";
+    button.addEventListener("click", async (event) => {
+      event.preventDefault();
+      const payload = buildEntryAcceptedApplicationEmail(button, true);
+      if (payload.error) {
+        showEntryAcceptedEmailStatus(button, payload.error, true);
+        return;
+      }
+      let copied = false;
+      try {
+        await copyRichTextToClipboard(payload);
+        copied = true;
+      } catch (error) {
+        copied = false;
+      }
+      window.open(buildEntryAcceptedGmailUrl(payload), "_blank", "noopener,noreferrer");
+      showEntryAcceptedEmailStatus(
+        button,
+        copied
+          ? "Application acceptance email copied. Paste it into Gmail to keep the design."
+          : "Gmail opened. If the email was not copied, use the copy button and paste it manually.",
+        !copied,
+      );
+    });
+  });
+  root.querySelectorAll("[data-copy-entry-accepted-email]").forEach((button) => {
+    if (button.dataset.entryAcceptedCopyInitialized === "true") return;
+    button.dataset.entryAcceptedCopyInitialized = "true";
+    button.addEventListener("click", async (event) => {
+      event.preventDefault();
+      const payload = buildEntryAcceptedApplicationEmail(button, false);
+      if (payload.error) {
+        showEntryAcceptedEmailStatus(button, payload.error, true);
+        return;
+      }
+      try {
+        await copyRichTextToClipboard(payload);
+        showEntryAcceptedEmailStatus(button, "Application acceptance email copied.");
+      } catch (error) {
+        showEntryAcceptedEmailStatus(button, "Could not copy the email. Please try again.", true);
+      }
+    });
+  });
+};
+
+const buildEntryAcceptedWhatsAppMessage = (button) => {
+  const root = button?.closest?.("[data-entry-accepted-email-root]") || button;
+  const fullName = cleanEmailValue(root?.dataset.fullName);
+  if (!fullName) return { error: "Potential entry full name is required." };
+  const text = `Hi ${fullName}! 😊
+
+I hope you're doing well.
+
+I'm Brenda from Path International Examinations.
+
+I'm delighted to let you know that I've just sent you an email confirming that **your application has been accepted**. Congratulations, and welcome to the Path team!
+
+To complete the onboarding process, we'd appreciate it if you could complete the following steps **within the next three working days**:
+
+✅ Read, complete, sign, and return the contract.
+✅ Confirm your availability for one of the induction sessions.
+✅ Confirm your availability for the remote training period and the Annual Staff Meeting.
+✅ Pre-confirm your participation in your assigned exam sessions.
+✅ Send us a profile photo with a white background, which will be used for your physical staff ID card.
+
+If you have any questions or need any assistance, please don't hesitate to get in touch—we'll be happy to help. 💙
+
+We're excited to have you with us and look forward to working together very soon!
+
+Kind regards,
+Brenda`;
+  return { text };
+};
+
+const showEntryAcceptedWhatsAppStatus = (button, message, isError = false) => {
+  const status = button.closest("[data-entry-accepted-email-root]")?.querySelector("[data-entry-accepted-whatsapp-status]");
+  if (!status) return;
+  status.textContent = message;
+  status.classList.toggle("is-error", isError);
+  window.setTimeout(() => {
+    status.textContent = "";
+    status.classList.remove("is-error");
+  }, isError ? 2600 : 1900);
+};
+
+const initEntryAcceptedWhatsAppButtons = (root = document) => {
+  root.querySelectorAll("[data-copy-entry-accepted-whatsapp]").forEach((button) => {
+    if (button.dataset.entryAcceptedWhatsappCopyInitialized === "true") return;
+    button.dataset.entryAcceptedWhatsappCopyInitialized = "true";
+    button.addEventListener("click", async (event) => {
+      event.preventDefault();
+      const payload = buildEntryAcceptedWhatsAppMessage(button);
+      if (payload.error) {
+        showEntryAcceptedWhatsAppStatus(button, payload.error, true);
+        return;
+      }
+      try {
+        await copyTextToClipboard(payload.text);
+        showEntryAcceptedWhatsAppStatus(button, "WhatsApp message copied.");
+      } catch (error) {
+        showEntryAcceptedWhatsAppStatus(button, "Could not copy the WhatsApp message. Please try again.", true);
       }
     });
   });
@@ -4880,6 +5238,9 @@ const initTeamMemberSelects = (root = document) => {
   initInvitationEmailCopyButtons(root);
   initPotentialInvitationEmailButtons(root);
   initPotentialOutcomeEmailButtons(root);
+  initInterviewInvitationEmailButtons(root);
+  initEntryAcceptedEmailButtons(root);
+  initEntryAcceptedWhatsAppButtons(root);
   initPotentialGmailButtons(root);
 };
 
@@ -4905,6 +5266,9 @@ document.querySelectorAll("[data-copy-link]").forEach((button) => {
 
 initPotentialInvitationEmailButtons();
 initPotentialOutcomeEmailButtons();
+initInterviewInvitationEmailButtons();
+initEntryAcceptedEmailButtons();
+initEntryAcceptedWhatsAppButtons();
 initPotentialGmailButtons();
 
 document.addEventListener("click", (event) => {
@@ -5973,7 +6337,7 @@ document.querySelectorAll(".member-form").forEach((form) => {
   if (!status || !arrangedFields) return;
 
   const syncArrangedFields = () => {
-    const isArranged = status.value === "Interview arranged" || status.value === "Interview scheduled";
+    const isArranged = status.value === "Interview invitation sent" || status.value === "Interview confirmed" || status.value === "Induction confirmed";
     arrangedFields.hidden = !isArranged;
     arrangedFields.querySelectorAll("input, select").forEach((field) => {
       field.required = isArranged && field.dataset.arrangedOptional !== "true";
@@ -6536,6 +6900,463 @@ const updatePermissionManagementScope = (form) => {
 };
 
 document.querySelectorAll("form").forEach(updatePermissionManagementScope);
+
+const formatInterviewOptionDateTyping = (value) => {
+  const digits = String(value || "").replace(/\D/g, "").slice(0, 8);
+  if (digits.length <= 2) return digits;
+  if (digits.length <= 4) return `${digits.slice(0, 2)}/${digits.slice(2)}`;
+  return `${digits.slice(0, 2)}/${digits.slice(2, 4)}/${digits.slice(4)}`;
+};
+
+const normalizeInterviewOptionDate = (value) => {
+  const raw = String(value || "").trim();
+  if (!raw) return "";
+  if (raw.includes("/")) {
+    const parts = raw.split("/").map((part) => part.replace(/\D/g, ""));
+    if (parts.length === 3 && parts[2].length === 4) {
+      return `${parts[0].padStart(2, "0").slice(-2)}/${parts[1].padStart(2, "0").slice(-2)}/${parts[2]}`;
+    }
+  }
+  return formatInterviewOptionDateTyping(raw);
+};
+
+const formatInterviewOptionTimeTyping = (value) => {
+  const raw = String(value || "").replace(/h\.?/gi, "").trim();
+  if (raw.includes(":")) {
+    const [hours = "", minutes = ""] = raw.split(":");
+    return `${hours.replace(/\D/g, "").slice(0, 2)}:${minutes.replace(/\D/g, "").slice(0, 2)}`.slice(0, 5);
+  }
+  const digits = raw.replace(/\D/g, "").slice(0, 4);
+  if (digits.length <= 2) return digits;
+  return `${digits.slice(0, 2)}:${digits.slice(2)}`;
+};
+
+const normalizeInterviewOptionTime = (value) => {
+  const raw = String(value || "").replace(/h\.?/gi, "").trim();
+  if (!raw) return "";
+  const digits = raw.replace(/\D/g, "");
+  if (raw.includes(":")) {
+    const [hours = "", minutes = ""] = raw.split(":");
+    const cleanHours = hours.replace(/\D/g, "");
+    const cleanMinutes = minutes.replace(/\D/g, "");
+    if (cleanHours && cleanMinutes.length === 2) return `${cleanHours.padStart(2, "0").slice(-2)}:${cleanMinutes}`;
+    return formatInterviewOptionTimeTyping(raw);
+  }
+  if (digits.length === 1 || digits.length === 2) return `${digits.padStart(2, "0")}:00`;
+  if (digits.length === 3) return `${digits.slice(0, 1).padStart(2, "0")}:${digits.slice(1)}`;
+  if (digits.length === 4) return `${digits.slice(0, 2)}:${digits.slice(2)}`;
+  return formatInterviewOptionTimeTyping(raw);
+};
+
+const syncProceedInterviewButton = (element) => {
+  const form = element?.closest?.("form") || element?.querySelector?.("form") || element;
+  const root = form?.querySelector?.("[data-interview-options-root]");
+  const button = form?.querySelector?.("[data-proceed-interview-button]");
+  if (!root || !button) return;
+  const hasDateAndTime = Array.from(root.querySelectorAll("[data-interview-option-row]")).some((row) => {
+    const date = row.querySelector("[data-interview-option-date]")?.value.trim();
+    const time = row.querySelector("[data-interview-option-time]")?.value.trim();
+    return Boolean(date && time);
+  });
+  const platform = root.querySelector("[data-interview-option-platform]")?.value.trim();
+  const interviewer = root.querySelector("select[name='interview_option_interviewer']")?.value.trim();
+  const canProceed = Boolean(hasDateAndTime && platform && interviewer);
+  button.disabled = !canProceed;
+  if (canProceed) {
+    button.removeAttribute("title");
+  } else {
+    button.setAttribute("title", "Complete at least one date and time, platform, and interviewer to proceed.");
+  }
+};
+
+const syncInterviewOptionControls = (root) => {
+  if (!root) return;
+  const maxOptions = Number(root.dataset.maxOptions || 5);
+  const rows = Array.from(root.querySelectorAll("[data-interview-option-row]"));
+  const addButton = root.querySelector("[data-add-interview-option]");
+  if (addButton) addButton.disabled = rows.length >= maxOptions;
+  rows.forEach((row, index) => {
+    const removeButton = row.querySelector("[data-remove-interview-option]");
+    if (removeButton) {
+      removeButton.hidden = index === 0;
+      removeButton.disabled = false;
+    }
+  });
+  syncProceedInterviewButton(root.closest("form"));
+};
+
+const platformPreviewHtml = (platform) => {
+  if (platform === "Zoom") return '<img class="platform-logo-img" src="/static/img/zoom.png" alt="Zoom" title="Zoom"><span>Zoom</span>';
+  if (platform === "Meet") return '<img class="platform-logo-img platform-logo-meet" src="/static/img/google-meet.png" alt="Google Meet" title="Google Meet"><span>Meet</span>';
+  return '<span class="muted">Select platform</span>';
+};
+
+const syncInterviewOptionPlatformPreview = (select) => {
+  const root = select?.closest("[data-interview-options-root]") || select?.closest(".onboarding-induction-group") || select?.closest("form");
+  const preview = root?.querySelector("[data-interview-option-platform-preview]");
+  if (preview) preview.innerHTML = platformPreviewHtml(select.value);
+};
+
+document.querySelectorAll("[data-interview-options-root]").forEach(syncInterviewOptionControls);
+document.querySelectorAll("[data-interview-option-platform]").forEach(syncInterviewOptionPlatformPreview);
+document.querySelectorAll("[data-proceed-interview-button]").forEach((button) => {
+  syncProceedInterviewButton(button.closest("form"));
+});
+
+const syncPotentialInterviewNoShow = (element) => {
+  const form = element?.closest?.("form") || element?.querySelector?.("form") || element;
+  const checkbox = form?.querySelector?.("[data-interview-no-show]");
+  if (!form || !checkbox) return;
+  if (checkbox.disabled) return;
+  const isNoShow = checkbox.checked;
+  form.querySelectorAll("[data-no-show-disabled-group]").forEach((group) => {
+    group.disabled = isNoShow;
+    group.querySelectorAll("input, select, textarea, button").forEach((control) => {
+      control.disabled = isNoShow;
+    });
+  });
+  const acceptedButton = form.querySelector("[data-application-accepted-button]");
+  if (acceptedButton) {
+    const hasCar = Boolean(form.querySelector("input[name='interview_has_car']:checked"));
+    const hasRole = Boolean(form.querySelector("input[name='interview_roles']:checked"));
+    const sessionsAdded = Boolean(form.querySelector("input[name='entry_added_in_sessions_pre_confirmation']:checked"));
+    const canAccept = Boolean(!isNoShow && hasCar && hasRole && sessionsAdded);
+    acceptedButton.disabled = !canAccept;
+    if (canAccept) {
+      acceptedButton.removeAttribute("title");
+    } else if (isNoShow) {
+      acceptedButton.setAttribute("title", "No-show entries cannot be accepted.");
+    } else {
+      acceptedButton.setAttribute("title", "Complete Has a car, Roles, and session pre-confirmation before accepting.");
+    }
+  }
+};
+
+document.querySelectorAll("[data-interview-no-show]").forEach((checkbox) => {
+  syncPotentialInterviewNoShow(checkbox.closest("form"));
+});
+
+const syncInterviewInvitationConfirmation = (element) => {
+  const form = element?.closest?.("form") || element?.querySelector?.("form") || element;
+  const root = form?.querySelector?.("[data-interview-confirm-root]");
+  if (!form || !root) return;
+  const noReply = Boolean(root.querySelector("[data-interview-no-reply]")?.checked);
+  const selectedOption = root.querySelector("[data-interview-option-choice]:checked");
+  root.querySelectorAll("[data-interview-option-choice]").forEach((option) => {
+    option.disabled = noReply;
+    if (noReply) option.checked = false;
+  });
+  const hasSelectedOption = Boolean(!noReply && selectedOption);
+  const confirmButton = form.querySelector("[data-interview-confirm-button]");
+  const turnDownButton = form.querySelector("[data-interview-turn-down-button]");
+  const reviewButton = form.querySelector("[data-review-date-time-options-button]");
+  if (confirmButton) {
+    confirmButton.disabled = !hasSelectedOption;
+    confirmButton.setAttribute("title", hasSelectedOption ? "" : "Select one date/time option before confirming the interview.");
+    if (hasSelectedOption) confirmButton.removeAttribute("title");
+  }
+  if (turnDownButton) {
+    turnDownButton.disabled = !noReply;
+    turnDownButton.setAttribute("title", noReply ? "" : "Select No reply before turning down the application.");
+    if (noReply) turnDownButton.removeAttribute("title");
+  }
+  if (reviewButton) {
+    const canReview = !noReply && !hasSelectedOption;
+    reviewButton.disabled = !canReview;
+    reviewButton.setAttribute("title", canReview ? "" : "Clear No reply and date/time selection to review options.");
+    if (canReview) reviewButton.removeAttribute("title");
+  }
+};
+
+document.querySelectorAll("[data-interview-confirm-root]").forEach((root) => {
+  syncInterviewInvitationConfirmation(root.closest("form"));
+});
+
+const syncEntryAcceptedOnboardingButton = (element) => {
+  const form = element?.closest?.("form") || element?.querySelector?.("form") || element;
+  const button = form?.querySelector?.("[data-onboarding-email-sent-button]");
+  if (!form || !button) return;
+  const requiredNames = [
+    "entry_accepted_notes_checked",
+    "entry_accepted_email_sent",
+    "entry_accepted_whatsapp_sent",
+  ];
+  const canMarkSent = requiredNames.every((name) => form.querySelector(`input[name="${name}"]`)?.checked);
+  button.disabled = !canMarkSent;
+  if (canMarkSent) {
+    button.removeAttribute("title");
+  } else {
+    button.setAttribute("title", "Complete all three checks before marking onboarding email as sent.");
+  }
+};
+
+document.querySelectorAll("[data-onboarding-email-sent-button]").forEach((button) => {
+  syncEntryAcceptedOnboardingButton(button.closest("form"));
+});
+
+const syncOnboardingFollowUpControls = (element) => {
+  const form = element?.closest?.("form") || element?.querySelector?.("form") || element;
+  const root = form?.querySelector?.("[data-onboarding-follow-up]");
+  if (!form || !root) return;
+  root.querySelectorAll("[data-interview-option-platform]").forEach(syncInterviewOptionPlatformPreview);
+  const choice = root.querySelector("[data-onboarding-choice]:checked")?.value || "";
+  root.querySelectorAll("[data-onboarding-panel]").forEach((panel) => {
+    const key = panel.dataset.onboardingPanel;
+    panel.classList.toggle("is-active", key === choice);
+  });
+  root.querySelectorAll("[data-onboarding-fieldset]").forEach((fieldset) => {
+    fieldset.disabled = fieldset.dataset.onboardingFieldset !== choice;
+  });
+  const confirmComplete = Boolean(choice === "confirm") && Array.from(root.querySelectorAll("[data-onboarding-confirm-required]")).every((field) => {
+    if (field.disabled) return false;
+    return Boolean(field.value?.trim());
+  });
+  const turnDownComplete = Boolean(choice === "turn_down") && Array.from(root.querySelectorAll("[data-onboarding-turn-down-required]")).every((field) => (
+    !field.disabled && field.checked
+  ));
+  const confirmButton = form.querySelector("[data-onboarding-confirm-button]");
+  const turnDownButton = form.querySelector("[data-onboarding-turn-down-button]");
+  if (confirmButton) {
+    confirmButton.disabled = !confirmComplete;
+    confirmButton.setAttribute("title", confirmComplete ? "" : "Complete all required confirm application fields.");
+    if (confirmComplete) confirmButton.removeAttribute("title");
+  }
+  if (turnDownButton) {
+    turnDownButton.disabled = !turnDownComplete;
+    turnDownButton.setAttribute("title", turnDownComplete ? "" : "Complete both turn down application checks.");
+    if (turnDownComplete) turnDownButton.removeAttribute("title");
+  }
+};
+
+document.querySelectorAll("[data-onboarding-follow-up]").forEach((root) => {
+  syncOnboardingFollowUpControls(root.closest("form"));
+});
+
+const syncInductionStatusPanels = (element) => {
+  const root = element?.closest?.("[data-induction-status-root]") || element;
+  if (!root) return;
+  const form = root.closest("form");
+  const selected = root.querySelector("[data-induction-status-option]:checked")?.value || "";
+  root.querySelectorAll("[data-induction-status-panel]").forEach((panel) => {
+    panel.hidden = panel.dataset.inductionStatusPanel !== selected;
+  });
+  const rescheduleComplete = selected === "reschedule" && Array.from(root.querySelectorAll("[data-induction-reschedule-required]")).every((field) => {
+    if (field.disabled) return false;
+    if (field.type === "checkbox") return field.checked;
+    return Boolean(field.value?.trim());
+  });
+  const attendedComplete = selected === "attended" && Boolean(root.querySelector("[data-induction-attended-required]:checked"));
+  const interviewAttendedComplete = selected === "attended"
+    && Boolean(root.querySelector("input[name='interview_has_car']:checked"))
+    && Boolean(root.querySelector("input[name='interview_roles']:checked"))
+    && Boolean(root.querySelector("input[name='entry_added_in_sessions_pre_confirmation']:checked"));
+  const rejectButton = form?.querySelector("[data-induction-reject-button]");
+  const rescheduleButton = form?.querySelector("[data-induction-reschedule-button]");
+  const activateButton = form?.querySelector("[data-induction-activate-button]");
+  const acceptedButton = form?.querySelector("[data-application-accepted-button]");
+  if (rejectButton) rejectButton.disabled = selected !== "no_show";
+  if (rescheduleButton) rescheduleButton.disabled = !rescheduleComplete;
+  if (activateButton) activateButton.disabled = !attendedComplete;
+  if (acceptedButton) acceptedButton.disabled = !interviewAttendedComplete;
+};
+
+document.querySelectorAll("[data-induction-status-root]").forEach(syncInductionStatusPanels);
+
+const syncEntryAcceptedCheck = async (checkbox) => {
+  const action = checkbox?.dataset.action;
+  if (!action) return;
+  const root = checkbox.closest("[data-entry-accepted-email-root]");
+  const status = root?.querySelector("[data-entry-accepted-email-status]");
+  const formData = new FormData();
+  formData.set("csrf_token", document.querySelector("input[name='csrf_token']")?.value || "");
+  formData.set(checkbox.name, checkbox.checked ? "1" : "0");
+  checkbox.disabled = true;
+  try {
+    const response = await fetch(action, {
+      method: "POST",
+      body: formData,
+      headers: { "X-Requested-With": "XMLHttpRequest" },
+    });
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok || payload.error) throw new Error(payload.error || "Could not save checkbox.");
+    syncEntryAcceptedOnboardingButton(checkbox.closest("form"));
+    if (status) {
+      status.textContent = "Notes check saved.";
+      status.classList.remove("is-error");
+      window.setTimeout(() => {
+        status.textContent = "";
+      }, 1400);
+    }
+  } catch (error) {
+    checkbox.checked = !checkbox.checked;
+    syncEntryAcceptedOnboardingButton(checkbox.closest("form"));
+    if (status) {
+      status.textContent = error.message || "Could not save checkbox.";
+      status.classList.add("is-error");
+      window.setTimeout(() => {
+        status.textContent = "";
+        status.classList.remove("is-error");
+      }, 2400);
+    }
+  } finally {
+    checkbox.disabled = false;
+    syncEntryAcceptedOnboardingButton(checkbox.closest("form"));
+  }
+};
+
+document.addEventListener("click", (event) => {
+  const editButton = event.target.closest("[data-edit-potential-info]");
+  if (editButton) {
+    event.preventDefault();
+    const section = editButton.closest(".potential-review-summary");
+    section?.querySelector("[data-potential-info-view]")?.setAttribute("hidden", "");
+    section?.querySelector("[data-potential-info-edit]")?.removeAttribute("hidden");
+    section?.querySelectorAll("[data-potential-note-delete]").forEach((form) => {
+      form.hidden = false;
+    });
+    editButton.hidden = true;
+    section?.querySelector("[data-potential-info-edit] input:not([type='hidden'])")?.focus();
+    return;
+  }
+
+  const cancelButton = event.target.closest("[data-cancel-potential-info-edit]");
+  if (cancelButton) {
+    event.preventDefault();
+    const section = cancelButton.closest(".potential-review-summary");
+    const form = cancelButton.closest("form");
+    form?.reset();
+    section?.querySelector("[data-potential-info-edit]")?.setAttribute("hidden", "");
+    section?.querySelector("[data-potential-info-view]")?.removeAttribute("hidden");
+    section?.querySelectorAll("[data-potential-note-delete]").forEach((form) => {
+      form.hidden = true;
+    });
+    const edit = section?.querySelector("[data-edit-potential-info]");
+    if (edit) edit.hidden = false;
+  }
+});
+
+document.addEventListener("input", (event) => {
+  const onboardingField = event.target.closest("[data-onboarding-confirm-required]");
+  if (onboardingField) {
+    syncOnboardingFollowUpControls(onboardingField.closest("form"));
+  }
+  const dateInput = event.target.closest("[data-interview-option-date]");
+  if (dateInput) {
+    dateInput.value = formatInterviewOptionDateTyping(dateInput.value);
+    syncProceedInterviewButton(dateInput.closest("form"));
+    syncInductionStatusPanels(dateInput);
+    return;
+  }
+  const timeInput = event.target.closest("[data-interview-option-time]");
+  if (timeInput) {
+    timeInput.value = formatInterviewOptionTimeTyping(timeInput.value);
+    syncProceedInterviewButton(timeInput.closest("form"));
+    syncInductionStatusPanels(timeInput);
+  }
+});
+
+document.addEventListener("change", (event) => {
+  const onboardingControl = event.target.closest("[data-onboarding-choice], [data-onboarding-confirm-required], [data-onboarding-turn-down-required]");
+  if (onboardingControl) {
+    syncOnboardingFollowUpControls(onboardingControl.closest("form"));
+    return;
+  }
+  const entryAcceptedCheckbox = event.target.closest("[data-entry-accepted-check]");
+  if (entryAcceptedCheckbox) {
+    syncEntryAcceptedCheck(entryAcceptedCheckbox);
+    return;
+  }
+  const noShowControl = event.target.closest("[data-interview-no-show]");
+  if (noShowControl) {
+    syncPotentialInterviewNoShow(noShowControl.closest("form"));
+    return;
+  }
+  const interviewConfirmControl = event.target.closest("[data-interview-no-reply], [data-interview-option-choice]");
+  if (interviewConfirmControl) {
+    if (interviewConfirmControl.matches("[data-interview-option-choice]") && interviewConfirmControl.checked) {
+      const root = interviewConfirmControl.closest("[data-interview-confirm-root]");
+      root?.querySelectorAll("[data-interview-option-choice]").forEach((option) => {
+        if (option !== interviewConfirmControl) option.checked = false;
+      });
+    }
+    syncInterviewInvitationConfirmation(interviewConfirmControl.closest("form"));
+    return;
+  }
+  const inductionStatusOption = event.target.closest("[data-induction-status-option], [data-induction-reschedule-required], [data-induction-attended-required], input[name='interview_has_car'], input[name='interview_roles'], input[name='entry_added_in_sessions_pre_confirmation']");
+  if (inductionStatusOption) {
+    syncInductionStatusPanels(inductionStatusOption);
+    return;
+  }
+  const platformSelect = event.target.closest("[data-interview-option-platform]");
+  if (platformSelect) {
+    syncInterviewOptionPlatformPreview(platformSelect);
+    syncProceedInterviewButton(platformSelect.closest("form"));
+    return;
+  }
+  const interviewerSelect = event.target.closest("select[name='interview_option_interviewer']");
+  if (interviewerSelect) syncProceedInterviewButton(interviewerSelect.closest("form"));
+});
+
+document.addEventListener("blur", (event) => {
+  const dateInput = event.target.closest?.("[data-interview-option-date]");
+  if (dateInput) {
+    dateInput.value = normalizeInterviewOptionDate(dateInput.value);
+    syncProceedInterviewButton(dateInput.closest("form"));
+    return;
+  }
+  const timeInput = event.target.closest?.("[data-interview-option-time]");
+  if (timeInput) {
+    timeInput.value = normalizeInterviewOptionTime(timeInput.value);
+    syncProceedInterviewButton(timeInput.closest("form"));
+  }
+}, true);
+
+document.addEventListener("click", (event) => {
+  const addButton = event.target.closest("[data-add-interview-option]");
+  if (addButton) {
+    event.preventDefault();
+    const root = addButton.closest("[data-interview-options-root]");
+    const list = root?.querySelector("[data-interview-options-list]");
+    const rows = root ? Array.from(root.querySelectorAll("[data-interview-option-row]")) : [];
+    const maxOptions = Number(root?.dataset.maxOptions || 5);
+    if (!root || !list || rows.length >= maxOptions) return;
+    const clone = rows[rows.length - 1].cloneNode(true);
+    clone.classList.add("is-extra");
+    clone.querySelectorAll("input").forEach((input) => {
+      input.value = "";
+      input.disabled = false;
+    });
+    clone.querySelectorAll("select").forEach((select) => {
+      select.value = "";
+      select.disabled = false;
+      if (select.matches("[data-interview-option-platform]")) syncInterviewOptionPlatformPreview(select);
+    });
+    clone.querySelectorAll("button").forEach((button) => {
+      button.disabled = false;
+    });
+    list.insertBefore(clone, addButton);
+    syncInterviewOptionControls(root);
+    clone.querySelector("input")?.focus();
+    return;
+  }
+
+  const removeButton = event.target.closest("[data-remove-interview-option]");
+  if (removeButton) {
+    event.preventDefault();
+    const root = removeButton.closest("[data-interview-options-root]");
+    const row = removeButton.closest("[data-interview-option-row]");
+    const rows = root ? Array.from(root.querySelectorAll("[data-interview-option-row]")) : [];
+    if (!root || !row) return;
+    if (rows.length <= 1) {
+      row.querySelectorAll("input").forEach((input) => {
+        input.value = "";
+      });
+    } else {
+      row.remove();
+    }
+    syncInterviewOptionControls(root);
+  }
+});
 
 const applyViewOnlyMode = () => {
   const main = document.querySelector("main[data-current-menu-can-edit='false']");

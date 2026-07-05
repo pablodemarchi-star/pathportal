@@ -13,16 +13,30 @@
         <div class="brand">
           <img class="brand-logo brand-logo-white" src="{{ url_for('static', filename='img/path-logo-white-transparent.png') }}" alt="Path International Examinations">
         </div>
-        {% set logged_user_label = session.get('user_full_name') or session.get('user_email') or g.user %}
-        {% if logged_user_label %}
-          <section class="logged-user-card" aria-label="Logged-in user">
-            <span>Hello, {{ logged_user_label }}!</span>
-          </section>
-        {% endif %}
         <nav>
+          <a class="nav-link standalone-nav-link {% if request.endpoint == 'staff.dashboard' %}active{% endif %}" href="{{ url_for('staff.dashboard') }}">
+            <svg class="nav-icon" viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M4 5h7v6H4z" />
+              <path d="M13 5h7v14h-7z" />
+              <path d="M4 13h7v6H4z" />
+            </svg>
+            <span>Dashboard</span>
+          </a>
           {% if user_can_view('staff_members') or user_can_view('examiner_certification') or user_can_view('supervisor_certification') or user_can_view('internship_stages') %}
           <section class="nav-group" aria-label="External staff">
             <div class="nav-section-title">External staff</div>
+            {% if user_can_view('staff_members') %}
+            <a class="nav-link {% if request.endpoint in ['staff.potential_entries', 'staff.create_potential_entry', 'staff.update_potential_entry', 'staff.update_potential_interview_invitation_sent', 'staff.add_potential_cv_review_note', 'staff.save_potential_cv_review', 'staff.delete_potential_cv_review_note', 'staff.reject_potential_cv_review', 'staff.proceed_potential_cv_review', 'staff.reject_potential_entry', 'staff.delete_rejected_potential_entry', 'staff.accept_potential_entry', 'staff.save_potential_acceptance_draft', 'staff.add_potential_note'] %}active{% endif %}" href="{{ url_for('staff.potential_entries') }}">
+              <svg class="nav-icon" viewBox="0 0 24 24" aria-hidden="true">
+                <path d="M8 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8Z" />
+                <path d="M2.5 21a5.5 5.5 0 0 1 11 0" />
+                <path d="M17 5v6" />
+                <path d="M14 8h6" />
+                <path d="M16 17h5" />
+              </svg>
+              <span>Potential entries</span>
+            </a>
+            {% endif %}
             {% if user_can_view('staff_members') %}
             <a class="nav-link {% if request.endpoint == 'staff.index' %}active{% endif %}" href="{{ url_for('staff.index') }}">
               <svg class="nav-icon" viewBox="0 0 24 24" aria-hidden="true">
