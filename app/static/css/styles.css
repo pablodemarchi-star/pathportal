@@ -7730,6 +7730,24 @@ span.session-marker-chip {
   flex-wrap: wrap;
 }
 
+.potential-reactivate-panel {
+  flex: 1 1 100%;
+}
+
+.potential-reactivate-panel summary {
+  width: fit-content;
+  margin-left: auto;
+  list-style: none;
+}
+
+.potential-reactivate-panel summary::-webkit-details-marker {
+  display: none;
+}
+
+.potential-reactivate-form {
+  margin-top: 12px;
+}
+
 .potential-review-modal {
   width: min(980px, calc(100vw - 32px));
 }

@@ -792,6 +792,23 @@
             <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
             <input type="hidden" name="deletion_password" value="">
           </form>
+          <details class="potential-reactivate-panel">
+            <summary class="secondary-button">Reactivate entry</summary>
+            <form method="post" action="{{ url_for('staff.reactivate_potential_entry', entry_id=entry.id) }}" class="form-grid one-column potential-reactivate-form">
+              <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+              <label>
+                Status
+                <select name="reactivation_status" required>
+                  {% for status_option in potential_reactivation_statuses %}
+                    <option value="{{ status_option }}">{{ status_option }}</option>
+                  {% endfor %}
+                </select>
+              </label>
+              <div class="form-actions">
+                <button class="primary-button" type="submit">Reactivate entry</button>
+              </div>
+            </form>
+          </details>
           <div class="form-actions">
             <button class="secondary-button" type="button" data-close-modal>Cancel</button>
             <button class="danger-button" type="submit" form="delete-archived-potential-entry-{{ entry.id }}">Delete</button>

@@ -137,6 +137,9 @@ POTENTIAL_ACTION_REQUIRED_STATUSES = [
 ]
 POTENTIAL_MANAGEMENT_DEPARTMENT_STATUSES = ["CV to be reviewed", "Review interview date and time", "Interview confirmed"]
 POTENTIAL_ARCHIVED_STATUSES = {"Archived accepted entry", "Archived rejected entry"}
+POTENTIAL_REACTIVATION_STATUS_OPTIONS = [
+    status for status in POTENTIAL_STATUS_OPTIONS if status not in POTENTIAL_ARCHIVED_STATUSES
+]
 POTENTIAL_DEPARTMENT_OPTIONS = ["ADMIN", "MANAGEMENT"]
 INTERVIEWER_OPTIONS = [
     "Prof. Lic. Agustina Savini",
@@ -15571,6 +15574,7 @@ def index():
         statuses=EDIT_STATUS_OPTIONS,
         create_statuses=CREATE_STATUS_OPTIONS,
         potential_statuses=POTENTIAL_STATUS_OPTIONS,
+        potential_reactivation_statuses=POTENTIAL_REACTIVATION_STATUS_OPTIONS,
         interviewer_options=INTERVIEWER_OPTIONS,
         confirmed_session_counts=confirmed_session_counts,
         staff_settings_values=staff_members_settings_values(staff_settings),
@@ -15690,6 +15694,7 @@ def potential_entries():
         statuses=EDIT_STATUS_OPTIONS,
         create_statuses=CREATE_STATUS_OPTIONS,
         potential_statuses=POTENTIAL_STATUS_OPTIONS,
+        potential_reactivation_statuses=POTENTIAL_REACTIVATION_STATUS_OPTIONS,
         potential_department_options=POTENTIAL_DEPARTMENT_OPTIONS,
         potential_toggle_url=url_for("staff.potential_entries", **toggle_args),
         interviewer_options=INTERVIEWER_OPTIONS,
@@ -19391,6 +19396,35 @@ def archive_potential_entry(entry_id):
 
     db.session.commit()
     flash("Potential entry archived.", "success")
+    return redirect(url_for("staff.potential_entries"))
+
+
+@staff_bp.route("/potential-entries/<int:entry_id>/reactivate", methods=["POST"])
+@login_required
+def reactivate_potential_entry(entry_id):
+    if not validate_csrf():
+        flash("Security token expired. Please try again.", "error")
+        return redirect(url_for("staff.potential_entries", show_archived=1))
+
+    entry = PotentialEntry.query.get_or_404(entry_id)
+    if entry.status not in POTENTIAL_ARCHIVED_STATUSES:
+        flash("Only archived potential entries can be reactivated.", "error")
+        return redirect(url_for("staff.potential_entries"))
+
+    reactivation_status = request.form.get("reactivation_status", "").strip()
+    if reactivation_status not in POTENTIAL_REACTIVATION_STATUS_OPTIONS:
+        flash("Please select a valid reactivation status.", "error")
+        return redirect(url_for("staff.potential_entries", show_archived=1, open_staff_modal=f"potential-entry-{entry.id}"))
+
+    set_potential_entry_status(entry, reactivation_status)
+    entry.is_rejected = reactivation_status == "Entry rejected"
+    if entry.is_rejected:
+        if not entry.rejected_on:
+            entry.rejected_on = datetime.now(timezone.utc)
+    else:
+        entry.rejected_on = None
+    db.session.commit()
+    flash("Potential entry reactivated.", "success")
     return redirect(url_for("staff.potential_entries"))
 
 

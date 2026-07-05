@@ -2054,12 +2054,49 @@ class PotentialInvitationTest(unittest.TestCase):
             html,
         )
         self.assertIn("Cancel", modal_html)
+        self.assertIn("Reactivate entry", modal_html)
+        self.assertIn(f'/potential-entries/{entry.id}/reactivate', modal_html)
+        self.assertIn('name="reactivation_status"', modal_html)
+        self.assertIn('<option value="CV to be reviewed">CV to be reviewed</option>', modal_html)
+        self.assertNotIn('<option value="Archived accepted entry">Archived accepted entry</option>', modal_html)
         self.assertIn(">Delete</button>", modal_html)
         self.assertIn("Save changes", modal_html)
         self.assertIn(f'/potential-entries/{entry.id}/delete', modal_html)
         self.assertIn('class="danger-button"', modal_html)
         self.assertIn('data-confirm-password-value="Path1234"', modal_html)
         self.assertIn('name="deletion_password"', modal_html)
+
+    def test_archived_potential_entry_can_be_reactivated_to_selected_status(self):
+        entry = self.add_entry(status="Archived rejected entry", is_rejected=True)
+        response = self.client().post(
+            f"/potential-entries/{entry.id}/reactivate",
+            data={"csrf_token": "token", "reactivation_status": "Interview to be arranged"},
+            follow_redirects=True,
+        )
+        updated_entry = db.session.get(PotentialEntry, entry.id)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("Potential entry reactivated.", response.get_data(as_text=True))
+        self.assertEqual(updated_entry.status, "Interview to be arranged")
+        self.assertFalse(updated_entry.is_rejected)
+        self.assertIsNone(updated_entry.rejected_on)
+
+        active_response = self.client().get("/potential-entries")
+        archived_response = self.client().get("/potential-entries?show_archived=1")
+        self.assertIn("Jane Candidate", active_response.get_data(as_text=True))
+        self.assertNotIn("Jane Candidate", archived_response.get_data(as_text=True))
+
+    def test_archived_potential_entry_reactivation_rejects_archived_status(self):
+        entry = self.add_entry(status="Archived accepted entry")
+        response = self.client().post(
+            f"/potential-entries/{entry.id}/reactivate",
+            data={"csrf_token": "token", "reactivation_status": "Archived rejected entry"},
+            follow_redirects=True,
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("Please select a valid reactivation status.", response.get_data(as_text=True))
+        self.assertEqual(db.session.get(PotentialEntry, entry.id).status, "Archived accepted entry")
 
     def test_archived_accepted_potential_entry_delete_requires_path_password(self):
         entry = self.add_entry(status="Archived accepted entry")
