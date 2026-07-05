@@ -19396,16 +19396,21 @@ def delete_rejected_potential_entry(entry_id):
         return redirect(url_for("staff.potential_entries", show_rejected=1))
 
     entry = PotentialEntry.query.get_or_404(entry_id)
-    if not entry.is_rejected:
-        flash("Only rejected potential entries can be permanently deleted.", "error")
+    if not entry.is_rejected and entry.status not in {"Archived accepted entry", "Archived rejected entry"}:
+        flash("Only archived or rejected potential entries can be permanently deleted.", "error")
         return redirect(url_for("staff.potential_entries"))
     if not is_valid_rejected_potential_entry_delete_password():
         flash("Potential entry delete password is not valid.", "error")
         return redirect(url_for("staff.potential_entries", show_rejected=1))
 
+    success_message = (
+        "Potential entry permanently deleted."
+        if entry.status == "Archived accepted entry"
+        else "Rejected potential entry permanently deleted."
+    )
     db.session.delete(entry)
     db.session.commit()
-    flash("Rejected potential entry permanently deleted.", "success")
+    flash(success_message, "success")
     return redirect(url_for("staff.potential_entries", show_rejected=1))
 
 

@@ -2041,6 +2041,48 @@ class PotentialInvitationTest(unittest.TestCase):
         self.assertIn("Rejected potential entry permanently deleted.", response.get_data(as_text=True))
         self.assertIsNone(db.session.get(PotentialEntry, entry.id))
 
+    def test_archived_potential_entry_modal_shows_delete_with_path_password(self):
+        entry = self.add_entry(status="Archived accepted entry", full_name="Archived Candidate")
+        response = self.client().get("/potential-entries?show_rejected=1")
+        html = response.get_data(as_text=True)
+        modal_html = html[html.index(f'id="potential-entry-{entry.id}"'):]
+        modal_html = modal_html[:modal_html.index(f'id="potential-note-{entry.id}"')]
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn(
+            f'<button class="mini-button potential-perform-action" type="button" data-open-modal="potential-entry-{entry.id}">Perform action</button>',
+            html,
+        )
+        self.assertIn("Cancel", modal_html)
+        self.assertIn(">Delete</button>", modal_html)
+        self.assertIn("Save changes", modal_html)
+        self.assertIn(f'/potential-entries/{entry.id}/delete', modal_html)
+        self.assertIn('class="danger-button"', modal_html)
+        self.assertIn('data-confirm-password-value="Path1234"', modal_html)
+        self.assertIn('name="deletion_password"', modal_html)
+
+    def test_archived_accepted_potential_entry_delete_requires_path_password(self):
+        entry = self.add_entry(status="Archived accepted entry")
+        response = self.client().post(
+            f"/potential-entries/{entry.id}/delete",
+            data={"csrf_token": "token", "deletion_password": "wrong"},
+            follow_redirects=True,
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("Potential entry delete password is not valid.", response.get_data(as_text=True))
+        self.assertIsNotNone(db.session.get(PotentialEntry, entry.id))
+
+        response = self.client().post(
+            f"/potential-entries/{entry.id}/delete",
+            data={"csrf_token": "token", "deletion_password": "Path1234"},
+            follow_redirects=True,
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("Potential entry permanently deleted.", response.get_data(as_text=True))
+        self.assertIsNone(db.session.get(PotentialEntry, entry.id))
+
     def test_archived_staff_member_delete_requires_path_password(self):
         member = self.add_member(status="Archived", full_name="Archived Staff", email="archived@example.com")
         session_record = self.add_session()
@@ -2136,7 +2178,7 @@ class PotentialInvitationTest(unittest.TestCase):
         )
 
         self.assertEqual(response.status_code, 200)
-        self.assertIn("Only rejected potential entries can be permanently deleted.", response.get_data(as_text=True))
+        self.assertIn("Only archived or rejected potential entries can be permanently deleted.", response.get_data(as_text=True))
         self.assertIsNotNone(db.session.get(PotentialEntry, entry.id))
 
     def test_potential_entries_default_order_shows_most_recently_updated_first(self):

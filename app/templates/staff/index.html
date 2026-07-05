@@ -338,7 +338,9 @@
             <span class="potential-action-text">{{ workflow_action }}</span>
           </td>
           <td>
-            {% if entry.is_rejected %}
+            {% if entry.status in ['Archived accepted entry', 'Archived rejected entry'] %}
+              <button class="mini-button potential-perform-action" type="button" data-open-modal="potential-entry-{{ entry.id }}">Perform action</button>
+            {% elif entry.is_rejected %}
               <button class="mini-button potential-perform-action" type="button" data-open-modal="potential-entry-{{ entry.id }}">Perform action</button>
             {% elif entry.status in ['CV to be reviewed', 'Review interview date and time'] %}
               <button class="mini-button potential-perform-action" type="button" data-open-modal="cv-review-potential-entry-{{ entry.id }}">Perform action</button>
@@ -782,6 +784,19 @@
           </form>
         {% elif entry.status in ['Archived accepted entry', 'Archived rejected entry'] %}
           <span class="muted">This archived record is kept for audit.</span>
+          <form id="save-archived-potential-entry-{{ entry.id }}" method="post" action="{{ url_for('staff.archive_potential_entry', entry_id=entry.id) }}">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+            <input type="hidden" name="archive_status" value="{{ entry.status }}">
+          </form>
+          <form id="delete-archived-potential-entry-{{ entry.id }}" method="post" action="{{ url_for('staff.delete_rejected_potential_entry', entry_id=entry.id) }}" data-confirm-password-submit="This will permanently delete {{ entry.full_name }}. This cannot be undone." data-confirm-password-value="Path1234">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+            <input type="hidden" name="deletion_password" value="">
+          </form>
+          <div class="form-actions">
+            <button class="secondary-button" type="button" data-close-modal>Cancel</button>
+            <button class="danger-button" type="submit" form="delete-archived-potential-entry-{{ entry.id }}">Delete</button>
+            <button class="primary-button" type="submit" form="save-archived-potential-entry-{{ entry.id }}">Save changes</button>
+          </div>
         {% else %}
           <button class="secondary-button" type="button" data-open-modal="edit-potential-entry-{{ entry.id }}">Edit</button>
           <form method="post" action="{{ url_for('staff.reject_potential_entry', entry_id=entry.id) }}">
