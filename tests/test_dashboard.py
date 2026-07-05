@@ -74,7 +74,7 @@ class DashboardTest(unittest.TestCase):
 
         self.assertEqual(response.status_code, 200)
         self.assertIn("Dashboard | Path Examinations", body)
-        self.assertIn("<h1>Dashboard</h1>", body)
+        self.assertIn("Hello, Pablo!", body)
         self.assertNotIn("Hello, Pablo Demarchi!", body)
         self.assertIn("Welcome back — here’s what needs your attention today.", body)
         self.assertIn("MANAGEMENT", body)

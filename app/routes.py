@@ -15428,11 +15428,17 @@ def dashboard():
             PotentialEntry.status.in_(POTENTIAL_ACTION_REQUIRED_STATUSES),
         ).count()
     current_user = getattr(g, "current_user", None)
-    dashboard_full_name = (
+    dashboard_display_name = (
         getattr(current_user, "full_name", "")
         or session.get("user_full_name")
         or session.get("user")
         or "admin"
+    )
+    dashboard_name_parts = dashboard_display_name.strip().split()
+    dashboard_full_name = (
+        "admin"
+        if "@" in dashboard_display_name or not dashboard_name_parts
+        else dashboard_name_parts[0]
     )
     dashboard_department = (
         getattr(current_user, "department", "")
