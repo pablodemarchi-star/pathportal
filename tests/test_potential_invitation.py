@@ -2210,6 +2210,15 @@ class PotentialInvitationTest(unittest.TestCase):
         self.assertIn(f'/potential-entries/{entry.id}/reactivate', modal_html)
         self.assertIn('name="reactivation_status"', modal_html)
         self.assertIn('<option value="CV to be reviewed">CV to be reviewed</option>', modal_html)
+        self.assertIn('<option value="Entry accepted (on hold)">Entry accepted (on hold)</option>', modal_html)
+        self.assertLess(
+            modal_html.index('<option value="Entry accepted">Entry accepted</option>'),
+            modal_html.index('<option value="Entry accepted (on hold)">Entry accepted (on hold)</option>'),
+        )
+        self.assertLess(
+            modal_html.index('<option value="Entry accepted (on hold)">Entry accepted (on hold)</option>'),
+            modal_html.index('<option value="Onboarding email sent">Onboarding email sent</option>'),
+        )
         self.assertNotIn('<option value="Archived accepted entry">Archived accepted entry</option>', modal_html)
         self.assertIn(">Delete</button>", modal_html)
         self.assertIn("Save changes", modal_html)

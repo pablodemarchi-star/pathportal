@@ -139,7 +139,17 @@ POTENTIAL_ACTION_REQUIRED_STATUSES = [
 POTENTIAL_MANAGEMENT_DEPARTMENT_STATUSES = ["CV to be reviewed", "Review interview date and time", "Interview confirmed", "Entry accepted (on hold)"]
 POTENTIAL_ARCHIVED_STATUSES = {"Archived accepted entry", "Archived rejected entry"}
 POTENTIAL_REACTIVATION_STATUS_OPTIONS = [
-    status for status in POTENTIAL_STATUS_OPTIONS if status not in POTENTIAL_ARCHIVED_STATUSES
+    "CV to be reviewed",
+    "Review interview date and time",
+    "Interview to be arranged",
+    "Interview invitation sent",
+    "Interview confirmed",
+    "Entry accepted",
+    "Entry accepted (on hold)",
+    "Onboarding email sent",
+    "Induction confirmed",
+    "Onboarding finalised",
+    "Entry rejected",
 ]
 POTENTIAL_DEPARTMENT_OPTIONS = ["ADMIN", "MANAGEMENT"]
 INTERVIEWER_OPTIONS = [
