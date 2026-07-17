@@ -9,15 +9,21 @@ os.environ["DATABASE_URL"] = "sqlite:///:memory:"
 from app import create_app, db
 from app.models import (
     AcademicStaff,
+    CertificationYearConfiguration,
+    ExaminerCertificationYear,
     ExamSession,
     ExamSessionExaminerAssignment,
     ExamSessionInternAssignment,
+    ExamSessionYear,
+    SupervisorCertificationYear,
     ExamSessionShipmentBundle,
     ExamSessionShipmentBundleSession,
     ExamSessionShipmentChecklistItem,
     ExamSessionShipmentEvent,
     ExamSessionSupervisorAssignment,
     PotentialEntry,
+    PotentialEntryNoteMention,
+    PotentialEntryPreassignedExamSession,
     PotentialEntryStatusTrack,
     StaffPayment,
     StaffMembersSettings,
@@ -27,6 +33,8 @@ from app.models import (
 
 
 class PotentialInvitationTest(unittest.TestCase):
+    CERTIFICATION_NOTE = "Further information, such as platform access details and any other relevant instructions, will be provided in due course."
+
     def setUp(self):
         self.app = create_app()
         self.app.config["TESTING"] = True
@@ -127,6 +135,22 @@ class PotentialInvitationTest(unittest.TestCase):
         result = subprocess.run(["node", "-e", script], check=True, capture_output=True, text=True)
         return json.loads(result.stdout)
 
+    def certification_programmes_payload(self, roles=("Examiner",), examiner_complete=True, supervisor_complete=True):
+        programmes = []
+        if "Examiner" in roles:
+            programmes.append({
+                "role": "Examiner",
+                "remote_training_period": "from Monday 20 July 2026 to Thursday 30 July 2026" if examiner_complete else "",
+                "annual_meeting": "Monday 20 July 2026 from 10 to 16 h (GMT-3)" if examiner_complete else "",
+            })
+        if "Supervisor" in roles:
+            programmes.append({
+                "role": "Supervisor",
+                "remote_training_period": "from Tuesday 21 July 2026 to Friday 31 July 2026" if supervisor_complete else "",
+                "annual_meeting": "Tuesday 21 July 2026 from 9 to 16 h (GMT-3)" if supervisor_complete else "",
+            })
+        return json.dumps({"roles": list(roles), "programmes": programmes})
+
     def build_interview_invitation_email(self, dataset):
         with open("app/static/js/app.js", encoding="utf-8") as handle:
             js = handle.read()
@@ -187,6 +211,9 @@ class PotentialInvitationTest(unittest.TestCase):
             "format": "Online",
         }
         values.update(overrides)
+        year = values["session_date"].year
+        if not ExamSessionYear.query.filter_by(year=year).first():
+            db.session.add(ExamSessionYear(year=year, is_archived=False))
         session_record = ExamSession(**values)
         db.session.add(session_record)
         db.session.commit()
@@ -413,7 +440,7 @@ class PotentialInvitationTest(unittest.TestCase):
             data={
                 "csrf_token": "token",
                 "cv_review_notes": "",
-                "cv_review_note_department": "",
+                "cv_review_note_to_user_id": "",
                 "interview_option_date": "31/12/2099",
                 "interview_option_time": "10:00",
                 "interview_option_platform": "Zoom",
@@ -429,7 +456,7 @@ class PotentialInvitationTest(unittest.TestCase):
 
         self.client().post(
             f"/potential-entries/{entry.id}/cv-review/add-note",
-            data={"csrf_token": "token", "cv_review_notes": "Follow-up note", "cv_review_note_department": "Admin"},
+            data={"csrf_token": "token", "cv_review_notes": "Follow-up note", "cv_review_note_to_user_id": ""},
             follow_redirects=True,
         )
         self.assertEqual(PotentialEntryStatusTrack.query.count(), 1)
@@ -924,6 +951,10 @@ class PotentialInvitationTest(unittest.TestCase):
 
     def test_cv_review_entry_perform_action_opens_review_modal(self):
         entry = self.add_entry(status="CV to be reviewed", cv="https://example.com/cv.pdf")
+        recipient = User(full_name="Brenda Sartori", email="brenda@example.com", department="Admin", is_active=True)
+        recipient.set_password("secret123")
+        db.session.add(recipient)
+        db.session.commit()
         response = self.client().get("/potential-entries")
         html = response.get_data(as_text=True)
 
@@ -954,13 +985,10 @@ class PotentialInvitationTest(unittest.TestCase):
         self.assertIn("Add internal notes about this application...", html)
         self.assertIn('data-edit-potential-info', html)
         self.assertIn('data-potential-info-edit hidden', html)
-        self.assertIn('name="cv_review_note_department" required', html)
+        self.assertIn("<span>From</span>", html)
+        self.assertIn('name="cv_review_note_to_user_id"', html)
         self.assertIn('class="cv-review-notes-panel"', html)
-        self.assertIn("<option value=\"Admin\"", html)
-        self.assertIn("<option value=\"Admissions\"", html)
-        self.assertIn("<option value=\"Finance\"", html)
-        self.assertIn("<option value=\"Logistics\"", html)
-        self.assertIn("<option value=\"Management\"", html)
+        self.assertIn(f'<option value="{recipient.id}" >Brenda Sartori, Admin</option>', html)
         self.assertIn(">Add</button>", html)
         self.assertIn("Save and close", html)
         self.assertIn('class="success-button"', html)
@@ -1004,7 +1032,8 @@ class PotentialInvitationTest(unittest.TestCase):
         self.assertIn("Information for interview arrangement", modal_html)
         self.assertIn('for="interview-arrange-notes-', modal_html)
         self.assertIn('name="cv_review_notes"', modal_html)
-        self.assertIn('name="cv_review_note_department" required', modal_html)
+        self.assertIn("<span>From</span>", modal_html)
+        self.assertIn('name="cv_review_note_to_user_id"', modal_html)
         self.assertIn(">Add</button>", modal_html)
         self.assertNotIn("potential-readonly-history", modal_html)
         self.assertIn("Option 1", modal_html)
@@ -1035,6 +1064,113 @@ class PotentialInvitationTest(unittest.TestCase):
         self.assertNotIn("Reject application", modal_html)
         self.assertNotIn("Proceed to interview", modal_html)
 
+    def test_cv_review_modal_shows_latest_year_preassigned_exam_sessions(self):
+        self.add_session(
+            exam_session_name="Previous Year Institute",
+            session_date=date(2026, 7, 20),
+            format="Online",
+        )
+        onsite_session = self.add_session(
+            exam_session_name="London Bridge Institute",
+            session_date=date(2027, 7, 20),
+            format="Onsite",
+            city="Resistencia",
+            province="Chaco",
+        )
+        online_session = self.add_session(
+            exam_session_name="Online Academy",
+            session_date=date(2027, 11, 13),
+            format="Online",
+            city="Buenos Aires",
+            province="Buenos Aires",
+        )
+        archived_future_session = self.add_session(
+            exam_session_name="Archived Future Institute",
+            session_date=date(2028, 3, 5),
+            format="Online",
+        )
+        ExamSessionYear.query.filter_by(year=2028).update({"is_archived": True})
+        db.session.commit()
+        entry = self.add_entry(status="CV to be reviewed")
+        review_entry = self.add_entry(status="Review interview date and time", full_name="Review Candidate", email="review@example.com")
+
+        response = self.client().get("/potential-entries")
+        html = response.get_data(as_text=True)
+        modal_html = html[html.index(f'id="cv-review-potential-entry-{entry.id}"'):]
+        modal_html = modal_html[:modal_html.index(f'id="potential-note-{entry.id}"')]
+        review_modal_html = html[html.index(f'id="cv-review-potential-entry-{review_entry.id}"'):]
+        review_modal_html = review_modal_html[:review_modal_html.index(f'id="potential-note-{review_entry.id}"')]
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("Pre-assigned exam sessions", modal_html)
+        self.assertIn("Exam sessions", modal_html)
+        self.assertIn(f'value="{onsite_session.id}"', modal_html)
+        self.assertIn("London Bridge Institute - Tuesday 20 July 2027 (Onsite in Resistencia, Chaco)", modal_html)
+        self.assertIn(f'value="{online_session.id}"', modal_html)
+        self.assertIn("Online Academy - Saturday 13 November 2027 (Online)", modal_html)
+        self.assertNotIn("Previous Year Institute", modal_html)
+        self.assertNotIn("Archived Future Institute", modal_html)
+        self.assertNotIn(f'value="{archived_future_session.id}"', modal_html)
+        self.assertNotIn("Pre-assigned exam sessions", review_modal_html)
+
+    def test_cv_review_save_persists_preassigned_exam_sessions_by_id(self):
+        session_record = self.add_session(
+            exam_session_name="London Bridge Institute",
+            session_date=date(2027, 7, 20),
+            format="Online",
+        )
+        entry = self.add_entry(status="CV to be reviewed")
+
+        response = self.client().post(
+            f"/potential-entries/{entry.id}/cv-review/save",
+            data={
+                "csrf_token": "token",
+                "preassigned_exam_session_ids": [str(session_record.id), str(session_record.id)],
+            },
+            follow_redirects=True,
+        )
+        links = PotentialEntryPreassignedExamSession.query.filter_by(potential_entry_id=entry.id).all()
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(len(links), 1)
+        self.assertEqual(links[0].exam_session_id, session_record.id)
+
+        html = response.get_data(as_text=True)
+        modal_html = html[html.index(f'id="cv-review-potential-entry-{entry.id}"'):]
+        modal_html = modal_html[:modal_html.index(f'id="potential-note-{entry.id}"')]
+        self.assertIn("London Bridge Institute - Tuesday 20 July 2027 (Online)", modal_html)
+        self.assertIn(f'value="{session_record.id}"', modal_html)
+        self.assertIn("checked", modal_html)
+
+        response = self.client().post(
+            f"/potential-entries/{entry.id}/cv-review/save",
+            data={"csrf_token": "token"},
+            follow_redirects=True,
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(PotentialEntryPreassignedExamSession.query.filter_by(potential_entry_id=entry.id).count(), 0)
+
+    def test_cv_review_modal_marks_missing_preassigned_session(self):
+        session_record = self.add_session(
+            exam_session_name="Temporary Session",
+            session_date=date(2027, 7, 20),
+            format="Online",
+        )
+        entry = self.add_entry(status="CV to be reviewed")
+        db.session.add(PotentialEntryPreassignedExamSession(potential_entry_id=entry.id, exam_session_id=session_record.id))
+        db.session.commit()
+        db.session.delete(session_record)
+        db.session.commit()
+
+        response = self.client().get("/potential-entries")
+        html = response.get_data(as_text=True)
+        modal_html = html[html.index(f'id="cv-review-potential-entry-{entry.id}"'):]
+        modal_html = modal_html[:modal_html.index(f'id="potential-note-{entry.id}"')]
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("Session no longer available", modal_html)
+        self.assertIn('data-session-unavailable="true"', modal_html)
+
     def test_interview_to_be_arranged_add_note_preserves_options_and_status(self):
         options = [
             {"date": "10/08/2026", "time": "10:00", "platform": "Zoom", "interviewer": "Prof. Lic. Agustina Savini"},
@@ -1049,7 +1185,7 @@ class PotentialInvitationTest(unittest.TestCase):
             data={
                 "csrf_token": "token",
                 "cv_review_notes": "Candidate asked for details before invitation.",
-                "cv_review_note_department": "Admin",
+                "cv_review_note_to_user_id": "",
             },
             follow_redirects=True,
         )
@@ -1061,7 +1197,9 @@ class PotentialInvitationTest(unittest.TestCase):
         self.assertIn(f'id="interview-arrange-potential-entry-{entry.id}" aria-hidden="false"', html)
         self.assertEqual(updated_entry.status, "Interview to be arranged")
         self.assertEqual(json.loads(updated_entry.cv_review_interview_options), options)
-        self.assertIn("CV review - Admin: Candidate asked for details before invitation.", updated_entry.interview)
+        self.assertIn("CV review: Candidate asked for details before invitation.", updated_entry.interview)
+        self.assertIn("From:", updated_entry.interview)
+        self.assertIn("To: -", updated_entry.interview)
 
     def test_interview_to_be_arranged_mark_it_as_sent_updates_status_and_preserves_options(self):
         options = [
@@ -1078,7 +1216,7 @@ class PotentialInvitationTest(unittest.TestCase):
             data={
                 "csrf_token": "token",
                 "cv_review_notes": "Invitation sent after confirming details.",
-                "cv_review_note_department": "Admin",
+                "cv_review_note_to_user_id": "",
             },
             follow_redirects=True,
         )
@@ -1090,7 +1228,9 @@ class PotentialInvitationTest(unittest.TestCase):
         self.assertEqual(updated_entry.status, "Interview invitation sent")
         self.assertTrue(updated_entry.interview_invitation_sent)
         self.assertEqual(json.loads(updated_entry.cv_review_interview_options), options)
-        self.assertIn("CV review - Admin: Invitation sent after confirming details.", updated_entry.interview)
+        self.assertIn("CV review: Invitation sent after confirming details.", updated_entry.interview)
+        self.assertIn("From:", updated_entry.interview)
+        self.assertIn("To: -", updated_entry.interview)
 
     def test_interview_invitation_sent_perform_action_opens_confirmation_modal(self):
         entry = self.add_entry(
@@ -1117,6 +1257,10 @@ class PotentialInvitationTest(unittest.TestCase):
         self.assertIn('data-interview-no-reply', modal_html)
         self.assertIn('data-interview-option-choice', modal_html)
         self.assertIn("Monday 10 August 2026, 10:00", modal_html)
+        self.assertNotIn("Send email", modal_html)
+        self.assertNotIn("data-send-interview-invitation-email", modal_html)
+        self.assertNotIn("data-copy-interview-invitation-email", modal_html)
+        self.assertNotIn('aria-label="Copy interview invitation email"', modal_html)
         self.assertIn("Cancel", modal_html)
         self.assertIn("Review date/time options", modal_html)
         self.assertIn("Turn down application", modal_html)
@@ -1143,7 +1287,7 @@ class PotentialInvitationTest(unittest.TestCase):
                 "csrf_token": "token",
                 "selected_interview_option": "0",
                 "cv_review_notes": "Candidate confirmed interview date and time.",
-                "cv_review_note_department": "Admin",
+                "cv_review_note_to_user_id": "",
             },
             follow_redirects=True,
         )
@@ -1158,7 +1302,9 @@ class PotentialInvitationTest(unittest.TestCase):
         self.assertEqual(updated_entry.platform, "Zoom")
         self.assertEqual(updated_entry.interviewer, "Prof. Lic. Agustina Savini")
         self.assertEqual(json.loads(updated_entry.cv_review_interview_options), options)
-        self.assertIn("CV review - Admin: Candidate confirmed interview date and time.", updated_entry.interview)
+        self.assertIn("CV review: Candidate confirmed interview date and time.", updated_entry.interview)
+        self.assertIn("From:", updated_entry.interview)
+        self.assertIn("To: -", updated_entry.interview)
 
     def test_interview_invitation_sent_confirm_requires_selected_option(self):
         entry = self.add_entry(
@@ -1275,7 +1421,7 @@ class PotentialInvitationTest(unittest.TestCase):
             data={
                 "csrf_token": "token",
                 "cv_review_notes": "Candidate did not attend the interview.",
-                "cv_review_note_department": "Management",
+                "cv_review_note_to_user_id": "",
                 "interview_no_show": "1",
                 "interview_has_car": "Yes",
                 "interview_roles": ["Examiner", "Other"],
@@ -1293,7 +1439,9 @@ class PotentialInvitationTest(unittest.TestCase):
         self.assertFalse(updated_entry.entry_added_in_sessions_pre_confirmation)
         self.assertEqual(updated_entry.has_car, "")
         self.assertEqual(updated_entry.roles_list(), [])
-        self.assertIn("CV review - Management: Candidate did not attend the interview.", updated_entry.interview)
+        self.assertIn("CV review: Candidate did not attend the interview.", updated_entry.interview)
+        self.assertIn("From:", updated_entry.interview)
+        self.assertIn("To: -", updated_entry.interview)
 
     def test_interview_confirmed_application_accepted_saves_outcome_fields_and_status(self):
         entry = self.add_entry(
@@ -1308,7 +1456,7 @@ class PotentialInvitationTest(unittest.TestCase):
             data={
                 "csrf_token": "token",
                 "cv_review_notes": "Candidate is ready to continue.",
-                "cv_review_note_department": "Management",
+                "cv_review_note_to_user_id": "",
                 "interview_outcome_status": "attended",
                 "interview_has_car": "Yes",
                 "interview_roles": ["RSG", "Supervisor"],
@@ -1327,7 +1475,9 @@ class PotentialInvitationTest(unittest.TestCase):
         self.assertTrue(updated_entry.entry_added_in_sessions_pre_confirmation)
         self.assertEqual(updated_entry.has_car, "Yes")
         self.assertEqual(updated_entry.roles_list(), ["RSG", "Supervisor"])
-        self.assertIn("CV review - Management: Candidate is ready to continue.", updated_entry.interview)
+        self.assertIn("CV review: Candidate is ready to continue.", updated_entry.interview)
+        self.assertIn("From:", updated_entry.interview)
+        self.assertIn("To: -", updated_entry.interview)
 
     def test_interview_confirmed_application_accepted_on_hold_saves_reactivation_date(self):
         entry = self.add_entry(
@@ -1343,7 +1493,7 @@ class PotentialInvitationTest(unittest.TestCase):
             data={
                 "csrf_token": "token",
                 "cv_review_notes": "Candidate accepted but will be contacted later.",
-                "cv_review_note_department": "Management",
+                "cv_review_note_to_user_id": "",
                 "interview_outcome_status": "attended",
                 "interview_has_car": "Yes",
                 "interview_roles": ["Examiner"],
@@ -1416,7 +1566,7 @@ class PotentialInvitationTest(unittest.TestCase):
             data={
                 "csrf_token": "token",
                 "cv_review_notes": "Candidate declined the opportunity.",
-                "cv_review_note_department": "Management",
+                "cv_review_note_to_user_id": "",
                 "interview_no_show": "1",
                 "interview_has_car": "No",
                 "interview_roles": ["Other"],
@@ -1436,7 +1586,9 @@ class PotentialInvitationTest(unittest.TestCase):
         self.assertFalse(updated_entry.entry_added_in_sessions_pre_confirmation)
         self.assertEqual(updated_entry.has_car, "")
         self.assertEqual(updated_entry.roles_list(), [])
-        self.assertIn("CV review - Management: Candidate declined the opportunity.", updated_entry.interview)
+        self.assertIn("CV review: Candidate declined the opportunity.", updated_entry.interview)
+        self.assertIn("From:", updated_entry.interview)
+        self.assertIn("To: -", updated_entry.interview)
 
     def test_interview_confirmed_application_accepted_is_blocked_when_no_show_is_checked(self):
         entry = self.add_entry(
@@ -1635,6 +1787,7 @@ class PotentialInvitationTest(unittest.TestCase):
                 "inductionOptions": json.dumps([
                     {"date": "10/08/2026", "start_time": "10:00", "end_time": "12:00"},
                 ]),
+                "certificationProgrammes": self.certification_programmes_payload(),
             },
             require_email=True,
         )
@@ -1643,11 +1796,19 @@ class PotentialInvitationTest(unittest.TestCase):
         self.assertIn("Jane Candidate", result["payload"]["text"])
         self.assertIn("We are delighted to inform you", result["payload"]["text"])
         self.assertIn("role of Examiner", result["payload"]["text"])
-        self.assertIn("Confirm your availability for ONE of the upcoming online induction session:", result["payload"]["text"])
-        self.assertIn("Confirm your availability for <strong>ONE</strong> of the upcoming online induction session:", result["payload"]["html"])
+        self.assertIn("2. CONFIRM AVAILABILITY FOR ONE INDUCTION SESSION:", result["payload"]["text"])
+        self.assertIn("2. CONFIRM AVAILABILITY FOR <strong><em><u>ONE</u></em></strong> INDUCTION SESSION:", result["payload"]["html"])
+        self.assertNotIn("Pre-confirm your participation", result["payload"]["text"])
+        self.assertNotIn("time ranges or fees", result["payload"]["text"])
         self.assertIn("Monday 10 August 2026", result["payload"]["text"])
         self.assertIn("10:00–12:00", result["payload"]["text"])
+        self.assertIn("1. SEND THESE FILES TO ADMIN@PATHEXAMINATIONS.COM:", result["payload"]["text"])
+        self.assertIn("examiner contract signed and dated", result["payload"]["text"])
+        self.assertIn("a professional profile photo with a white background for your Path ID card.", result["payload"]["text"])
+        self.assertNotIn("this contract", result["payload"]["text"])
+        self.assertIn('href="mailto:admin@pathexaminations.com"', result["payload"]["html"])
         self.assertIn('href="https://drive.google.com/file/d/1FfzKcWq8pED3qv5yuzx2L9n_VEx0ZysM/view?usp=sharing"', result["payload"]["html"])
+        self.assertNotIn("this contract", result["payload"]["html"])
         self.assertIn("https://drive.google.com/file/d/1FfzKcWq8pED3qv5yuzx2L9n_VEx0ZysM/view?usp=sharing", result["payload"]["text"])
         self.assertIn("https://zoom.us/j/7284728472", result["payload"]["text"])
         self.assertIn("728 472 8472", result["payload"]["text"])
@@ -1657,6 +1818,65 @@ class PotentialInvitationTest(unittest.TestCase):
         self.assertIn("su=Your%20application%20has%20been%20accepted", result["gmailUrl"])
         self.assertNotIn("body=", result["gmailUrl"])
 
+    def test_entry_accepted_email_includes_preassigned_exam_sessions_when_selected(self):
+        result = self.build_entry_accepted_email(
+            {
+                "fullName": "Jane Candidate",
+                "email": "jane@example.com",
+                "inductionOptions": json.dumps([
+                    {"date": "23/07/2026", "start_time": "15:00", "end_time": "16:00"},
+                    {"date": "20/07/2026", "start_time": "11:00", "end_time": "11:30"},
+                ]),
+                "preassignedExamSessions": json.dumps([
+                    {
+                        "name": "London Bridge Institute",
+                        "date": "Monday 20 July 2026",
+                        "format": "Online",
+                        "address": "",
+                    },
+                    {
+                        "name": "New Bridge",
+                        "date": "Tuesday 23 March 2038",
+                        "format": "Onsite",
+                        "address": "Las Amapolas 475, Pilar",
+                    },
+                ]),
+                "certificationProgrammes": self.certification_programmes_payload(("Examiner", "Supervisor")),
+            },
+            require_email=True,
+        )
+
+        self.assertNotIn("error", result["payload"])
+        self.assertIn("2. PRE-CONFIRM YOUR PARTICIPATION IN EXAM SESSIONS:", result["payload"]["text"])
+        self.assertIn("London Bridge Institute\nMonday 20 July 2026\nOnline session", result["payload"]["text"])
+        self.assertIn("New Bridge\nTuesday 23 March 2038\nOnsite session\nLas Amapolas 475, Pilar", result["payload"]["text"])
+        self.assertIn("At this stage, we are unable to confirm further details, such as time slots or fees, as the final schedule will only be available once candidate registration closes in October.", result["payload"]["text"])
+        self.assertIn("3. CONFIRM AVAILABILITY FOR ONE INDUCTION SESSION:", result["payload"]["text"])
+        self.assertIn("Option 1:\nMonday 20 July 2026\n11:00–11:30", result["payload"]["text"])
+        self.assertIn("Option 2:\nThursday 23 July 2026\n15:00–16:00", result["payload"]["text"])
+        self.assertIn("<strong>Examiner</strong>", result["payload"]["html"])
+        self.assertIn("2. PRE-CONFIRM YOUR PARTICIPATION IN EXAM SESSIONS:", result["payload"]["html"])
+        self.assertIn("Online session", result["payload"]["html"])
+        self.assertIn("Onsite session", result["payload"]["html"])
+        self.assertIn("Las Amapolas 475, Pilar", result["payload"]["html"])
+        self.assertIn("3. CONFIRM AVAILABILITY FOR <strong><em><u>ONE</u></em></strong> INDUCTION SESSION:", result["payload"]["html"])
+        self.assertIn("4. CONFIRM ANNUAL CERTIFICATION PROGRAMMES:", result["payload"]["text"])
+        self.assertIn("4. CONFIRM ANNUAL CERTIFICATION PROGRAMMES:", result["payload"]["html"])
+        self.assertIn("EXAMINER CERTIFICATION", result["payload"]["text"])
+        self.assertIn("SUPERVISOR CERTIFICATION", result["payload"]["text"])
+        self.assertLess(
+            result["payload"]["text"].index("EXAMINER CERTIFICATION"),
+            result["payload"]["text"].index("SUPERVISOR CERTIFICATION"),
+        )
+        self.assertIn(self.CERTIFICATION_NOTE, result["payload"]["text"])
+        self.assertIn(self.CERTIFICATION_NOTE, result["payload"]["html"])
+        self.assertEqual(result["payload"]["text"].count(self.CERTIFICATION_NOTE), 1)
+        self.assertEqual(result["payload"]["html"].count(self.CERTIFICATION_NOTE), 1)
+        self.assertLess(
+            result["payload"]["text"].index("SUPERVISOR CERTIFICATION"),
+            result["payload"]["text"].index(self.CERTIFICATION_NOTE),
+        )
+
     def test_entry_accepted_send_email_requires_email(self):
         result = self.build_entry_accepted_email(
             {
@@ -1665,31 +1885,177 @@ class PotentialInvitationTest(unittest.TestCase):
                 "inductionOptions": json.dumps([
                     {"date": "10/08/2026", "start_time": "10:00", "end_time": "12:00"},
                 ]),
+                "certificationProgrammes": self.certification_programmes_payload(),
             },
             require_email=True,
         )
 
         self.assertEqual(result["payload"], {"error": "Potential entry email is required."})
 
+    def test_successful_application_email_certification_container_uses_dynamic_numbering(self):
+        result = self.build_entry_accepted_email(
+            {
+                "fullName": "Jane Candidate",
+                "email": "jane@example.com",
+                "inductionOptions": json.dumps([
+                    {"date": "10/08/2026", "start_time": "10:00", "end_time": "12:00"},
+                ]),
+                "certificationProgrammes": self.certification_programmes_payload(),
+            },
+            require_email=True,
+        )
+
+        self.assertNotIn("error", result["payload"])
+        self.assertIn("3. CONFIRM ANNUAL CERTIFICATION PROGRAMMES:", result["payload"]["text"])
+        self.assertIn("3. CONFIRM ANNUAL CERTIFICATION PROGRAMMES:", result["payload"]["html"])
+        self.assertNotIn("4. CONFIRM ANNUAL CERTIFICATION PROGRAMMES:", result["payload"]["text"])
+        self.assertLess(
+            result["payload"]["text"].index("2. CONFIRM AVAILABILITY FOR ONE INDUCTION SESSION:"),
+            result["payload"]["text"].index("3. CONFIRM ANNUAL CERTIFICATION PROGRAMMES:"),
+        )
+
+    def test_successful_application_email_certification_blocks_follow_selected_roles(self):
+        examiner_result = self.build_successful_application_email(
+            {
+                "fullName": "Jane Candidate",
+                "inductionOptions": json.dumps([
+                    {"date": "10/08/2026", "start_time": "10:00", "end_time": "12:00"},
+                ]),
+                "certificationProgrammes": self.certification_programmes_payload(("Examiner",)),
+            }
+        )
+        supervisor_result = self.build_successful_application_email(
+            {
+                "fullName": "Sam Candidate",
+                "inductionOptions": json.dumps([
+                    {"date": "10/08/2026", "start_time": "10:00", "end_time": "12:00"},
+                ]),
+                "certificationProgrammes": self.certification_programmes_payload(("Supervisor",)),
+            }
+        )
+
+        self.assertIn("EXAMINER CERTIFICATION", examiner_result["text"])
+        self.assertIn("Remote training period: from Monday 20 July 2026 to Thursday 30 July 2026", examiner_result["text"])
+        self.assertIn("Annual meeting: Monday 20 July 2026 from 10 to 16 h (GMT-3)", examiner_result["text"])
+        self.assertNotIn("SUPERVISOR CERTIFICATION", examiner_result["text"])
+        self.assertIn(self.CERTIFICATION_NOTE, examiner_result["text"])
+        self.assertEqual(examiner_result["text"].count(self.CERTIFICATION_NOTE), 1)
+        self.assertLess(
+            examiner_result["text"].index("EXAMINER CERTIFICATION"),
+            examiner_result["text"].index(self.CERTIFICATION_NOTE),
+        )
+        self.assertIn("SUPERVISOR CERTIFICATION", supervisor_result["text"])
+        self.assertIn("Remote training period: from Tuesday 21 July 2026 to Friday 31 July 2026", supervisor_result["text"])
+        self.assertIn("Annual meeting: Tuesday 21 July 2026 from 9 to 16 h (GMT-3)", supervisor_result["text"])
+        self.assertNotIn("EXAMINER CERTIFICATION", supervisor_result["text"])
+        self.assertIn(self.CERTIFICATION_NOTE, supervisor_result["text"])
+        self.assertEqual(supervisor_result["text"].count(self.CERTIFICATION_NOTE), 1)
+        self.assertLess(
+            supervisor_result["text"].index("SUPERVISOR CERTIFICATION"),
+            supervisor_result["text"].index(self.CERTIFICATION_NOTE),
+        )
+
+    def test_successful_application_email_rejects_missing_certification_data(self):
+        missing_role = self.build_successful_application_email(
+            {
+                "fullName": "Jane Candidate",
+                "inductionOptions": json.dumps([
+                    {"date": "10/08/2026", "start_time": "10:00", "end_time": "12:00"},
+                ]),
+                "certificationProgrammes": json.dumps({"roles": [], "programmes": []}),
+            }
+        )
+        missing_examiner = self.build_successful_application_email(
+            {
+                "fullName": "Jane Candidate",
+                "inductionOptions": json.dumps([
+                    {"date": "10/08/2026", "start_time": "10:00", "end_time": "12:00"},
+                ]),
+                "certificationProgrammes": self.certification_programmes_payload(("Examiner",), examiner_complete=False),
+            }
+        )
+        missing_supervisor = self.build_successful_application_email(
+            {
+                "fullName": "Jane Candidate",
+                "inductionOptions": json.dumps([
+                    {"date": "10/08/2026", "start_time": "10:00", "end_time": "12:00"},
+                ]),
+                "certificationProgrammes": self.certification_programmes_payload(("Supervisor",), supervisor_complete=False),
+            }
+        )
+
+        self.assertEqual(missing_role, {"error": "Potential entry role is required."})
+        self.assertEqual(missing_examiner, {"error": "Examiner certification dates are not configured."})
+        self.assertEqual(missing_supervisor, {"error": "Supervisor certification dates are not configured."})
+
+    def test_entry_accepted_email_dataset_uses_certification_year_settings(self):
+        db.session.add_all([
+            ExaminerCertificationYear(year=2026, is_archived=False),
+            SupervisorCertificationYear(year=2026, is_archived=False),
+            CertificationYearConfiguration(
+                module_key="examiner_certification",
+                year=2026,
+                remote_training_start_date=date(2026, 7, 20),
+                remote_training_end_date=date(2026, 7, 30),
+                annual_meeting_date=date(2026, 7, 20),
+                annual_meeting_time=time(10, 0),
+            ),
+            CertificationYearConfiguration(
+                module_key="supervisor_certification",
+                year=2026,
+                remote_training_start_date=date(2026, 7, 21),
+                remote_training_end_date=date(2026, 7, 31),
+                annual_meeting_date=date(2026, 7, 21),
+                annual_meeting_time=time(9, 30),
+            ),
+        ])
+        db.session.commit()
+        self.add_entry(status="Entry accepted", acceptance_roles="Examiner,Supervisor")
+
+        response = self.client().get("/potential-entries")
+        html = response.get_data(as_text=True)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("data-certification-programmes=", html)
+        self.assertIn("from Monday 20 July 2026 to Thursday 30 July 2026", html)
+        self.assertIn("Monday 20 July 2026 from 10 to 16 h (GMT-3)", html)
+        self.assertIn("from Tuesday 21 July 2026 to Friday 31 July 2026", html)
+        self.assertIn("Tuesday 21 July 2026 from 9:30 to 16 h (GMT-3)", html)
+
     def test_entry_accepted_whatsapp_message_uses_full_name_and_required_copy(self):
-        result = self.build_entry_accepted_whatsapp_message({"fullName": "Jane Candidate"})
+        result = self.build_entry_accepted_whatsapp_message({"fullName": "Juani Pérez"})
 
         self.assertNotIn("error", result)
-        self.assertIn("Hi Jane Candidate!", result["text"])
+        self.assertTrue(result["text"].startswith("Hello Juani!"))
         self.assertNotIn("XXXX", result["text"])
-        self.assertIn("I'm Brenda from Path International Examinations.", result["text"])
+        self.assertNotIn("{FIRST_NAME}", result["text"])
+        self.assertNotIn("undefined", result["text"])
+        self.assertNotIn("null", result["text"])
+        self.assertNotIn("None", result["text"])
+        self.assertNotRegex(result["text"], r"<[^>]+>")
+        self.assertIn("I'm Brenda from Path International Examinations. It’s a pleasure to be in touch!", result["text"])
         self.assertIn("your application has been accepted", result["text"])
-        self.assertIn("✅ Read, complete, sign, and return the contract.", result["text"])
-        self.assertIn("✅ Confirm your availability for one of the induction sessions.", result["text"])
-        self.assertIn("✅ Confirm your availability for the remote training period and the Annual Staff Meeting.", result["text"])
-        self.assertIn("✅ Pre-confirm your participation in your assigned exam sessions.", result["text"])
-        self.assertIn("✅ Send us a profile photo with a white background, which will be used for your physical staff ID card.", result["text"])
+        self.assertIn("*your application has been accepted*", result["text"])
+        self.assertIn("within the next three working days", result["text"])
+        self.assertIn("*within the next three working days*", result["text"])
+        self.assertIn("1️⃣🅰️ Read, complete, sign, and return the contract.", result["text"])
+        self.assertIn("1️⃣🅱️ Send us a profile photo with a white background, which will be used for your physical staff ID card.", result["text"])
+        self.assertIn("2️⃣ Pre-confirm your participation in your assigned exam sessions.", result["text"])
+        self.assertIn("3️⃣ Confirm your availability for one of the induction sessions.", result["text"])
+        self.assertNotIn("*one*", result["text"])
+        self.assertIn("4️⃣ Confirm your availability for the certification programmes associated with your role(s).", result["text"])
         self.assertIn("Kind regards,\nBrenda", result["text"])
+
+    def test_entry_accepted_whatsapp_message_prefers_first_name_dataset(self):
+        result = self.build_entry_accepted_whatsapp_message({"fullName": "María Laura Gómez", "firstName": "Malena"})
+
+        self.assertNotIn("error", result)
+        self.assertTrue(result["text"].startswith("Hello Malena!"))
 
     def test_entry_accepted_whatsapp_message_requires_full_name(self):
         result = self.build_entry_accepted_whatsapp_message({"fullName": ""})
 
-        self.assertEqual(result, {"error": "Potential entry full name is required."})
+        self.assertEqual(result, {"error": "Potential entry name is required."})
 
     def test_interview_invitation_email_generation_uses_options_platform_and_gmail_body(self):
         result = self.build_interview_invitation_email({
@@ -1771,7 +2137,7 @@ class PotentialInvitationTest(unittest.TestCase):
             data={
                 "csrf_token": "token",
                 "cv_review_notes": "Application is not aligned right now.",
-                "cv_review_note_department": "Management",
+                "cv_review_note_to_user_id": "",
             },
             follow_redirects=True,
         )
@@ -1782,22 +2148,157 @@ class PotentialInvitationTest(unittest.TestCase):
         self.assertEqual(updated_entry.status, "Entry rejected")
         self.assertTrue(updated_entry.is_rejected)
         self.assertIsNotNone(updated_entry.rejected_on)
-        self.assertIn("CV review - Management: Application is not aligned right now.", updated_entry.interview)
+        self.assertIn("CV review: Application is not aligned right now.", updated_entry.interview)
+        self.assertIn("From:", updated_entry.interview)
+        self.assertIn("To: -", updated_entry.interview)
         self.assertEqual(json.loads(updated_entry.cv_review_interview_options), [])
 
-    def test_cv_review_note_requires_department(self):
+    def test_cv_review_note_allows_empty_to(self):
         entry = self.add_entry(status="CV to be reviewed", interview="")
         response = self.client().post(
             f"/potential-entries/{entry.id}/cv-review/add-note",
-            data={"csrf_token": "token", "cv_review_notes": "Missing department."},
+            data={"csrf_token": "token", "cv_review_notes": "No recipient selected."},
             follow_redirects=True,
         )
         html = response.get_data(as_text=True)
         updated_entry = db.session.get(PotentialEntry, entry.id)
 
         self.assertEqual(response.status_code, 200)
-        self.assertIn("Department is required.", html)
-        self.assertEqual(updated_entry.interview, "")
+        self.assertIn("Note added.", html)
+        self.assertIn("From:", updated_entry.interview)
+        self.assertIn("To: -", updated_entry.interview)
+
+    def test_cv_review_note_saves_selected_to_user(self):
+        entry = self.add_entry(status="CV to be reviewed", interview="")
+        recipient = User(full_name="Brenda Sartori", email="brenda@example.com", department="Admin", is_active=True)
+        recipient.set_password("secret123")
+        db.session.add(recipient)
+        db.session.commit()
+
+        response = self.client().post(
+            f"/potential-entries/{entry.id}/cv-review/add-note",
+            data={
+                "csrf_token": "token",
+                "cv_review_notes": "Please follow up with the candidate.",
+                "cv_review_note_to_user_id": str(recipient.id),
+            },
+            follow_redirects=True,
+        )
+        html = response.get_data(as_text=True)
+        updated_entry = db.session.get(PotentialEntry, entry.id)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("Note added.", html)
+        self.assertIn("To: Brenda Sartori, Admin", updated_entry.interview)
+        self.assertIn('<span class="responsible-chip potential-note-department-chip">To: Brenda Sartori, Admin</span>', html)
+
+    def test_dashboard_shows_unread_potential_note_mentions(self):
+        recipient_client, recipient = self.permission_client(can_edit=True, department="Admissions")
+        entry = self.add_entry(status="CV to be reviewed", interview="", department="Admissions", full_name="Mentioned Candidate")
+
+        self.client().post(
+            f"/potential-entries/{entry.id}/cv-review/add-note",
+            data={
+                "csrf_token": "token",
+                "cv_review_notes": "Please review this application.",
+                "cv_review_note_to_user_id": str(recipient.id),
+            },
+            follow_redirects=True,
+        )
+        mention = PotentialEntryNoteMention.query.one()
+
+        response = recipient_client.get("/")
+        html = response.get_data(as_text=True)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("1 note", html)
+        self.assertNotIn("0 actions", html)
+        self.assertIn("You have been mentioned in 1 note in this menu.", html)
+        self.assertIn("View note in Mentioned Candidate", html)
+        self.assertIn(f"open_staff_modal=cv-review-potential-entry-{entry.id}", html)
+        self.assertIn(f"highlight_note={mention.note_id}", html)
+
+        second_entry = self.add_entry(status="CV to be reviewed", interview="", department="Admissions", full_name="Second Mention")
+        self.client().post(
+            f"/potential-entries/{second_entry.id}/cv-review/add-note",
+            data={
+                "csrf_token": "token",
+                "cv_review_notes": "Please review this second application.",
+                "cv_review_note_to_user_id": str(recipient.id),
+            },
+            follow_redirects=True,
+        )
+        second_html = recipient_client.get("/").get_data(as_text=True)
+
+        self.assertIn("2 notes", second_html)
+        self.assertIn("You have been mentioned in 2 notes in this menu.", second_html)
+
+    def test_potential_note_recipient_can_mark_note_as_read(self):
+        recipient_client, recipient = self.permission_client(can_edit=True, department="Admissions")
+        entry = self.add_entry(status="CV to be reviewed", interview="", department="Admissions")
+
+        self.client().post(
+            f"/potential-entries/{entry.id}/cv-review/add-note",
+            data={
+                "csrf_token": "token",
+                "cv_review_notes": "Please mark this as read.",
+                "cv_review_note_to_user_id": str(recipient.id),
+            },
+            follow_redirects=True,
+        )
+        mention = PotentialEntryNoteMention.query.one()
+
+        response = recipient_client.post(
+            f"/potential-entry-note-mentions/{mention.id}/read",
+            data={
+                "csrf_token": "token",
+                "read": "1",
+                "return_modal": f"potential-entry-{entry.id}",
+                "highlight_note": mention.note_id,
+            },
+            follow_redirects=True,
+        )
+        db.session.refresh(mention)
+        dashboard_html = recipient_client.get("/").get_data(as_text=True)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(mention.is_read)
+        self.assertEqual(mention.read_by_user_id, recipient.id)
+        self.assertIsNotNone(mention.read_on)
+        self.assertIn("Read", response.get_data(as_text=True))
+        self.assertNotIn("You have been mentioned in 1 note in this menu.", dashboard_html)
+
+    def test_only_potential_note_recipient_can_mark_note_as_read(self):
+        recipient = User(full_name="Brenda Sartori", email="brenda@example.com", department="Admissions", is_active=True)
+        recipient.set_password("secret123")
+        db.session.add(recipient)
+        db.session.commit()
+        other_client, _other = self.permission_client(can_edit=True, department="Admissions")
+        entry = self.add_entry(status="CV to be reviewed", interview="", department="Admissions")
+
+        self.client().post(
+            f"/potential-entries/{entry.id}/cv-review/add-note",
+            data={
+                "csrf_token": "token",
+                "cv_review_notes": "Only Brenda can mark this as read.",
+                "cv_review_note_to_user_id": str(recipient.id),
+            },
+            follow_redirects=True,
+        )
+        mention = PotentialEntryNoteMention.query.one()
+
+        response = other_client.post(
+            f"/potential-entry-note-mentions/{mention.id}/read",
+            data={"csrf_token": "token", "read": "1"},
+            follow_redirects=True,
+        )
+        db.session.refresh(mention)
+        html = other_client.get("/potential-entries").get_data(as_text=True)
+
+        self.assertEqual(response.status_code, 403)
+        self.assertFalse(mention.is_read)
+        self.assertIn("Not read yet", html)
+        self.assertNotIn('data-note-read-checkbox', html)
 
     def test_cv_review_add_note_saves_comment_and_keeps_modal_open(self):
         entry = self.add_entry(status="CV to be reviewed")
@@ -1806,7 +2307,7 @@ class PotentialInvitationTest(unittest.TestCase):
             data={
                 "csrf_token": "token",
                 "cv_review_notes": "Please compare references.",
-                "cv_review_note_department": "Admin",
+                "cv_review_note_to_user_id": "",
                 "interview_option_date": ["31/12/2099"],
                 "interview_option_time": ["09:30"],
             },
@@ -1819,11 +2320,13 @@ class PotentialInvitationTest(unittest.TestCase):
         self.assertIn("Note added.", html)
         self.assertIn(f'id="cv-review-potential-entry-{entry.id}" aria-hidden="false"', html)
         self.assertRegex(html, r"\d{2}/\d{2}/\d{4} - \d{2}:\d{2} h\.")
-        self.assertIn('<span class="responsible-chip potential-note-department-chip">Admin</span>', html)
+        self.assertIn('<span class="responsible-chip potential-note-department-chip">From: admin, Admin</span>', html)
         self.assertIn("Please compare references.", html)
         self.assertIn('data-potential-note-delete hidden', html)
         self.assertEqual(updated_entry.status, "CV to be reviewed")
-        self.assertIn("CV review - Admin: Please compare references.", updated_entry.interview)
+        self.assertIn("CV review: Please compare references.", updated_entry.interview)
+        self.assertIn("From:", updated_entry.interview)
+        self.assertIn("To: -", updated_entry.interview)
         self.assertEqual(json.loads(updated_entry.cv_review_interview_options), [{"date": "31/12/2099", "time": "09:30", "platform": "", "interviewer": ""}])
 
     def test_cv_review_note_can_be_deleted(self):
@@ -1852,7 +2355,7 @@ class PotentialInvitationTest(unittest.TestCase):
             data={
                 "csrf_token": "token",
                 "cv_review_notes": "Save this note without moving status.",
-                "cv_review_note_department": "Admissions",
+                "cv_review_note_to_user_id": "",
                 "interview_option_date": ["31/12/2099"],
                 "interview_option_time": ["10:00"],
             },
@@ -1865,7 +2368,9 @@ class PotentialInvitationTest(unittest.TestCase):
         self.assertIn("CV review saved.", html)
         self.assertNotIn(f'id="cv-review-potential-entry-{entry.id}" aria-hidden="false"', html)
         self.assertEqual(updated_entry.status, "CV to be reviewed")
-        self.assertIn("CV review - Admissions: Save this note without moving status.", updated_entry.interview)
+        self.assertIn("CV review: Save this note without moving status.", updated_entry.interview)
+        self.assertIn("From:", updated_entry.interview)
+        self.assertIn("To: -", updated_entry.interview)
         self.assertEqual(json.loads(updated_entry.cv_review_interview_options), [{"date": "31/12/2099", "time": "10:00", "platform": "", "interviewer": ""}])
 
     def test_cv_review_proceed_saves_notes_and_moves_to_interview_stage(self):
@@ -1875,7 +2380,7 @@ class PotentialInvitationTest(unittest.TestCase):
             data={
                 "csrf_token": "token",
                 "cv_review_notes": "Strong application. Arrange interview.",
-                "cv_review_note_department": "Management",
+                "cv_review_note_to_user_id": "",
                 "interview_option_date": ["31/12/2099", "01/01/2100"],
                 "interview_option_time": ["09:30", "10:00"],
                 "interview_option_platform": ["Zoom", "Meet"],
@@ -1893,7 +2398,9 @@ class PotentialInvitationTest(unittest.TestCase):
         self.assertEqual(updated_entry.status, "Interview to be arranged")
         self.assertFalse(updated_entry.is_rejected)
         self.assertIsNone(updated_entry.rejected_on)
-        self.assertIn("CV review - Management: Strong application. Arrange interview.", updated_entry.interview)
+        self.assertIn("CV review: Strong application. Arrange interview.", updated_entry.interview)
+        self.assertIn("From:", updated_entry.interview)
+        self.assertIn("To: -", updated_entry.interview)
         self.assertEqual(
             json.loads(updated_entry.cv_review_interview_options),
             [
@@ -1919,7 +2426,7 @@ class PotentialInvitationTest(unittest.TestCase):
             data={
                 "csrf_token": "token",
                 "cv_review_notes": "Ready to move.",
-                "cv_review_note_department": "Management",
+                "cv_review_note_to_user_id": "",
                 "interview_option_date": [""],
                 "interview_option_time": [""],
             },
@@ -1941,7 +2448,7 @@ class PotentialInvitationTest(unittest.TestCase):
             data={
                 "csrf_token": "token",
                 "cv_review_notes": "Ready to move.",
-                "cv_review_note_department": "Management",
+                "cv_review_note_to_user_id": "",
                 "interview_option_date": ["31/12/2099"],
                 "interview_option_time": ["10:00"],
             },
@@ -1964,7 +2471,7 @@ class PotentialInvitationTest(unittest.TestCase):
             data={
                 "csrf_token": "token",
                 "cv_review_notes": "Reject without dates.",
-                "cv_review_note_department": "Management",
+                "cv_review_note_to_user_id": "",
                 "interview_option_date": [""],
                 "interview_option_time": [""],
             },
@@ -1981,7 +2488,7 @@ class PotentialInvitationTest(unittest.TestCase):
         entry = self.add_entry(status="Interview invitation sent", interview="")
         response = self.client().post(
             f"/potential-entries/{entry.id}/cv-review/proceed",
-            data={"csrf_token": "token", "cv_review_notes": "Manipulated transition.", "cv_review_note_department": "Admin"},
+            data={"csrf_token": "token", "cv_review_notes": "Manipulated transition.", "cv_review_note_to_user_id": ""},
             follow_redirects=True,
         )
 
@@ -2007,7 +2514,7 @@ class PotentialInvitationTest(unittest.TestCase):
                 data={
                     "csrf_token": "token",
                     "cv_review_notes": "Keep this draft",
-                    "cv_review_note_department": "Finance",
+                    "cv_review_note_to_user_id": "",
                     "interview_option_date": dates,
                     "interview_option_time": times,
                 },
@@ -2990,12 +3497,18 @@ class PotentialInvitationTest(unittest.TestCase):
         self.assertIn("Application update", js)
         self.assertIn("Your application has been accepted", js)
         self.assertIn("application for the role of Examiner", js)
-        self.assertIn("this contract</a>", js)
+        self.assertIn("examiner contract signed and dated</a>", js)
         self.assertIn("1FfzKcWq8pED3qv5yuzx2L9n_VEx0ZysM", js)
         self.assertIn("Upcoming induction session date and time options are not configured.", js)
-        self.assertIn("Please complete all induction session options before copying this email.", js)
-        self.assertIn("Confirm your availability for <strong>ONE</strong> of the upcoming online induction session:", js)
-        self.assertIn("Confirm your availability for ONE of the upcoming online induction session:", js)
+        self.assertNotIn("Please complete all induction session options before copying this email.", js)
+        self.assertIn("CONFIRM AVAILABILITY FOR <strong><em><u>ONE</u></em></strong> INDUCTION SESSION:", js)
+        self.assertIn("CONFIRM AVAILABILITY FOR ONE INDUCTION SESSION:", js)
+        self.assertIn("CONFIRM ANNUAL CERTIFICATION PROGRAMMES:", js)
+        self.assertIn("Potential entry role is required.", js)
+        self.assertIn("Examiner certification dates are not configured.", js)
+        self.assertIn("Supervisor certification dates are not configured.", js)
+        self.assertIn("SEND THESE FILES TO", js)
+        self.assertIn("ADMIN@PATHEXAMINATIONS.COM", js)
         self.assertIn("https://zoom.us/j/7284728472", js)
         self.assertIn("728 472 8472", js)
         self.assertIn("Password: <strong>", js)
@@ -3024,16 +3537,18 @@ class PotentialInvitationTest(unittest.TestCase):
                         {"date": "10/08/2026", "start_time": "08:00", "end_time": "09:00"},
                     ]
                 ),
+                "certificationProgrammes": self.certification_programmes_payload(),
             }
         )
 
         self.assertNotIn("error", result)
-        self.assertIn("Confirm your availability for <strong>ONE</strong> of the upcoming online induction session:", result["html"])
-        self.assertIn("Confirm your availability for ONE of the upcoming online induction session:", result["text"])
+        self.assertIn("CONFIRM AVAILABILITY FOR <strong><em><u>ONE</u></em></strong> INDUCTION SESSION:", result["html"])
+        self.assertIn("CONFIRM AVAILABILITY FOR ONE INDUCTION SESSION:", result["text"])
         self.assertIn('href="https://drive.google.com/file/d/1FfzKcWq8pED3qv5yuzx2L9n_VEx0ZysM/view?usp=sharing"', result["html"])
-        self.assertIn("this contract</a>", result["html"])
+        self.assertIn("examiner contract signed and dated</a>", result["html"])
+        self.assertNotIn("this contract", result["html"])
         self.assertIn("https://drive.google.com/file/d/1FfzKcWq8pED3qv5yuzx2L9n_VEx0ZysM/view?usp=sharing", result["text"])
-        self.assertIn("The Zoom access details are as follows:", result["html"])
+        self.assertIn("The Zoom access details for the induction session are as follows:", result["html"])
         self.assertIn("https://zoom.us/j/7284728472", result["text"])
         self.assertIn("728 472 8472", result["text"])
         self.assertIn("Password: path", result["text"])
@@ -3059,6 +3574,7 @@ class PotentialInvitationTest(unittest.TestCase):
             {
                 "fullName": "Jane Candidate",
                 "inductionOptions": json.dumps([{"date": "", "start_time": "", "end_time": ""}]),
+                "certificationProgrammes": self.certification_programmes_payload(),
             }
         )
 
@@ -3074,10 +3590,11 @@ class PotentialInvitationTest(unittest.TestCase):
                         {"date": "13/08/2026", "start_time": "", "end_time": "17:00"},
                     ]
                 ),
+                "certificationProgrammes": self.certification_programmes_payload(),
             }
         )
 
-        self.assertEqual(result, {"error": "Please complete all induction session options before copying this email."})
+        self.assertEqual(result, {"error": "Upcoming induction session date and time options are not configured."})
 
 
 if __name__ == "__main__":

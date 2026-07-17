@@ -34,13 +34,37 @@
           <div>
             <h2>Potential entries</h2>
             {% if potential_entries_pending_count %}
-              <p>You have {{ potential_entries_pending_count }} actions to complete in this menu.</p>
+              <p>You have {{ potential_entries_pending_count }} action{% if potential_entries_pending_count != 1 %}s{% endif %} to complete in this menu.</p>
             {% else %}
               <p>Everything is up to date in this menu.</p>
             {% endif %}
+            {% if potential_entries_note_mentions_count %}
+              <p class="dashboard-mention-summary">You have been mentioned in {{ potential_entries_note_mentions_count }} note{% if potential_entries_note_mentions_count != 1 %}s{% endif %} in this menu.</p>
+            {% endif %}
           </div>
-          <span class="dashboard-count-chip">{{ potential_entries_pending_count }}</span>
+          {% if potential_entries_pending_count or potential_entries_note_mentions_count %}
+            <div class="dashboard-count-stack" aria-label="Potential entries counters">
+              {% if potential_entries_pending_count %}
+                <span class="dashboard-count-chip">{{ potential_entries_pending_count }} action{% if potential_entries_pending_count != 1 %}s{% endif %}</span>
+              {% endif %}
+              {% if potential_entries_note_mentions_count %}
+                <span class="dashboard-count-chip dashboard-count-chip-note">{{ potential_entries_note_mentions_count }} note{% if potential_entries_note_mentions_count != 1 %}s{% endif %}</span>
+              {% endif %}
+            </div>
+          {% endif %}
         </div>
+        {% if potential_entries_note_mentions_count %}
+          <div class="dashboard-mention-links" aria-label="Potential entries note mentions">
+            {% for mention in potential_entries_note_mentions %}
+              {% set mention_entry = mention.potential_entry %}
+              {% set mention_modal_id = potential_perform_action_modal_id(mention_entry) %}
+              <a href="{{ url_for('staff.potential_entries', open_staff_modal=mention_modal_id, highlight_note=mention.note_id, show_archived=1) if mention_entry.is_rejected or mention_entry.status in ['Archived accepted entry', 'Archived rejected entry'] else url_for('staff.potential_entries', open_staff_modal=mention_modal_id, highlight_note=mention.note_id) }}">View note in {{ mention_entry.full_name }}</a>
+            {% endfor %}
+            {% if potential_entries_note_mentions_count > potential_entries_note_mentions|length %}
+              <a href="{{ url_for('staff.potential_entries', mentions=1) }}">View all mentions</a>
+            {% endif %}
+          </div>
+        {% endif %}
         <a class="primary-button link-button dashboard-menu-button" href="{{ url_for('staff.potential_entries', action_scope='my_actions') }}">Go to menu</a>
       </article>
     {% endif %}

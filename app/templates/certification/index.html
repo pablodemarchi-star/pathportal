@@ -703,7 +703,20 @@
           New note
           <textarea name="interview" rows="4" maxlength="4000" placeholder="Add a new history note" required></textarea>
         </label>
-        <div class="form-actions">
+        <div class="history-note-meta-actions">
+          <div class="note-from-field">
+            <span>From</span>
+            <strong>{{ note_actor_label() }}</strong>
+          </div>
+          <label>
+            To
+            <select name="note_to_user_id">
+              <option value="">-</option>
+              {% for user_option in note_to_user_options() %}
+                <option value="{{ user_option.id }}">{{ user_option.full_name }}, {{ user_option.department }}</option>
+              {% endfor %}
+            </select>
+          </label>
           <button class="secondary-button" type="button" data-close-modal>Cancel</button>
           <button class="primary-button" type="submit">Add note</button>
         </div>
@@ -714,7 +727,9 @@
       <div class="history-list">
         {% for entry in interview_entries|reverse %}
           <article class="history-entry">
-            <time>{{ entry.date }}</time>
+            <time>Created on: {{ entry.date }}</time>
+            <small>From: {{ history_from_label(entry) }}</small>
+            {% if history_to_label(entry) != '-' %}<small>To: {{ history_to_label(entry) }}</small>{% endif %}
             <p>{{ entry.note }}</p>
           </article>
         {% endfor %}

@@ -213,7 +213,19 @@ class ProviderHistory(db.Model):
     provider_id = db.Column(db.Integer, db.ForeignKey("provider.id"), nullable=False, index=True)
     comment = db.Column(db.Text, nullable=False)
     created_by = db.Column(db.String(120), nullable=True)
+    from_user_id = db.Column(db.Integer, db.ForeignKey("app_user.id"), nullable=True, index=True)
+    from_full_name = db.Column(db.String(160), nullable=True)
+    from_department = db.Column(db.String(40), nullable=True)
+    to_user_id = db.Column(db.Integer, db.ForeignKey("app_user.id"), nullable=True, index=True)
+    to_full_name = db.Column(db.String(160), nullable=True)
+    to_department = db.Column(db.String(40), nullable=True)
     created_on = db.Column(db.DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))
+    updated_on = db.Column(
+        db.DateTime(timezone=True),
+        nullable=False,
+        default=lambda: datetime.now(timezone.utc),
+        onupdate=lambda: datetime.now(timezone.utc),
+    )
 
     provider = db.relationship("Provider", backref=db.backref("history_entries", lazy=True, cascade="all, delete-orphan"))
 
@@ -1623,7 +1635,19 @@ class ExamSessionLogisticsConceptNote(db.Model):
     logistics_concept_id = db.Column(db.Integer, db.ForeignKey("exam_session_logistics_concept.id"), nullable=False, index=True)
     comment = db.Column(db.Text, nullable=False)
     created_by = db.Column(db.String(120), nullable=True)
+    from_user_id = db.Column(db.Integer, db.ForeignKey("app_user.id"), nullable=True, index=True)
+    from_full_name = db.Column(db.String(160), nullable=True)
+    from_department = db.Column(db.String(40), nullable=True)
+    to_user_id = db.Column(db.Integer, db.ForeignKey("app_user.id"), nullable=True, index=True)
+    to_full_name = db.Column(db.String(160), nullable=True)
+    to_department = db.Column(db.String(40), nullable=True)
     created_on = db.Column(db.DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))
+    updated_on = db.Column(
+        db.DateTime(timezone=True),
+        nullable=False,
+        default=lambda: datetime.now(timezone.utc),
+        onupdate=lambda: datetime.now(timezone.utc),
+    )
 
     logistics_concept = db.relationship("ExamSessionLogisticsConcept", backref=db.backref("notes", lazy=True))
 
@@ -1680,6 +1704,68 @@ class PotentialEntry(db.Model):
 
     def roles_list(self):
         return [role.strip() for role in (self.acceptance_roles or "").split(",") if role.strip()]
+
+
+class PotentialEntryNoteMention(db.Model):
+    __tablename__ = "potential_entry_note_mention"
+
+    id = db.Column(db.Integer, primary_key=True)
+    note_id = db.Column(db.String(64), nullable=False, unique=True, index=True)
+    related_entity_type = db.Column(db.String(80), nullable=False, default="Potential entry", index=True)
+    related_entity_id = db.Column(db.Integer, nullable=False, index=True)
+    potential_entry_id = db.Column(
+        db.Integer,
+        db.ForeignKey("potential_entry.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    from_user_id = db.Column(db.Integer, db.ForeignKey("app_user.id"), nullable=True, index=True)
+    from_full_name = db.Column(db.String(160), nullable=True)
+    from_department = db.Column(db.String(40), nullable=True)
+    to_user_id = db.Column(db.Integer, db.ForeignKey("app_user.id"), nullable=True, index=True)
+    to_full_name = db.Column(db.String(160), nullable=True)
+    to_department = db.Column(db.String(40), nullable=True)
+    comment_text = db.Column(db.Text, nullable=False)
+    is_read = db.Column(db.Boolean, nullable=False, default=False, index=True)
+    read_by_user_id = db.Column(db.Integer, db.ForeignKey("app_user.id"), nullable=True, index=True)
+    read_on = db.Column(db.DateTime(timezone=True), nullable=True)
+    created_on = db.Column(db.DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))
+    updated_on = db.Column(
+        db.DateTime(timezone=True),
+        nullable=False,
+        default=lambda: datetime.now(timezone.utc),
+        onupdate=lambda: datetime.now(timezone.utc),
+    )
+
+    potential_entry = db.relationship("PotentialEntry", backref=db.backref("note_mentions", lazy=True, cascade="all, delete-orphan"))
+
+
+class PotentialEntryPreassignedExamSession(db.Model):
+    __tablename__ = "potential_entry_preassigned_exam_session"
+    __table_args__ = (
+        db.UniqueConstraint("potential_entry_id", "exam_session_id", name="uq_potential_entry_preassigned_session"),
+    )
+
+    id = db.Column(db.Integer, primary_key=True)
+    potential_entry_id = db.Column(
+        db.Integer,
+        db.ForeignKey("potential_entry.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    exam_session_id = db.Column(db.Integer, nullable=False, index=True)
+    created_on = db.Column(db.DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))
+    updated_on = db.Column(
+        db.DateTime(timezone=True),
+        nullable=False,
+        default=lambda: datetime.now(timezone.utc),
+        onupdate=lambda: datetime.now(timezone.utc),
+    )
+
+    potential_entry = db.relationship(
+        "PotentialEntry",
+        backref=db.backref("preassigned_exam_sessions", lazy=True, cascade="all, delete-orphan"),
+    )
 
 
 class PotentialEntryStatusTrack(db.Model):

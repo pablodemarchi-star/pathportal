@@ -357,11 +357,31 @@ const openRequestedStaffModal = () => {
   const modalId = params.get("open_staff_modal");
   if (!modalId) return;
   openModal(modalId);
+  const highlightNoteId = params.get("highlight_note");
+  if (highlightNoteId) {
+    window.requestAnimationFrame(() => {
+      const target = document.getElementById(`potential-note-${highlightNoteId}`);
+      if (!target) return;
+      target.scrollIntoView({ block: "center", behavior: "smooth" });
+      target.setAttribute("tabindex", "-1");
+      target.focus({ preventScroll: true });
+      highlightModalTarget(target);
+    });
+  }
   params.delete("open_staff_modal");
+  params.delete("highlight_note");
   const query = params.toString();
   const nextUrl = `${window.location.pathname}${query ? `?${query}` : ""}${window.location.hash}`;
   window.history.replaceState({}, "", nextUrl);
 };
+
+document.querySelectorAll("[data-note-read-checkbox]").forEach((checkbox) => {
+  checkbox.addEventListener("change", () => {
+    if (!checkbox.checked) return;
+    const form = checkbox.closest("[data-note-read-form]");
+    form?.requestSubmit();
+  });
+});
 
 const closeScheduleActionPanel = (form, { restoreFocus = true } = {}) => {
   if (!form) return;
@@ -2758,6 +2778,74 @@ const closeOtherMemberMultiselects = (activePicker) => {
   });
 };
 
+const syncPotentialSessionMultiselect = (picker) => {
+  const tags = picker.querySelector("[data-potential-session-tags]");
+  const placeholder = picker.querySelector("[data-potential-session-placeholder]");
+  if (!tags) return;
+  tags.innerHTML = "";
+  const checkedSessions = Array.from(picker.querySelectorAll("input[type='checkbox']:checked"));
+  checkedSessions.forEach((checkbox) => {
+    const fullLabel = checkbox.dataset.sessionUnavailable === "true"
+      ? "Session no longer available"
+      : checkbox.dataset.sessionLabel || checkbox.value;
+    const label = checkbox.dataset.sessionUnavailable === "true"
+      ? "Session no longer available"
+      : checkbox.dataset.sessionChipLabel || fullLabel;
+    const tag = document.createElement("span");
+    tag.className = "potential-session-chip";
+    if (checkbox.dataset.sessionUnavailable === "true") tag.classList.add("is-unavailable");
+    tag.textContent = label;
+    tag.title = fullLabel;
+
+    if (!checkbox.disabled) {
+      const remove = document.createElement("button");
+      remove.type = "button";
+      remove.setAttribute("aria-label", `Remove ${fullLabel}`);
+      remove.textContent = "×";
+      remove.addEventListener("click", (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        checkbox.checked = false;
+        syncPotentialSessionMultiselect(picker);
+        positionPotentialSessionMultiselectPanel(picker);
+      });
+      tag.appendChild(remove);
+    }
+
+    tags.appendChild(tag);
+  });
+  if (placeholder) {
+    placeholder.hidden = checkedSessions.length > 0;
+  }
+};
+
+const positionPotentialSessionMultiselectPanel = (picker) => {
+  const panel = picker.querySelector(".potential-session-picker-panel");
+  const summary = picker.querySelector("summary");
+  if (!panel || !summary || !picker.open) return;
+  const rect = summary.getBoundingClientRect();
+  const viewportGap = 12;
+  const panelWidth = Math.min(rect.width, window.innerWidth - viewportGap * 2);
+  const left = Math.min(Math.max(rect.left, viewportGap), window.innerWidth - panelWidth - viewportGap);
+  const availableBelow = window.innerHeight - rect.bottom - viewportGap;
+  const availableAbove = rect.top - viewportGap;
+  const openAbove = availableBelow < 160 && availableAbove > availableBelow;
+  const maxHeight = Math.max(160, Math.min(280, openAbove ? availableAbove - 6 : availableBelow - 6));
+  panel.style.width = `${panelWidth}px`;
+  panel.style.maxHeight = `${maxHeight}px`;
+  panel.style.left = `${left}px`;
+  const panelHeight = Math.min(panel.scrollHeight || maxHeight, maxHeight);
+  panel.style.top = openAbove
+    ? `${Math.max(viewportGap, rect.top - panelHeight - 6)}px`
+    : `${Math.min(window.innerHeight - viewportGap, rect.bottom + 6)}px`;
+};
+
+const closeOtherPotentialSessionMultiselects = (activePicker) => {
+  document.querySelectorAll("[data-potential-session-multiselect][open]").forEach((picker) => {
+    if (picker !== activePicker) picker.open = false;
+  });
+};
+
 const positionTeamMemberPickerPanel = (picker) => {
   const panel = picker.querySelector(".team-member-picker-panel");
   const summary = picker.querySelector("summary");
@@ -2944,8 +3032,32 @@ const initMemberMultiselects = (root = document) => {
   });
 };
 
+const initPotentialSessionMultiselects = (root = document) => {
+  root.querySelectorAll("[data-potential-session-multiselect]").forEach((picker) => {
+    if (picker.dataset.initialized === "true") return;
+    picker.dataset.initialized = "true";
+    picker.addEventListener("toggle", () => {
+      if (picker.open) {
+        closeOtherMemberMultiselects();
+        closeOtherPotentialSessionMultiselects(picker);
+        positionPotentialSessionMultiselectPanel(picker);
+      }
+    });
+    picker.querySelectorAll("input[type='checkbox']").forEach((checkbox) => {
+      checkbox.addEventListener("change", () => {
+        syncPotentialSessionMultiselect(picker);
+        positionPotentialSessionMultiselectPanel(picker);
+      });
+    });
+    syncPotentialSessionMultiselect(picker);
+  });
+};
+
 document.addEventListener("click", (event) => {
   document.querySelectorAll("[data-member-multiselect][open]").forEach((picker) => {
+    if (!picker.contains(event.target)) picker.open = false;
+  });
+  document.querySelectorAll("[data-potential-session-multiselect][open]").forEach((picker) => {
     if (!picker.contains(event.target)) picker.open = false;
   });
 });
@@ -2955,15 +3067,20 @@ document.addEventListener("keydown", (event) => {
   document.querySelectorAll("[data-member-multiselect][open]").forEach((picker) => {
     picker.open = false;
   });
+  document.querySelectorAll("[data-potential-session-multiselect][open]").forEach((picker) => {
+    picker.open = false;
+  });
 });
 
 window.addEventListener("resize", () => {
   document.querySelectorAll("[data-member-multiselect][open]").forEach(positionMemberMultiselectPanel);
+  document.querySelectorAll("[data-potential-session-multiselect][open]").forEach(positionPotentialSessionMultiselectPanel);
   document.querySelectorAll("[data-team-member-picker][open]").forEach(positionTeamMemberPickerPanel);
 });
 
 window.addEventListener("scroll", () => {
   document.querySelectorAll("[data-member-multiselect][open]").forEach(positionMemberMultiselectPanel);
+  document.querySelectorAll("[data-potential-session-multiselect][open]").forEach(positionPotentialSessionMultiselectPanel);
   document.querySelectorAll("[data-team-member-picker][open]").forEach(positionTeamMemberPickerPanel);
 }, true);
 
@@ -4071,7 +4188,7 @@ const getInductionSessionOptions = (button) => {
     const startTime = cleanEmailValue(option.start_time);
     const endTime = cleanEmailValue(option.end_time);
     if (!sortDate || !inductionDate || !inductionTimeRange || startTime >= endTime) {
-      return { options: [], error: "Please complete all induction session options before copying this email." };
+      return { options: [], error: "Upcoming induction session date and time options are not configured." };
     }
     options.push({ date: inductionDate, timeRange: inductionTimeRange, sortDate, startTime });
   }
@@ -4091,6 +4208,112 @@ const pathEmailShell = ({ label, title, bodyHtml }) => `
   </div>
 `;
 
+const getEntryAcceptedPreassignedSessions = (source) => {
+  let rawSessions = [];
+  try {
+    rawSessions = JSON.parse(source?.dataset?.preassignedExamSessions || "[]");
+  } catch (error) {
+    rawSessions = [];
+  }
+  if (!Array.isArray(rawSessions)) return [];
+  return rawSessions
+    .filter((session) => session && typeof session === "object")
+    .map((session, index) => ({
+      name: cleanEmailValue(session.name),
+      date: cleanEmailValue(session.date),
+      format: cleanEmailValue(session.format),
+      address: cleanEmailValue(session.address),
+      sortDate: Date.parse(cleanEmailValue(session.date)) || 0,
+      index,
+    }))
+    .filter((session) => session.name && session.date && session.format)
+    .sort((first, second) => first.sortDate - second.sortDate || first.index - second.index);
+};
+
+const entryAcceptedExamSessionHtml = (session) => {
+  const isOnsite = session.format === "Onsite";
+  return `
+    <div style="margin:0 0 10px;padding:12px 14px;background:#ffffff;border:1px solid #d9dfdc;border-radius:10px;">
+      <p style="margin:0;color:#00506b;font:700 15px/1.35 Arial, Helvetica, sans-serif;">${escapeEmailHtml(session.name)}</p>
+      <p style="margin:4px 0 0;color:#111115;font:400 14px/1.45 Arial, Helvetica, sans-serif;">${escapeEmailHtml(session.date)}</p>
+      <p style="margin:2px 0 0;color:#53615c;font:700 13px/1.4 Arial, Helvetica, sans-serif;">${isOnsite ? "Onsite session" : "Online session"}</p>
+      ${isOnsite && session.address ? `<p style="margin:2px 0 0;color:#111115;font:400 13px/1.45 Arial, Helvetica, sans-serif;">${escapeEmailHtml(session.address)}</p>` : ""}
+    </div>
+  `;
+};
+
+const entryAcceptedExamSessionText = (session) => {
+  const lines = [
+    session.name,
+    session.date,
+    session.format === "Onsite" ? "Onsite session" : "Online session",
+  ];
+  if (session.format === "Onsite" && session.address) lines.push(session.address);
+  return lines.join("\n");
+};
+
+const getEntryAcceptedCertificationProgrammes = (source) => {
+  let payload = {};
+  try {
+    payload = JSON.parse(source?.dataset?.certificationProgrammes || "{}");
+  } catch (error) {
+    payload = {};
+  }
+  const roles = Array.isArray(payload.roles)
+    ? payload.roles.map(cleanEmailValue).filter((role) => role === "Examiner" || role === "Supervisor")
+    : [];
+  const programmeByRole = {};
+  if (Array.isArray(payload.programmes)) {
+    payload.programmes.forEach((programme) => {
+      if (!programme || typeof programme !== "object") return;
+      const role = cleanEmailValue(programme.role);
+      if (role !== "Examiner" && role !== "Supervisor") return;
+      programmeByRole[role] = {
+        role,
+        remoteTrainingPeriod: cleanEmailValue(programme.remote_training_period || programme.remoteTrainingPeriod),
+        annualMeeting: cleanEmailValue(programme.annual_meeting || programme.annualMeeting),
+      };
+    });
+  }
+  const orderedRoles = ["Examiner", "Supervisor"].filter((role) => roles.includes(role));
+  return orderedRoles.map((role) => programmeByRole[role] || {
+    role,
+    remoteTrainingPeriod: "",
+    annualMeeting: "",
+  });
+};
+
+const validateEntryAcceptedCertificationProgrammes = (programmes) => {
+  if (!programmes.length) return "Potential entry role is required.";
+  const examinerProgramme = programmes.find((programme) => programme.role === "Examiner");
+  if (examinerProgramme && (!examinerProgramme.remoteTrainingPeriod || !examinerProgramme.annualMeeting)) {
+    return "Examiner certification dates are not configured.";
+  }
+  const supervisorProgramme = programmes.find((programme) => programme.role === "Supervisor");
+  if (supervisorProgramme && (!supervisorProgramme.remoteTrainingPeriod || !supervisorProgramme.annualMeeting)) {
+    return "Supervisor certification dates are not configured.";
+  }
+  return "";
+};
+
+const entryAcceptedCertificationProgrammeHtml = (programme) => `
+  <div style="margin:0 0 12px;padding:12px 14px;background:#ffffff;border:1px solid #d9dfdc;border-radius:10px;">
+    <p style="margin:0 0 8px;color:#00506b;font:700 13px/1.35 Arial, Helvetica, sans-serif;letter-spacing:.3px;text-transform:uppercase;">${escapeEmailHtml(programme.role)} CERTIFICATION</p>
+    <ul style="margin:0;padding-left:20px;color:#111115;font:400 14px/1.55 Arial, Helvetica, sans-serif;">
+      <li style="margin-bottom:6px;"><strong>Remote training period:</strong> ${escapeEmailHtml(programme.remoteTrainingPeriod)}</li>
+      <li><strong>Annual meeting:</strong> ${escapeEmailHtml(programme.annualMeeting)}</li>
+    </ul>
+  </div>
+`;
+
+const entryAcceptedCertificationProgrammeText = (programme) => (
+  `${programme.role.toUpperCase()} CERTIFICATION\n\n`
+  + `* Remote training period: ${programme.remoteTrainingPeriod}\n`
+  + `* Annual meeting: ${programme.annualMeeting}`
+);
+
+const ENTRY_ACCEPTED_CERTIFICATION_NOTE = "Further information, such as platform access details and any other relevant instructions, will be provided in due course.";
+
 const buildSuccessfulApplicationEmail = (button) => {
   const source = button?.dataset?.fullName
     ? button
@@ -4106,36 +4329,66 @@ const buildSuccessfulApplicationEmail = (button) => {
   }
   const { link: zoomLink, id: zoomId, password: zoomPassword } = POTENTIAL_INTERVIEW_ACCESS_DETAILS.Zoom;
   const safeName = escapeEmailHtml(fullName);
+  const preassignedSessions = getEntryAcceptedPreassignedSessions(source);
+  const hasPreassignedSessions = preassignedSessions.length > 0;
+  const inductionStepNumber = hasPreassignedSessions ? 3 : 2;
+  const certificationStepNumber = inductionStepNumber + 1;
+  const certificationProgrammes = getEntryAcceptedCertificationProgrammes(source);
+  const certificationError = validateEntryAcceptedCertificationProgrammes(certificationProgrammes);
+  if (certificationError) {
+    return { error: certificationError };
+  }
   const inductionOptionsHtml = inductionOptions.map((option, index) => `
       <div style="${index > 0 ? "margin-top:12px;padding-top:12px;border-top:1px solid #d9dfdc;" : ""}">
-        ${inductionOptions.length > 1 ? `<p style="margin:0 0 4px;color:#62727a;font:700 11px Arial, Helvetica, sans-serif;text-transform:uppercase;">Option ${index + 1}</p>` : ""}
+        <p style="margin:0 0 4px;color:#62727a;font:700 11px Arial, Helvetica, sans-serif;text-transform:uppercase;">Option ${index + 1}:</p>
         <p style="margin:0;color:#00506b;font:700 18px/1.35 Arial, Helvetica, sans-serif;">${escapeEmailHtml(option.date)}</p>
         <p style="margin:3px 0 0;color:#00506b;font:700 18px/1.35 Arial, Helvetica, sans-serif;">${escapeEmailHtml(option.timeRange)}</p>
       </div>
     `).join("");
   const inductionOptionsText = inductionOptions
-    .map((option, index) => inductionOptions.length > 1 ? `Option ${index + 1}: ${option.date}\n${option.timeRange}` : `${option.date}\n${option.timeRange}`)
+    .map((option, index) => `Option ${index + 1}:\n${option.date}\n${option.timeRange}`)
     .join("\n\n");
+  const preassignedSessionsHtml = hasPreassignedSessions ? `
+    <div style="margin:0 0 18px;padding:16px 18px;background:#f1f3f2;border:1px solid #d9dfdc;border-radius:12px;">
+      <p style="margin:0 0 12px;color:#00506b;font:700 15px Arial, Helvetica, sans-serif;">2. PRE-CONFIRM YOUR PARTICIPATION IN EXAM SESSIONS:</p>
+      ${preassignedSessions.map(entryAcceptedExamSessionHtml).join("")}
+      <p style="margin:12px 0 0;color:#111115;font:400 14px/1.55 Arial, Helvetica, sans-serif;">At this stage, we are unable to confirm further details, such as time slots or fees, as the final schedule will only be available once candidate registration closes in October.</p>
+    </div>
+  ` : "";
+  const preassignedSessionsText = hasPreassignedSessions
+    ? `\n\n2. PRE-CONFIRM YOUR PARTICIPATION IN EXAM SESSIONS:\n\n${preassignedSessions.map(entryAcceptedExamSessionText).join("\n\n")}\n\nAt this stage, we are unable to confirm further details, such as time slots or fees, as the final schedule will only be available once candidate registration closes in October.`
+    : "";
+  const certificationProgrammesHtml = `
+    <div style="margin:0 0 18px;padding:16px 18px;background:#f1f3f2;border:1px solid #d9dfdc;border-radius:12px;">
+      <p style="margin:0 0 12px;color:#00506b;font:700 15px Arial, Helvetica, sans-serif;">${certificationStepNumber}. CONFIRM ANNUAL CERTIFICATION PROGRAMMES:</p>
+      ${certificationProgrammes.map(entryAcceptedCertificationProgrammeHtml).join("")}
+      <p style="margin:12px 0 0;color:#53615c;font:400 14px/1.55 Arial, Helvetica, sans-serif;">${escapeEmailHtml(ENTRY_ACCEPTED_CERTIFICATION_NOTE)}</p>
+    </div>
+  `;
+  const certificationProgrammesText = `\n\n${certificationStepNumber}. CONFIRM ANNUAL CERTIFICATION PROGRAMMES:\n\n${certificationProgrammes.map(entryAcceptedCertificationProgrammeText).join("\n\n")}\n\n${ENTRY_ACCEPTED_CERTIFICATION_NOTE}`;
   const bodyHtml = `
     <p style="margin:0 0 14px;color:#111115;font:400 15px/1.55 Arial, Helvetica, sans-serif;">Dear ${safeName},</p>
     <p style="margin:0 0 16px;color:#111115;font:400 15px/1.55 Arial, Helvetica, sans-serif;">We are delighted to inform you that your application for the role of <strong>Examiner</strong> at Path International Examinations has been accepted. We are confident that you will be a valuable addition to our academic team.</p>
-    <div style="margin:0 0 18px;padding:16px 18px;background:#e6f0f3;border-left:4px solid #00506b;border-radius:12px;">
-      <p style="margin:0 0 10px;color:#00506b;font:700 15px Arial, Helvetica, sans-serif;">To formally accept this offer and secure your place, please complete the following steps within 3 working days:</p>
-      <ol style="margin:0;padding-left:20px;color:#111115;font:400 14px/1.55 Arial, Helvetica, sans-serif;">
-        <li style="margin-bottom:8px;">Review, complete, sign and return <a href="${escapeEmailAttribute(CONTRACT_LINK)}" style="color:#00506b;font-weight:700;">this contract</a> to <a href="mailto:admin@pathexaminations.com" style="color:#00506b;font-weight:700;">admin@pathexaminations.com</a>, together with a professional profile picture.</li>
-        <li>Confirm your availability for <strong>ONE</strong> of the upcoming online induction session.</li>
-      </ol>
-    </div>
+    <p style="margin:0 0 18px;color:#111115;font:700 15px/1.55 Arial, Helvetica, sans-serif;">To formally accept this offer and secure your place, please complete the following steps within 3 working days:</p>
     <div style="margin:0 0 18px;padding:16px 18px;background:#f1f3f2;border:1px solid #d9dfdc;border-radius:12px;">
-      <p style="margin:0 0 10px;color:#00506b;font:700 15px Arial, Helvetica, sans-serif;">Confirm your availability for <strong>ONE</strong> of the upcoming online induction session:</p>
+      <p style="margin:0 0 12px;color:#00506b;font:700 15px Arial, Helvetica, sans-serif;">1. SEND THESE FILES TO <a href="mailto:admin@pathexaminations.com" style="color:#00506b;font-weight:700;">ADMIN@PATHEXAMINATIONS.COM</a>:</p>
+      <ul style="margin:0;padding-left:20px;color:#111115;font:400 14px/1.55 Arial, Helvetica, sans-serif;">
+        <li style="margin-bottom:8px;"><a href="${escapeEmailAttribute(CONTRACT_LINK)}" style="color:#00506b;font-weight:700;">examiner contract signed and dated</a></li>
+        <li>a professional profile photo with a white background for your Path ID card.</li>
+      </ul>
+    </div>
+    ${preassignedSessionsHtml}
+    <div style="margin:0 0 18px;padding:16px 18px;background:#f1f3f2;border:1px solid #d9dfdc;border-radius:12px;">
+      <p style="margin:0 0 10px;color:#00506b;font:700 15px Arial, Helvetica, sans-serif;">${inductionStepNumber}. CONFIRM AVAILABILITY FOR <strong><em><u>ONE</u></em></strong> INDUCTION SESSION:</p>
       ${inductionOptionsHtml}
+      <div style="margin-top:14px;padding-top:14px;border-top:1px solid #d9dfdc;">
+        <p style="margin:0 0 10px;color:#00506b;font:700 15px Arial, Helvetica, sans-serif;">The Zoom access details for the induction session are as follows:</p>
+        <p style="margin:0 0 6px;color:#111115;font:400 14px/1.5 Arial, Helvetica, sans-serif;">Link: <a href="${escapeEmailAttribute(zoomLink)}" style="color:#00506b;font-weight:700;">${escapeEmailHtml(zoomLink)}</a></p>
+        <p style="margin:0 0 6px;color:#111115;font:400 14px/1.5 Arial, Helvetica, sans-serif;">Zoom ID: <strong>${escapeEmailHtml(zoomId)}</strong></p>
+        <p style="margin:0;color:#111115;font:400 14px/1.5 Arial, Helvetica, sans-serif;">Password: <strong>${escapeEmailHtml(zoomPassword)}</strong></p>
+      </div>
     </div>
-    <div style="margin:0 0 18px;padding:16px 18px;background:#f1f3f2;border:1px solid #d9dfdc;border-radius:12px;">
-      <p style="margin:0 0 10px;color:#00506b;font:700 15px Arial, Helvetica, sans-serif;">The Zoom access details are as follows:</p>
-      <p style="margin:0 0 6px;color:#111115;font:400 14px/1.5 Arial, Helvetica, sans-serif;">Link: <a href="${escapeEmailAttribute(zoomLink)}" style="color:#00506b;font-weight:700;">${escapeEmailHtml(zoomLink)}</a></p>
-      <p style="margin:0 0 6px;color:#111115;font:400 14px/1.5 Arial, Helvetica, sans-serif;">Zoom ID: <strong>${escapeEmailHtml(zoomId)}</strong></p>
-      <p style="margin:0;color:#111115;font:400 14px/1.5 Arial, Helvetica, sans-serif;">Password: <strong>${escapeEmailHtml(zoomPassword)}</strong></p>
-    </div>
+    ${certificationProgrammesHtml}
     <p style="margin:0 0 14px;color:#111115;font:400 15px/1.55 Arial, Helvetica, sans-serif;">Should you have any questions or require any further information, please let us know.</p>
     <p style="margin:0;color:#111115;font:400 15px/1.55 Arial, Helvetica, sans-serif;">Welcome to Path International Examinations. We look forward to working with you!</p>
   `;
@@ -4144,7 +4397,7 @@ const buildSuccessfulApplicationEmail = (button) => {
     title: ACCEPTED_APPLICATION_SUBJECT,
     bodyHtml,
   });
-  const text = `Dear ${fullName},\n\nWe are delighted to inform you that your application for the role of Examiner at Path International Examinations has been accepted. We are confident that you will be a valuable addition to our academic team.\n\nTo formally accept this offer and secure your place, please complete the following steps within 3 working days:\n\n* Review, complete, sign and return this contract to admin@pathexaminations.com, together with a professional profile picture:\n${CONTRACT_LINK}\n\n* Confirm your availability for ONE of the upcoming online induction session:\n\n${inductionOptionsText}\n\nThe Zoom access details are as follows:\n\nLink: ${zoomLink}\nZoom ID: ${zoomId}\nPassword: ${zoomPassword}\n\nShould you have any questions or require any further information, please let us know.\n\nWelcome to Path International Examinations. We look forward to working with you!\n\nBest regards,\n\nPath International Examinations`;
+  const text = `Successful application\n${ACCEPTED_APPLICATION_SUBJECT}\n\nDear ${fullName},\n\nWe are delighted to inform you that your application for the role of Examiner at Path International Examinations has been accepted. We are confident that you will be a valuable addition to our academic team.\n\nTo formally accept this offer and secure your place, please complete the following steps within 3 working days:\n\n1. SEND THESE FILES TO ADMIN@PATHEXAMINATIONS.COM:\n\nexaminer contract signed and dated\n${CONTRACT_LINK}\n\na professional profile photo with a white background for your Path ID card.${preassignedSessionsText}\n\n${inductionStepNumber}. CONFIRM AVAILABILITY FOR ONE INDUCTION SESSION:\n\n${inductionOptionsText}\n\nThe Zoom access details for the induction session are as follows:\n\nLink: ${zoomLink}\nZoom ID: ${zoomId}\nPassword: ${zoomPassword}${certificationProgrammesText}\n\nShould you have any questions or require any further information, please let us know.\n\nWelcome to Path International Examinations. We look forward to working with you!\n\nBest regards,\n\nPath International Examinations`;
   return { html, text };
 };
 
@@ -4314,24 +4567,25 @@ const initEntryAcceptedEmailButtons = (root = document) => {
 const buildEntryAcceptedWhatsAppMessage = (button) => {
   const root = button?.closest?.("[data-entry-accepted-email-root]") || button;
   const fullName = cleanEmailValue(root?.dataset.fullName);
-  if (!fullName) return { error: "Potential entry full name is required." };
-  const text = `Hi ${fullName}! 😊
+  const firstName = cleanEmailValue(root?.dataset.firstName) || fullName.split(/\s+/).find(Boolean) || fullName;
+  if (!firstName) return { error: "Potential entry name is required." };
+  const text = `Hello ${firstName}!
 
-I hope you're doing well.
+I hope you're doing well. 😀
 
-I'm Brenda from Path International Examinations.
+I'm Brenda from Path International Examinations. It’s a pleasure to be in touch!
 
-I'm delighted to let you know that I've just sent you an email confirming that **your application has been accepted**. Congratulations, and welcome to the Path team!
+I'm delighted to let you know that I've just sent you an email confirming that *your application has been accepted*. Congratulations, and welcome to the Path team!
 
-To complete the onboarding process, we'd appreciate it if you could complete the following steps **within the next three working days**:
+To complete the onboarding process, we'd appreciate it if you could complete the following steps *within the next three working days*:
 
-✅ Read, complete, sign, and return the contract.
-✅ Confirm your availability for one of the induction sessions.
-✅ Confirm your availability for the remote training period and the Annual Staff Meeting.
-✅ Pre-confirm your participation in your assigned exam sessions.
-✅ Send us a profile photo with a white background, which will be used for your physical staff ID card.
+1️⃣🅰️ Read, complete, sign, and return the contract.
+1️⃣🅱️ Send us a profile photo with a white background, which will be used for your physical staff ID card.
+2️⃣ Pre-confirm your participation in your assigned exam sessions.
+3️⃣ Confirm your availability for one of the induction sessions.
+4️⃣ Confirm your availability for the certification programmes associated with your role(s).
 
-If you have any questions or need any assistance, please don't hesitate to get in touch—we'll be happy to help. 💙
+If you have any questions or need any assistance, please don't hesitate to get in touch—we'll be happy to help! 💙
 
 We're excited to have you with us and look forward to working together very soon!
 
@@ -5270,6 +5524,7 @@ initInterviewInvitationEmailButtons();
 initEntryAcceptedEmailButtons();
 initEntryAcceptedWhatsAppButtons();
 initPotentialGmailButtons();
+initPotentialSessionMultiselects();
 
 document.addEventListener("click", (event) => {
   document.querySelectorAll("[data-team-member-picker][open]").forEach((picker) => {
@@ -5954,6 +6209,7 @@ const initLogisticsControls = (root = document) => {
 
 const initSessionMemberRows = (root = document) => {
   initMemberMultiselects(root);
+  initPotentialSessionMultiselects(root);
   initTeamMemberSelects(root);
   initStaffGmailLinks(root);
   initParticipationSelects(root);
@@ -6785,10 +7041,16 @@ const initProviderHistoryForm = (form) => {
       const entry = document.createElement("article");
       entry.className = "history-entry";
       const time = document.createElement("time");
-      time.textContent = `${payload.note.created_on} h${payload.note.created_by ? ` | ${payload.note.created_by}` : ""}`;
+      time.textContent = `Created on: ${payload.note.created_on} h`;
+      const from = document.createElement("small");
+      from.textContent = `From: ${payload.note.from || "-"}`;
+      const to = document.createElement("small");
+      to.textContent = `To: ${payload.note.to || "-"}`;
       const text = document.createElement("p");
       text.textContent = payload.note.comment;
-      entry.append(time, text);
+      entry.append(time, from);
+      if (payload.note.to && payload.note.to !== "-") entry.append(to);
+      entry.append(text);
       list.prepend(entry);
       list.hidden = false;
       if (empty) empty.hidden = true;

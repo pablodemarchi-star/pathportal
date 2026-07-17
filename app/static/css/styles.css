@@ -222,23 +222,59 @@ textarea {
   line-height: 1.25;
 }
 
-.dashboard-count-chip {
+.dashboard-count-stack {
   flex: 0 0 auto;
+  display: grid;
+  justify-items: end;
+  gap: 8px;
+}
+
+.dashboard-count-chip {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  min-width: 42px;
-  min-height: 42px;
+  min-height: 34px;
   border-radius: 8px;
   background: var(--path-sage-50);
   color: var(--badge-green-text);
-  font-size: 18px;
+  padding: 8px 12px;
+  font-size: 13px;
   font-weight: 900;
   line-height: 1;
+  white-space: nowrap;
+}
+
+.dashboard-count-chip-note {
+  background: var(--path-cyan-50);
+  color: var(--path-cyan);
 }
 
 .dashboard-menu-button {
   justify-self: start;
+}
+
+.dashboard-mention-summary {
+  color: var(--color-primary-dark);
+  font-weight: 800;
+}
+
+.dashboard-mention-links {
+  display: grid;
+  justify-items: start;
+  gap: 6px;
+  align-self: end;
+}
+
+.dashboard-mention-links a {
+  color: var(--path-cyan);
+  font-size: 13px;
+  font-weight: 800;
+  line-height: 1.3;
+  text-decoration: none;
+}
+
+.dashboard-mention-links a:hover {
+  text-decoration: underline;
 }
 
 .brand {
@@ -7889,14 +7925,101 @@ span.session-marker-chip {
 
 .cv-review-note-actions {
   display: grid;
-  grid-template-columns: minmax(0, 210px) auto;
-  justify-content: end;
+  grid-template-columns: minmax(0, 2fr) minmax(0, 3fr) auto;
+  justify-content: stretch;
   align-items: end;
   gap: 10px;
 }
 
-.cv-review-note-actions label {
+.cv-review-note-actions label,
+.history-note-meta-actions label {
   font-size: 12px;
+}
+
+.history-note-meta-actions {
+  display: grid;
+  grid-template-columns: minmax(0, 2fr) minmax(0, 3fr) auto;
+  align-items: end;
+  gap: 10px;
+}
+
+.note-from-field {
+  display: grid;
+  gap: 6px;
+  align-self: end;
+  min-width: 0;
+  color: var(--color-primary-dark);
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 1.2;
+}
+
+.note-from-field span {
+  font-weight: 800;
+}
+
+.note-from-field strong {
+  display: flex;
+  align-items: center;
+  width: 100%;
+  min-height: 40px;
+  padding: 9px 10px;
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  background: var(--color-background);
+  color: var(--color-primary-dark);
+  font-size: 14px;
+  font-weight: 500;
+  line-height: 1.2;
+  overflow-wrap: anywhere;
+}
+
+.potential-note-entry {
+  scroll-margin-top: 96px;
+}
+
+.note-read-row,
+.note-read-form,
+.note-read-checkbox {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.note-read-chip {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 999px;
+  padding: 5px 9px;
+  font-size: 11px;
+  font-weight: 900;
+  line-height: 1.15;
+  white-space: nowrap;
+}
+
+.note-read-chip.is-unread {
+  background: var(--badge-yellow-bg);
+  color: var(--badge-yellow-text);
+}
+
+.note-read-chip.is-read {
+  background: var(--badge-green-bg);
+  color: var(--badge-green-text);
+}
+
+.note-read-checkbox {
+  color: var(--color-primary-dark);
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.note-read-checkbox input {
+  width: 15px;
+  height: 15px;
+  margin: 0;
+  accent-color: var(--path-sage);
 }
 
 .potential-review-summary .history-list {
@@ -7991,6 +8114,177 @@ span.session-marker-chip {
   padding: 12px;
   background: var(--path-cyan-50);
   min-height: 188px;
+}
+
+.potential-preassigned-sessions .interview-options-fieldset {
+  min-height: 0;
+}
+
+.potential-preassigned-session-label {
+  display: grid;
+  gap: 8px;
+}
+
+.potential-session-picker {
+  position: relative;
+  width: 100%;
+}
+
+.potential-session-picker summary {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  min-height: 40px;
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  padding: 6px 10px;
+  background: var(--color-surface);
+  color: var(--color-primary-dark);
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 700;
+  line-height: 1.25;
+  list-style: none;
+  box-shadow: none;
+}
+
+.potential-session-picker summary::-webkit-details-marker {
+  display: none;
+}
+
+.potential-session-picker[open] summary,
+.potential-session-picker summary:focus-visible {
+  border-color: var(--path-cyan);
+  outline: 2px solid rgba(11, 143, 178, 0.16);
+  outline-offset: 1px;
+}
+
+.potential-session-picker .session-member-summary-tags {
+  gap: 6px;
+}
+
+.potential-session-picker .session-member-summary-placeholder {
+  font-weight: 700;
+}
+
+.potential-session-picker-panel {
+  position: fixed;
+  z-index: 1200;
+  display: grid;
+  gap: 4px;
+  box-sizing: border-box;
+  overflow: auto;
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  padding: 6px;
+  background: var(--color-surface);
+  box-shadow: 0 12px 28px rgba(17, 17, 21, 0.14);
+}
+
+.potential-session-option {
+  display: grid;
+  grid-template-columns: 18px minmax(0, 1fr);
+  gap: 8px;
+  align-items: start;
+  border-radius: 7px;
+  padding: 8px 9px;
+  color: var(--color-text);
+  cursor: pointer;
+  line-height: 1.25;
+}
+
+.potential-session-option:hover {
+  background: var(--path-cyan-50);
+}
+
+.potential-session-option input {
+  display: none;
+}
+
+.potential-session-option-check {
+  display: inline-grid;
+  place-items: center;
+  width: 18px;
+  height: 18px;
+  border: 1px solid var(--color-border);
+  border-radius: 999px;
+  color: transparent;
+  font-size: 11px;
+  font-weight: 900;
+}
+
+.potential-session-option:has(input:checked) .potential-session-option-check {
+  border-color: var(--path-cyan);
+  background: var(--path-cyan);
+  color: white;
+}
+
+.potential-session-option:has(input:checked) {
+  background: var(--path-cyan-50);
+}
+
+.potential-session-option-copy {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.potential-session-option-name {
+  overflow: hidden;
+  color: var(--color-primary-dark);
+  font-size: 13px;
+  font-weight: 900;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.potential-session-option-meta {
+  color: var(--color-muted);
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1.3;
+  overflow-wrap: anywhere;
+}
+
+.potential-session-empty {
+  display: block;
+  padding: 12px 10px;
+  color: var(--color-muted);
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.potential-session-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  max-width: min(100%, 260px);
+  border-radius: 999px;
+  padding: 4px 8px;
+  background: var(--badge-blue-bg);
+  color: var(--badge-blue-text);
+  font-size: 12px;
+  font-weight: 900;
+  line-height: 1.2;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.potential-session-chip.is-unavailable {
+  background: var(--badge-yellow-bg);
+  color: var(--badge-yellow-text);
+}
+
+.potential-session-chip button {
+  flex: 0 0 auto;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  font: inherit;
+  line-height: 1;
+  padding: 0;
 }
 
 .interview-options-list {
@@ -9760,7 +10054,8 @@ span.session-marker-chip {
 
   .potential-review-layout,
   .potential-cv-review-fields,
-  .cv-review-note-actions {
+  .cv-review-note-actions,
+  .history-note-meta-actions {
     grid-template-columns: 1fr;
   }
 

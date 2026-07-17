@@ -5,6 +5,7 @@ import secrets
 from decimal import Decimal, InvalidOperation, ROUND_FLOOR
 from datetime import date, datetime, timezone, timedelta
 import calendar
+import uuid
 from io import BytesIO
 from urllib.parse import parse_qs, quote, urlparse
 
@@ -70,6 +71,8 @@ from app.models import (
     InternStageRemoteTrainingSelection,
     InternStageYear,
     PotentialEntry,
+    PotentialEntryNoteMention,
+    PotentialEntryPreassignedExamSession,
     PotentialEntryStatusTrack,
     Provider,
     ProviderHistory,
@@ -458,6 +461,9 @@ def require_menu_permission_for_request():
         return None
     if request.endpoint == "staff.session_journey_public":
         return None
+    if request.endpoint == "staff.mark_potential_note_read":
+        require_menu_view("staff_members")
+        return None
     menu_key = menu_key_for_path(request.path)
     if not menu_key:
         return None
@@ -481,6 +487,13 @@ def inject_menu_permissions():
         "current_menu_can_edit": current_menu_can_edit,
         "current_user_is_view_only": bool(current_menu_key and current_menu_can_view and not current_menu_can_edit),
         "current_user_full_name": getattr(current_user, "full_name", "") or session.get("user", ""),
+        "current_user_department": getattr(current_user, "department", "") or session.get("user_department", ""),
+        "note_to_user_options": note_to_user_options,
+        "note_actor_label": note_actor_label,
+        "history_from_label": history_from_label,
+        "history_to_label": history_to_label,
+        "potential_entry_note_status": potential_entry_note_status,
+        "potential_perform_action_modal_id": potential_perform_action_modal_id,
         "user_can_view": user_can_view,
         "user_can_edit": user_can_edit,
     }
@@ -2479,6 +2492,197 @@ def long_session_date_filter(value):
     return f"{value.strftime('%A')} {value.day}, {value.strftime('%B')} {value.year}"
 
 
+def potential_preassigned_exam_session_date(value):
+    if not value:
+        return ""
+    return f"{value.strftime('%A')} {value.day} {value.strftime('%B')} {value.year}"
+
+
+def potential_preassigned_exam_session_label(session_record):
+    date_label = potential_preassigned_exam_session_date(session_record.session_date)
+    format_label = (session_record.format or "").strip()
+    if format_label == "Onsite":
+        location_parts = [part for part in [(session_record.city or "").strip(), (session_record.province or "").strip()] if part]
+        location = ", ".join(location_parts)
+        suffix = f"Onsite in {location}" if location else "Onsite"
+    else:
+        suffix = format_label or "-"
+    return f"{session_record.exam_session_name} - {date_label} ({suffix})"
+
+
+def potential_preassigned_exam_session_option(session_record):
+    date_label = potential_preassigned_exam_session_date(session_record.session_date)
+    format_label = (session_record.format or "").strip()
+    if format_label == "Onsite":
+        location_parts = [part for part in [(session_record.city or "").strip(), (session_record.province or "").strip()] if part]
+        location = ", ".join(location_parts)
+        meta_suffix = f"Onsite in {location}" if location else "Onsite"
+    else:
+        meta_suffix = format_label or "-"
+    chip_date = session_record.session_date.strftime("%d %b %Y") if session_record.session_date else ""
+    return {
+        "id": session_record.id,
+        "name": session_record.exam_session_name,
+        "meta": f"{date_label} · {meta_suffix}",
+        "chip_label": f"{session_record.exam_session_name} · {chip_date}",
+        "label": potential_preassigned_exam_session_label(session_record),
+    }
+
+
+def latest_potential_preassignable_exam_sessions():
+    latest_year_record = (
+        ExamSessionYear.query.filter_by(is_archived=False)
+        .order_by(ExamSessionYear.year.desc())
+        .first()
+    )
+    if latest_year_record is None:
+        return []
+    latest_year = latest_year_record.year
+    return (
+        ExamSession.query.filter(db.extract("year", ExamSession.session_date) == latest_year)
+        .order_by(ExamSession.session_date.asc(), ExamSession.exam_session_name.asc(), ExamSession.id.asc())
+        .all()
+    )
+
+
+def potential_preassigned_exam_session_options():
+    return [
+        potential_preassigned_exam_session_option(session_record)
+        for session_record in latest_potential_preassignable_exam_sessions()
+    ]
+
+
+def potential_preassigned_exam_sessions_by_entry(entries, available_options=None):
+    entry_ids = [entry.id for entry in entries if entry.id]
+    if not entry_ids:
+        return {}
+    available_options = available_options if available_options is not None else potential_preassigned_exam_session_options()
+    available_by_id = {option["id"]: option for option in available_options}
+    links = (
+        PotentialEntryPreassignedExamSession.query.filter(
+            PotentialEntryPreassignedExamSession.potential_entry_id.in_(entry_ids)
+        )
+        .order_by(PotentialEntryPreassignedExamSession.created_on.asc(), PotentialEntryPreassignedExamSession.id.asc())
+        .all()
+    )
+    session_ids = sorted({link.exam_session_id for link in links if link.exam_session_id not in available_by_id})
+    session_options = dict(available_by_id)
+    if session_ids:
+        for session_record in ExamSession.query.filter(ExamSession.id.in_(session_ids)).all():
+            session_options[session_record.id] = potential_preassigned_exam_session_option(session_record)
+
+    selections = {entry_id: [] for entry_id in entry_ids}
+    for link in links:
+        option = session_options.get(link.exam_session_id)
+        label = option["label"] if option else "Session no longer available"
+        selections.setdefault(link.potential_entry_id, []).append({
+            "id": link.exam_session_id,
+            "label": label,
+            "chip_label": option["chip_label"] if option else "Session no longer available",
+            "available": option is not None,
+        })
+    return selections
+
+
+def potential_entry_preassigned_email_sessions(entry):
+    if not entry or not entry.id:
+        return []
+    links = PotentialEntryPreassignedExamSession.query.filter_by(potential_entry_id=entry.id).all()
+    session_ids = [link.exam_session_id for link in links]
+    if not session_ids:
+        return []
+    sessions_by_id = {
+        session_record.id: session_record
+        for session_record in ExamSession.query.filter(ExamSession.id.in_(session_ids)).all()
+    }
+    sessions = [sessions_by_id[session_id] for session_id in session_ids if session_id in sessions_by_id]
+    sessions.sort(key=lambda session_record: (session_record.session_date, session_record.exam_session_name.lower(), session_record.id))
+    payload = []
+    for session_record in sessions:
+        format_label = (session_record.format or "").strip()
+        address = (session_record.full_address_google_maps or "").strip() if format_label == "Onsite" else ""
+        payload.append({
+            "name": session_record.exam_session_name or "",
+            "date": potential_preassigned_exam_session_date(session_record.session_date),
+            "format": format_label,
+            "address": address,
+        })
+    return payload
+
+
+def potential_entry_certification_email_programmes(entry):
+    if not entry or not entry.id:
+        return {"roles": [], "programmes": []}
+    roles = [role for role in entry.roles_list() if role in {"Examiner", "Supervisor"}]
+    programmes = []
+    module_by_role = {
+        "Examiner": EXAMINER_CERTIFICATION_MODULE_KEY,
+        "Supervisor": SUPERVISOR_CERTIFICATION_MODULE_KEY,
+    }
+    year_by_role = {
+        "Examiner": latest_active_examiner_certification_year,
+        "Supervisor": latest_active_supervisor_certification_year,
+    }
+    for role in ["Examiner", "Supervisor"]:
+        if role not in roles:
+            continue
+        selected_year = year_by_role[role]()
+        config = certification_year_configuration(module_by_role[role], selected_year)
+        remote_training = ""
+        annual_meeting = ""
+        if config and config.remote_training_start_date and config.remote_training_end_date:
+            remote_training = (
+                "from "
+                f"{potential_preassigned_exam_session_date(config.remote_training_start_date)} "
+                f"to {potential_preassigned_exam_session_date(config.remote_training_end_date)}"
+            )
+        if config and config.annual_meeting_date and config.annual_meeting_time:
+            start_hour = config.annual_meeting_time.strftime("%H:%M").lstrip("0")
+            if start_hour.endswith(":00"):
+                start_hour = start_hour[:-3]
+            annual_meeting = (
+                f"{potential_preassigned_exam_session_date(config.annual_meeting_date)} "
+                f"from {start_hour} to 16 h (GMT-3)"
+            )
+        programmes.append({
+            "role": role,
+            "remote_training_period": remote_training,
+            "annual_meeting": annual_meeting,
+        })
+    return {"roles": roles, "programmes": programmes}
+
+
+def selected_potential_preassigned_exam_session_ids(form):
+    selected_ids = []
+    seen = set()
+    for raw_id in form.getlist("preassigned_exam_session_ids"):
+        try:
+            session_id = int(raw_id)
+        except (TypeError, ValueError):
+            continue
+        if session_id <= 0 or session_id in seen:
+            continue
+        seen.add(session_id)
+        selected_ids.append(session_id)
+    return selected_ids
+
+
+def sync_potential_preassigned_exam_sessions(entry, form):
+    selected_ids = selected_potential_preassigned_exam_session_ids(form)
+    existing_links = {
+        link.exam_session_id: link
+        for link in PotentialEntryPreassignedExamSession.query.filter_by(potential_entry_id=entry.id).all()
+    }
+    for session_id in selected_ids:
+        if session_id not in existing_links:
+            db.session.add(PotentialEntryPreassignedExamSession(potential_entry_id=entry.id, exam_session_id=session_id))
+        else:
+            existing_links[session_id].updated_on = datetime.now(timezone.utc)
+    for session_id, link in existing_links.items():
+        if session_id not in selected_ids:
+            db.session.delete(link)
+
+
 def display_interviewer(value):
     if not value:
         return ""
@@ -2510,6 +2714,149 @@ def current_user_audit_department():
     department = getattr(current_user, "department", "") or session.get("user_department") or ""
     department = str(department).strip()
     return department.upper() if department else "Unknown department"
+
+
+def current_note_actor():
+    current_user = getattr(g, "current_user", None)
+    return {
+        "user_id": getattr(current_user, "id", None) or session.get("user_id"),
+        "full_name": (getattr(current_user, "full_name", "") or session.get("user_full_name") or session.get("user") or "").strip(),
+        "department": (getattr(current_user, "department", "") or session.get("user_department") or "").strip(),
+    }
+
+
+def note_party_label(full_name="", department=""):
+    parts = [part for part in [(full_name or "").strip(), (department or "").strip()] if part]
+    return ", ".join(parts) if parts else "-"
+
+
+def note_actor_label():
+    actor = current_note_actor()
+    return note_party_label(actor["full_name"], actor["department"])
+
+
+def note_to_user_options():
+    return User.query.filter_by(is_active=True).order_by(User.full_name.asc(), User.department.asc()).all()
+
+
+def selected_note_recipient(form):
+    raw_user_id = (form.get("note_to_user_id") or form.get("cv_review_note_to_user_id") or "").strip()
+    if not raw_user_id:
+        return {"user_id": None, "full_name": "", "department": ""}
+    try:
+        user_id = int(raw_user_id)
+    except ValueError:
+        return {"user_id": None, "full_name": "", "department": ""}
+    user = db.session.get(User, user_id)
+    if not user or not user.is_active:
+        return {"user_id": None, "full_name": "", "department": ""}
+    return {"user_id": user.id, "full_name": user.full_name, "department": user.department}
+
+
+def history_from_label(entry):
+    if isinstance(entry, dict):
+        label = note_party_label(entry.get("from_full_name"), entry.get("from_department"))
+        return label if label != "-" else (entry.get("created_by") or "-")
+    label = note_party_label(getattr(entry, "from_full_name", ""), getattr(entry, "from_department", ""))
+    return label if label != "-" else (getattr(entry, "created_by", "") or "-")
+
+
+def history_to_label(entry):
+    if isinstance(entry, dict):
+        return note_party_label(entry.get("to_full_name"), entry.get("to_department"))
+    return note_party_label(getattr(entry, "to_full_name", ""), getattr(entry, "to_department", ""))
+
+
+def note_metadata_lines(actor=None, recipient=None, note_id=None):
+    actor = actor or current_note_actor()
+    recipient = recipient or {"user_id": None, "full_name": "", "department": ""}
+    lines = []
+    if note_id:
+        lines.append(f"Note ID: {note_id}")
+    lines.extend([
+        f"From: {note_party_label(actor.get('full_name'), actor.get('department'))}",
+        f"From user ID: {actor.get('user_id') or '-'}",
+        f"To: {note_party_label(recipient.get('full_name'), recipient.get('department'))}",
+        f"To user ID: {recipient.get('user_id') or '-'}",
+    ])
+    return "\n".join(lines)
+
+
+def apply_note_metadata(record, form):
+    actor = current_note_actor()
+    recipient = selected_note_recipient(form)
+    record.from_user_id = actor["user_id"]
+    record.from_full_name = actor["full_name"]
+    record.from_department = actor["department"]
+    record.to_user_id = recipient["user_id"]
+    record.to_full_name = recipient["full_name"]
+    record.to_department = recipient["department"]
+    if hasattr(record, "created_by"):
+        record.created_by = actor["full_name"] or session.get("user")
+    return actor, recipient
+
+
+def register_potential_entry_note_mention(entry, note_id, comment_text, actor, recipient):
+    if not note_id or not recipient.get("user_id"):
+        return None
+    mention = PotentialEntryNoteMention(
+        note_id=note_id,
+        related_entity_type="Potential entry",
+        related_entity_id=entry.id,
+        potential_entry_id=entry.id,
+        from_user_id=actor.get("user_id"),
+        from_full_name=actor.get("full_name"),
+        from_department=actor.get("department"),
+        to_user_id=recipient.get("user_id"),
+        to_full_name=recipient.get("full_name"),
+        to_department=recipient.get("department"),
+        comment_text=comment_text.strip(),
+    )
+    db.session.add(mention)
+    return mention
+
+
+def potential_entry_mentions_for_current_user(limit=None):
+    current_user = getattr(g, "current_user", None)
+    if not current_user:
+        return []
+    query = (
+        PotentialEntryNoteMention.query
+        .join(PotentialEntry, PotentialEntry.id == PotentialEntryNoteMention.potential_entry_id)
+        .filter(
+            PotentialEntryNoteMention.to_user_id == current_user.id,
+            PotentialEntryNoteMention.is_read.is_(False),
+        )
+        .order_by(PotentialEntryNoteMention.created_on.desc(), PotentialEntryNoteMention.id.desc())
+    )
+    if limit:
+        query = query.limit(limit)
+    return query.all()
+
+
+def potential_entry_unread_mentions_by_note_id(entry_ids):
+    current_user = getattr(g, "current_user", None)
+    if not current_user or not entry_ids:
+        return {}
+    mentions = PotentialEntryNoteMention.query.filter(
+        PotentialEntryNoteMention.potential_entry_id.in_(entry_ids),
+        PotentialEntryNoteMention.to_user_id == current_user.id,
+    ).all()
+    return {mention.note_id: mention for mention in mentions}
+
+
+def potential_entry_note_status(note):
+    note_id = note.get("note_id") if isinstance(note, dict) else None
+    mention = note.get("mention") if isinstance(note, dict) else None
+    is_current_recipient = bool(mention and getattr(g, "current_user", None) and mention.to_user_id == g.current_user.id)
+    return {
+        "note_id": note_id,
+        "has_recipient": bool(mention),
+        "is_read": bool(mention and mention.is_read),
+        "label": "Read" if mention and mention.is_read else "Not read yet",
+        "can_mark_read": bool(mention and is_current_recipient and not mention.is_read),
+        "mention_id": mention.id if mention else None,
+    }
 
 
 def record_potential_status_change(entry, previous_status, new_status):
@@ -10063,16 +10410,18 @@ def meetings_redirect():
     return redirect(url_for("staff.annual_meetings"))
 
 
-def format_interview_entry(note):
+def format_interview_entry(note, form=None, note_id=None, actor=None, recipient=None):
     timestamp = datetime.now(timezone.utc).astimezone(LOCAL_TZ).strftime("%d/%m/%Y - %H:%M h.")
-    return f"{timestamp}\n{note.strip()}"
+    actor = actor or current_note_actor()
+    recipient = recipient or (selected_note_recipient(form or {}) if form is not None else {"user_id": None, "full_name": "", "department": ""})
+    return f"{timestamp}\n{note_metadata_lines(actor, recipient, note_id)}\n{note.strip()}"
 
 
 def append_interview_note(member, form):
     note = form.get("interview", "").strip()
     if not note:
         return
-    entry = format_interview_entry(note)
+    entry = format_interview_entry(note, form)
     if member.interview:
         member.interview = f"{member.interview.strip()}\n\n{entry}"
     else:
@@ -10083,24 +10432,30 @@ def append_potential_interview_note(entry, form):
     note = form.get("interview", "").strip()
     if not note:
         return
-    history_entry = format_interview_entry(note)
+    actor = current_note_actor()
+    recipient = selected_note_recipient(form)
+    note_id = uuid.uuid4().hex
+    history_entry = format_interview_entry(note, form, note_id=note_id, actor=actor, recipient=recipient)
     if entry.interview:
         entry.interview = f"{entry.interview.strip()}\n\n{history_entry}"
     else:
         entry.interview = history_entry
+    register_potential_entry_note_mention(entry, note_id, note, actor, recipient)
 
 
 def append_potential_cv_review_notes(entry, form):
     note = form.get("cv_review_notes", "").strip()
     if not note:
         return
-    department = form.get("cv_review_note_department", "").strip()
-    department_label = f" - {department}" if department in USER_DEPARTMENTS else ""
-    history_entry = format_interview_entry(f"CV review{department_label}: {note}")
+    actor = current_note_actor()
+    recipient = selected_note_recipient(form)
+    note_id = uuid.uuid4().hex
+    history_entry = format_interview_entry(f"CV review: {note}", form, note_id=note_id, actor=actor, recipient=recipient)
     if entry.interview:
         entry.interview = f"{entry.interview.strip()}\n\n{history_entry}"
     else:
         entry.interview = history_entry
+    register_potential_entry_note_mention(entry, note_id, f"CV review: {note}", actor, recipient)
 
 
 def potential_cv_review_draft_key(entry_id):
@@ -10129,8 +10484,9 @@ def save_potential_cv_review_draft(entry_id, form):
     drafts = dict(potential_cv_review_drafts())
     drafts[potential_cv_review_draft_key(entry_id)] = {
         "notes": form.get("cv_review_notes", "").strip(),
-        "department": form.get("cv_review_note_department", "").strip(),
+        "to_user_id": (form.get("cv_review_note_to_user_id") or form.get("note_to_user_id") or "").strip(),
         "options": options,
+        "preassigned_exam_session_ids": selected_potential_preassigned_exam_session_ids(form),
     }
     session["potential_cv_review_drafts"] = drafts
     session.modified = True
@@ -10333,20 +10689,76 @@ def interview_history_entries(history):
         if not lines:
             continue
         if len(lines) == 1:
-            entries.append({"index": index, "date": "Legacy note", "note": lines[0]})
+            entries.append({
+                "index": index,
+                "date": "Legacy note",
+                "note": lines[0],
+                "note_id": "",
+                "from_full_name": "",
+                "from_department": "",
+                "from_user_id": None,
+                "to_full_name": "",
+                "to_department": "",
+                "to_user_id": None,
+            })
         else:
-            entries.append({"index": index, "date": lines[0], "note": "\n".join(lines[1:])})
+            metadata = {
+                "note_id": "",
+                "from_full_name": "",
+                "from_department": "",
+                "from_user_id": None,
+                "to_full_name": "",
+                "to_department": "",
+                "to_user_id": None,
+            }
+            note_lines = []
+            for line in lines[1:]:
+                if line.startswith("Note ID:"):
+                    metadata["note_id"] = line.replace("Note ID:", "", 1).strip()
+                    continue
+                if line.startswith("From:"):
+                    value = line.replace("From:", "", 1).strip()
+                    if value != "-":
+                        parts = [part.strip() for part in value.split(",", 1)]
+                        metadata["from_full_name"] = parts[0] if parts else ""
+                        metadata["from_department"] = parts[1] if len(parts) > 1 else ""
+                    continue
+                if line.startswith("From user ID:"):
+                    value = line.replace("From user ID:", "", 1).strip()
+                    if value.isdigit():
+                        metadata["from_user_id"] = int(value)
+                    continue
+                if line.startswith("To:"):
+                    value = line.replace("To:", "", 1).strip()
+                    if value != "-":
+                        parts = [part.strip() for part in value.split(",", 1)]
+                        metadata["to_full_name"] = parts[0] if parts else ""
+                        metadata["to_department"] = parts[1] if len(parts) > 1 else ""
+                    continue
+                if line.startswith("To user ID:"):
+                    value = line.replace("To user ID:", "", 1).strip()
+                    if value.isdigit():
+                        metadata["to_user_id"] = int(value)
+                    continue
+                note_lines.append(line)
+            entries.append({"index": index, "date": lines[0], "note": "\n".join(note_lines), **metadata})
     return entries
 
 
 def delete_interview_history_entry(history, note_index):
     if not history:
-        return history
+        return history, ""
     blocks = [block for block in history.strip().split("\n\n") if block.strip()]
     if note_index < 0 or note_index >= len(blocks):
-        return history
+        return history, ""
+    deleted_block = blocks[note_index]
+    deleted_note_id = ""
+    for line in deleted_block.splitlines():
+        if line.startswith("Note ID:"):
+            deleted_note_id = line.replace("Note ID:", "", 1).strip()
+            break
     del blocks[note_index]
-    return "\n\n".join(blocks)
+    return "\n\n".join(blocks), deleted_note_id
 
 
 @staff_bp.app_template_filter("potential_cv_review_note_parts")
@@ -10668,6 +11080,20 @@ def interview_entries_filter(value):
     return interview_history_entries(value)
 
 
+@staff_bp.app_template_filter("potential_interview_entries")
+def potential_interview_entries_filter(entry):
+    if not entry:
+        return []
+    notes = interview_history_entries(entry.interview)
+    mentions = {
+        mention.note_id: mention
+        for mention in PotentialEntryNoteMention.query.filter_by(potential_entry_id=entry.id).all()
+    }
+    for note in notes:
+        note["mention"] = mentions.get(note.get("note_id") or "")
+    return notes
+
+
 @staff_bp.app_template_filter("year_color")
 def year_color_filter(value):
     return year_color_class(value)
@@ -10888,8 +11314,8 @@ def add_provider_note(provider_id):
     entry = ProviderHistory(
         provider_id=provider.id,
         comment=note,
-        created_by=session.get("user"),
     )
+    apply_note_metadata(entry, request.form)
     db.session.add(entry)
     db.session.commit()
     return jsonify({
@@ -10898,6 +11324,8 @@ def add_provider_note(provider_id):
         "note": {
             "comment": entry.comment,
             "created_by": entry.created_by or "",
+            "from": history_from_label(entry),
+            "to": history_to_label(entry),
             "created_on": local_datetime(entry.created_on),
         },
         "provider": provider_payload(provider),
@@ -14844,13 +15272,12 @@ def save_exam_session_logistics(session_record):
         concept.currency = currency
         concept.fee = fee
         for note in pending_notes:
-            db.session.add(
-                ExamSessionLogisticsConceptNote(
-                    logistics_concept=concept,
-                    comment=note,
-                    created_by=session.get("user"),
-                )
+            concept_note = ExamSessionLogisticsConceptNote(
+                logistics_concept=concept,
+                comment=note,
             )
+            apply_note_metadata(concept_note, request.form)
+            db.session.add(concept_note)
     return True
 
 
@@ -15043,13 +15470,12 @@ def add_logistics_concept_note(concept_id):
         flash("History note cannot be empty.", "error")
         return logistics_redirect(session_record)
 
-    db.session.add(
-        ExamSessionLogisticsConceptNote(
-            logistics_concept_id=concept.id,
-            comment=note,
-            created_by=session.get("user"),
-        )
+    concept_note = ExamSessionLogisticsConceptNote(
+        logistics_concept_id=concept.id,
+        comment=note,
     )
+    apply_note_metadata(concept_note, request.form)
+    db.session.add(concept_note)
     db.session.commit()
     flash("History note added successfully.", "success")
     return logistics_redirect(session_record)
@@ -15359,6 +15785,12 @@ def duplicate_exam_session_year():
                         logistics_concept_id=concept_map[note.logistics_concept_id],
                         comment=note.comment,
                         created_by=note.created_by,
+                        from_user_id=note.from_user_id,
+                        from_full_name=note.from_full_name,
+                        from_department=note.from_department,
+                        to_user_id=note.to_user_id,
+                        to_full_name=note.to_full_name,
+                        to_department=note.to_department,
                     )
                 )
 
@@ -15460,6 +15892,8 @@ def delete_exam_session_year(year):
 def dashboard():
     potential_entries_allowed = user_can_view("staff_members")
     potential_entries_pending_count = 0
+    potential_entries_note_mentions = []
+    potential_entries_note_mentions_count = 0
     if potential_entries_allowed:
         potential_entries_pending_count = PotentialEntry.query.filter(
             PotentialEntry.is_rejected == False,
@@ -15467,6 +15901,12 @@ def dashboard():
             potential_pending_action_filter(),
         ).count()
     current_user = getattr(g, "current_user", None)
+    if potential_entries_allowed and current_user:
+        potential_entries_note_mentions_count = PotentialEntryNoteMention.query.filter(
+            PotentialEntryNoteMention.to_user_id == current_user.id,
+            PotentialEntryNoteMention.is_read.is_(False),
+        ).count()
+        potential_entries_note_mentions = potential_entry_mentions_for_current_user(limit=3)
     dashboard_display_name = (
         getattr(current_user, "full_name", "")
         or session.get("user_full_name")
@@ -15490,6 +15930,8 @@ def dashboard():
         dashboard_department=dashboard_department,
         potential_entries_allowed=potential_entries_allowed,
         potential_entries_pending_count=potential_entries_pending_count,
+        potential_entries_note_mentions=potential_entries_note_mentions,
+        potential_entries_note_mentions_count=potential_entries_note_mentions_count,
     )
 
 
@@ -15614,6 +16056,8 @@ def index():
         interviewer_options=INTERVIEWER_OPTIONS,
         confirmed_session_counts=confirmed_session_counts,
         staff_settings_values=staff_members_settings_values(staff_settings),
+        potential_entry_preassigned_email_sessions=potential_entry_preassigned_email_sessions,
+        potential_entry_certification_email_programmes=potential_entry_certification_email_programmes,
         create_member_draft=create_member_draft,
         filters={
             "q": query_text,
@@ -15678,7 +16122,8 @@ def ordered_potential_entries(show_archived=False, status="", department="", act
 @staff_bp.route("/potential-entries", methods=["GET"])
 @login_required
 def potential_entries():
-    show_archived = request.args.get("show_archived") == "1" or request.args.get("show_rejected") == "1"
+    mentions_only = request.args.get("mentions") == "1"
+    show_archived = request.args.get("show_archived") == "1" or request.args.get("show_rejected") == "1" or mentions_only
     status = request.args.get("status", "").strip()
     department = request.args.get("department", "").strip().upper()
     action_scope = request.args.get("action_scope", "all").strip()
@@ -15722,12 +16167,20 @@ def potential_entries():
         toggle_args["show_archived"] = 1
 
     staff_settings = staff_members_settings()
+    potential_entry_rows = ordered_potential_entries(show_archived, status, department, action_scope, sort_by, sort_dir)
+    if mentions_only:
+        mention_entry_ids = {
+            mention.potential_entry_id
+            for mention in potential_entry_mentions_for_current_user()
+        }
+        potential_entry_rows = [entry for entry in potential_entry_rows if entry.id in mention_entry_ids]
+    preassigned_exam_session_options = potential_preassigned_exam_session_options()
     return render_template(
         "staff/index.html",
         page_mode="potential_entries",
         members=[],
         pagination=None,
-        potential_entries=ordered_potential_entries(show_archived, status, department, action_scope, sort_by, sort_dir),
+        potential_entries=potential_entry_rows,
         roles=ROLE_OPTIONS,
         statuses=EDIT_STATUS_OPTIONS,
         create_statuses=CREATE_STATUS_OPTIONS,
@@ -15736,6 +16189,13 @@ def potential_entries():
         potential_today_iso=datetime.now(LOCAL_TZ).date().isoformat(),
         potential_department_options=POTENTIAL_DEPARTMENT_OPTIONS,
         potential_toggle_url=url_for("staff.potential_entries", **toggle_args),
+        potential_preassigned_exam_session_options=preassigned_exam_session_options,
+        potential_preassigned_exam_sessions_by_entry=potential_preassigned_exam_sessions_by_entry(
+            potential_entry_rows,
+            preassigned_exam_session_options,
+        ),
+        potential_entry_preassigned_email_sessions=potential_entry_preassigned_email_sessions,
+        potential_entry_certification_email_programmes=potential_entry_certification_email_programmes,
         interviewer_options=INTERVIEWER_OPTIONS,
         confirmed_session_counts={},
         staff_settings_values=staff_members_settings_values(staff_settings),
@@ -15749,6 +16209,7 @@ def potential_entries():
             "show_rejected": show_archived,
             "department": department,
             "action_scope": action_scope,
+            "mentions": mentions_only,
             "sort": sort_by,
             "dir": sort_dir,
         },
@@ -18608,9 +19069,6 @@ def apply_potential_cv_review_action(entry, next_status, success_message, requir
     if require_interview_option and not interview_options:
         option_errors.append("Please configure at least one interview date and time option before proceeding to interview.")
     note = request.form.get("cv_review_notes", "").strip()
-    note_department = request.form.get("cv_review_note_department", "").strip()
-    if note and note_department not in USER_DEPARTMENTS:
-        option_errors.append("Department is required.")
     if option_errors:
         save_potential_cv_review_draft(entry.id, request.form)
         for error in option_errors:
@@ -18619,6 +19077,8 @@ def apply_potential_cv_review_action(entry, next_status, success_message, requir
 
     append_potential_cv_review_notes(entry, request.form)
     entry.cv_review_interview_options = json.dumps(interview_options)
+    if entry.status == "CV to be reviewed":
+        sync_potential_preassigned_exam_sessions(entry, request.form)
     set_potential_entry_status(entry, next_status)
     if next_status == "Entry rejected":
         entry.is_rejected = True
@@ -18633,6 +19093,18 @@ def potential_review_modal_id(entry):
     if entry.status in {"Interview to be arranged", "Interview invitation sent", "Interview confirmed", "Entry accepted", "Onboarding email sent", "Induction confirmed"}:
         return f"interview-arrange-potential-entry-{entry.id}"
     return f"cv-review-potential-entry-{entry.id}"
+
+
+def potential_perform_action_modal_id(entry):
+    if entry.status in {"Archived accepted entry", "Archived rejected entry"} or entry.is_rejected:
+        return f"potential-entry-{entry.id}"
+    if entry.status in {"CV to be reviewed", "Review interview date and time"}:
+        return f"cv-review-potential-entry-{entry.id}"
+    if entry.status in {"Interview to be arranged", "Interview invitation sent", "Interview confirmed", "Entry accepted", "Onboarding email sent", "Induction confirmed"}:
+        return f"interview-arrange-potential-entry-{entry.id}"
+    if entry.status in {"Entry accepted (on hold)", "Onboarding finalised"}:
+        return f"potential-entry-{entry.id}"
+    return f"edit-potential-entry-{entry.id}"
 
 
 POTENTIAL_INTERVIEW_ROLE_OPTIONS = {"Examiner", "RSG", "Supervisor", "Other"}
@@ -18662,9 +19134,6 @@ def save_potential_cv_review_changes(
     note = request.form.get("cv_review_notes", "").strip()
     if require_note and not note:
         option_errors.append("Notes cannot be empty.")
-    note_department = request.form.get("cv_review_note_department", "").strip()
-    if note and note_department not in USER_DEPARTMENTS:
-        option_errors.append("Department is required.")
     if entry.status == "Interview confirmed":
         no_show = request.form.get("interview_outcome_status") == "no_show"
         has_car = request.form.get("interview_has_car", "").strip()
@@ -18723,6 +19192,8 @@ def save_potential_cv_review_changes(
         entry.cv_review_interview_options = json.dumps(interview_options)
     if not is_arrangement_note_only:
         entry.cv_review_interview_options = json.dumps(interview_options)
+    if entry.status == "CV to be reviewed":
+        sync_potential_preassigned_exam_sessions(entry, request.form)
     if next_status:
         set_potential_entry_status(entry, next_status)
     if mark_rejected:
@@ -19053,10 +19524,6 @@ def validate_and_apply_onboarding_follow_up(entry, form, require_action=None):
 
 def save_onboarding_notes_if_present(entry, form, errors):
     note = form.get("cv_review_notes", "").strip()
-    note_department = form.get("cv_review_note_department", "").strip()
-    if note and note_department not in USER_DEPARTMENTS:
-        errors.append("Department is required.")
-        return
     append_potential_cv_review_notes(entry, form)
 
 
@@ -19147,9 +19614,6 @@ def mark_potential_interview_invitation_sent(entry_id):
 
     option_errors = []
     note = request.form.get("cv_review_notes", "").strip()
-    note_department = request.form.get("cv_review_note_department", "").strip()
-    if note and note_department not in USER_DEPARTMENTS:
-        option_errors.append("Department is required.")
     if option_errors:
         for error in option_errors:
             flash(error, "error")
@@ -19253,9 +19717,6 @@ def confirm_potential_interview(entry_id):
     if not selected_option:
         option_errors.append("Select one interview date and time option before confirming the interview.")
     note = request.form.get("cv_review_notes", "").strip()
-    note_department = request.form.get("cv_review_note_department", "").strip()
-    if note and note_department not in USER_DEPARTMENTS:
-        option_errors.append("Department is required.")
     if option_errors:
         for error in option_errors:
             flash(error, "error")
@@ -19281,10 +19742,36 @@ def delete_potential_cv_review_note(entry_id):
         note_index = int(request.form.get("note_index", "-1"))
     except ValueError:
         note_index = -1
-    entry.interview = delete_interview_history_entry(entry.interview, note_index)
+    entry.interview, deleted_note_id = delete_interview_history_entry(entry.interview, note_index)
+    if deleted_note_id:
+        PotentialEntryNoteMention.query.filter_by(note_id=deleted_note_id).delete()
     db.session.commit()
     flash("Note deleted.", "success")
     return redirect(url_for("staff.potential_entries", open_staff_modal=f"cv-review-potential-entry-{entry.id}"))
+
+
+@staff_bp.route("/potential-entry-note-mentions/<int:mention_id>/read", methods=["POST"])
+@login_required
+def mark_potential_note_read(mention_id):
+    if not validate_csrf():
+        flash("Security token expired. Please try again.", "error")
+        return redirect(url_for("staff.dashboard"))
+
+    mention = PotentialEntryNoteMention.query.get_or_404(mention_id)
+    current_user = getattr(g, "current_user", None)
+    if not current_user or mention.to_user_id != current_user.id:
+        abort(403)
+
+    if request.form.get("read") == "1" and not mention.is_read:
+        mention.is_read = True
+        mention.read_by_user_id = current_user.id
+        mention.read_on = datetime.now(timezone.utc)
+        db.session.commit()
+        flash("Note marked as read.", "success")
+
+    return_modal = (request.form.get("return_modal") or f"potential-entry-{mention.potential_entry_id}").strip()
+    highlight_note = (request.form.get("highlight_note") or mention.note_id).strip()
+    return redirect(url_for("staff.potential_entries", open_staff_modal=return_modal, highlight_note=highlight_note))
 
 
 @staff_bp.route("/potential-entries/<int:entry_id>/cv-review/reject", methods=["POST"])
@@ -19411,9 +19898,6 @@ def reschedule_potential_interview(entry_id):
     if not interview_options:
         option_errors.append("Please configure a new interview date and time before rescheduling.")
     note = request.form.get("cv_review_notes", "").strip()
-    note_department = request.form.get("cv_review_note_department", "").strip()
-    if note and note_department not in USER_DEPARTMENTS:
-        option_errors.append("Department is required.")
     if option_errors:
         for error in option_errors:
             flash(error, "error")

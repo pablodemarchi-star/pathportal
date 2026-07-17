@@ -98,9 +98,30 @@ class DashboardTest(unittest.TestCase):
 
         self.assertEqual(response.status_code, 200)
         self.assertIn("Potential entries", body)
+        self.assertIn("2 actions", body)
+        self.assertNotIn("0 notes", body)
         self.assertIn("You have 2 actions to complete in this menu.", body)
         self.assertIn('href="/potential-entries?action_scope=my_actions"', body)
         self.assertIn(">Go to menu<", body)
+        self.assertNotIn('<span class="dashboard-count-chip">2</span>', body)
+
+    def test_dashboard_potential_entries_counters_pluralize_zero_and_one(self):
+        zero_response = self.client().get("/")
+        zero_body = zero_response.get_data(as_text=True)
+
+        self.assertEqual(zero_response.status_code, 200)
+        self.assertNotIn("0 actions", zero_body)
+        self.assertNotIn("0 notes", zero_body)
+        self.assertNotIn('aria-label="Potential entries counters"', zero_body)
+
+        self.add_entry("Interview invitation sent")
+        one_response = self.client().get("/")
+        one_body = one_response.get_data(as_text=True)
+
+        self.assertEqual(one_response.status_code, 200)
+        self.assertIn("1 action", one_body)
+        self.assertNotIn("0 notes", one_body)
+        self.assertIn("You have 1 action to complete in this menu.", one_body)
 
     def test_management_dashboard_counts_only_management_potential_actions(self):
         self.add_entry("CV to be reviewed")

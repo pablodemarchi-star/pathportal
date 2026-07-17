@@ -79,6 +79,8 @@ def create_app():
         InternStageRemoteTrainingSelection,
         InternStageYear,
         PotentialEntry,
+        PotentialEntryNoteMention,
+        PotentialEntryPreassignedExamSession,
         PotentialEntryStatusTrack,
         Provider,
         ProviderHistory,
@@ -229,6 +231,53 @@ def create_app():
             db.session.execute(text("ALTER TABLE potential_entry ADD COLUMN updated_on DATETIME"))
             db.session.execute(text("UPDATE potential_entry SET updated_on = COALESCE(created_on, CURRENT_TIMESTAMP) WHERE updated_on IS NULL"))
             db.session.commit()
+        note_metadata_columns = {
+            "from_user_id": "INTEGER",
+            "from_full_name": "VARCHAR(160)",
+            "from_department": "VARCHAR(40)",
+            "to_user_id": "INTEGER",
+            "to_full_name": "VARCHAR(160)",
+            "to_department": "VARCHAR(40)",
+            "updated_on": "DATETIME",
+        }
+        for table_name in ("provider_history", "exam_session_logistics_concept_note"):
+            table_columns = {
+                row[1] for row in db.session.execute(text(f"PRAGMA table_info({table_name})"))
+            }
+            for column_name, column_type in note_metadata_columns.items():
+                if table_columns and column_name not in table_columns:
+                    db.session.execute(text(f"ALTER TABLE {table_name} ADD COLUMN {column_name} {column_type}"))
+                    if column_name == "updated_on":
+                        db.session.execute(text(f"UPDATE {table_name} SET updated_on = COALESCE(created_on, CURRENT_TIMESTAMP) WHERE updated_on IS NULL"))
+                    db.session.commit()
+        db.session.execute(text("""
+            CREATE TABLE IF NOT EXISTS potential_entry_note_mention (
+                id INTEGER PRIMARY KEY,
+                note_id VARCHAR(64) NOT NULL UNIQUE,
+                related_entity_type VARCHAR(80) NOT NULL DEFAULT 'Potential entry',
+                related_entity_id INTEGER NOT NULL,
+                potential_entry_id INTEGER NOT NULL,
+                from_user_id INTEGER,
+                from_full_name VARCHAR(160),
+                from_department VARCHAR(40),
+                to_user_id INTEGER,
+                to_full_name VARCHAR(160),
+                to_department VARCHAR(40),
+                comment_text TEXT NOT NULL,
+                is_read BOOLEAN NOT NULL DEFAULT 0,
+                read_by_user_id INTEGER,
+                read_on DATETIME,
+                created_on DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                updated_on DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY(potential_entry_id) REFERENCES potential_entry (id) ON DELETE CASCADE,
+                FOREIGN KEY(from_user_id) REFERENCES app_user (id),
+                FOREIGN KEY(to_user_id) REFERENCES app_user (id),
+                FOREIGN KEY(read_by_user_id) REFERENCES app_user (id)
+            )
+        """))
+        db.session.execute(text("CREATE INDEX IF NOT EXISTS ix_potential_entry_note_mention_to_read ON potential_entry_note_mention (to_user_id, is_read)"))
+        db.session.execute(text("CREATE INDEX IF NOT EXISTS ix_potential_entry_note_mention_entry ON potential_entry_note_mention (potential_entry_id)"))
+        db.session.commit()
         potential_entry_draft_columns = {
             "acceptance_status": "VARCHAR(40)",
             "title": "VARCHAR(120)",
