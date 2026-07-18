@@ -2720,10 +2720,13 @@ class PotentialInvitationTest(unittest.TestCase):
         self.assertIn('const dateMaskValidationMessage', js)
         self.assertIn('const formatDateMaskSlashInput', js)
         self.assertIn("const initStaffInductionTimeInputs", js)
+        self.assertIn("const initStaffInductionDateInputs", js)
+        self.assertIn("input[name='upcoming_induction_session_date'][data-date-mask]", js)
         self.assertIn("input[name='annual_meeting_time'][data-annual-meeting-time]", js)
         self.assertIn("const initRemoteTrainingPeriodInputs", js)
         self.assertIn("input.dataset.certificationYear", js)
         self.assertLess(js.index("initStaffInductionTimeInputs();"), js.index("const dismissFlashNotification"))
+        self.assertLess(js.index("initStaffInductionDateInputs();"), js.index("const dismissFlashNotification"))
         self.assertLess(js.index("initRemoteTrainingPeriodInputs();"), js.index("const dismissFlashNotification"))
 
     def test_date_mask_formats_and_validates_dd_mm_yyyy(self):

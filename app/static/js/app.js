@@ -133,6 +133,128 @@ const initStaffInductionTimeInputs = () => {
 
 initStaffInductionTimeInputs();
 
+const initStaffInductionDateInputs = () => {
+  const selector = "input[name='upcoming_induction_session_date'][data-date-mask]";
+  const inputFromTarget = (target) => target?.closest?.(selector) || null;
+  const today = () => {
+    const value = new Date();
+    value.setHours(0, 0, 0, 0);
+    return value;
+  };
+  const digitsOnly = (value) => String(value || "").replace(/\D/g, "");
+  const formatTyping = (value) => {
+    const raw = String(value || "");
+    if (raw.includes("/")) {
+      const parts = raw.split("/").slice(0, 3);
+      const day = digitsOnly(parts[0]).slice(0, 2);
+      const monthDigits = digitsOnly(parts[1]);
+      const month = monthDigits.slice(0, 2);
+      const year = `${monthDigits.slice(2)}${digitsOnly(parts[2])}`.slice(0, 4);
+      if (parts.length === 2 && monthDigits.length > 2) return `${day}/${month}/${year}`.slice(0, 10);
+      if (parts.length >= 3) return `${day}/${month}/${year}`.slice(0, 10);
+      return `${day}/${month}${raw.endsWith("/") && month ? "/" : ""}`.slice(0, 10);
+    }
+    const clean = digitsOnly(raw).slice(0, 8);
+    if (clean.length <= 2) return clean;
+    if (clean.length <= 4) return `${clean.slice(0, 2)}/${clean.slice(2)}`;
+    return `${clean.slice(0, 2)}/${clean.slice(2, 4)}/${clean.slice(4)}`;
+  };
+  const slashAdvance = (value) => {
+    const raw = String(value || "").trim();
+    if (!raw) return "";
+    const parts = raw.split("/").slice(0, 3);
+    const day = digitsOnly(parts[0]).slice(0, 2);
+    if (!raw.includes("/")) return day ? `${day.padStart(2, "0")}/` : "";
+    const month = digitsOnly(parts[1]).slice(0, 2);
+    const year = digitsOnly(parts[2]).slice(0, 4);
+    if (parts.length === 2) {
+      if (!month) return day ? `${day.padStart(2, "0")}/` : "";
+      return `${day.padStart(2, "0")}/${month.padStart(2, "0")}/${year}`.slice(0, 10);
+    }
+    return `${day.padStart(2, "0")}/${month.padStart(2, "0")}/${year}`.slice(0, 10);
+  };
+  const normalize = (value) => {
+    const raw = String(value || "").trim();
+    if (!raw) return "";
+    const clean = digitsOnly(raw).slice(0, 8);
+    if (raw.includes("/")) {
+      const parts = raw.split("/").slice(0, 3);
+      const day = digitsOnly(parts[0]).slice(0, 2);
+      const month = digitsOnly(parts[1]).slice(0, 2);
+      const year = `${digitsOnly(parts[1]).slice(2)}${digitsOnly(parts[2])}`.slice(0, 4);
+      if (parts.length >= 3 && year.length) return `${day.padStart(2, "0")}/${month.padStart(2, "0")}/${year}`.slice(0, 10);
+    }
+    if (clean.length <= 2) return clean.padStart(2, "0");
+    if (clean.length <= 4) return `${clean.slice(0, 2)}/${clean.slice(2).padStart(2, "0")}`;
+    return `${clean.slice(0, 2)}/${clean.slice(2, 4)}/${clean.slice(4)}`;
+  };
+  const parseDate = (value) => {
+    const match = String(value || "").trim().match(/^(\d{2})\/(\d{2})\/(\d{4})$/);
+    if (!match) return null;
+    const day = Number.parseInt(match[1], 10);
+    const monthIndex = Number.parseInt(match[2], 10) - 1;
+    const year = Number.parseInt(match[3], 10);
+    if (day < 1 || day > 31 || monthIndex < 0 || monthIndex > 11 || year < today().getFullYear()) return null;
+    const parsed = new Date(year, monthIndex, day);
+    parsed.setHours(0, 0, 0, 0);
+    if (parsed.getDate() !== day || parsed.getMonth() !== monthIndex || parsed.getFullYear() !== year) return null;
+    return parsed;
+  };
+  const validate = (input) => {
+    if (!input?.setCustomValidity) return;
+    const raw = String(input.value || "").trim();
+    const parsed = parseDate(raw);
+    let message = "";
+    if (raw && !parsed) message = "Please enter a valid date.";
+    if (parsed && parsed < today()) message = "Date cannot be in the past.";
+    input.setCustomValidity(message);
+  };
+  const setEndCursor = (input) => {
+    if (typeof input?.setSelectionRange !== "function") return;
+    const cursorPosition = input.value.length;
+    input.setSelectionRange(cursorPosition, cursorPosition);
+  };
+  const complete = (input) => {
+    if (!input) return;
+    input.value = normalize(input.value);
+    validate(input);
+    setEndCursor(input);
+  };
+  document.addEventListener("input", (event) => {
+    const input = inputFromTarget(event.target);
+    if (!input) return;
+    input.value = formatTyping(input.value);
+    validate(input);
+    setEndCursor(input);
+  }, true);
+  document.addEventListener("blur", (event) => complete(inputFromTarget(event.target)), true);
+  document.addEventListener("change", (event) => complete(inputFromTarget(event.target)), true);
+  document.addEventListener("keydown", (event) => {
+    const input = inputFromTarget(event.target);
+    if (!input) return;
+    if (event.key === "/") {
+      event.preventDefault();
+      input.value = slashAdvance(input.value);
+      validate(input);
+      setEndCursor(input);
+      return;
+    }
+    if (event.key === "Shift") input.dataset.staffInductionDateShiftAdvance = "true";
+    if (event.shiftKey && event.key !== "Shift") delete input.dataset.staffInductionDateShiftAdvance;
+  }, true);
+  document.addEventListener("keyup", (event) => {
+    if (event.key !== "Shift") return;
+    const input = inputFromTarget(event.target);
+    if (!input || input.dataset.staffInductionDateShiftAdvance !== "true") return;
+    delete input.dataset.staffInductionDateShiftAdvance;
+    input.value = slashAdvance(input.value);
+    validate(input);
+    setEndCursor(input);
+  }, true);
+};
+
+initStaffInductionDateInputs();
+
 const initRemoteTrainingPeriodInputs = () => {
   const selector = "input[name='remote_training_period'][data-remote-training-period]";
   const inputFromTarget = (target) => target?.closest?.(selector) || null;
