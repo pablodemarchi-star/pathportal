@@ -1991,7 +1991,17 @@ class ScheduleWorkflowTest(unittest.TestCase):
         self.assertEqual(examiner_response.status_code, 200)
         self.assertIn("Annual meeting date & time", examiner_html)
         self.assertIn("Remote training period", examiner_html)
-        self.assertIn("DD/MM/2026 to DD/MM/2026", examiner_html)
+        self.assertIn('placeholder="DD/MM/YYYY to DD/MM/YYYY"', examiner_html)
+        self.assertIn('pattern="\\d{2}/\\d{2}/\\d{4} to \\d{2}/\\d{2}/\\d{4}"', examiner_html)
+        self.assertIn('data-remote-training-period', examiner_html)
+        self.assertIn('data-certification-year="2026"', examiner_html)
+        self.assertIn('name="annual_meeting_date"', examiner_html)
+        self.assertIn('placeholder="DD/MM/YYYY"', examiner_html)
+        self.assertIn('data-date-mask', examiner_html)
+        self.assertIn('data-date-future-or-today', examiner_html)
+        self.assertIn('name="annual_meeting_time"', examiner_html)
+        self.assertIn('data-annual-meeting-time', examiner_html)
+        self.assertIn('data-time-mask', examiner_html)
         self.assertLess(examiner_html.index("Remote training period"), examiner_html.index("Annual meeting date & time"))
         self.assertIn('placeholder="hh:mm"', examiner_html)
         self.assertIn("/annual-certification-programme/year-settings", examiner_html)
@@ -2010,9 +2020,9 @@ class ScheduleWorkflowTest(unittest.TestCase):
             data={
                 "csrf_token": "token",
                 "certification_year": "2026",
-                "annual_meeting_date": "10/03/2026",
+                "annual_meeting_date": "10/08/2026",
                 "annual_meeting_time": "14:30",
-                "remote_training_period": "11/03/2026 to 20/03/2026",
+                "remote_training_period": "11/08/2026 to 20/08/2026",
             },
             follow_redirects=False,
         )
@@ -2022,26 +2032,26 @@ class ScheduleWorkflowTest(unittest.TestCase):
             module_key="examiner_certification",
             year=2026,
         ).one()
-        self.assertEqual(examiner_config.annual_meeting_date, date(2026, 3, 10))
+        self.assertEqual(examiner_config.annual_meeting_date, date(2026, 8, 10))
         self.assertEqual(examiner_config.annual_meeting_time, time(14, 30))
-        self.assertEqual(examiner_config.remote_training_start_date, date(2026, 3, 11))
-        self.assertEqual(examiner_config.remote_training_end_date, date(2026, 3, 20))
+        self.assertEqual(examiner_config.remote_training_start_date, date(2026, 8, 11))
+        self.assertEqual(examiner_config.remote_training_end_date, date(2026, 8, 20))
 
         supervisor_response = client.get("/supervisor-certification?certification_year=2026")
         supervisor_html = supervisor_response.get_data(as_text=True)
 
         self.assertEqual(supervisor_response.status_code, 200)
         self.assertIn("/supervisor-certification/year-settings", supervisor_html)
-        self.assertIn("DD/MM/2026 to DD/MM/2026", supervisor_html)
+        self.assertIn('placeholder="DD/MM/YYYY to DD/MM/YYYY"', supervisor_html)
 
         response = client.post(
             "/supervisor-certification/year-settings",
             data={
                 "csrf_token": "token",
                 "certification_year": "2026",
-                "annual_meeting_date": "12/04/2026",
+                "annual_meeting_date": "12/09/2026",
                 "annual_meeting_time": "09:05",
-                "remote_training_period": "13/04/2026 to 18/04/2026",
+                "remote_training_period": "13/09/2026 to 18/09/2026",
             },
             follow_redirects=False,
         )
@@ -2051,10 +2061,10 @@ class ScheduleWorkflowTest(unittest.TestCase):
             module_key="supervisor_certification",
             year=2026,
         ).one()
-        self.assertEqual(supervisor_config.annual_meeting_date, date(2026, 4, 12))
+        self.assertEqual(supervisor_config.annual_meeting_date, date(2026, 9, 12))
         self.assertEqual(supervisor_config.annual_meeting_time, time(9, 5))
-        self.assertEqual(supervisor_config.remote_training_start_date, date(2026, 4, 13))
-        self.assertEqual(supervisor_config.remote_training_end_date, date(2026, 4, 18))
+        self.assertEqual(supervisor_config.remote_training_start_date, date(2026, 9, 13))
+        self.assertEqual(supervisor_config.remote_training_end_date, date(2026, 9, 18))
 
     def test_certification_sections_default_to_latest_active_year(self):
         client = self.login_client()
@@ -2481,6 +2491,58 @@ class ScheduleWorkflowTest(unittest.TestCase):
             data={
                 "csrf_token": "token",
                 "certification_year": "2026",
+                "annual_meeting_date": "17/07/2026",
+                "annual_meeting_time": "14:30",
+                "remote_training_period": "",
+            },
+            follow_redirects=False,
+        )
+
+        self.assertEqual(response.status_code, 302)
+        self.assertEqual(CertificationYearConfiguration.query.count(), 0)
+
+        response = client.post(
+            "/annual-certification-programme/year-settings",
+            data={
+                "csrf_token": "token",
+                "certification_year": "2026",
+                "annual_meeting_date": "",
+                "annual_meeting_time": "14:30",
+                "remote_training_period": "",
+            },
+            follow_redirects=False,
+        )
+
+        self.assertEqual(response.status_code, 302)
+        config = CertificationYearConfiguration.query.filter_by(
+            module_key="examiner_certification",
+            year=2026,
+        ).one()
+        self.assertIsNone(config.annual_meeting_date)
+        self.assertIsNone(config.annual_meeting_time)
+        db.session.delete(config)
+        db.session.commit()
+
+        response = client.post(
+            "/annual-certification-programme/year-settings",
+            data={
+                "csrf_token": "token",
+                "certification_year": "2026",
+                "annual_meeting_date": "",
+                "annual_meeting_time": "",
+                "remote_training_period": "11/08/2027 to 20/08/2027",
+            },
+            follow_redirects=False,
+        )
+
+        self.assertEqual(response.status_code, 302)
+        self.assertEqual(CertificationYearConfiguration.query.count(), 0)
+
+        response = client.post(
+            "/annual-certification-programme/year-settings",
+            data={
+                "csrf_token": "token",
+                "certification_year": "2026",
                 "annual_meeting_date": "10/03/2027",
                 "annual_meeting_time": "",
                 "remote_training_period": "",
@@ -2498,7 +2560,7 @@ class ScheduleWorkflowTest(unittest.TestCase):
                 "certification_year": "2026",
                 "annual_meeting_date": "",
                 "annual_meeting_time": "",
-                "remote_training_period": "20/03/2026 to 11/03/2026",
+                "remote_training_period": "20/08/2026 to 11/08/2026",
             },
             follow_redirects=False,
         )
@@ -2513,7 +2575,7 @@ class ScheduleWorkflowTest(unittest.TestCase):
                 "certification_year": "2026",
                 "annual_meeting_date": "",
                 "annual_meeting_time": "",
-                "remote_training_period": "11/03/2026 to 11/03/2026",
+                "remote_training_period": "11/08/2026 to 11/08/2026",
             },
             follow_redirects=False,
         )
@@ -2526,7 +2588,7 @@ class ScheduleWorkflowTest(unittest.TestCase):
             data={
                 "csrf_token": "token",
                 "certification_year": "2026",
-                "annual_meeting_date": "11/03/2026",
+                "annual_meeting_date": "11/08/2026",
                 "annual_meeting_time": "24:00",
                 "remote_training_period": "",
             },
@@ -2535,6 +2597,60 @@ class ScheduleWorkflowTest(unittest.TestCase):
 
         self.assertEqual(response.status_code, 302)
         self.assertEqual(CertificationYearConfiguration.query.count(), 0)
+
+    def test_certification_year_settings_clean_past_annual_meeting_on_render(self):
+        client = self.login_client()
+        db.session.add_all([
+            ExaminerCertificationYear(year=2026, is_archived=False),
+            SupervisorCertificationYear(year=2026, is_archived=False),
+            CertificationYearConfiguration(
+                module_key="examiner_certification",
+                year=2026,
+                annual_meeting_date=date(2026, 7, 17),
+                annual_meeting_time=time(14, 30),
+            ),
+            CertificationYearConfiguration(
+                module_key="supervisor_certification",
+                year=2026,
+                annual_meeting_date=date(2026, 7, 17),
+                annual_meeting_time=time(9, 5),
+            ),
+        ])
+        db.session.commit()
+
+        examiner_html = client.get("/annual-certification-programme?certification_year=2026").get_data(as_text=True)
+        supervisor_html = client.get("/supervisor-certification?certification_year=2026").get_data(as_text=True)
+
+        self.assertNotIn('value="17/07/2026"', examiner_html)
+        self.assertNotIn('value="14:30"', examiner_html)
+        self.assertNotIn('value="17/07/2026"', supervisor_html)
+        self.assertNotIn('value="09:05"', supervisor_html)
+
+    def test_certification_year_settings_clean_past_remote_training_on_render(self):
+        client = self.login_client()
+        db.session.add_all([
+            ExaminerCertificationYear(year=2026, is_archived=False),
+            SupervisorCertificationYear(year=2026, is_archived=False),
+            CertificationYearConfiguration(
+                module_key="examiner_certification",
+                year=2026,
+                remote_training_start_date=date(2026, 7, 10),
+                remote_training_end_date=date(2026, 7, 17),
+            ),
+            CertificationYearConfiguration(
+                module_key="supervisor_certification",
+                year=2026,
+                remote_training_start_date=date(2026, 8, 10),
+                remote_training_end_date=date(2026, 8, 15),
+            ),
+        ])
+        db.session.commit()
+
+        examiner_html = client.get("/annual-certification-programme?certification_year=2026").get_data(as_text=True)
+        supervisor_html = client.get("/supervisor-certification?certification_year=2026").get_data(as_text=True)
+
+        self.assertNotIn('value="10/07/2026 to 17/07/2026"', examiner_html)
+        self.assertIn('value="10/08/2026 to 15/08/2026"', supervisor_html)
 
     def test_session_header_non_available_staff_persists_to_assignment_rows(self):
         assigned_supervisor = self.create_supervisor(staff_id=1, name="Laura Mendez")

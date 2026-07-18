@@ -253,7 +253,7 @@ def create_app():
         db.session.execute(text("""
             CREATE TABLE IF NOT EXISTS potential_entry_note_mention (
                 id INTEGER PRIMARY KEY,
-                note_id VARCHAR(64) NOT NULL UNIQUE,
+                note_id VARCHAR(64) NOT NULL,
                 related_entity_type VARCHAR(80) NOT NULL DEFAULT 'Potential entry',
                 related_entity_id INTEGER NOT NULL,
                 potential_entry_id INTEGER NOT NULL,
@@ -275,8 +275,65 @@ def create_app():
                 FOREIGN KEY(read_by_user_id) REFERENCES app_user (id)
             )
         """))
+        note_mention_indexes = list(db.session.execute(text("PRAGMA index_list(potential_entry_note_mention)")))
+        has_legacy_note_unique = False
+        for index_row in note_mention_indexes:
+            index_name = index_row[1]
+            is_unique = bool(index_row[2])
+            index_columns = [
+                column_row[2]
+                for column_row in db.session.execute(text(f"PRAGMA index_info('{index_name}')"))
+            ]
+            if is_unique and index_columns == ["note_id"]:
+                has_legacy_note_unique = True
+                break
+        if has_legacy_note_unique:
+            db.session.execute(text("PRAGMA foreign_keys=OFF"))
+            db.session.execute(text("ALTER TABLE potential_entry_note_mention RENAME TO potential_entry_note_mention_old"))
+            db.session.execute(text("""
+                CREATE TABLE potential_entry_note_mention (
+                    id INTEGER PRIMARY KEY,
+                    note_id VARCHAR(64) NOT NULL,
+                    related_entity_type VARCHAR(80) NOT NULL DEFAULT 'Potential entry',
+                    related_entity_id INTEGER NOT NULL,
+                    potential_entry_id INTEGER NOT NULL,
+                    from_user_id INTEGER,
+                    from_full_name VARCHAR(160),
+                    from_department VARCHAR(40),
+                    to_user_id INTEGER,
+                    to_full_name VARCHAR(160),
+                    to_department VARCHAR(40),
+                    comment_text TEXT NOT NULL,
+                    is_read BOOLEAN NOT NULL DEFAULT 0,
+                    read_by_user_id INTEGER,
+                    read_on DATETIME,
+                    created_on DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    updated_on DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    FOREIGN KEY(potential_entry_id) REFERENCES potential_entry (id) ON DELETE CASCADE,
+                    FOREIGN KEY(from_user_id) REFERENCES app_user (id),
+                    FOREIGN KEY(to_user_id) REFERENCES app_user (id),
+                    FOREIGN KEY(read_by_user_id) REFERENCES app_user (id)
+                )
+            """))
+            db.session.execute(text("""
+                INSERT INTO potential_entry_note_mention (
+                    id, note_id, related_entity_type, related_entity_id, potential_entry_id,
+                    from_user_id, from_full_name, from_department,
+                    to_user_id, to_full_name, to_department, comment_text,
+                    is_read, read_by_user_id, read_on, created_on, updated_on
+                )
+                SELECT
+                    id, note_id, related_entity_type, related_entity_id, potential_entry_id,
+                    from_user_id, from_full_name, from_department,
+                    to_user_id, to_full_name, to_department, comment_text,
+                    is_read, read_by_user_id, read_on, created_on, updated_on
+                FROM potential_entry_note_mention_old
+            """))
+            db.session.execute(text("DROP TABLE potential_entry_note_mention_old"))
+            db.session.execute(text("PRAGMA foreign_keys=ON"))
         db.session.execute(text("CREATE INDEX IF NOT EXISTS ix_potential_entry_note_mention_to_read ON potential_entry_note_mention (to_user_id, is_read)"))
         db.session.execute(text("CREATE INDEX IF NOT EXISTS ix_potential_entry_note_mention_entry ON potential_entry_note_mention (potential_entry_id)"))
+        db.session.execute(text("CREATE UNIQUE INDEX IF NOT EXISTS uq_potential_note_recipient ON potential_entry_note_mention (note_id, to_user_id)"))
         db.session.commit()
         potential_entry_draft_columns = {
             "acceptance_status": "VARCHAR(40)",

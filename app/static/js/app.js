@@ -1,5 +1,313 @@
 const modalOpeners = new WeakMap();
 
+const initStaffInductionTimeInputs = () => {
+  const selector = "input[name='upcoming_induction_session_start_time'], input[name='upcoming_induction_session_end_time'], input[name='annual_meeting_time'][data-annual-meeting-time]";
+  const inputFromTarget = (target) => target?.closest?.(selector) || null;
+  const cleanDigits = (value) => String(value || "").replace(/\D/g, "");
+  const formatTyping = (value) => {
+    const raw = String(value || "").replace(/h\.?/gi, "").trim();
+    if (raw.includes(":")) {
+      const [hours = "", minutes = ""] = raw.split(":");
+      return `${cleanDigits(hours).slice(0, 2)}:${cleanDigits(minutes).slice(0, 2)}`.slice(0, 5);
+    }
+    const digits = cleanDigits(raw).slice(0, 4);
+    if (digits.length <= 2) return digits;
+    return `${digits.slice(0, 2)}:${digits.slice(2)}`;
+  };
+  const normalize = (value) => {
+    const raw = String(value || "").replace(/h\.?/gi, "").trim();
+    if (!raw) return "";
+    const digits = cleanDigits(raw);
+    if (raw.includes(":")) {
+      const [hours = "", minutes = ""] = raw.split(":");
+      const cleanHours = cleanDigits(hours);
+      const cleanMinutes = cleanDigits(minutes);
+      if (!cleanHours) return "";
+      return `${cleanHours.padStart(2, "0").slice(-2)}:${(cleanMinutes || "00").padStart(2, "0").slice(0, 2)}`;
+    }
+    if (digits.length <= 2) return `${digits.padStart(2, "0")}:00`;
+    if (digits.length === 3) return `${digits.slice(0, 1).padStart(2, "0")}:${digits.slice(1)}`;
+    return `${digits.slice(0, 2)}:${digits.slice(2, 4)}`;
+  };
+  const colonAdvance = (value) => {
+    const raw = String(value || "").trim();
+    if (!raw) return "";
+    if (!raw.includes(":")) {
+      const hours = cleanDigits(raw).slice(0, 2);
+      return hours ? `${hours.padStart(2, "0")}:` : "";
+    }
+    return normalize(raw);
+  };
+  const parseMinutes = (value) => {
+    const match = String(value || "").trim().match(/^(\d{2}):(\d{2})$/);
+    if (!match) return null;
+    const hours = Number.parseInt(match[1], 10);
+    const minutes = Number.parseInt(match[2], 10);
+    if (hours < 0 || hours > 23 || minutes < 0 || minutes > 59) return null;
+    return (hours * 60) + minutes;
+  };
+  const validateRow = (row) => {
+    if (!row) return;
+    const startInput = row.querySelector("input[name='upcoming_induction_session_start_time']");
+    const endInput = row.querySelector("input[name='upcoming_induction_session_end_time']");
+    const startMinutes = parseMinutes(startInput?.value);
+    const endMinutes = parseMinutes(endInput?.value);
+    [startInput, endInput].forEach((input) => {
+      if (!input?.setCustomValidity) return;
+      const currentMinutes = parseMinutes(input.value);
+      let message = "";
+      if (input.value.trim() && currentMinutes === null) {
+        message = "Please enter a valid 24-hour time.";
+      } else if (startMinutes !== null && endMinutes !== null && startMinutes >= endMinutes) {
+        message = input === startInput ? "Start time must be earlier than end time." : "End time must be later than start time.";
+      }
+      input.setCustomValidity(message);
+    });
+  };
+  const validateSingleTimeInput = (input) => {
+    if (!input?.setCustomValidity) return;
+    input.setCustomValidity(input.value.trim() && parseMinutes(input.value) === null ? "Please enter a valid 24-hour time." : "");
+  };
+  const complete = (input) => {
+    if (!input) return;
+    input.value = normalize(input.value);
+    const row = input.closest("[data-induction-option-row]");
+    if (row) {
+      validateRow(row);
+    } else {
+      validateSingleTimeInput(input);
+    }
+  };
+  const focusNext = (input) => {
+    const row = input?.closest?.("[data-induction-option-row]");
+    if (!row) return;
+    const fields = Array.from(row.querySelectorAll(selector)).filter((field) => !field.disabled);
+    const nextField = fields[fields.indexOf(input) + 1];
+    nextField?.focus();
+  };
+  document.addEventListener("input", (event) => {
+    const input = inputFromTarget(event.target);
+    if (!input) return;
+    input.value = formatTyping(input.value);
+    const row = input.closest("[data-induction-option-row]");
+    if (row) {
+      validateRow(row);
+    } else {
+      validateSingleTimeInput(input);
+    }
+  }, true);
+  document.addEventListener("blur", (event) => {
+    complete(inputFromTarget(event.target));
+  }, true);
+  document.addEventListener("change", (event) => {
+    complete(inputFromTarget(event.target));
+  }, true);
+  document.addEventListener("keydown", (event) => {
+    const input = inputFromTarget(event.target);
+    if (!input) return;
+    if (event.key === ":") {
+      event.preventDefault();
+      input.value = colonAdvance(input.value);
+      const row = input.closest("[data-induction-option-row]");
+      if (row) {
+        validateRow(row);
+      } else {
+        validateSingleTimeInput(input);
+      }
+      return;
+    }
+    if (event.key === "Tab") complete(input);
+    if (event.key === "Shift") input.dataset.staffInductionShiftAdvance = "true";
+    if (event.shiftKey && event.key !== "Shift") delete input.dataset.staffInductionShiftAdvance;
+  }, true);
+  document.addEventListener("keyup", (event) => {
+    if (event.key !== "Shift") return;
+    const input = inputFromTarget(event.target);
+    if (!input) return;
+    const shouldAdvance = input.dataset.staffInductionShiftAdvance === "true";
+    delete input.dataset.staffInductionShiftAdvance;
+    complete(input);
+    if (shouldAdvance) focusNext(input);
+  }, true);
+};
+
+initStaffInductionTimeInputs();
+
+const initRemoteTrainingPeriodInputs = () => {
+  const selector = "input[name='remote_training_period'][data-remote-training-period]";
+  const inputFromTarget = (target) => target?.closest?.(selector) || null;
+  const today = () => {
+    const value = new Date();
+    value.setHours(0, 0, 0, 0);
+    return value;
+  };
+  const digitsOnly = (value) => String(value || "").replace(/\D/g, "");
+  const dateFromDigits = (digits) => {
+    const clean = digitsOnly(digits).slice(0, 8);
+    if (clean.length <= 2) return clean;
+    if (clean.length <= 4) return `${clean.slice(0, 2)}/${clean.slice(2)}`;
+    return `${clean.slice(0, 2)}/${clean.slice(2, 4)}/${clean.slice(4)}`;
+  };
+  const formatRangeTyping = (value) => {
+    const clean = digitsOnly(value).slice(0, 16);
+    const first = dateFromDigits(clean.slice(0, 8));
+    const second = dateFromDigits(clean.slice(8, 16));
+    if (clean.length >= 8) return `${first} to ${second}`.slice(0, 24);
+    return first;
+  };
+  const splitRange = (value) => {
+    const raw = String(value || "");
+    if (raw.includes(" to ")) {
+      const [first = "", second = ""] = raw.split(" to ");
+      return [first, second];
+    }
+    const clean = digitsOnly(raw);
+    return [dateFromDigits(clean.slice(0, 8)), dateFromDigits(clean.slice(8, 16))];
+  };
+  const padActiveSegment = (value) => {
+    const raw = String(value || "");
+    const [firstRaw, secondRaw] = splitRange(raw);
+    const editingSecond = raw.includes(" to ");
+    const parts = (editingSecond ? secondRaw : firstRaw).split("/");
+    const day = digitsOnly(parts[0]).slice(0, 2);
+    const month = digitsOnly(parts[1]).slice(0, 2);
+    const year = digitsOnly(parts[2]).slice(0, 4);
+    let formatted = "";
+    if (parts.length <= 1) {
+      formatted = day ? `${day.padStart(2, "0")}/` : "";
+    } else if (parts.length === 2) {
+      formatted = month ? `${day.padStart(2, "0")}/${month.padStart(2, "0")}/` : `${day.padStart(2, "0")}/`;
+    } else {
+      formatted = `${day.padStart(2, "0")}/${month.padStart(2, "0")}/${year}`;
+    }
+    if (editingSecond) return `${firstRaw} to ${formatted}`.slice(0, 24);
+    return formatted;
+  };
+  const normalizeRange = (value) => {
+    const clean = digitsOnly(value).slice(0, 16);
+    const first = dateFromDigits(clean.slice(0, 8));
+    const second = dateFromDigits(clean.slice(8, 16));
+    if (clean.length > 8) return `${first} to ${second}`.slice(0, 24);
+    if (clean.length === 8) return `${first} to `;
+    return first;
+  };
+  const parseDate = (value) => {
+    const match = String(value || "").trim().match(/^(\d{2})\/(\d{2})\/(\d{4})$/);
+    if (!match) return null;
+    const day = Number.parseInt(match[1], 10);
+    const monthIndex = Number.parseInt(match[2], 10) - 1;
+    const year = Number.parseInt(match[3], 10);
+    if (day < 1 || day > 31 || monthIndex < 0 || monthIndex > 11 || year < today().getFullYear()) return null;
+    const parsed = new Date(year, monthIndex, day);
+    parsed.setHours(0, 0, 0, 0);
+    if (parsed.getDate() !== day || parsed.getMonth() !== monthIndex || parsed.getFullYear() !== year) return null;
+    return parsed;
+  };
+  const validationMessage = (input) => {
+    const raw = String(input?.value || "").trim();
+    if (!raw) return "";
+    const selectedYear = Number.parseInt(input.dataset.certificationYear || "", 10);
+    const [startValue, endValue] = raw.split(" to ");
+    if (!startValue || !endValue || raw.split(" to ").length !== 2) return "Remote training period must use DD/MM/YYYY to DD/MM/YYYY.";
+    const start = parseDate(startValue);
+    const end = parseDate(endValue);
+    if (!start || !end) return "Please enter valid dates.";
+    if (selectedYear && (start.getFullYear() !== selectedYear || end.getFullYear() !== selectedYear)) {
+      return `Remote training period dates must be in ${selectedYear}.`;
+    }
+    if (start < today() || end < today()) return "Date cannot be in the past.";
+    if (start >= end) return "Remote training period start date must be earlier than the end date.";
+    return "";
+  };
+  const validate = (input) => {
+    if (!input?.setCustomValidity) return;
+    input.setCustomValidity(validationMessage(input));
+  };
+  const setEndCursor = (input) => {
+    if (typeof input?.setSelectionRange !== "function") return;
+    const cursorPosition = input.value.length;
+    input.setSelectionRange(cursorPosition, cursorPosition);
+  };
+  const complete = (input) => {
+    if (!input) return;
+    input.value = normalizeRange(input.value);
+    validate(input);
+    setEndCursor(input);
+  };
+  document.addEventListener("input", (event) => {
+    const input = inputFromTarget(event.target);
+    if (!input) return;
+    input.value = formatRangeTyping(input.value);
+    validate(input);
+    setEndCursor(input);
+  }, true);
+  document.addEventListener("blur", (event) => complete(inputFromTarget(event.target)), true);
+  document.addEventListener("change", (event) => complete(inputFromTarget(event.target)), true);
+  document.addEventListener("keydown", (event) => {
+    const input = inputFromTarget(event.target);
+    if (!input) return;
+    if (event.key === "/") {
+      event.preventDefault();
+      input.value = padActiveSegment(input.value);
+      validate(input);
+      setEndCursor(input);
+      return;
+    }
+    if (event.key === "Shift") input.dataset.remoteTrainingShiftAdvance = "true";
+    if (event.shiftKey && event.key !== "Shift") delete input.dataset.remoteTrainingShiftAdvance;
+  }, true);
+  document.addEventListener("keyup", (event) => {
+    if (event.key !== "Shift") return;
+    const input = inputFromTarget(event.target);
+    if (!input || input.dataset.remoteTrainingShiftAdvance !== "true") return;
+    delete input.dataset.remoteTrainingShiftAdvance;
+    input.value = padActiveSegment(input.value);
+    validate(input);
+    setEndCursor(input);
+  }, true);
+};
+
+initRemoteTrainingPeriodInputs();
+
+const dismissFlashNotification = (button) => {
+  const flash = button?.closest?.("[data-dismissible-flash], .flash");
+  if (!flash) return;
+  const stack = flash.closest(".flash-stack");
+  flash.remove();
+  if (stack && !stack.children.length) {
+    stack.hidden = true;
+  }
+};
+
+const createFlashCloseButton = () => {
+  const button = document.createElement("button");
+  button.className = "flash-close-button";
+  button.type = "button";
+  button.setAttribute("aria-label", "Dismiss notification");
+  button.dataset.dismissFlash = "true";
+  button.innerHTML = "&times;";
+  return button;
+};
+
+const appendFlashContent = (item, message) => {
+  item.dataset.dismissibleFlash = "true";
+  const text = document.createElement("span");
+  text.className = "flash-message";
+  text.textContent = message;
+  item.replaceChildren(text, createFlashCloseButton());
+};
+
+const flashNotificationMessage = (flash) => (
+  flash?.querySelector?.(".flash-message")?.textContent || flash?.textContent || ""
+).trim();
+
+document.addEventListener("click", (event) => {
+  const button = event.target.closest?.("[data-dismiss-flash]");
+  if (!button) return;
+  event.preventDefault();
+  dismissFlashNotification(button);
+});
+
 document.querySelectorAll("[data-password-toggle]").forEach((button) => {
   const inputId = button.dataset.passwordInput;
   const input = inputId ? document.getElementById(inputId) : null;
@@ -257,7 +565,7 @@ const openRequestedScheduleModal = () => {
       const flash = document.querySelector(".flash.error");
       const errorBox = form.querySelector("[data-schedule-action-error]");
       if (flash && errorBox) {
-        errorBox.textContent = flash.textContent.trim();
+        errorBox.textContent = flashNotificationMessage(flash);
         errorBox.hidden = false;
       }
     }
@@ -270,7 +578,7 @@ const openRequestedScheduleModal = () => {
       const flash = document.querySelector(".flash.error");
       const errorBox = form.querySelector("[data-staffing-control-error]");
       if (flash && errorBox) {
-        errorBox.textContent = flash.textContent.trim();
+        errorBox.textContent = flashNotificationMessage(flash);
         errorBox.hidden = false;
       }
     }
@@ -283,7 +591,7 @@ const openRequestedScheduleModal = () => {
       const flash = document.querySelector(".flash.error");
       const errorBox = form.querySelector("[data-logistics-control-error]");
       if (flash && errorBox) {
-        errorBox.textContent = flash.textContent.trim();
+        errorBox.textContent = flashNotificationMessage(flash);
         errorBox.hidden = false;
       }
     }
@@ -296,7 +604,7 @@ const openRequestedScheduleModal = () => {
       const flash = document.querySelector(".flash.error");
       const errorBox = form.querySelector("[data-finance-control-error]");
       if (flash && errorBox) {
-        errorBox.textContent = flash.textContent.trim();
+        errorBox.textContent = flashNotificationMessage(flash);
         errorBox.hidden = false;
       }
     }
@@ -309,7 +617,7 @@ const openRequestedScheduleModal = () => {
       const flash = document.querySelector(".flash.error");
       const errorBox = form.querySelector("[data-sinapsis-control-error]");
       if (flash && errorBox) {
-        errorBox.textContent = flash.textContent.trim();
+        errorBox.textContent = flashNotificationMessage(flash);
         errorBox.hidden = false;
       }
     }
@@ -322,7 +630,7 @@ const openRequestedScheduleModal = () => {
       const flash = document.querySelector(".flash.error");
       const errorBox = form.querySelector("[data-communications-control-error]");
       if (flash && errorBox) {
-        errorBox.textContent = flash.textContent.trim();
+        errorBox.textContent = flashNotificationMessage(flash);
         errorBox.hidden = false;
       }
     }
@@ -2846,6 +3154,120 @@ const closeOtherPotentialSessionMultiselects = (activePicker) => {
   });
 };
 
+const closeOtherNoteRecipientPickers = (activePicker) => {
+  document.querySelectorAll("[data-note-recipient-picker].is-open").forEach((picker) => {
+    if (picker !== activePicker) picker.classList.remove("is-open");
+  });
+};
+
+const syncNoteRecipientSelect = (select) => {
+  const picker = select._noteRecipientPicker;
+  const chips = select.parentElement?.querySelector("[data-note-recipient-chips]");
+  if (!picker) return;
+  const selectedOptions = Array.from(select.selectedOptions).filter((option) => option.value);
+  const button = picker.querySelector("[data-note-recipient-toggle]");
+  const selectedText = picker.querySelector("[data-note-recipient-selected]");
+  const checkboxes = picker.querySelectorAll("input[type='checkbox']");
+  checkboxes.forEach((checkbox) => {
+    const option = Array.from(select.options).find((item) => item.value === checkbox.value);
+    checkbox.checked = Boolean(option?.selected);
+  });
+  if (selectedText) {
+    selectedText.textContent = selectedOptions.length
+      ? `${selectedOptions.length} selected`
+      : "Select recipients";
+  }
+  button?.classList.toggle("has-selection", selectedOptions.length > 0);
+  if (!chips) return;
+  chips.innerHTML = "";
+  selectedOptions.forEach((option) => {
+    const chip = document.createElement("span");
+    chip.className = "note-recipient-selected-chip";
+    chip.title = option.textContent.trim();
+    chip.textContent = option.textContent.trim();
+
+    const remove = document.createElement("button");
+    remove.type = "button";
+    remove.setAttribute("aria-label", `Remove ${option.textContent.trim()}`);
+    remove.textContent = "×";
+    remove.addEventListener("click", (event) => {
+      event.preventDefault();
+      option.selected = false;
+      syncNoteRecipientSelect(select);
+    });
+    chip.appendChild(remove);
+    chips.appendChild(chip);
+  });
+};
+
+const initNoteRecipientSelects = (root = document) => {
+  root.querySelectorAll("[data-note-recipient-select]").forEach((select) => {
+    if (select.dataset.initialized === "true") return;
+    select.dataset.initialized = "true";
+    select.hidden = true;
+
+    const picker = document.createElement("div");
+    picker.className = "note-recipient-picker";
+    picker.dataset.noteRecipientPicker = "true";
+
+    const toggle = document.createElement("button");
+    toggle.type = "button";
+    toggle.className = "note-recipient-picker-toggle";
+    toggle.dataset.noteRecipientToggle = "true";
+    toggle.setAttribute("aria-haspopup", "listbox");
+    toggle.innerHTML = '<span data-note-recipient-selected>Select recipients</span><span aria-hidden="true">⌄</span>';
+
+    const panel = document.createElement("div");
+    panel.className = "note-recipient-picker-panel";
+    panel.setAttribute("role", "listbox");
+    panel.setAttribute("aria-multiselectable", "true");
+
+    const options = Array.from(select.options).filter((option) => option.value);
+    if (options.length) {
+      options.forEach((option) => {
+        const row = document.createElement("label");
+        row.className = "note-recipient-picker-option";
+        row.setAttribute("role", "option");
+
+        const checkbox = document.createElement("input");
+        checkbox.type = "checkbox";
+        checkbox.value = option.value;
+        checkbox.checked = option.selected;
+
+        const text = document.createElement("span");
+        text.textContent = option.textContent.trim();
+
+        checkbox.addEventListener("change", () => {
+          option.selected = checkbox.checked;
+          syncNoteRecipientSelect(select);
+        });
+
+        row.appendChild(checkbox);
+        row.appendChild(text);
+        panel.appendChild(row);
+      });
+    } else {
+      const empty = document.createElement("span");
+      empty.className = "note-recipient-picker-empty";
+      empty.textContent = "No users available";
+      panel.appendChild(empty);
+    }
+
+    toggle.addEventListener("click", (event) => {
+      event.preventDefault();
+      const willOpen = !picker.classList.contains("is-open");
+      closeOtherNoteRecipientPickers(picker);
+      picker.classList.toggle("is-open", willOpen);
+    });
+
+    picker.appendChild(toggle);
+    picker.appendChild(panel);
+    select.insertAdjacentElement("beforebegin", picker);
+    select._noteRecipientPicker = picker;
+    syncNoteRecipientSelect(select);
+  });
+};
+
 const positionTeamMemberPickerPanel = (picker) => {
   const panel = picker.querySelector(".team-member-picker-panel");
   const summary = picker.querySelector("summary");
@@ -3060,6 +3482,9 @@ document.addEventListener("click", (event) => {
   document.querySelectorAll("[data-potential-session-multiselect][open]").forEach((picker) => {
     if (!picker.contains(event.target)) picker.open = false;
   });
+  document.querySelectorAll("[data-note-recipient-picker].is-open").forEach((picker) => {
+    if (!picker.contains(event.target)) picker.classList.remove("is-open");
+  });
 });
 
 document.addEventListener("keydown", (event) => {
@@ -3069,6 +3494,9 @@ document.addEventListener("keydown", (event) => {
   });
   document.querySelectorAll("[data-potential-session-multiselect][open]").forEach((picker) => {
     picker.open = false;
+  });
+  document.querySelectorAll("[data-note-recipient-picker].is-open").forEach((picker) => {
+    picker.classList.remove("is-open");
   });
 });
 
@@ -5525,6 +5953,7 @@ initEntryAcceptedEmailButtons();
 initEntryAcceptedWhatsAppButtons();
 initPotentialGmailButtons();
 initPotentialSessionMultiselects();
+initNoteRecipientSelects();
 
 document.addEventListener("click", (event) => {
   document.querySelectorAll("[data-team-member-picker][open]").forEach((picker) => {
@@ -5574,7 +6003,11 @@ const showStaffPaymentFeedback = (message) => {
   const feedback = document.querySelector("[data-staff-payment-feedback]");
   if (!feedback) return;
   feedback.hidden = false;
-  feedback.innerHTML = `<div class="flash error">${message}</div>`;
+  feedback.innerHTML = "";
+  const item = document.createElement("div");
+  item.className = "flash error";
+  appendFlashContent(item, message);
+  feedback.append(item);
 };
 
 const syncStaffPaymentRow = async (row) => {
@@ -6210,6 +6643,7 @@ const initLogisticsControls = (root = document) => {
 const initSessionMemberRows = (root = document) => {
   initMemberMultiselects(root);
   initPotentialSessionMultiselects(root);
+  initNoteRecipientSelects(root);
   initTeamMemberSelects(root);
   initStaffGmailLinks(root);
   initParticipationSelects(root);
@@ -6611,7 +7045,7 @@ const showProviderFeedback = (message, category = "success") => {
   stack.innerHTML = "";
   const item = document.createElement("div");
   item.className = `flash ${category}`;
-  item.textContent = message;
+  appendFlashContent(item, message);
   stack.append(item);
   window.setTimeout(() => {
     if (stack.contains(item)) {
@@ -7100,6 +7534,7 @@ const initInductionOptions = (root) => {
       });
       list.append(nextRow);
       updateInductionOptionRows(root);
+      validateInductionTimeRange(nextRow);
       nextRow.querySelector("input")?.focus();
       return;
     }
@@ -7110,6 +7545,7 @@ const initInductionOptions = (root) => {
       updateInductionOptionRows(root);
     }
   });
+  root.querySelectorAll("[data-induction-option-row]").forEach(validateInductionTimeRange);
 };
 
 document.querySelectorAll("[data-induction-options]").forEach(initInductionOptions);
@@ -7163,10 +7599,35 @@ const updatePermissionManagementScope = (form) => {
 
 document.querySelectorAll("form").forEach(updatePermissionManagementScope);
 
-const formatInterviewOptionDateTyping = (value) => {
-  const digits = String(value || "").replace(/\D/g, "").slice(0, 8);
-  if (digits.length <= 2) return digits;
-  if (digits.length <= 4) return `${digits.slice(0, 2)}/${digits.slice(2)}`;
+const dateMaskSelector = "[data-date-mask], [data-interview-option-date], [data-reactivation-date]";
+
+const dateMaskInputFromTarget = (target) => target?.closest?.(dateMaskSelector) || null;
+
+const cleanDateSegment = (value, length) => String(value || "").replace(/\D/g, "").slice(0, length);
+
+const formatInterviewOptionDateTyping = (value, { completeSegments = true } = {}) => {
+  const raw = String(value || "");
+  if (raw.includes("/")) {
+    const parts = raw.split("/").slice(0, 3);
+    const day = cleanDateSegment(parts[0], 2);
+    const monthDigits = String(parts[1] || "").replace(/\D/g, "");
+    const month = monthDigits.slice(0, 2);
+    const year = `${monthDigits.slice(2)}${String(parts[2] || "").replace(/\D/g, "")}`.slice(0, 4);
+    const hasFullDate = parts.length === 3 && year.length === 4;
+    const shouldPadDay = completeSegments && day.length === 1 && (raw.includes("/") || hasFullDate);
+    const shouldPadMonth = completeSegments && month.length === 1 && (parts.length === 3 || raw.endsWith("/") || hasFullDate);
+    const formattedDay = shouldPadDay ? day.padStart(2, "0") : day;
+    const formattedMonth = shouldPadMonth ? month.padStart(2, "0") : month;
+    if (parts.length === 2 && monthDigits.length > 2) return `${formattedDay}/${formattedMonth}/${year}`.slice(0, 10);
+    if (parts.length >= 3) return `${formattedDay}/${formattedMonth}/${year}`.slice(0, 10);
+    if (parts.length === 2) return `${formattedDay}/${formattedMonth}${raw.endsWith("/") && formattedMonth ? "/" : ""}`.slice(0, 10);
+    return formattedDay;
+  }
+  const digits = raw.replace(/\D/g, "").slice(0, 8);
+  if (digits.length <= 1) return digits;
+  if (digits.length === 2) return completeSegments ? `${digits}/` : digits;
+  if (digits.length <= 3) return `${digits.slice(0, 2)}/${digits.slice(2)}`;
+  if (digits.length === 4) return completeSegments ? `${digits.slice(0, 2)}/${digits.slice(2)}/` : `${digits.slice(0, 2)}/${digits.slice(2)}`;
   return `${digits.slice(0, 2)}/${digits.slice(2, 4)}/${digits.slice(4)}`;
 };
 
@@ -7179,7 +7640,7 @@ const normalizeInterviewOptionDate = (value) => {
       return `${parts[0].padStart(2, "0").slice(-2)}/${parts[1].padStart(2, "0").slice(-2)}/${parts[2]}`;
     }
   }
-  return formatInterviewOptionDateTyping(raw);
+  return formatInterviewOptionDateTyping(raw, { completeSegments: true });
 };
 
 const parseDdMmYyyyDate = (value) => {
@@ -7205,14 +7666,81 @@ const isFutureDdMmYyyyDate = (value) => {
   if (!parsed) return false;
   const today = new Date();
   today.setHours(0, 0, 0, 0);
-  return parsed > today;
+  return parsed >= today;
 };
+
+const dateMaskValidationMessage = (value, { futureOrToday = false } = {}) => {
+  const raw = String(value || "").trim();
+  if (!raw) return "";
+  const match = raw.match(/^(\d{2})\/(\d{2})\/(\d{4})$/);
+  if (!match) return "Please enter a valid date.";
+  const day = Number.parseInt(match[1], 10);
+  const month = Number.parseInt(match[2], 10);
+  const year = Number.parseInt(match[3], 10);
+  const currentYear = new Date().getFullYear();
+  if (day < 1 || day > 31) return "Day must be between 01 and 31.";
+  if (month < 1 || month > 12) return "Month must be between 01 and 12.";
+  if (year < currentYear) return "Year must be the current year or later.";
+  if (!parseDdMmYyyyDate(raw)) return "Please enter a valid date.";
+  if (futureOrToday && !isFutureDdMmYyyyDate(raw)) return "Date cannot be in the past.";
+  return "";
+};
+
+const validateDateMaskInput = (input) => {
+  if (!input?.setCustomValidity) return;
+  input.setCustomValidity(dateMaskValidationMessage(input.value, {
+    futureOrToday: input.matches("[data-date-future-or-today]"),
+  }));
+};
+
+const formatDateMaskSlashInput = (value) => {
+  const raw = String(value || "").trim();
+  if (!raw) return "";
+  const parts = raw.split("/").slice(0, 3);
+  const day = cleanDateSegment(parts[0], 2);
+  if (!raw.includes("/")) {
+    return day ? `${day.padStart(2, "0")}/` : "";
+  }
+  const monthDigits = String(parts[1] || "").replace(/\D/g, "");
+  const month = monthDigits.slice(0, 2);
+  const year = `${monthDigits.slice(2)}${String(parts[2] || "").replace(/\D/g, "")}`.slice(0, 4);
+  const formattedDay = day ? day.padStart(2, "0") : "";
+  if (parts.length === 2) {
+    if (!month) return formattedDay ? `${formattedDay}/` : "";
+    return `${formattedDay}/${month.padStart(2, "0")}/${year}`.slice(0, 10);
+  }
+  return formatInterviewOptionDateTyping(raw, { completeSegments: true });
+};
+
+const completeCurrentDateMaskSegment = (input) => {
+  if (!input) return;
+  input.value = formatInterviewOptionDateTyping(input.value, { completeSegments: true });
+  validateDateMaskInput(input);
+};
+
+const advanceDateMaskSegment = (input) => {
+  if (!input) return;
+  input.value = formatDateMaskSlashInput(input.value);
+  if (typeof input.setSelectionRange === "function") {
+    const cursorPosition = input.value.length;
+    input.setSelectionRange(cursorPosition, cursorPosition);
+  }
+  validateDateMaskInput(input);
+};
+
+const timeMaskSelector = "[data-time-mask], [data-interview-option-time]";
+
+const timeMaskInputFromTarget = (target) => target?.closest?.(timeMaskSelector) || null;
 
 const formatInterviewOptionTimeTyping = (value) => {
   const raw = String(value || "").replace(/h\.?/gi, "").trim();
   if (raw.includes(":")) {
-    const [hours = "", minutes = ""] = raw.split(":");
-    return `${hours.replace(/\D/g, "").slice(0, 2)}:${minutes.replace(/\D/g, "").slice(0, 2)}`.slice(0, 5);
+    const parts = raw.split(":").slice(0, 2);
+    const hourDigits = String(parts[0] || "").replace(/\D/g, "");
+    const minuteDigits = String(parts[1] || "").replace(/\D/g, "");
+    const hours = hourDigits.slice(0, 2);
+    const minutes = `${hourDigits.slice(2)}${minuteDigits}`.slice(0, 2);
+    return `${hours}:${minutes}`.slice(0, 5);
   }
   const digits = raw.replace(/\D/g, "").slice(0, 4);
   if (digits.length <= 2) return digits;
@@ -7227,13 +7755,96 @@ const normalizeInterviewOptionTime = (value) => {
     const [hours = "", minutes = ""] = raw.split(":");
     const cleanHours = hours.replace(/\D/g, "");
     const cleanMinutes = minutes.replace(/\D/g, "");
-    if (cleanHours && cleanMinutes.length === 2) return `${cleanHours.padStart(2, "0").slice(-2)}:${cleanMinutes}`;
+    if (cleanHours && cleanMinutes) return `${cleanHours.padStart(2, "0").slice(-2)}:${cleanMinutes.padStart(2, "0").slice(0, 2)}`;
+    if (cleanHours) return `${cleanHours.padStart(2, "0").slice(-2)}:00`;
     return formatInterviewOptionTimeTyping(raw);
   }
   if (digits.length === 1 || digits.length === 2) return `${digits.padStart(2, "0")}:00`;
   if (digits.length === 3) return `${digits.slice(0, 1).padStart(2, "0")}:${digits.slice(1)}`;
   if (digits.length === 4) return `${digits.slice(0, 2)}:${digits.slice(2)}`;
   return formatInterviewOptionTimeTyping(raw);
+};
+
+const formatTimeColonInput = (value) => {
+  const raw = String(value || "").trim();
+  if (!raw) return "";
+  if (!raw.includes(":")) {
+    const hours = raw.replace(/\D/g, "").slice(0, 2);
+    return hours ? `${hours.padStart(2, "0")}:` : "";
+  }
+  const [hours = "", minutes = ""] = raw.split(":");
+  const cleanHours = hours.replace(/\D/g, "").slice(0, 2);
+  const cleanMinutes = minutes.replace(/\D/g, "").slice(0, 2);
+  if (!cleanHours) return "";
+  return `${cleanHours.padStart(2, "0")}:${cleanMinutes.padStart(2, "0")}`.slice(0, 5);
+};
+
+const parseTimeMaskValue = (value) => {
+  const match = String(value || "").trim().match(/^(\d{2}):(\d{2})$/);
+  if (!match) return null;
+  const hours = Number.parseInt(match[1], 10);
+  const minutes = Number.parseInt(match[2], 10);
+  if (hours < 0 || hours > 23 || minutes < 0 || minutes > 59) return null;
+  return (hours * 60) + minutes;
+};
+
+const timeMaskValidationMessage = (input) => {
+  const raw = String(input?.value || "").trim();
+  if (!raw) return "";
+  const minutes = parseTimeMaskValue(raw);
+  if (minutes === null) return "Please enter a valid 24-hour time.";
+  const row = input.closest?.("[data-induction-option-row]");
+  if (!row) return "";
+  const startInput = row.querySelector("[data-induction-option-start-time]");
+  const endInput = row.querySelector("[data-induction-option-end-time]");
+  const startMinutes = parseTimeMaskValue(startInput?.value);
+  const endMinutes = parseTimeMaskValue(endInput?.value);
+  if (startMinutes === null || endMinutes === null) return "";
+  if (startMinutes >= endMinutes) {
+    return input.matches("[data-induction-option-start-time]")
+      ? "Start time must be earlier than end time."
+      : "End time must be later than start time.";
+  }
+  return "";
+};
+
+const validateInductionTimeRange = (row) => {
+  row?.querySelectorAll?.("[data-induction-option-start-time], [data-induction-option-end-time]").forEach((input) => {
+    if (input.setCustomValidity) input.setCustomValidity(timeMaskValidationMessage(input));
+  });
+};
+
+const validateTimeMaskInput = (input) => {
+  if (!input?.setCustomValidity) return;
+  input.setCustomValidity(timeMaskValidationMessage(input));
+  validateInductionTimeRange(input.closest?.("[data-induction-option-row]"));
+};
+
+const completeTimeMaskInput = (input) => {
+  if (!input) return;
+  input.value = normalizeInterviewOptionTime(input.value);
+  validateTimeMaskInput(input);
+};
+
+const advanceTimeMaskSegment = (input) => {
+  if (!input) return;
+  input.value = formatTimeColonInput(input.value);
+  if (typeof input.setSelectionRange === "function") {
+    const cursorPosition = input.value.length;
+    input.setSelectionRange(cursorPosition, cursorPosition);
+  }
+  validateTimeMaskInput(input);
+};
+
+const focusNextTimeMaskInput = (input) => {
+  const row = input?.closest?.("[data-induction-option-row]");
+  const scope = row || input?.closest?.("form");
+  if (!scope) return;
+  const fields = Array.from(scope.querySelectorAll("[data-time-mask], [data-interview-option-time]"))
+    .filter((field) => !field.disabled && field.offsetParent !== null);
+  const currentIndex = fields.indexOf(input);
+  const nextField = currentIndex >= 0 ? fields[currentIndex + 1] : null;
+  nextField?.focus();
 };
 
 const syncProceedInterviewButton = (element) => {
@@ -7542,24 +8153,25 @@ document.addEventListener("input", (event) => {
   if (onboardingField) {
     syncOnboardingFollowUpControls(onboardingField.closest("form"));
   }
-  const dateInput = event.target.closest("[data-interview-option-date]");
-  if (dateInput) {
-    dateInput.value = formatInterviewOptionDateTyping(dateInput.value);
-    syncProceedInterviewButton(dateInput.closest("form"));
-    syncInductionStatusPanels(dateInput);
+  const maskedDateInput = dateMaskInputFromTarget(event.target);
+  if (maskedDateInput) {
+    const isDeleting = String(event.inputType || "").startsWith("delete");
+    maskedDateInput.value = formatInterviewOptionDateTyping(maskedDateInput.value, { completeSegments: !isDeleting });
+    validateDateMaskInput(maskedDateInput);
+    if (maskedDateInput.matches("[data-interview-option-date]")) {
+      syncProceedInterviewButton(maskedDateInput.closest("form"));
+      syncInductionStatusPanels(maskedDateInput);
+    } else if (maskedDateInput.matches("[data-reactivation-date]")) {
+      syncInductionStatusPanels(maskedDateInput);
+    }
     return;
   }
-  const reactivationDateInput = event.target.closest("[data-reactivation-date]");
-  if (reactivationDateInput) {
-    reactivationDateInput.value = formatInterviewOptionDateTyping(reactivationDateInput.value);
-    syncInductionStatusPanels(reactivationDateInput);
-    return;
-  }
-  const timeInput = event.target.closest("[data-interview-option-time]");
+  const timeInput = timeMaskInputFromTarget(event.target);
   if (timeInput) {
     timeInput.value = formatInterviewOptionTimeTyping(timeInput.value);
+    validateTimeMaskInput(timeInput);
     syncProceedInterviewButton(timeInput.closest("form"));
-    syncInductionStatusPanels(timeInput);
+    if (timeInput.matches("[data-interview-option-time]")) syncInductionStatusPanels(timeInput);
   }
 });
 
@@ -7606,24 +8218,67 @@ document.addEventListener("change", (event) => {
 });
 
 document.addEventListener("blur", (event) => {
-  const dateInput = event.target.closest?.("[data-interview-option-date]");
-  if (dateInput) {
-    dateInput.value = normalizeInterviewOptionDate(dateInput.value);
-    syncProceedInterviewButton(dateInput.closest("form"));
+  const maskedDateInput = dateMaskInputFromTarget(event.target);
+  if (maskedDateInput) {
+    maskedDateInput.value = normalizeInterviewOptionDate(maskedDateInput.value);
+    validateDateMaskInput(maskedDateInput);
+    if (maskedDateInput.matches("[data-interview-option-date]")) {
+      syncProceedInterviewButton(maskedDateInput.closest("form"));
+      syncInductionStatusPanels(maskedDateInput);
+    } else if (maskedDateInput.matches("[data-reactivation-date]")) {
+      syncInductionStatusPanels(maskedDateInput);
+    }
     return;
   }
-  const reactivationDateInput = event.target.closest?.("[data-reactivation-date]");
-  if (reactivationDateInput) {
-    reactivationDateInput.value = normalizeInterviewOptionDate(reactivationDateInput.value);
-    syncInductionStatusPanels(reactivationDateInput);
-    return;
-  }
-  const timeInput = event.target.closest?.("[data-interview-option-time]");
+  const timeInput = timeMaskInputFromTarget(event.target);
   if (timeInput) {
-    timeInput.value = normalizeInterviewOptionTime(timeInput.value);
+    completeTimeMaskInput(timeInput);
     syncProceedInterviewButton(timeInput.closest("form"));
+    if (timeInput.matches("[data-interview-option-time]")) syncInductionStatusPanels(timeInput);
   }
 }, true);
+
+document.addEventListener("keydown", (event) => {
+  const maskedDateInput = dateMaskInputFromTarget(event.target);
+  if (maskedDateInput) {
+    if (event.key === "/") {
+      event.preventDefault();
+      advanceDateMaskSegment(maskedDateInput);
+      return;
+    }
+    if (event.key === "Tab") {
+      completeCurrentDateMaskSegment(maskedDateInput);
+    }
+  }
+  const timeInput = timeMaskInputFromTarget(event.target);
+  if (!timeInput) return;
+  if (event.key === "Shift") {
+    timeInput.dataset.shiftTimeAdvance = "true";
+    return;
+  }
+  if (event.shiftKey && event.key !== "Shift") {
+    delete timeInput.dataset.shiftTimeAdvance;
+  }
+  if (event.key === ":") {
+    event.preventDefault();
+    advanceTimeMaskSegment(timeInput);
+    return;
+  }
+  if (event.key === "Tab") {
+    completeTimeMaskInput(timeInput);
+  }
+});
+
+document.addEventListener("keyup", (event) => {
+  if (event.key !== "Shift") return;
+  completeCurrentDateMaskSegment(dateMaskInputFromTarget(event.target));
+  const timeInput = timeMaskInputFromTarget(event.target);
+  if (!timeInput) return;
+  const shouldAdvance = timeInput.dataset.shiftTimeAdvance === "true";
+  delete timeInput.dataset.shiftTimeAdvance;
+  completeTimeMaskInput(timeInput);
+  if (shouldAdvance) focusNextTimeMaskInput(timeInput);
+});
 
 document.addEventListener("click", (event) => {
   const addButton = event.target.closest("[data-add-interview-option]");

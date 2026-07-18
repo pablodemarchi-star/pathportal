@@ -55,7 +55,10 @@
 </div>
 
 {% if payload.unknown_headers %}
-  <div class="flash warning">Ignored unknown columns: {{ payload.unknown_headers|join(', ') }}</div>
+  <div class="flash warning" data-dismissible-flash>
+    <span class="flash-message">Ignored unknown columns: {{ payload.unknown_headers|join(', ') }}</span>
+    <button class="flash-close-button" type="button" aria-label="Dismiss notification" data-dismiss-flash>&times;</button>
+  </div>
 {% endif %}
 
 <section class="table-wrap import-preview-wrap" aria-label="Import preview rows">

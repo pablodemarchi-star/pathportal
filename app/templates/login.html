@@ -22,7 +22,12 @@
         <h1>Internal team portal</h1>
         <p>Sign in to manage internal processes and operations.</p>
       </div>
-      {% if error %}<div class="flash error">{{ error }}</div>{% endif %}
+      {% if error %}
+        <div class="flash error" data-dismissible-flash>
+          <span class="flash-message">{{ error }}</span>
+          <button class="flash-close-button" type="button" aria-label="Dismiss notification" data-dismiss-flash>&times;</button>
+        </div>
+      {% endif %}
       <form method="post" class="form-grid one-column login-form">
         <label>
           Email

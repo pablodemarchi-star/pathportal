@@ -1708,9 +1708,12 @@ class PotentialEntry(db.Model):
 
 class PotentialEntryNoteMention(db.Model):
     __tablename__ = "potential_entry_note_mention"
+    __table_args__ = (
+        db.UniqueConstraint("note_id", "to_user_id", name="uq_potential_note_recipient"),
+    )
 
     id = db.Column(db.Integer, primary_key=True)
-    note_id = db.Column(db.String(64), nullable=False, unique=True, index=True)
+    note_id = db.Column(db.String(64), nullable=False, index=True)
     related_entity_type = db.Column(db.String(80), nullable=False, default="Potential entry", index=True)
     related_entity_id = db.Column(db.Integer, nullable=False, index=True)
     potential_entry_id = db.Column(

@@ -967,7 +967,7 @@ class PotentialInvitationTest(unittest.TestCase):
         self.assertIn("Potential entry review", html)
         self.assertIn("Potential entry information", html)
         self.assertIn("<dt>Full name</dt>", html)
-        self.assertIn("CV review", html)
+        self.assertIn(f'<h3 id="cv-review-title-{entry.id}">CV to be reviewed</h3>', html)
         self.assertIn("Date and time options for interview", html)
         self.assertIn('name="interview_option_date"', html)
         self.assertIn('placeholder="DD/MM/YYYY"', html)
@@ -1379,6 +1379,7 @@ class PotentialInvitationTest(unittest.TestCase):
         )
         self.assertIn("Interview confirmed", modal_html)
         self.assertIn("Notes", modal_html)
+        self.assertIn(f'<h3 id="interview-arrange-title-{entry.id}">Onboarding email sent</h3>', modal_html)
         self.assertIn('type="radio" name="interview_outcome_status" value="no_show" data-induction-status-option checked', modal_html)
         self.assertIn("No-show", modal_html)
         self.assertIn("Has a car", modal_html)
@@ -2022,6 +2023,26 @@ class PotentialInvitationTest(unittest.TestCase):
         self.assertIn("from Tuesday 21 July 2026 to Friday 31 July 2026", html)
         self.assertIn("Tuesday 21 July 2026 from 9:30 to 16 h (GMT-3)", html)
 
+    def test_entry_accepted_email_dataset_omits_past_annual_meeting(self):
+        db.session.add_all([
+            ExaminerCertificationYear(year=2026, is_archived=False),
+            CertificationYearConfiguration(
+                module_key="examiner_certification",
+                year=2026,
+                remote_training_start_date=date(2026, 7, 20),
+                remote_training_end_date=date(2026, 7, 30),
+                annual_meeting_date=date(2026, 7, 17),
+                annual_meeting_time=time(10, 0),
+            ),
+        ])
+        db.session.commit()
+        self.add_entry(status="Entry accepted", acceptance_roles="Examiner")
+
+        html = self.client().get("/potential-entries").get_data(as_text=True)
+
+        self.assertIn("from Monday 20 July 2026 to Thursday 30 July 2026", html)
+        self.assertNotIn("Friday 17 July 2026 from 10 to 16 h (GMT-3)", html)
+
     def test_entry_accepted_whatsapp_message_uses_full_name_and_required_copy(self):
         result = self.build_entry_accepted_whatsapp_message({"fullName": "Juani Pérez"})
 
@@ -2190,7 +2211,125 @@ class PotentialInvitationTest(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertIn("Note added.", html)
         self.assertIn("To: Brenda Sartori, Admin", updated_entry.interview)
-        self.assertIn('<span class="responsible-chip potential-note-department-chip">To: Brenda Sartori, Admin</span>', html)
+        self.assertIn('note-recipient-history-chip">Brenda Sartori, Admin</span>', html)
+
+    def test_cv_review_note_saves_multiple_to_users(self):
+        client, current_user = self.permission_client(can_edit=True, department="Admissions")
+        entry = self.add_entry(status="CV to be reviewed", interview="", department="Admissions")
+        recipient_one = User(full_name="Brenda Sartori", email="brenda@example.com", department="Admin", is_active=True)
+        recipient_one.set_password("secret123")
+        recipient_two = User(full_name="Mauro Vega", email="mauro@example.com", department="Logistics", is_active=True)
+        recipient_two.set_password("secret123")
+        db.session.add_all([recipient_one, recipient_two])
+        db.session.commit()
+
+        response = client.post(
+            f"/potential-entries/{entry.id}/cv-review/add-note",
+            data={
+                "csrf_token": "token",
+                "cv_review_notes": "Please review together.",
+                "cv_review_note_to_user_id": [
+                    str(recipient_one.id),
+                    str(recipient_two.id),
+                    str(recipient_one.id),
+                    str(current_user.id),
+                ],
+            },
+            follow_redirects=True,
+        )
+        html = response.get_data(as_text=True)
+        updated_entry = db.session.get(PotentialEntry, entry.id)
+        mentions = PotentialEntryNoteMention.query.order_by(PotentialEntryNoteMention.id.asc()).all()
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(len(mentions), 2)
+        self.assertEqual({mention.to_user_id for mention in mentions}, {recipient_one.id, recipient_two.id})
+        self.assertEqual(len({mention.note_id for mention in mentions}), 1)
+        self.assertIn("To: Brenda Sartori, Admin; Mauro Vega, Logistics", updated_entry.interview)
+        self.assertIn(f"To user ID: {recipient_one.id},{recipient_two.id}", updated_entry.interview)
+        self.assertIn('note-recipient-history-chip">Brenda Sartori, Admin</span>', html)
+        self.assertIn('note-recipient-history-chip">Mauro Vega, Logistics</span>', html)
+        self.assertNotIn('note-recipient-history-chip">Permission User, Admissions</span>', html)
+
+    def test_note_to_dropdown_excludes_current_user(self):
+        client, current_user = self.permission_client(can_edit=True, department="Admissions")
+        other_user = User(full_name="Brenda Sartori", email="brenda@example.com", department="Admin", is_active=True)
+        other_user.set_password("secret123")
+        db.session.add(other_user)
+        db.session.commit()
+        entry = self.add_entry(status="CV to be reviewed", interview="", department="Admissions")
+
+        response = client.get("/potential-entries")
+        html = response.get_data(as_text=True)
+        modal_html = html[html.index(f'id="cv-review-potential-entry-{entry.id}"'):]
+        modal_html = modal_html[:modal_html.index(f'id="potential-note-{entry.id}"')]
+        select_html = modal_html[modal_html.index('name="cv_review_note_to_user_id"'):]
+        select_html = select_html[:select_html.index("</select>")]
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("Permission User, Admissions", modal_html)
+        self.assertIn('class="cv-review-note-actions"', modal_html)
+        self.assertIn('class="note-from-field"', modal_html)
+        self.assertIn('class="note-recipient-field"', modal_html)
+        self.assertIn('class="note-add-action-field"', modal_html)
+        self.assertIn('class="note-action-spacer" aria-hidden="true">Action</span>', modal_html)
+        self.assertIn('class="mini-button add-note-button"', modal_html)
+        self.assertIn('multiple data-note-recipient-select', select_html)
+        self.assertNotIn(f'value="{current_user.id}"', select_html)
+        self.assertNotIn("Permission User, Admissions", select_html)
+        self.assertIn(f'value="{other_user.id}"', select_html)
+        self.assertIn("Brenda Sartori, Admin", select_html)
+
+    def test_partial_read_note_status_shows_read_user_tooltip(self):
+        entry = self.add_entry(status="CV to be reviewed", interview="", department="Admissions")
+        recipient_one = User(full_name="Brenda Sartori", email="brenda-tooltip@example.com", department="Admin", is_active=True)
+        recipient_one.set_password("secret123")
+        recipient_two = User(full_name="Mauro Vega", email="mauro-tooltip@example.com", department="Logistics", is_active=True)
+        recipient_two.set_password("secret123")
+        db.session.add_all([recipient_one, recipient_two])
+        db.session.commit()
+
+        self.client().post(
+            f"/potential-entries/{entry.id}/cv-review/add-note",
+            data={
+                "csrf_token": "token",
+                "cv_review_notes": "Please review partially.",
+                "cv_review_note_to_user_id": [str(recipient_one.id), str(recipient_two.id)],
+            },
+            follow_redirects=True,
+        )
+        mention = PotentialEntryNoteMention.query.filter_by(to_user_id=recipient_one.id).one()
+        mention.is_read = True
+        mention.read_by_user_id = recipient_one.id
+        mention.read_on = datetime.now(timezone.utc)
+        db.session.commit()
+
+        html = self.client().get("/potential-entries").get_data(as_text=True)
+
+        self.assertIn("Read by 1/2", html)
+        self.assertIn('title="Read by Brenda Sartori, Admin"', html)
+        self.assertIn('aria-label="Read by Brenda Sartori, Admin"', html)
+        self.assertNotIn('title="Read by Mauro Vega, Logistics"', html)
+
+    def test_note_to_ignores_current_user_if_form_is_manipulated(self):
+        client, current_user = self.permission_client(can_edit=True, department="Admissions")
+        entry = self.add_entry(status="CV to be reviewed", interview="", department="Admissions")
+
+        response = client.post(
+            f"/potential-entries/{entry.id}/cv-review/add-note",
+            data={
+                "csrf_token": "token",
+                "cv_review_notes": "Trying to mention myself.",
+                "cv_review_note_to_user_id": str(current_user.id),
+            },
+            follow_redirects=True,
+        )
+        updated_entry = db.session.get(PotentialEntry, entry.id)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("Note added.", response.get_data(as_text=True))
+        self.assertIn("To: -", updated_entry.interview)
+        self.assertNotIn("To: Permission User, Admissions", updated_entry.interview)
 
     def test_dashboard_shows_unread_potential_note_mentions(self):
         recipient_client, recipient = self.permission_client(can_edit=True, department="Admissions")
@@ -2575,8 +2714,101 @@ class PotentialInvitationTest(unittest.TestCase):
         with open("app/static/js/app.js", encoding="utf-8") as handle:
             js = handle.read()
 
-        self.assertIn('replace(/\\D/g, "").slice(0, 8)', js)
-        self.assertIn('return `${digits.slice(0, 2)}/${digits.slice(2, 4)}/${digits.slice(4)}`;', js)
+        self.assertIn('const dateMaskSelector = "[data-date-mask], [data-interview-option-date], [data-reactivation-date]"', js)
+        self.assertIn('const formatInterviewOptionDateTyping', js)
+        self.assertIn('const normalizeInterviewOptionDate', js)
+        self.assertIn('const dateMaskValidationMessage', js)
+        self.assertIn('const formatDateMaskSlashInput', js)
+        self.assertIn("const initStaffInductionTimeInputs", js)
+        self.assertIn("input[name='annual_meeting_time'][data-annual-meeting-time]", js)
+        self.assertIn("const initRemoteTrainingPeriodInputs", js)
+        self.assertIn("input.dataset.certificationYear", js)
+        self.assertLess(js.index("initStaffInductionTimeInputs();"), js.index("const dismissFlashNotification"))
+        self.assertLess(js.index("initRemoteTrainingPeriodInputs();"), js.index("const dismissFlashNotification"))
+
+    def test_date_mask_formats_and_validates_dd_mm_yyyy(self):
+        with open("app/static/js/app.js", encoding="utf-8") as handle:
+            js = handle.read()
+        start = js.index("const dateMaskSelector")
+        end = js.index("const formatInterviewOptionTimeTyping")
+        script = (
+            js[start:end]
+            + """
+const cases = {
+  compact: formatInterviewOptionDateTyping("09072026"),
+  singleSegments: normalizeInterviewOptionDate("9/7/2026"),
+  singleDaySlash: formatInterviewOptionDateTyping("9/"),
+  singleMonthSlash: formatInterviewOptionDateTyping("09/7/"),
+  slashAfterSingleDay: formatDateMaskSlashInput("9"),
+  slashAfterSingleMonth: formatDateMaskSlashInput("09/7"),
+  typedYearAfterMonth: formatInterviewOptionDateTyping("09/072"),
+  day32: dateMaskValidationMessage("32/07/2026"),
+  day00: dateMaskValidationMessage("00/07/2026"),
+  month13: dateMaskValidationMessage("09/13/2026"),
+  month00: dateMaskValidationMessage("09/00/2026"),
+  shortYear: dateMaskValidationMessage("09/07/26"),
+  invalidDate: dateMaskValidationMessage("31/02/2027"),
+  future: dateMaskValidationMessage("09/07/2099", { futureOrToday: true }),
+  past: dateMaskValidationMessage("09/07/2025", { futureOrToday: true }),
+};
+console.log(JSON.stringify(cases));
+"""
+        )
+        result = subprocess.run(["node", "-e", script], check=True, capture_output=True, text=True)
+        cases = json.loads(result.stdout)
+
+        self.assertEqual(cases["compact"], "09/07/2026")
+        self.assertEqual(cases["singleSegments"], "09/07/2026")
+        self.assertEqual(cases["singleDaySlash"], "09/")
+        self.assertEqual(cases["singleMonthSlash"], "09/07/")
+        self.assertEqual(cases["slashAfterSingleDay"], "09/")
+        self.assertEqual(cases["slashAfterSingleMonth"], "09/07/")
+        self.assertEqual(cases["typedYearAfterMonth"], "09/07/2")
+        self.assertEqual(cases["day32"], "Day must be between 01 and 31.")
+        self.assertEqual(cases["day00"], "Day must be between 01 and 31.")
+        self.assertEqual(cases["month13"], "Month must be between 01 and 12.")
+        self.assertEqual(cases["month00"], "Month must be between 01 and 12.")
+        self.assertEqual(cases["shortYear"], "Please enter a valid date.")
+        self.assertEqual(cases["invalidDate"], "Please enter a valid date.")
+        self.assertEqual(cases["future"], "")
+        self.assertEqual(cases["past"], "Year must be the current year or later.")
+
+    def test_time_mask_formats_single_digits_and_colon_navigation(self):
+        with open("app/static/js/app.js", encoding="utf-8") as handle:
+            js = handle.read()
+        start = js.index("const timeMaskSelector")
+        end = js.index("const syncProceedInterviewButton")
+        script = (
+            js[start:end]
+            + """
+const cases = {
+  compact: formatInterviewOptionTimeTyping("0930"),
+  typedColonHour: formatTimeColonInput("9"),
+  typedColonMinute: formatTimeColonInput("09:7"),
+  singleHour: normalizeInterviewOptionTime("9"),
+  doubleHour: normalizeInterviewOptionTime("12"),
+  oneDigitMinute: normalizeInterviewOptionTime("09:7"),
+  complete: normalizeInterviewOptionTime("9:30"),
+  valid: parseTimeMaskValue("09:30"),
+  invalidHour: parseTimeMaskValue("24:00"),
+  invalidMinute: parseTimeMaskValue("09:60"),
+};
+console.log(JSON.stringify(cases));
+"""
+        )
+        result = subprocess.run(["node", "-e", script], check=True, capture_output=True, text=True)
+        cases = json.loads(result.stdout)
+
+        self.assertEqual(cases["compact"], "09:30")
+        self.assertEqual(cases["typedColonHour"], "09:")
+        self.assertEqual(cases["typedColonMinute"], "09:07")
+        self.assertEqual(cases["singleHour"], "09:00")
+        self.assertEqual(cases["doubleHour"], "12:00")
+        self.assertEqual(cases["oneDigitMinute"], "09:07")
+        self.assertEqual(cases["complete"], "09:30")
+        self.assertEqual(cases["valid"], 570)
+        self.assertIsNone(cases["invalidHour"])
+        self.assertIsNone(cases["invalidMinute"])
 
     def test_rejected_potential_entry_shows_permanent_delete_action(self):
         entry = self.add_entry(is_rejected=True)

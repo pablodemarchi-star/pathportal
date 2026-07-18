@@ -167,6 +167,8 @@
                 inputmode="numeric"
                 maxlength="10"
                 pattern="\d{2}/\d{2}/\d{4}"
+                data-date-mask
+                data-date-future-or-today
                 aria-label="Upcoming induction session option {{ loop.index }} date"
               >
               <input
@@ -176,6 +178,8 @@
                 inputmode="numeric"
                 maxlength="5"
                 pattern="([01]\d|2[0-3]):[0-5]\d"
+                data-time-mask
+                data-induction-option-start-time
                 aria-label="Upcoming induction session option {{ loop.index }} start time"
               >
               <input
@@ -185,6 +189,8 @@
                 inputmode="numeric"
                 maxlength="5"
                 pattern="([01]\d|2[0-3]):[0-5]\d"
+                data-time-mask
+                data-induction-option-end-time
                 aria-label="Upcoming induction session option {{ loop.index }} end time"
               >
             </span>
@@ -779,10 +785,17 @@
             <article class="history-entry potential-note-entry" {% if note.note_id %}id="potential-note-{{ note.note_id }}" data-note-id="{{ note.note_id }}"{% endif %}>
               <time>Created on: {{ note.date }}</time>
               <small>From: {{ history_from_label(note) }}</small>
-              {% if history_to_label(note) != '-' %}<small>To: {{ history_to_label(note) }}</small>{% endif %}
+              {% set note_to_labels = history_to_labels(note) %}
+              {% if note_to_labels %}
+                <small class="note-recipient-history">To:
+                  {% for to_label in note_to_labels %}
+                    <span class="note-recipient-history-chip">{{ to_label }}</span>
+                  {% endfor %}
+                </small>
+              {% endif %}
               {% if note_status.has_recipient %}
                 <div class="note-read-row">
-                  <span class="note-read-chip {% if note_status.is_read %}is-read{% else %}is-unread{% endif %}">{{ note_status.label }}</span>
+                  <span class="note-read-chip {% if note_status.is_read %}is-read{% else %}is-unread{% endif %}" {% if note_status.tooltip %}title="{{ note_status.tooltip }}" aria-label="{{ note_status.tooltip }}"{% endif %}>{{ note_status.label }}</span>
                   {% if note_status.can_mark_read %}
                     <form method="post" action="{{ url_for('staff.mark_potential_note_read', mention_id=note_status.mention_id) }}" class="note-read-form" data-note-read-form>
                       <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
@@ -947,11 +960,16 @@
                 <div class="potential-note-header">
                   <time>Created on: {{ note.date }}</time>
                   <span class="responsible-chip potential-note-department-chip">From: {{ history_from_label(note) }}</span>
-                  {% if history_to_label(note) != '-' %}
-                    <span class="responsible-chip potential-note-department-chip">To: {{ history_to_label(note) }}</span>
+                  {% set note_to_labels = history_to_labels(note) %}
+                  {% if note_to_labels %}
+                    <span class="responsible-chip potential-note-department-chip note-recipient-history">To:
+                      {% for to_label in note_to_labels %}
+                        <span class="note-recipient-history-chip">{{ to_label }}</span>
+                      {% endfor %}
+                    </span>
                   {% endif %}
                   {% if note_status.has_recipient %}
-                    <span class="note-read-chip {% if note_status.is_read %}is-read{% else %}is-unread{% endif %}">{{ note_status.label }}</span>
+                    <span class="note-read-chip {% if note_status.is_read %}is-read{% else %}is-unread{% endif %}" {% if note_status.tooltip %}title="{{ note_status.tooltip }}" aria-label="{{ note_status.tooltip }}"{% endif %}>{{ note_status.label }}</span>
                     {% if note_status.can_mark_read %}
                       <form method="post" action="{{ url_for('staff.mark_potential_note_read', mention_id=note_status.mention_id) }}" class="note-read-form" data-note-read-form>
                         <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
@@ -980,7 +998,7 @@
         {{ status_track_panel(entry, 'cv-review') }}
       </section>
       <section class="potential-cv-review-section" aria-labelledby="cv-review-title-{{ entry.id }}">
-        <h3 id="cv-review-title-{{ entry.id }}">CV review</h3>
+        <h3 id="cv-review-title-{{ entry.id }}">{{ entry.status }}</h3>
         <form method="post" action="{{ url_for('staff.proceed_potential_cv_review', entry_id=entry.id) }}" class="potential-cv-review-form" data-confirm-submit>
           <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
           <div class="potential-cv-review-fields">
@@ -994,20 +1012,24 @@
                       <span>From</span>
                       <strong>{{ note_actor_label() }}</strong>
                     </div>
-                    <label>
+                    <label class="note-recipient-field">
                       To
-                      <select name="cv_review_note_to_user_id">
-                        <option value="">-</option>
+                      {% set draft_to_ids = cv_review_draft.to_user_ids if cv_review_draft and cv_review_draft.to_user_ids is defined else [] %}
+                      <select name="cv_review_note_to_user_id" multiple data-note-recipient-select>
                         {% for user_option in note_to_user_options() %}
-                          <option value="{{ user_option.id }}" {% if cv_review_draft and cv_review_draft.to_user_id|string == user_option.id|string %}selected{% endif %}>{{ user_option.full_name }}, {{ user_option.department }}</option>
+                          <option value="{{ user_option.id }}" {% if user_option.id|string in draft_to_ids or (cv_review_draft and cv_review_draft.to_user_id|string == user_option.id|string) %}selected{% endif %}>{{ user_option.full_name }}, {{ user_option.department }}</option>
                         {% endfor %}
                       </select>
+                      <span class="note-recipient-selected-chips" data-note-recipient-chips></span>
                     </label>
-                    <button
-                      class="mini-button add-note-button"
-                      type="submit"
-                      formaction="{{ url_for('staff.add_potential_cv_review_note', entry_id=entry.id) }}"
-                    >Add</button>
+                    <div class="note-add-action-field">
+                      <span class="note-action-spacer" aria-hidden="true">Action</span>
+                      <button
+                        class="mini-button add-note-button"
+                        type="submit"
+                        formaction="{{ url_for('staff.add_potential_cv_review_note', entry_id=entry.id) }}"
+                      >Add</button>
+                    </div>
                   </div>
                 {% endif %}
               </div>
@@ -1267,11 +1289,16 @@
                 <div class="potential-note-header">
                   <time>Created on: {{ note.date }}</time>
                   <span class="responsible-chip potential-note-department-chip">From: {{ history_from_label(note) }}</span>
-                  {% if history_to_label(note) != '-' %}
-                    <span class="responsible-chip potential-note-department-chip">To: {{ history_to_label(note) }}</span>
+                  {% set note_to_labels = history_to_labels(note) %}
+                  {% if note_to_labels %}
+                    <span class="responsible-chip potential-note-department-chip note-recipient-history">To:
+                      {% for to_label in note_to_labels %}
+                        <span class="note-recipient-history-chip">{{ to_label }}</span>
+                      {% endfor %}
+                    </span>
                   {% endif %}
                   {% if note_status.has_recipient %}
-                    <span class="note-read-chip {% if note_status.is_read %}is-read{% else %}is-unread{% endif %}">{{ note_status.label }}</span>
+                    <span class="note-read-chip {% if note_status.is_read %}is-read{% else %}is-unread{% endif %}" {% if note_status.tooltip %}title="{{ note_status.tooltip }}" aria-label="{{ note_status.tooltip }}"{% endif %}>{{ note_status.label }}</span>
                     {% if note_status.can_mark_read %}
                       <form method="post" action="{{ url_for('staff.mark_potential_note_read', mention_id=note_status.mention_id) }}" class="note-read-form" data-note-read-form>
                         <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
@@ -1293,7 +1320,7 @@
         {{ status_track_panel(entry, 'review') }}
       </section>
       <section class="potential-cv-review-section" aria-labelledby="interview-arrange-title-{{ entry.id }}">
-        <h3 id="interview-arrange-title-{{ entry.id }}">CV review</h3>
+        <h3 id="interview-arrange-title-{{ entry.id }}">{{ entry.status }}</h3>
         <form method="post" action="{{ url_for('staff.add_potential_cv_review_note', entry_id=entry.id) }}" class="potential-cv-review-form">
           <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
           <div class="potential-cv-review-fields{% if entry.status == 'Onboarding email sent' %} potential-interview-arrangement-fields{% endif %}">
@@ -1307,19 +1334,22 @@
                       <span>From</span>
                       <strong>{{ note_actor_label() }}</strong>
                     </div>
-                    <label>
+                    <label class="note-recipient-field">
                       To
-                      <select name="cv_review_note_to_user_id">
-                        <option value="">-</option>
+                      <select name="cv_review_note_to_user_id" multiple data-note-recipient-select>
                         {% for user_option in note_to_user_options() %}
                           <option value="{{ user_option.id }}">{{ user_option.full_name }}, {{ user_option.department }}</option>
                         {% endfor %}
                       </select>
+                      <span class="note-recipient-selected-chips" data-note-recipient-chips></span>
                     </label>
-                    <button
-                      class="mini-button add-note-button"
-                      type="submit"
-                    >Add</button>
+                    <div class="note-add-action-field">
+                      <span class="note-action-spacer" aria-hidden="true">Action</span>
+                      <button
+                        class="mini-button add-note-button"
+                        type="submit"
+                      >Add</button>
+                    </div>
                   </div>
                 {% endif %}
               </div>
@@ -2156,7 +2186,7 @@
             <span>From</span>
             <strong>{{ note_actor_label() }}</strong>
           </div>
-          <label>
+          <label class="note-recipient-field">
             To
             <select name="note_to_user_id">
               <option value="">-</option>
@@ -2165,7 +2195,10 @@
               {% endfor %}
             </select>
           </label>
-          <button class="primary-button" type="submit">Add</button>
+          <div class="note-add-action-field">
+            <span class="note-action-spacer" aria-hidden="true">Action</span>
+            <button class="primary-button add-note-button" type="submit">Add</button>
+          </div>
         </div>
       </form>
     </details>

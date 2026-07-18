@@ -1073,7 +1073,7 @@
                 <span>From</span>
                 <strong>{{ note_actor_label() }}</strong>
               </div>
-              <label>
+              <label class="note-recipient-field">
                 To
                 <select name="note_to_user_id">
                   <option value="">-</option>
@@ -1082,7 +1082,10 @@
                   {% endfor %}
                 </select>
               </label>
-              <button class="primary-button" type="submit">Add note</button>
+              <div class="note-add-action-field">
+                <span class="note-action-spacer" aria-hidden="true">Action</span>
+                <button class="primary-button add-note-button" type="submit">Add note</button>
+              </div>
             </div>
           </form>
         </details>

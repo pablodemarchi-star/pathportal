@@ -241,10 +241,13 @@
       <input
         name="remote_training_period"
         value="{{ certification_remote_training_period_value }}"
-        placeholder="DD/MM/{{ selected_certification_year }} to DD/MM/{{ selected_certification_year }}"
+        placeholder="DD/MM/YYYY to DD/MM/YYYY"
         inputmode="numeric"
         maxlength="24"
-        pattern="\d{2}/\d{2}/{{ selected_certification_year }} to \d{2}/\d{2}/{{ selected_certification_year }}"
+        pattern="\d{2}/\d{2}/\d{4} to \d{2}/\d{2}/\d{4}"
+        data-remote-training-period
+        data-date-future-or-today
+        data-certification-year="{{ selected_certification_year }}"
       >
     </label>
     <label>
@@ -253,10 +256,12 @@
         <input
           name="annual_meeting_date"
           value="{{ certification_annual_meeting_date_value }}"
-          placeholder="DD/MM/{{ selected_certification_year }}"
+          placeholder="DD/MM/YYYY"
           inputmode="numeric"
           maxlength="10"
-          pattern="\d{2}/\d{2}/{{ selected_certification_year }}"
+          pattern="\d{2}/\d{2}/\d{4}"
+          data-date-mask
+          data-date-future-or-today
           aria-label="Annual meeting date"
         >
         <input
@@ -266,6 +271,8 @@
           inputmode="numeric"
           maxlength="5"
           pattern="([01]\d|2[0-3]):[0-5]\d"
+          data-time-mask
+          data-annual-meeting-time
           aria-label="Annual meeting time"
         >
       </span>
@@ -708,7 +715,7 @@
             <span>From</span>
             <strong>{{ note_actor_label() }}</strong>
           </div>
-          <label>
+          <label class="note-recipient-field">
             To
             <select name="note_to_user_id">
               <option value="">-</option>
@@ -717,8 +724,13 @@
               {% endfor %}
             </select>
           </label>
-          <button class="secondary-button" type="button" data-close-modal>Cancel</button>
-          <button class="primary-button" type="submit">Add note</button>
+          <div class="note-add-action-field">
+            <span class="note-action-spacer" aria-hidden="true">Action</span>
+            <span class="note-action-buttons">
+              <button class="secondary-button add-note-button" type="button" data-close-modal>Cancel</button>
+              <button class="primary-button add-note-button" type="submit">Add note</button>
+            </span>
+          </div>
         </div>
       </form>
     </details>

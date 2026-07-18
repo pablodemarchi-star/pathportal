@@ -6,6 +6,7 @@ from decimal import Decimal, InvalidOperation, ROUND_FLOOR
 from datetime import date, datetime, timezone, timedelta
 import calendar
 import uuid
+from collections import defaultdict
 from io import BytesIO
 from urllib.parse import parse_qs, quote, urlparse
 
@@ -492,6 +493,7 @@ def inject_menu_permissions():
         "note_actor_label": note_actor_label,
         "history_from_label": history_from_label,
         "history_to_label": history_to_label,
+        "history_to_labels": history_to_labels,
         "potential_entry_note_status": potential_entry_note_status,
         "potential_perform_action_modal_id": potential_perform_action_modal_id,
         "user_can_view": user_can_view,
@@ -2636,7 +2638,7 @@ def potential_entry_certification_email_programmes(entry):
                 f"{potential_preassigned_exam_session_date(config.remote_training_start_date)} "
                 f"to {potential_preassigned_exam_session_date(config.remote_training_end_date)}"
             )
-        if config and config.annual_meeting_date and config.annual_meeting_time:
+        if config and config.annual_meeting_date and config.annual_meeting_time and date_is_today_or_future(config.annual_meeting_date):
             start_hour = config.annual_meeting_time.strftime("%H:%M").lstrip("0")
             if start_hour.endswith(":00"):
                 start_hour = start_hour[:-3]
@@ -2736,16 +2738,74 @@ def note_actor_label():
 
 
 def note_to_user_options():
-    return User.query.filter_by(is_active=True).order_by(User.full_name.asc(), User.department.asc()).all()
+    actor = current_note_actor()
+    query = User.query.filter_by(is_active=True)
+    if actor["user_id"]:
+        query = query.filter(User.id != actor["user_id"])
+    return query.order_by(User.full_name.asc(), User.department.asc()).all()
 
 
 def selected_note_recipient(form):
+    recipients = selected_note_recipients(form)
+    return recipients[0] if recipients else {"user_id": None, "full_name": "", "department": ""}
+
+
+def selected_note_recipients(form):
+    raw_user_ids = []
+    for field_name in ("note_to_user_id", "cv_review_note_to_user_id"):
+        raw_user_ids.extend(form.getlist(field_name) if hasattr(form, "getlist") else [])
+        raw_value = form.get(field_name) if hasattr(form, "get") else ""
+        raw_values = raw_value if isinstance(raw_value, (list, tuple)) else [raw_value]
+        for value in raw_values:
+            value = str(value or "").strip()
+            if value and value not in raw_user_ids:
+                raw_user_ids.append(value)
+    if not raw_user_ids:
+        return []
+    actor = current_note_actor()
+    recipients = []
+    seen = set()
+    for raw_user_id in raw_user_ids:
+        try:
+            user_id = int(str(raw_user_id).strip())
+        except ValueError:
+            continue
+        if user_id in seen:
+            continue
+        seen.add(user_id)
+        if actor["user_id"] and user_id == actor["user_id"]:
+            continue
+        user = db.session.get(User, user_id)
+        if not user or not user.is_active:
+            continue
+        recipients.append({"user_id": user.id, "full_name": user.full_name, "department": user.department})
+    return recipients
+
+
+def note_recipients_label(recipients):
+    labels = [
+        note_party_label(recipient.get("full_name"), recipient.get("department"))
+        for recipient in recipients
+        if recipient.get("user_id")
+    ]
+    return "; ".join(label for label in labels if label and label != "-") or "-"
+
+
+def note_recipient_ids_label(recipients):
+    ids = [str(recipient.get("user_id")) for recipient in recipients if recipient.get("user_id")]
+    return ",".join(ids) if ids else "-"
+
+
+def selected_note_recipient_legacy(form):
     raw_user_id = (form.get("note_to_user_id") or form.get("cv_review_note_to_user_id") or "").strip()
     if not raw_user_id:
         return {"user_id": None, "full_name": "", "department": ""}
     try:
         user_id = int(raw_user_id)
     except ValueError:
+        return {"user_id": None, "full_name": "", "department": ""}
+    actor = current_note_actor()
+    if actor["user_id"] and user_id == actor["user_id"]:
         return {"user_id": None, "full_name": "", "department": ""}
     user = db.session.get(User, user_id)
     if not user or not user.is_active:
@@ -2763,21 +2823,33 @@ def history_from_label(entry):
 
 def history_to_label(entry):
     if isinstance(entry, dict):
+        if entry.get("to_labels"):
+            return "; ".join(entry.get("to_labels") or []) or "-"
+        if entry.get("to_label"):
+            return entry.get("to_label") or "-"
         return note_party_label(entry.get("to_full_name"), entry.get("to_department"))
     return note_party_label(getattr(entry, "to_full_name", ""), getattr(entry, "to_department", ""))
 
 
-def note_metadata_lines(actor=None, recipient=None, note_id=None):
+def history_to_labels(entry):
+    label = history_to_label(entry)
+    if not label or label == "-":
+        return []
+    return [part.strip() for part in label.split(";") if part.strip()]
+
+
+def note_metadata_lines(actor=None, recipient=None, note_id=None, recipients=None):
     actor = actor or current_note_actor()
-    recipient = recipient or {"user_id": None, "full_name": "", "department": ""}
+    recipients = recipients if recipients is not None else ([recipient] if recipient and recipient.get("user_id") else [])
+    recipient = recipient or (recipients[0] if recipients else {"user_id": None, "full_name": "", "department": ""})
     lines = []
     if note_id:
         lines.append(f"Note ID: {note_id}")
     lines.extend([
         f"From: {note_party_label(actor.get('full_name'), actor.get('department'))}",
         f"From user ID: {actor.get('user_id') or '-'}",
-        f"To: {note_party_label(recipient.get('full_name'), recipient.get('department'))}",
-        f"To user ID: {recipient.get('user_id') or '-'}",
+        f"To: {note_recipients_label(recipients) if recipients else note_party_label(recipient.get('full_name'), recipient.get('department'))}",
+        f"To user ID: {note_recipient_ids_label(recipients) if recipients else (recipient.get('user_id') or '-')}",
     ])
     return "\n".join(lines)
 
@@ -2796,24 +2868,41 @@ def apply_note_metadata(record, form):
     return actor, recipient
 
 
+def register_potential_entry_note_mentions(entry, note_id, comment_text, actor, recipients):
+    if not note_id:
+        return []
+    mentions = []
+    for recipient in recipients:
+        if not recipient.get("user_id"):
+            continue
+        existing = PotentialEntryNoteMention.query.filter_by(
+            note_id=note_id,
+            to_user_id=recipient.get("user_id"),
+        ).first()
+        if existing:
+            mentions.append(existing)
+            continue
+        mention = PotentialEntryNoteMention(
+            note_id=note_id,
+            related_entity_type="Potential entry",
+            related_entity_id=entry.id,
+            potential_entry_id=entry.id,
+            from_user_id=actor.get("user_id"),
+            from_full_name=actor.get("full_name"),
+            from_department=actor.get("department"),
+            to_user_id=recipient.get("user_id"),
+            to_full_name=recipient.get("full_name"),
+            to_department=recipient.get("department"),
+            comment_text=comment_text.strip(),
+        )
+        db.session.add(mention)
+        mentions.append(mention)
+    return mentions
+
+
 def register_potential_entry_note_mention(entry, note_id, comment_text, actor, recipient):
-    if not note_id or not recipient.get("user_id"):
-        return None
-    mention = PotentialEntryNoteMention(
-        note_id=note_id,
-        related_entity_type="Potential entry",
-        related_entity_id=entry.id,
-        potential_entry_id=entry.id,
-        from_user_id=actor.get("user_id"),
-        from_full_name=actor.get("full_name"),
-        from_department=actor.get("department"),
-        to_user_id=recipient.get("user_id"),
-        to_full_name=recipient.get("full_name"),
-        to_department=recipient.get("department"),
-        comment_text=comment_text.strip(),
-    )
-    db.session.add(mention)
-    return mention
+    mentions = register_potential_entry_note_mentions(entry, note_id, comment_text, actor, [recipient])
+    return mentions[0] if mentions else None
 
 
 def potential_entry_mentions_for_current_user(limit=None):
@@ -2848,14 +2937,51 @@ def potential_entry_unread_mentions_by_note_id(entry_ids):
 def potential_entry_note_status(note):
     note_id = note.get("note_id") if isinstance(note, dict) else None
     mention = note.get("mention") if isinstance(note, dict) else None
-    is_current_recipient = bool(mention and getattr(g, "current_user", None) and mention.to_user_id == g.current_user.id)
+    mentions = note.get("mentions") if isinstance(note, dict) else []
+    if not mentions and mention:
+        mentions = [mention]
+    current_user = getattr(g, "current_user", None)
+    current_mention = next(
+        (
+            item for item in mentions
+            if current_user and item.to_user_id == current_user.id
+        ),
+        None,
+    )
+    read_count = sum(1 for item in mentions if item.is_read)
+    total_count = len(mentions)
+    if total_count > 1:
+        if read_count == total_count:
+            label = "Read by all"
+        elif read_count:
+            label = f"Read by {read_count}/{total_count}"
+        else:
+            label = "Not read yet"
+    else:
+        label = "Read" if mention and mention.is_read else "Not read yet"
+    recipient_details = [
+        {
+            "label": note_party_label(item.to_full_name, item.to_department),
+            "status": "Read" if item.is_read else "Not read yet",
+            "is_read": bool(item.is_read),
+        }
+        for item in mentions
+    ]
+    read_labels = [
+        detail["label"]
+        for detail in recipient_details
+        if detail["is_read"] and detail["label"] and detail["label"] != "-"
+    ]
+    tooltip = f"Read by {', '.join(read_labels)}" if total_count > 1 and 0 < read_count < total_count and read_labels else ""
     return {
         "note_id": note_id,
-        "has_recipient": bool(mention),
-        "is_read": bool(mention and mention.is_read),
-        "label": "Read" if mention and mention.is_read else "Not read yet",
-        "can_mark_read": bool(mention and is_current_recipient and not mention.is_read),
-        "mention_id": mention.id if mention else None,
+        "has_recipient": bool(mentions),
+        "is_read": bool(total_count and read_count == total_count),
+        "label": label,
+        "tooltip": tooltip,
+        "can_mark_read": bool(current_mention and not current_mention.is_read),
+        "mention_id": current_mention.id if current_mention else None,
+        "recipient_details": recipient_details,
     }
 
 
@@ -3933,24 +4059,52 @@ def certification_time_value(value):
     return value.strftime("%H:%M") if value else ""
 
 
+def today_local():
+    return datetime.now(LOCAL_TZ).date()
+
+
+def date_is_today_or_future(value):
+    return bool(value and value >= today_local())
+
+
 def certification_remote_training_period_value(config):
     if not config or not config.remote_training_start_date or not config.remote_training_end_date:
+        return ""
+    if config.remote_training_end_date < today_local():
         return ""
     return f"{certification_date_value(config.remote_training_start_date)} to {certification_date_value(config.remote_training_end_date)}"
 
 
-def parse_certification_date(value, selected_year, field_label):
+def parse_dd_mm_yyyy_date(value, field_label):
     raw_value = (value or "").strip()
     if not raw_value:
         return None, None
     if not re.match(r"^\d{2}/\d{2}/\d{4}$", raw_value):
         return None, f"{field_label} must use DD/MM/YYYY."
+    day = int(raw_value[:2])
+    month = int(raw_value[3:5])
+    year = int(raw_value[6:])
+    if day < 1 or day > 31:
+        return None, "Day must be between 01 and 31."
+    if month < 1 or month > 12:
+        return None, "Month must be between 01 and 12."
+    if year < today_local().year:
+        return None, "Year must be the current year or later."
     try:
         parsed = datetime.strptime(raw_value, "%d/%m/%Y").date()
     except ValueError:
-        return None, f"{field_label} must be a valid date."
+        return None, "Please enter a valid date."
+    return parsed, None
+
+
+def parse_certification_date(value, selected_year, field_label):
+    parsed, error = parse_dd_mm_yyyy_date(value, field_label)
+    if error or parsed is None:
+        return parsed, error
     if parsed.year != selected_year:
         return None, f"{field_label} must be in {selected_year}."
+    if parsed < today_local():
+        return None, "Date cannot be in the past."
     return parsed, None
 
 
@@ -3958,8 +4112,15 @@ def parse_certification_time(value, field_label):
     raw_value = (value or "").strip()
     if not raw_value:
         return None, None
-    if not re.match(r"^\d{2}:\d{2}$", raw_value):
+    match = re.match(r"^(\d{2}):(\d{2})$", raw_value)
+    if not match:
         return None, f"{field_label} must use hh:mm."
+    hours = int(match.group(1))
+    minutes = int(match.group(2))
+    if hours < 0 or hours > 23:
+        return None, f"{field_label} hour must be between 00 and 23."
+    if minutes < 0 or minutes > 59:
+        return None, f"{field_label} minutes must be between 00 and 59."
     try:
         parsed = datetime.strptime(raw_value, "%H:%M").time()
     except ValueError:
@@ -3968,15 +4129,11 @@ def parse_certification_time(value, field_label):
 
 
 def parse_staff_settings_date(value, field_label):
-    raw_value = (value or "").strip()
-    if not raw_value:
-        return None, None
-    if not re.match(r"^\d{2}/\d{2}/\d{4}$", raw_value):
-        return None, f"{field_label} must use DD/MM/YYYY."
-    try:
-        parsed = datetime.strptime(raw_value, "%d/%m/%Y").date()
-    except ValueError:
-        return None, f"{field_label} must be a valid date."
+    parsed, error = parse_dd_mm_yyyy_date(value, field_label)
+    if error or parsed is None:
+        return parsed, error
+    if parsed < today_local():
+        return None, "Date cannot be in the past."
     return parsed, None
 
 
@@ -3993,6 +4150,11 @@ def induction_session_option_from_values(induction_date, start_time, end_time):
         "start_time": certification_time_value(start_time),
         "end_time": certification_time_value(end_time),
     }
+
+
+def induction_option_is_today_or_future(option):
+    parsed, error = parse_dd_mm_yyyy_date(option.get("date"), "Upcoming induction session date")
+    return bool(parsed and not error and parsed >= today_local())
 
 
 def staff_members_induction_session_options(settings_record):
@@ -4016,12 +4178,14 @@ def staff_members_induction_session_options(settings_record):
                         "end_time": (option.get("end_time") or "").strip(),
                     }
                 )
+        options = [option for option in options if induction_option_is_today_or_future(option)]
         if options:
             return options
     if (
         settings_record.upcoming_induction_session_date
         and settings_record.upcoming_induction_session_start_time
         and settings_record.upcoming_induction_session_end_time
+        and date_is_today_or_future(settings_record.upcoming_induction_session_date)
     ):
         return [
             induction_session_option_from_values(
@@ -4031,6 +4195,12 @@ def staff_members_induction_session_options(settings_record):
             )
         ]
     return []
+
+
+def certification_config_annual_meeting_values(config):
+    if not config or not config.annual_meeting_date or not date_is_today_or_future(config.annual_meeting_date):
+        return "", ""
+    return certification_date_value(config.annual_meeting_date), certification_time_value(config.annual_meeting_time)
 
 
 def staff_members_settings_values(settings_record):
@@ -4116,10 +4286,10 @@ def parse_certification_remote_training_period(value, selected_year):
     end_date, end_error = parse_certification_date(parts[1], selected_year, "Remote training period end date")
     if end_error:
         return None, None, end_error
-    if start_date == end_date:
-        return None, None, "Remote training period dates cannot be the same."
-    if start_date > end_date:
-        return None, None, "Remote training period start date cannot be after the end date."
+    if start_date < today_local() or end_date < today_local():
+        return None, None, "Date cannot be in the past."
+    if start_date >= end_date:
+        return None, None, "Remote training period start date must be earlier than the end date."
     return start_date, end_date, None
 
 
@@ -4143,6 +4313,8 @@ def save_certification_year_configuration(module_key, selected_year):
     if annual_time_error:
         flash(annual_time_error, "error")
         return False
+    if annual_date is None:
+        annual_time = None
     remote_start, remote_end, remote_error = parse_certification_remote_training_period(
         request.form.get("remote_training_period", ""),
         selected_year,
@@ -9318,6 +9490,7 @@ def journey_share_views(session_record, shares_by_audience=None):
 
 
 def render_journey_unavailable(status_code=404):
+    annual_meeting_date_value, annual_meeting_time_value = certification_config_annual_meeting_values(year_configuration)
     return render_template(
         "pre_session_control_tower/session_journey.html",
         journey=None,
@@ -10410,11 +10583,13 @@ def meetings_redirect():
     return redirect(url_for("staff.annual_meetings"))
 
 
-def format_interview_entry(note, form=None, note_id=None, actor=None, recipient=None):
+def format_interview_entry(note, form=None, note_id=None, actor=None, recipient=None, recipients=None):
     timestamp = datetime.now(timezone.utc).astimezone(LOCAL_TZ).strftime("%d/%m/%Y - %H:%M h.")
     actor = actor or current_note_actor()
-    recipient = recipient or (selected_note_recipient(form or {}) if form is not None else {"user_id": None, "full_name": "", "department": ""})
-    return f"{timestamp}\n{note_metadata_lines(actor, recipient, note_id)}\n{note.strip()}"
+    if recipients is None:
+        recipients = selected_note_recipients(form or {}) if form is not None else None
+    recipient = recipient or ((recipients or [None])[0] if recipients else {"user_id": None, "full_name": "", "department": ""})
+    return f"{timestamp}\n{note_metadata_lines(actor, recipient, note_id, recipients=recipients)}\n{note.strip()}"
 
 
 def append_interview_note(member, form):
@@ -10433,14 +10608,14 @@ def append_potential_interview_note(entry, form):
     if not note:
         return
     actor = current_note_actor()
-    recipient = selected_note_recipient(form)
+    recipients = selected_note_recipients(form)
     note_id = uuid.uuid4().hex
-    history_entry = format_interview_entry(note, form, note_id=note_id, actor=actor, recipient=recipient)
+    history_entry = format_interview_entry(note, form, note_id=note_id, actor=actor, recipients=recipients)
     if entry.interview:
         entry.interview = f"{entry.interview.strip()}\n\n{history_entry}"
     else:
         entry.interview = history_entry
-    register_potential_entry_note_mention(entry, note_id, note, actor, recipient)
+    register_potential_entry_note_mentions(entry, note_id, note, actor, recipients)
 
 
 def append_potential_cv_review_notes(entry, form):
@@ -10448,14 +10623,15 @@ def append_potential_cv_review_notes(entry, form):
     if not note:
         return
     actor = current_note_actor()
-    recipient = selected_note_recipient(form)
+    recipients = selected_note_recipients(form)
     note_id = uuid.uuid4().hex
-    history_entry = format_interview_entry(f"CV review: {note}", form, note_id=note_id, actor=actor, recipient=recipient)
+    note_text = f"CV review: {note}"
+    history_entry = format_interview_entry(note_text, form, note_id=note_id, actor=actor, recipients=recipients)
     if entry.interview:
         entry.interview = f"{entry.interview.strip()}\n\n{history_entry}"
     else:
         entry.interview = history_entry
-    register_potential_entry_note_mention(entry, note_id, f"CV review: {note}", actor, recipient)
+    register_potential_entry_note_mentions(entry, note_id, note_text, actor, recipients)
 
 
 def potential_cv_review_draft_key(entry_id):
@@ -10482,9 +10658,16 @@ def save_potential_cv_review_draft(entry_id, form):
             "interviewer": interviewer,
         })
     drafts = dict(potential_cv_review_drafts())
+    selected_to_user_ids = []
+    for field_name in ("cv_review_note_to_user_id", "note_to_user_id"):
+        for raw_user_id in form.getlist(field_name):
+            value = str(raw_user_id).strip()
+            if value and value not in selected_to_user_ids:
+                selected_to_user_ids.append(value)
     drafts[potential_cv_review_draft_key(entry_id)] = {
         "notes": form.get("cv_review_notes", "").strip(),
-        "to_user_id": (form.get("cv_review_note_to_user_id") or form.get("note_to_user_id") or "").strip(),
+        "to_user_id": selected_to_user_ids[0] if selected_to_user_ids else "",
+        "to_user_ids": selected_to_user_ids,
         "options": options,
         "preassigned_exam_session_ids": selected_potential_preassigned_exam_session_ids(form),
     }
@@ -10700,6 +10883,9 @@ def interview_history_entries(history):
                 "to_full_name": "",
                 "to_department": "",
                 "to_user_id": None,
+                "to_user_ids": [],
+                "to_label": "",
+                "to_labels": [],
             })
         else:
             metadata = {
@@ -10710,6 +10896,9 @@ def interview_history_entries(history):
                 "to_full_name": "",
                 "to_department": "",
                 "to_user_id": None,
+                "to_user_ids": [],
+                "to_label": "",
+                "to_labels": [],
             }
             note_lines = []
             for line in lines[1:]:
@@ -10731,14 +10920,22 @@ def interview_history_entries(history):
                 if line.startswith("To:"):
                     value = line.replace("To:", "", 1).strip()
                     if value != "-":
-                        parts = [part.strip() for part in value.split(",", 1)]
+                        labels = [part.strip() for part in value.split(";") if part.strip()]
+                        metadata["to_label"] = value
+                        metadata["to_labels"] = labels
+                        parts = [part.strip() for part in labels[0].split(",", 1)] if labels else []
                         metadata["to_full_name"] = parts[0] if parts else ""
                         metadata["to_department"] = parts[1] if len(parts) > 1 else ""
                     continue
                 if line.startswith("To user ID:"):
                     value = line.replace("To user ID:", "", 1).strip()
-                    if value.isdigit():
-                        metadata["to_user_id"] = int(value)
+                    user_ids = []
+                    for raw_user_id in value.split(","):
+                        raw_user_id = raw_user_id.strip()
+                        if raw_user_id.isdigit():
+                            user_ids.append(int(raw_user_id))
+                    metadata["to_user_ids"] = user_ids
+                    metadata["to_user_id"] = user_ids[0] if user_ids else None
                     continue
                 note_lines.append(line)
             entries.append({"index": index, "date": lines[0], "note": "\n".join(note_lines), **metadata})
@@ -11085,12 +11282,25 @@ def potential_interview_entries_filter(entry):
     if not entry:
         return []
     notes = interview_history_entries(entry.interview)
-    mentions = {
-        mention.note_id: mention
-        for mention in PotentialEntryNoteMention.query.filter_by(potential_entry_id=entry.id).all()
-    }
+    mentions_by_note_id = defaultdict(list)
+    for mention in (
+        PotentialEntryNoteMention.query
+        .filter_by(potential_entry_id=entry.id)
+        .order_by(PotentialEntryNoteMention.id.asc())
+        .all()
+    ):
+        mentions_by_note_id[mention.note_id].append(mention)
+    current_user = getattr(g, "current_user", None)
     for note in notes:
-        note["mention"] = mentions.get(note.get("note_id") or "")
+        mentions = mentions_by_note_id.get(note.get("note_id") or "", [])
+        note["mentions"] = mentions
+        note["mention"] = next(
+            (
+                mention for mention in mentions
+                if current_user and mention.to_user_id == current_user.id
+            ),
+            mentions[0] if mentions else None,
+        )
     return notes
 
 
@@ -16488,6 +16698,7 @@ def annual_certification_programme():
         args["dir"] = [next_dir]
         return url_for("staff.annual_certification_programme", **args)
 
+    annual_meeting_date_value, annual_meeting_time_value = certification_config_annual_meeting_values(year_configuration)
     return render_template(
         "certification/index.html",
         members=members,
@@ -16515,8 +16726,8 @@ def annual_certification_programme():
         selected_certification_year=selected_certification_year,
         certification_year_configuration=year_configuration,
         certification_year_settings_endpoint="staff.update_examiner_certification_year_settings",
-        certification_annual_meeting_date_value=certification_date_value(year_configuration.annual_meeting_date) if year_configuration else "",
-        certification_annual_meeting_time_value=certification_time_value(year_configuration.annual_meeting_time) if year_configuration else "",
+        certification_annual_meeting_date_value=annual_meeting_date_value,
+        certification_annual_meeting_time_value=annual_meeting_time_value,
         certification_remote_training_period_value=certification_remote_training_period_value(year_configuration),
         certification_allowed=certification_allowed,
         current_year=current_year(),
@@ -17289,6 +17500,7 @@ def supervisor_certification():
         args["dir"] = [next_dir]
         return url_for("staff.supervisor_certification", **args)
 
+    annual_meeting_date_value, annual_meeting_time_value = certification_config_annual_meeting_values(year_configuration)
     return render_template(
         "certification/index.html",
         page_title="Supervisor certification",
@@ -17318,8 +17530,8 @@ def supervisor_certification():
         selected_certification_year=selected_certification_year,
         certification_year_configuration=year_configuration,
         certification_year_settings_endpoint="staff.update_supervisor_certification_year_settings",
-        certification_annual_meeting_date_value=certification_date_value(year_configuration.annual_meeting_date) if year_configuration else "",
-        certification_annual_meeting_time_value=certification_time_value(year_configuration.annual_meeting_time) if year_configuration else "",
+        certification_annual_meeting_date_value=annual_meeting_date_value,
+        certification_annual_meeting_time_value=annual_meeting_time_value,
         certification_remote_training_period_value=certification_remote_training_period_value(year_configuration),
         certification_allowed=certification_allowed,
         current_year=current_year(),

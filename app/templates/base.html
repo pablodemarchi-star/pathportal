@@ -181,7 +181,10 @@
           {% if messages %}
             <div class="flash-stack">
               {% for category, message in messages %}
-                <div class="flash {{ category }}">{{ message }}</div>
+                <div class="flash {{ category }}" data-dismissible-flash>
+                  <span class="flash-message">{{ message }}</span>
+                  <button class="flash-close-button" type="button" aria-label="Dismiss notification" data-dismiss-flash>&times;</button>
+                </div>
               {% endfor %}
             </div>
           {% endif %}
@@ -198,6 +201,6 @@
         {% block content %}{% endblock %}
       </main>
     </div>
-    <script src="{{ url_for('static', filename='js/app.js', v='20260630-potential-outcomes-01') }}"></script>
+    <script src="{{ url_for('static', filename='js/app.js', v='20260718-annual-meeting-time-01') }}"></script>
   </body>
 </html>
