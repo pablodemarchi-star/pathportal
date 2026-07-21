@@ -363,6 +363,18 @@ class StaffMembersSettings(db.Model):
     )
 
 
+class StaffPaymentSettings(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    next_payment_date = db.Column(db.Date)
+    created_on = db.Column(db.DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))
+    updated_on = db.Column(
+        db.DateTime(timezone=True),
+        nullable=False,
+        default=lambda: datetime.now(timezone.utc),
+        onupdate=lambda: datetime.now(timezone.utc),
+    )
+
+
 class ExaminerCertificationFut1Selection(db.Model):
     __table_args__ = (
         db.UniqueConstraint("member_id", "option_name", "year", name="uq_member_examiner_fut1_option_year"),

@@ -4,7 +4,7 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>{% block title %}Path Examinations Internal App{% endblock %}</title>
-    <link rel="stylesheet" href="{{ url_for('static', filename='css/styles.css', v='20260720-interview-noshow-preassigned-01') }}">
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/styles.css', v='20260721-staff-payments-next-date-01') }}">
   </head>
   <body>
     <div class="app-shell">
@@ -121,7 +121,7 @@
           </a>
           {% endif %}
           {% if user_can_view('staff_payments') %}
-          <a class="nav-link standalone-nav-link {% if request.endpoint in ['staff.staff_payments', 'staff.update_staff_payment'] %}active{% endif %}" href="{{ url_for('staff.staff_payments') }}">
+          <a class="nav-link standalone-nav-link {% if request.endpoint in ['staff.staff_payments', 'staff.update_staff_payment', 'staff.update_staff_payment_settings'] %}active{% endif %}" href="{{ url_for('staff.staff_payments') }}">
             <svg class="nav-icon" viewBox="0 0 24 24" aria-hidden="true">
               <path d="M4 7h16" />
               <path d="M4 12h16" />
@@ -201,6 +201,6 @@
         {% block content %}{% endblock %}
       </main>
     </div>
-    <script src="{{ url_for('static', filename='js/app.js', v='20260720-interview-noshow-preassigned-01') }}"></script>
+    <script src="{{ url_for('static', filename='js/app.js', v='20260721-staff-payments-next-date-01') }}"></script>
   </body>
 </html>

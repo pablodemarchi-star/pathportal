@@ -38,6 +38,28 @@
 </section>
 {% endif %}
 
+<section class="staff-payment-settings-panel" aria-label="Staff payments settings">
+  <form method="post" action="{{ url_for('staff.update_staff_payment_settings') }}" class="staff-payment-settings-form">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <input type="hidden" name="session_year" value="{{ selected_session_year }}">
+    <label>
+      <span>Next payment date:</span>
+      <input
+        name="next_payment_date"
+        value="{{ staff_payment_settings_values.next_payment_date }}"
+        placeholder="DD/MM/YYYY"
+        inputmode="numeric"
+        maxlength="10"
+        pattern="\d{2}/\d{2}/\d{4}"
+        autocomplete="off"
+        data-date-mask
+        data-date-future-or-today
+      >
+    </label>
+    <button class="secondary-button compact-action" type="submit">Save</button>
+  </form>
+</section>
+
 <div class="flash-stack providers-feedback" data-staff-payment-feedback hidden></div>
 <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
 

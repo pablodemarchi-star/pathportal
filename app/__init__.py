@@ -88,6 +88,7 @@ def create_app():
         Role,
         StaffMembersSettings,
         StaffPayment,
+        StaffPaymentSettings,
         StaffCertificationFut2Selection,
         StaffCertificationFutSelection,
         SupervisorCertificationAnnualMeetingSelection,

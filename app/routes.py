@@ -81,6 +81,7 @@ from app.models import (
     Role,
     StaffMembersSettings,
     StaffPayment,
+    StaffPaymentSettings,
     StaffCertificationFut2Selection,
     StaffCertificationFutSelection,
     SupervisorCertificationAnnualMeetingSelection,
@@ -3360,6 +3361,20 @@ def staff_payment_status(invoice_verified, payment_completed):
     if invoice_verified:
         return "Verified"
     return "Pending"
+
+
+def staff_payment_settings():
+    return StaffPaymentSettings.query.order_by(StaffPaymentSettings.id.asc()).first()
+
+
+def staff_payment_settings_values(settings_record):
+    if not settings_record or not settings_record.next_payment_date:
+        return {"next_payment_date": ""}
+    if settings_record.next_payment_date < today_local():
+        settings_record.next_payment_date = None
+        db.session.commit()
+        return {"next_payment_date": ""}
+    return {"next_payment_date": certification_date_value(settings_record.next_payment_date)}
 
 
 def assignment_currency_totals(assignment):
@@ -12118,6 +12133,7 @@ def staff_payments():
     selected_year, session_years = selected_exam_session_year()
     payment_rows = build_staff_payment_rows(selected_year)
     payment_rows, pagination = paginate_items(payment_rows)
+    payment_settings = staff_payment_settings()
     return render_template(
         "staff_payments/index.html",
         rows=payment_rows,
@@ -12129,8 +12145,39 @@ def staff_payments():
             .all()
         ),
         selected_session_year=selected_year,
+        staff_payment_settings_values=staff_payment_settings_values(payment_settings),
         csrf_token=session.get("csrf_token"),
     )
+
+
+@staff_bp.route("/staff-payments/settings", methods=["POST"])
+@login_required
+def update_staff_payment_settings():
+    if not validate_csrf():
+        flash("Security token expired. Please try again.", "error")
+        return redirect(url_for("staff.staff_payments"))
+    selected_year = request.form.get("session_year", "").strip()
+    next_payment_date, date_error = parse_staff_settings_date(
+        request.form.get("next_payment_date"),
+        "Next payment date",
+    )
+    if date_error:
+        flash(date_error, "error")
+        return redirect(url_for(
+            "staff.staff_payments",
+            **({"session_year": selected_year} if selected_year.isdigit() else {}),
+        ))
+    settings_record = staff_payment_settings()
+    if settings_record is None:
+        settings_record = StaffPaymentSettings()
+        db.session.add(settings_record)
+    settings_record.next_payment_date = next_payment_date
+    db.session.commit()
+    flash("Next payment date updated.", "success")
+    return redirect(url_for(
+        "staff.staff_payments",
+        **({"session_year": selected_year} if selected_year.isdigit() else {}),
+    ))
 
 
 @staff_bp.route("/staff-payments/<int:member_id>/<int:payment_year>", methods=["POST"])
@@ -14994,6 +15041,7 @@ def exam_session_planner():
         ),
         selected_session_year=selected_year,
         staff_preconfirmation_certifications=staff_preconfirmation_email_certifications(),
+        staff_payment_next_payment_date=staff_payment_settings_values(staff_payment_settings())["next_payment_date"],
         status_options=EXAM_SESSION_STATUS_OPTIONS,
         module_options=EXAM_SESSION_MODULE_OPTIONS,
         shift_options=EXAM_SESSION_SHIFT_OPTIONS,

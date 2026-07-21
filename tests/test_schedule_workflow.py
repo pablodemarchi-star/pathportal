@@ -50,6 +50,7 @@ from app.models import (
     ExamSessionSinapsisEvent,
     ExamSessionStaffingControl,
     ExamSessionSupervisorAssignment,
+    StaffPaymentSettings,
     Provider,
     ProviderType,
     InternStageYear,
@@ -2051,12 +2052,14 @@ class ScheduleWorkflowTest(unittest.TestCase):
             team_member_id=supervisor.id,
             participation_status="Confirmed",
         ))
+        db.session.add(StaffPaymentSettings(next_payment_date=date(2026, 12, 27)))
         db.session.commit()
 
         html = self.login_client().get("/exam-session-planner?session_year=2026").get_data(as_text=True)
 
         self.assertEqual(html.count("data-staff-confirmation-email"), 1)
         self.assertIn("Official confirmation email", html)
+        self.assertIn('data-staff-payment-next-payment-date="27/12/2026"', html)
         self.assertNotIn(">Confirmation email</button>", html)
 
     def test_exam_session_planner_disables_official_confirmation_button_for_online_session(self):
@@ -2093,6 +2096,7 @@ class ScheduleWorkflowTest(unittest.TestCase):
             "total_fee": "ARS 54.200",
             "logistics_status": "Simple logistics",
             "logistics_url": "https://example.com/logistics",
+            "next_payment_date": "27/12/2026",
             "contacts": [
                 {
                     "label": "Supervisor 1",
@@ -2144,9 +2148,18 @@ class ScheduleWorkflowTest(unittest.TestCase):
         self.assertIn("Device depreciation", result["html"])
         self.assertIn("TOTAL FEE:", result["html"])
         self.assertIn("ARS 54.200", result["html"])
-        self.assertIn("<strong><em><u>all your exam sessions</u></em></strong>", result["html"])
-        self.assertIn("<strong><em><u>unified invoice</u></em></strong>", result["html"])
+        self.assertNotIn("unified invoice with the TOTAL FEE", result["text"])
+        self.assertIn("<em><u>Once all your exam sessions are over</u></em>", result["html"])
+        self.assertIn("background:#f1f3f2;border:1px solid #d9dfdc;border-radius:10px", result["html"])
+        self.assertIn("font:400 13px/1.5 Arial, Helvetica, sans-serif", result["html"])
         self.assertIn('href="mailto:finance@pathexaminations.com"', result["html"])
+        self.assertIn("<strong><u>finance@pathexaminations.com</u></strong>", result["html"])
+        self.assertIn("<strong>sum of the total fees</strong>", result["html"])
+        self.assertIn('href="https://drive.google.com/drive/u/0/my-drive"', result["html"])
+        self.assertIn("<strong>attached sample</strong>", result["html"])
+        self.assertIn("Payments will be processed on <strong>27/12/2026</strong>", result["html"])
+        self.assertIn("<strong>at 5:00 pm (GMT-3)</strong>", result["html"])
+        self.assertIn("Bellis Ignis Group SRL", result["text"])
         self.assertIn("SESSION MATERIALS", result["html"])
         self.assertIn("Supervisor guidelines", result["html"])
         self.assertIn("View material", result["html"])
@@ -2157,7 +2170,6 @@ class ScheduleWorkflowTest(unittest.TestCase):
         self.assertIn("Phone number not available", result["text"])
         self.assertIn("Emergency lines", result["text"])
         self.assertNotIn("Please contact your Supervisor first before using these emergency lines.", result["text"])
-        self.assertIn("<strong><em><u>all your exam sessions</u></em></strong>", result["html"])
         self.assertIn("https://wa.me/5491150954847", result["html"])
         self.assertIn("https://wa.me/5491133945761", result["html"])
         self.assertIn("https://wa.me/5491155692629", result["html"])
@@ -2217,11 +2229,13 @@ class ScheduleWorkflowTest(unittest.TestCase):
         missing_time = self.build_staff_official_confirmation_email(self.official_confirmation_base_payload(time_ranges=[]))
         missing_total = self.build_staff_official_confirmation_email(self.official_confirmation_base_payload(total_fee="-"))
         missing_logistics_url = self.build_staff_official_confirmation_email(self.official_confirmation_base_payload(logistics_url=""))
+        missing_next_payment_date = self.build_staff_official_confirmation_email(self.official_confirmation_base_payload(next_payment_date=""))
 
         self.assertEqual(online["error"], "Official confirmation email is only available for onsite sessions.")
         self.assertEqual(missing_time["error"], "Staff member time range is required for official confirmation emails.")
         self.assertEqual(missing_total["error"], "Total fee is required for official confirmation emails.")
         self.assertEqual(missing_logistics_url["error"], "Logistics folder link is required for simple logistics.")
+        self.assertEqual(missing_next_payment_date["error"], "Next payment date is required for official confirmation emails.")
 
     def test_exam_session_logistics_confirmed_status_requires_password(self):
         supervisor = self.create_supervisor(staff_id=1, name="Laura Mendez")

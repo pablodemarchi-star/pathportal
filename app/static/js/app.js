@@ -6901,12 +6901,13 @@ const getStaffOfficialConfirmationEmailPayload = (button) => {
     format: cleanEmailValue(panel?.dataset?.sessionFormat),
     address: cleanEmailValue(panel?.dataset?.sessionAddress),
     fee_lines: collectOfficialFeeLines(row),
-    total_fee: cleanEmailValue(row?.querySelector?.("[data-total-fee-value]")?.textContent),
-    logistics_status: cleanEmailValue(row?.querySelector?.("[data-logistics-control]")?.value),
-    logistics_url: logisticsUrl,
-    contacts: collectOfficialSessionStaff(form),
-  };
-};
+	    total_fee: cleanEmailValue(row?.querySelector?.("[data-total-fee-value]")?.textContent),
+	    logistics_status: cleanEmailValue(row?.querySelector?.("[data-logistics-control]")?.value),
+	    logistics_url: logisticsUrl,
+	    next_payment_date: cleanEmailValue(panel?.dataset?.staffPaymentNextPaymentDate),
+	    contacts: collectOfficialSessionStaff(form),
+	  };
+	};
 
 const validateStaffOfficialConfirmationEmailPayload = (payload) => {
   if (!cleanEmailValue(payload?.full_name || payload?.fullName)) return "Staff member full name is required.";
@@ -6929,11 +6930,14 @@ const validateStaffOfficialConfirmationEmailPayload = (payload) => {
   if (logisticsStatus === "Simple logistics" && !emailLinkIsUsable(payload?.logistics_url || payload?.logisticsUrl)) {
     return "Logistics folder link is required for simple logistics.";
   }
-  if (logisticsStatus === "Complex logistics" && !emailLinkIsUsable(payload?.logistics_url || payload?.logisticsUrl)) {
-    return "Logistics folder link is required for complex logistics.";
-  }
-  return "";
-};
+	  if (logisticsStatus === "Complex logistics" && !emailLinkIsUsable(payload?.logistics_url || payload?.logisticsUrl)) {
+	    return "Logistics folder link is required for complex logistics.";
+	  }
+	  if (!cleanEmailValue(payload?.next_payment_date || payload?.nextPaymentDate)) {
+	    return "Next payment date is required for official confirmation emails.";
+	  }
+	  return "";
+	};
 
 const officialConfirmationStatusStyle = (tone) => {
   if (tone === "green") return { background: "#eef5ed", border: "#86aa83", color: "#4f7f4c" };
@@ -7090,9 +7094,10 @@ const buildStaffOfficialConfirmationEmail = (button) => {
   const address = cleanEmailValue(payload.address);
   const totalFee = cleanEmailValue(payload.total_fee || payload.totalFee);
   const feeLines = Array.isArray(payload.fee_lines || payload.feeLines) ? (payload.fee_lines || payload.feeLines) : [];
-  const logisticsStatus = cleanEmailValue(payload.logistics_status || payload.logisticsStatus);
-  const logisticsUrl = cleanEmailValue(payload.logistics_url || payload.logisticsUrl);
-  const contacts = Array.isArray(payload.contacts) ? payload.contacts : [];
+	  const logisticsStatus = cleanEmailValue(payload.logistics_status || payload.logisticsStatus);
+	  const logisticsUrl = cleanEmailValue(payload.logistics_url || payload.logisticsUrl);
+	  const nextPaymentDate = cleanEmailValue(payload.next_payment_date || payload.nextPaymentDate);
+	  const contacts = Array.isArray(payload.contacts) ? payload.contacts : [];
   const roleData = roleInvitationCopy(role);
   const arrival = officialArrivalMinutesForRole(role);
   const travel = officialTravelCopy(role, logisticsStatus, logisticsUrl);
@@ -7160,8 +7165,11 @@ const buildStaffOfficialConfirmationEmail = (button) => {
           <h2 style="${styles.sectionTitle}">FEES AND INVOICE</h2>
           <p style="${styles.paragraph}">Below you’ll find the breakdown of your exam session fee:</p>
           <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="border-collapse:collapse;border:1px solid #d9dfdc;border-radius:10px;overflow:hidden;margin:0 0 14px;">${feeRowsHtml}<tr><td style="padding:12px;background:#e7f5f8;color:#00506b;font:800 15px Arial, Helvetica, sans-serif;">TOTAL FEE:</td><td align="right" style="padding:12px;background:#e7f5f8;color:#00506b;font:800 15px Arial, Helvetica, sans-serif;">${escapeEmailHtml(totalFee)}</td></tr></table>
-          <p style="${styles.paragraph};margin-bottom:0;">Once <strong><em><u>all your exam sessions</u></em></strong> are over, please send a <strong><em><u>unified invoice</u></em></strong> with the TOTAL FEE of all sessions to <a href="mailto:finance@pathexaminations.com" style="color:#00506b;font-weight:700;text-decoration:underline;">finance@pathexaminations.com</a>.</p>
-        </div>
+	          <div style="margin:0;padding:13px 15px;background:#f1f3f2;border:1px solid #d9dfdc;border-radius:10px;">
+	            <p style="margin:0 0 10px;color:#111115;font:400 13px/1.5 Arial, Helvetica, sans-serif;"><em><u>Once all your exam sessions are over</u></em>, please send one consolidated invoice to <a href="mailto:finance@pathexaminations.com" style="color:#00506b;font-weight:700;text-decoration:underline;"><strong><u>finance@pathexaminations.com</u></strong></a>, including only the <strong>sum of the total fees</strong> for all your sessions. Do not include additional expenses, as only invoices matching the system amount will be processed. The invoice may be issued in your name or someone else’s name. Please follow the <a href="https://drive.google.com/drive/u/0/my-drive" style="color:#00506b;font-weight:700;text-decoration:underline;"><strong>attached sample</strong></a> with the required company details.</p>
+	            <p style="margin:0;color:#111115;font:400 13px/1.5 Arial, Helvetica, sans-serif;">Payments will be processed on <strong>${escapeEmailHtml(nextPaymentDate)}</strong> <strong>at 5:00 pm (GMT-3)</strong> and will appear as Bellis Ignis Group SRL. First-time payments may take up to 72 working hours after processing; previous recipients should receive payment immediately.</p>
+	          </div>
+	        </div>
         ${officialConfirmationMaterialsHtml(role, styles)}
         ${officialContactsHtml(contacts, role, styles)}
         ${supervisorMaterialHtml}
@@ -7200,7 +7208,8 @@ const buildStaffOfficialConfirmationEmail = (button) => {
     "Below you’ll find the breakdown of your exam session fee:",
     feeText,
     `TOTAL FEE: ${totalFee}`,
-    "Once all your exam sessions are over, please send a unified invoice with the TOTAL FEE of all sessions to finance@pathexaminations.com.",
+	    "Once all your exam sessions are over, please send one consolidated invoice to finance@pathexaminations.com, including only the sum of the total fees for all your sessions. Do not include additional expenses, as only invoices matching the system amount will be processed. The invoice may be issued in your name or someone else’s name. Please follow the attached sample with the required company details: https://drive.google.com/drive/u/0/my-drive",
+	    `Payments will be processed on ${nextPaymentDate} at 5:00 pm (GMT-3) and will appear as Bellis Ignis Group SRL. First-time payments may take up to 72 working hours after processing; previous recipients should receive payment immediately.`,
     materialsText,
     officialContactsText(contacts, role),
     supervisorMaterialText,

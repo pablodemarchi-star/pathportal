@@ -26,6 +26,7 @@ from app.models import (
     PotentialEntryPreassignedExamSession,
     PotentialEntryStatusTrack,
     StaffPayment,
+    StaffPaymentSettings,
     StaffMembersSettings,
     User,
     UserMenuPermission,
@@ -34,6 +35,7 @@ from app.routes import (
     assigned_session_counts_by_member,
     assigned_session_details_by_member,
     staff_sessions_email_payload_by_member,
+    today_local,
 )
 
 
@@ -3719,6 +3721,66 @@ console.log(JSON.stringify({ enabledState, missingState }));
         self.assertEqual(response.status_code, 200)
         self.assertIn("Potential entry permanently deleted.", response.get_data(as_text=True))
         self.assertIsNone(db.session.get(PotentialEntry, entry.id))
+
+    def test_staff_payments_next_payment_date_renders_and_persists(self):
+        self.add_session(session_date=today_local() + timedelta(days=30))
+        next_payment_date = today_local() + timedelta(days=7)
+
+        response = self.client().get("/staff-payments")
+        html = response.get_data(as_text=True)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("Next payment date:", html)
+        self.assertIn('name="next_payment_date"', html)
+        self.assertIn("data-date-mask", html)
+        self.assertIn("data-date-future-or-today", html)
+        self.assertIn("/staff-payments/settings", html)
+
+        response = self.client().post(
+            "/staff-payments/settings",
+            data={
+                "csrf_token": "token",
+                "session_year": str((today_local() + timedelta(days=30)).year),
+                "next_payment_date": next_payment_date.strftime("%d/%m/%Y"),
+            },
+            follow_redirects=True,
+        )
+        html = response.get_data(as_text=True)
+        settings = StaffPaymentSettings.query.one()
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("Next payment date updated.", html)
+        self.assertEqual(settings.next_payment_date, next_payment_date)
+        self.assertIn(next_payment_date.strftime("%d/%m/%Y"), html)
+
+    def test_staff_payments_next_payment_date_rejects_past_date_and_cleans_expired_value(self):
+        self.add_session(session_date=today_local() + timedelta(days=30))
+        past_date = today_local() - timedelta(days=1)
+        response = self.client().post(
+            "/staff-payments/settings",
+            data={
+                "csrf_token": "token",
+                "session_year": str((today_local() + timedelta(days=30)).year),
+                "next_payment_date": past_date.strftime("%d/%m/%Y"),
+            },
+            follow_redirects=True,
+        )
+        html = response.get_data(as_text=True)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("Date cannot be in the past.", html)
+        self.assertEqual(StaffPaymentSettings.query.count(), 0)
+
+        settings = StaffPaymentSettings(next_payment_date=past_date)
+        db.session.add(settings)
+        db.session.commit()
+
+        response = self.client().get("/staff-payments")
+        html = response.get_data(as_text=True)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertNotIn(f'value="{past_date.strftime("%d/%m/%Y")}"', html)
+        self.assertIsNone(db.session.get(StaffPaymentSettings, settings.id).next_payment_date)
 
     def test_archived_staff_member_delete_requires_path_password(self):
         member = self.add_member(status="Archived", full_name="Archived Staff", email="archived@example.com")
