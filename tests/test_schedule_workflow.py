@@ -1,4 +1,6 @@
+import json
 import os
+import subprocess
 import unittest
 from datetime import date, datetime, time, timedelta, timezone
 
@@ -207,6 +209,36 @@ class ScheduleWorkflowTest(unittest.TestCase):
         db.session.add(supervisor)
         db.session.commit()
         return supervisor
+
+    def build_staff_preconfirmation_email(self, dataset):
+        with open("app/static/js/app.js", encoding="utf-8") as handle:
+            js = handle.read()
+        start = js.index("const cleanEmailValue")
+        end = js.index("const buildSuccessfulApplicationEmail")
+        script = (
+            js[start:end]
+            + "\nconst button = { dataset: "
+            + json.dumps({"staffPreconfirmationEmailPayload": json.dumps(dataset)})
+            + " };\n"
+            + "console.log(JSON.stringify(buildStaffPreconfirmationEmail(button)));\n"
+        )
+        result = subprocess.run(["node", "-e", script], check=True, capture_output=True, text=True)
+        return json.loads(result.stdout)
+
+    def build_staff_official_confirmation_email(self, dataset):
+        with open("app/static/js/app.js", encoding="utf-8") as handle:
+            js = handle.read()
+        start = js.index("const cleanEmailValue")
+        end = js.index("const initInvitationEmailCopyButtons")
+        script = (
+            js[start:end]
+            + "\nconst button = { dataset: "
+            + json.dumps({"staffOfficialConfirmationEmailPayload": json.dumps(dataset)})
+            + " };\n"
+            + "console.log(JSON.stringify(buildStaffOfficialConfirmationEmail(button)));\n"
+        )
+        result = subprocess.run(["node", "-e", script], check=True, capture_output=True, text=True)
+        return json.loads(result.stdout)
 
     def assign_confirmed_supervisor(self, session_record=None, supervisor_id=1):
         session_record = session_record or self.session_record
@@ -1851,6 +1883,12 @@ class ScheduleWorkflowTest(unittest.TestCase):
         self.assertIn("data-total-fee-cell", html)
         self.assertIn("data-staff-email-cell", html)
         self.assertIn("data-copy-invitation-email", html)
+        self.assertIn("Pre-confirmation email", html)
+        self.assertIn("Official confirmation email", html)
+        self.assertIn("Final information email", html)
+        self.assertIn("data-staff-preconfirmation-email", html)
+        self.assertIn("data-staff-confirmation-email", html)
+        self.assertIn("data-staff-final-information-email", html)
         self.assertIn("data-remove-supervisor-row", html)
         recipient_fragment = html[html.index("Receives shipment") - 800:html.index("Receives shipment") + 200]
         self.assertIn("Laura Mendez", recipient_fragment)
@@ -1881,6 +1919,309 @@ class ScheduleWorkflowTest(unittest.TestCase):
         self.assertIn("requestLogisticsConfirmedPassword", script)
         self.assertIn("LOGISTICS_CONFIRMED_PASSWORD", script)
         self.assertIn("Select a Type of provider before changing this Logistics concept from Pending.", script)
+
+    def test_exam_session_planner_renders_one_preconfirmation_button_per_assigned_staff_card(self):
+        supervisor = self.create_supervisor(staff_id=1, name="Laura Mendez")
+        examiner = AcademicStaff(id=2, status="Active", full_name="Noah Rivers", roles="Examiner")
+        intern = AcademicStaff(id=3, status="Active", full_name="Iris Lane", roles="Intern")
+        db.session.add_all([
+            examiner,
+            intern,
+            ExamSessionSupervisorAssignment(
+                exam_session_id=self.session_record.id,
+                team_member_id=supervisor.id,
+                participation_status="Pending",
+            ),
+            ExamSessionExaminerAssignment(
+                exam_session_id=self.session_record.id,
+                team_member_id=examiner.id,
+                participation_status="Pending",
+            ),
+            ExamSessionInternAssignment(
+                exam_session_id=self.session_record.id,
+                team_member_id=intern.id,
+                participation_status="Pending",
+            ),
+        ])
+        db.session.commit()
+
+        response = self.login_client().get("/exam-session-planner?session_year=2026")
+        html = response.get_data(as_text=True)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(html.count("data-staff-preconfirmation-email"), 3)
+        self.assertIn("data-preconfirmation-certifications", html)
+        self.assertIn("data-session-date-email=\"Thursday 25 June 2026\"", html)
+        self.assertIn("data-session-shift=\"Morning\"", html)
+
+    def test_staff_preconfirmation_email_for_supervisor_includes_session_and_certification(self):
+        payload = self.build_staff_preconfirmation_email({
+            "full_name": "Laura Mendez",
+            "role": "Supervisor",
+            "session_name": "London Bridge",
+            "session_date": "Thursday 10 December 2026",
+            "shift": "Morning",
+            "format": "Onsite",
+            "address": "Pilar, Buenos Aires",
+            "certifications": {
+                "Supervisor": {
+                    "remote_training_period": "from Monday 20 July 2026 to Friday 24 July 2026",
+                    "annual_meeting": "Friday 31 July 2026 from 9 to 16 h (GMT-3)",
+                },
+            },
+        })
+
+        self.assertNotIn("error", payload)
+        self.assertIn("Dear Laura Mendez,", payload["text"])
+        self.assertIn("Participation awaiting your pre-confirmation", payload["html"])
+        self.assertIn("pre-selected as a <strong>Supervisor</strong>", payload["html"])
+        self.assertIn("<strong>Exam session:</strong> London Bridge", payload["html"])
+        self.assertIn("<strong>Date:</strong> Thursday 10 December 2026", payload["html"])
+        self.assertIn("<strong>Shift:</strong> Morning", payload["html"])
+        self.assertIn("<strong>Format:</strong> Onsite", payload["html"])
+        self.assertIn("<strong>Address:</strong> Pilar, Buenos Aires", payload["html"])
+        self.assertIn("SUPERVISOR CERTIFICATION", payload["html"])
+        self.assertIn("Remote training period:", payload["html"])
+        self.assertIn("Further information, such as platform access details", payload["text"])
+        self.assertIn("<strong>pre-confirming your availability for the assigned exam session and training programme</strong>", payload["html"])
+        self.assertNotIn("undefined", payload["html"])
+        self.assertNotIn("null", payload["html"])
+        self.assertNotIn("None", payload["html"])
+
+    def test_staff_preconfirmation_email_for_examiner_validates_certification_dates(self):
+        payload = self.build_staff_preconfirmation_email({
+            "full_name": "Noah Rivers",
+            "role": "Examiner",
+            "session_name": "London Bridge",
+            "session_date": "Thursday 10 December 2026",
+            "format": "Online",
+            "certifications": {
+                "Examiner": {
+                    "remote_training_period": "",
+                    "annual_meeting": "Friday 31 July 2026 from 10 to 16 h (GMT-3)",
+                },
+            },
+        })
+
+        self.assertEqual(payload["error"], "Examiner certification dates are not configured.")
+
+    def test_staff_preconfirmation_email_for_intern_omits_training_programme(self):
+        payload = self.build_staff_preconfirmation_email({
+            "full_name": "Iris Lane",
+            "role": "Intern",
+            "session_name": "Online Bridge",
+            "session_date": "Friday 11 December 2026",
+            "format": "Online",
+            "certifications": {},
+        })
+
+        self.assertNotIn("error", payload)
+        self.assertIn("pre-selected as a <strong>Intern</strong>", payload["html"])
+        self.assertNotIn("EXAMINER CERTIFICATION", payload["html"])
+        self.assertNotIn("SUPERVISOR CERTIFICATION", payload["html"])
+        self.assertNotIn("training programme for this role", payload["text"])
+        self.assertNotIn("assigned exam session and training programme", payload["text"])
+        self.assertIn("assigned exam session.", payload["text"])
+        self.assertNotIn("<strong>Address:</strong>", payload["html"])
+
+    def test_staff_preconfirmation_email_requires_onsite_address(self):
+        payload = self.build_staff_preconfirmation_email({
+            "full_name": "Laura Mendez",
+            "role": "Supervisor",
+            "session_name": "London Bridge",
+            "session_date": "Thursday 10 December 2026",
+            "format": "Onsite",
+            "address": "",
+            "certifications": {
+                "Supervisor": {
+                    "remote_training_period": "from Monday 20 July 2026 to Friday 24 July 2026",
+                    "annual_meeting": "Friday 31 July 2026 from 9 to 16 h (GMT-3)",
+                },
+            },
+        })
+
+        self.assertEqual(payload["error"], "Exam session address is required for onsite sessions.")
+
+    def test_exam_session_planner_renders_existing_official_confirmation_button_without_duplicates(self):
+        supervisor = self.create_supervisor(staff_id=1, name="Laura Mendez")
+        self.session_record.format = "Onsite"
+        self.session_record.full_address_google_maps = "Pilar, Buenos Aires"
+        db.session.add(ExamSessionSupervisorAssignment(
+            exam_session_id=self.session_record.id,
+            team_member_id=supervisor.id,
+            participation_status="Confirmed",
+        ))
+        db.session.commit()
+
+        html = self.login_client().get("/exam-session-planner?session_year=2026").get_data(as_text=True)
+
+        self.assertEqual(html.count("data-staff-confirmation-email"), 1)
+        self.assertIn("Official confirmation email", html)
+        self.assertNotIn(">Confirmation email</button>", html)
+
+    def test_exam_session_planner_disables_official_confirmation_button_for_online_session(self):
+        supervisor = self.create_supervisor(staff_id=1, name="Laura Mendez")
+        db.session.add(ExamSessionSupervisorAssignment(
+            exam_session_id=self.session_record.id,
+            team_member_id=supervisor.id,
+            participation_status="Confirmed",
+        ))
+        db.session.commit()
+
+        html = self.login_client().get("/exam-session-planner?session_year=2026").get_data(as_text=True)
+
+        self.assertIn("Official confirmation email is only available for onsite sessions.", html)
+        self.assertRegex(html, r"data-staff-confirmation-email[^>]*disabled")
+
+    def official_confirmation_base_payload(self, **overrides):
+        payload = {
+            "full_name": "Laura Mendez",
+            "role": "Supervisor",
+            "session_name": "London Bridge",
+            "session_date": "Thursday, December 10th, 2026",
+            "time_ranges": ["10.50 to 12.30 h"],
+            "format": "Onsite",
+            "address": "Pilar, Buenos Aires",
+            "fee_lines": [
+                {"label": "Role fee", "value": "ARS 22.000"},
+                {"label": "Device depreciation", "value": "ARS 6.000"},
+                {"label": "Commuting", "value": "ARS 20.000"},
+                {"label": "Fuel", "value": "ARS 2.000"},
+                {"label": "Vehicle depreciation", "value": "ARS 2.000"},
+                {"label": "Seniority", "value": "ARS 2.200"},
+            ],
+            "total_fee": "ARS 54.200",
+            "logistics_status": "Simple logistics",
+            "logistics_url": "https://example.com/logistics",
+            "contacts": [
+                {
+                    "label": "Supervisor 1",
+                    "role": "Supervisor",
+                    "assigned": True,
+                    "name": "Laura Mendez",
+                    "phone": "+5491128508482",
+                    "status": "Confirmed",
+                    "statusTone": "green",
+                },
+                {
+                    "label": "Examiner 1",
+                    "role": "Examiner",
+                    "assigned": True,
+                    "name": "Noah Rivers",
+                    "phone": "",
+                    "status": "To be confirmed",
+                    "statusTone": "yellow",
+                },
+                {
+                    "label": "Intern 1",
+                    "role": "Intern",
+                    "assigned": False,
+                    "emptyMessage": "This intern has not been assigned yet",
+                },
+            ],
+        }
+        payload.update(overrides)
+        return payload
+
+    def test_staff_official_confirmation_email_for_supervisor_contains_required_sections(self):
+        result = self.build_staff_official_confirmation_email(self.official_confirmation_base_payload())
+
+        self.assertNotIn("error", result)
+        self.assertIn("OFFICIAL CONFIRMATION", result["html"])
+        self.assertIn("Path exam session official confirmation", result["html"])
+        self.assertIn("Dear Laura Mendez,", result["text"])
+        self.assertIn("Participation awaiting your confirmation", result["html"])
+        self.assertIn("selected as a <strong>Supervisor</strong>", result["html"])
+        self.assertIn("EXAM SESSION INFORMATION", result["html"])
+        self.assertIn("Thursday, December 10th, 2026", result["text"])
+        self.assertIn("10.50 to 12.30 h GMT-3", result["html"])
+        self.assertIn("<em style=", result["html"])
+        self.assertIn("50 minutes", result["text"])
+        self.assertIn("📍 Venue", result["html"])
+        self.assertIn("Pilar, Buenos Aires", result["html"])
+        self.assertIn("FEES AND INVOICE", result["html"])
+        self.assertIn("Role fee", result["html"])
+        self.assertIn("Device depreciation", result["html"])
+        self.assertIn("TOTAL FEE:", result["html"])
+        self.assertIn("ARS 54.200", result["html"])
+        self.assertIn("<strong><em><u>all your exam sessions</u></em></strong>", result["html"])
+        self.assertIn("<strong><em><u>unified invoice</u></em></strong>", result["html"])
+        self.assertIn('href="mailto:finance@pathexaminations.com"', result["html"])
+        self.assertIn("SESSION MATERIALS", result["html"])
+        self.assertIn("Supervisor guidelines", result["html"])
+        self.assertIn("View material", result["html"])
+        self.assertIn("STAFF MEMBERS AND EMERGENCY LINES", result["html"])
+        self.assertIn("Confirmed", result["html"])
+        self.assertIn("To be confirmed", result["html"])
+        self.assertIn("This intern has not been assigned yet", result["html"])
+        self.assertIn("Phone number not available", result["text"])
+        self.assertIn("Emergency lines", result["text"])
+        self.assertNotIn("Please contact your Supervisor first before using these emergency lines.", result["text"])
+        self.assertIn("<strong><em><u>all your exam sessions</u></em></strong>", result["html"])
+        self.assertIn("https://wa.me/5491150954847", result["html"])
+        self.assertIn("https://wa.me/5491133945761", result["html"])
+        self.assertIn("https://wa.me/5491155692629", result["html"])
+        self.assertIn("https://wa.me/5491128508482", result["html"])
+        self.assertIn("- Path Examinations office at +5491150954847", result["text"])
+        self.assertIn("EXAM SESSION MATERIAL", result["html"])
+        self.assertIn("TRAVEL AND COMMUTING", result["html"])
+        self.assertIn('href="https://example.com/logistics"', result["html"])
+        self.assertIn("EXAM SESSION FINAL CHECKS", result["html"])
+        self.assertIn("Click here to confirm participation and material reception", result["html"])
+        self.assertIn("mailto:admin%40pathexaminations.com", result["html"])
+        self.assertNotIn("undefined", result["html"])
+        self.assertNotIn("null", result["html"])
+        self.assertNotIn("None", result["html"])
+
+    def test_staff_official_confirmation_email_for_examiner_uses_examiner_sections(self):
+        result = self.build_staff_official_confirmation_email(self.official_confirmation_base_payload(
+            full_name="Noah Rivers",
+            role="Examiner",
+            logistics_status="Does not apply",
+            logistics_url="",
+            fee_lines=[{"label": "Role fee", "value": "ARS 22.000"}],
+            total_fee="ARS 22.000",
+        ))
+
+        self.assertNotIn("error", result)
+        self.assertIn("selected as an <strong>Examiner</strong>", result["html"])
+        self.assertIn("30 minutes", result["text"])
+        self.assertIn("Examiner guidelines", result["html"])
+        self.assertIn("ATTENDANCE, MARKS AND RECORDINGS", result["html"])
+        self.assertIn("Please contact your Supervisor first before using these emergency lines.", result["text"])
+        self.assertNotIn("EXAM SESSION MATERIAL", result["html"])
+        self.assertNotIn("Supervisor guidelines", result["html"])
+
+    def test_staff_official_confirmation_email_for_intern_omits_material_and_final_instruction_sections(self):
+        result = self.build_staff_official_confirmation_email(self.official_confirmation_base_payload(
+            full_name="Iris Lane",
+            role="Intern",
+            logistics_status="Complex logistics",
+            logistics_url="https://example.com/complex-logistics",
+            fee_lines=[{"label": "Role fee", "value": "ARS 10.000"}],
+            total_fee="ARS 10.000",
+        ))
+
+        self.assertNotIn("error", result)
+        self.assertIn("selected as an <strong>Intern</strong>", result["html"])
+        self.assertIn("30 minutes", result["text"])
+        self.assertIn("All relevant information and documents for your trip or commute can be found", result["text"])
+        self.assertIn("Please contact your Supervisor first before using these emergency lines.", result["text"])
+        self.assertNotIn("SESSION MATERIALS", result["html"])
+        self.assertNotIn("ATTENDANCE, MARKS AND RECORDINGS", result["html"])
+        self.assertNotIn("EXAM SESSION FINAL CHECKS", result["html"])
+        self.assertNotIn("EXAM SESSION MATERIAL", result["html"])
+
+    def test_staff_official_confirmation_email_validations(self):
+        online = self.build_staff_official_confirmation_email(self.official_confirmation_base_payload(format="Online"))
+        missing_time = self.build_staff_official_confirmation_email(self.official_confirmation_base_payload(time_ranges=[]))
+        missing_total = self.build_staff_official_confirmation_email(self.official_confirmation_base_payload(total_fee="-"))
+        missing_logistics_url = self.build_staff_official_confirmation_email(self.official_confirmation_base_payload(logistics_url=""))
+
+        self.assertEqual(online["error"], "Official confirmation email is only available for onsite sessions.")
+        self.assertEqual(missing_time["error"], "Staff member time range is required for official confirmation emails.")
+        self.assertEqual(missing_total["error"], "Total fee is required for official confirmation emails.")
+        self.assertEqual(missing_logistics_url["error"], "Logistics folder link is required for simple logistics.")
 
     def test_exam_session_logistics_confirmed_status_requires_password(self):
         supervisor = self.create_supervisor(staff_id=1, name="Laura Mendez")
@@ -2679,6 +3020,51 @@ class ScheduleWorkflowTest(unittest.TestCase):
             team_member_id=assigned_supervisor.id,
         ).one()
         self.assertEqual(assignment.non_available_ids(), [unavailable_supervisor.id])
+
+    def test_session_header_non_available_staff_persists_on_session_without_assignment_rows(self):
+        unavailable_supervisor = self.create_supervisor(staff_id=4, name="Mateo Silva")
+        client = self.login_client()
+
+        response = client.post(
+            f"/exam-session-planner/sessions/{self.session_record.id}/members",
+            data={
+                "csrf_token": "token",
+                "session_year": "2026",
+                "modal_action": "save",
+                "session_non_available_member_ids": ["", str(unavailable_supervisor.id)],
+            },
+            follow_redirects=False,
+        )
+
+        self.assertEqual(response.status_code, 302)
+        db.session.refresh(self.session_record)
+        self.assertEqual(self.session_record.non_available_ids(), [unavailable_supervisor.id])
+
+        html = client.get("/exam-session-planner?session_year=2026").get_data(as_text=True)
+        self.assertIn('name="session_non_available_member_ids"', html)
+        self.assertIn(f'value="{unavailable_supervisor.id}"', html)
+        self.assertIn("checked", html)
+
+    def test_session_header_non_available_staff_can_be_cleared(self):
+        unavailable_supervisor = self.create_supervisor(staff_id=4, name="Mateo Silva")
+        self.session_record.non_available_member_ids = f"[{unavailable_supervisor.id}]"
+        db.session.commit()
+        client = self.login_client()
+
+        response = client.post(
+            f"/exam-session-planner/sessions/{self.session_record.id}/members",
+            data={
+                "csrf_token": "token",
+                "session_year": "2026",
+                "modal_action": "save",
+                "session_non_available_member_ids": "",
+            },
+            follow_redirects=False,
+        )
+
+        self.assertEqual(response.status_code, 302)
+        db.session.refresh(self.session_record)
+        self.assertEqual(self.session_record.non_available_ids(), [])
 
     def test_auto_shipment_bundles_group_by_supervisor_number_deadline_and_idempotency(self):
         self.create_supervisor(staff_id=1, name="Laura Mendez")

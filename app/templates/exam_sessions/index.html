@@ -433,6 +433,11 @@
             <span class="copy-button-feedback">Copied!</span>
           </button>
         </div>
+        <div class="staff-contact-email-chip-row" aria-label="Staff email actions">
+          <button class="staff-contact-email-chip" type="button" data-staff-preconfirmation-email {% if not current_menu_can_edit %}disabled{% endif %}>Pre-confirmation email</button>
+          <button class="staff-contact-email-chip" type="button" data-staff-confirmation-email {% if not current_menu_can_edit or session.format != 'Onsite' %}disabled{% endif %} {% if session.format != 'Onsite' %}title="Official confirmation email is only available for onsite sessions."{% endif %}>Official confirmation email</button>
+          <button class="staff-contact-email-chip" type="button" data-staff-final-information-email {% if not current_menu_can_edit %}disabled{% endif %}>Final information email</button>
+        </div>
       {% else %}
         <span class="muted">-</span>
       {% endif %}
@@ -817,7 +822,7 @@
 
 {% for session in sessions %}
   <div class="modal" id="exam-session-members-{{ session.id }}" aria-hidden="true">
-    <div class="modal-panel extra-large" data-session-modal-panel data-session-id="{{ session.id }}" data-session-name="{{ session.exam_session_name }}" data-session-date="{{ session.session_date.isoformat() }}" data-session-date-label="{{ session.session_date|long_session_date }}" data-session-format="{{ session.format }}" data-session-address="{{ session.full_address_google_maps or '' }}" data-session-city="{{ session.city or '' }}" data-session-province="{{ session.province or '' }}" data-session-details-url="{{ session.details_url or '' }}">
+    <div class="modal-panel extra-large" data-session-modal-panel data-session-id="{{ session.id }}" data-session-name="{{ session.exam_session_name }}" data-session-date="{{ session.session_date.isoformat() }}" data-session-date-label="{{ session.session_date|long_session_date }}" data-session-date-email="{{ session.session_date.strftime('%A') }} {{ session.session_date.day }} {{ session.session_date.strftime('%B') }} {{ session.session_date.year }}" data-session-shift="{{ session.shifts or '' }}" data-session-format="{{ session.format }}" data-session-address="{{ session.full_address_google_maps or '' }}" data-session-city="{{ session.city or '' }}" data-session-province="{{ session.province or '' }}" data-session-details-url="{{ session.details_url or '' }}" data-preconfirmation-certifications='{{ staff_preconfirmation_certifications|tojson }}'>
       <div class="modal-header">
         <div>
           <h2>
@@ -865,7 +870,7 @@
                 <div class="session-member-picker-panel-title">Non-available staff members</div>
                 {% for member in session_non_available_options %}
                   <label class="session-member-option">
-                    <input type="checkbox" value="{{ member.id }}" data-member-name="{{ member.full_name }}" {% if member.id in selected_non_available_ids %}checked{% endif %}>
+                    <input type="checkbox" name="session_non_available_member_ids" value="{{ member.id }}" form="exam-session-members-form-{{ session.id }}" data-member-name="{{ member.full_name }}" {% if member.id in selected_non_available_ids %}checked{% endif %}>
                     <span data-base-label="{{ member_option_label(member) }}">{{ staff_member_option_markup(member, 0) }}</span>
                     <span class="session-member-assigned-note">Already assigned</span>
                   </label>
@@ -893,6 +898,7 @@
       <form id="exam-session-members-form-{{ session.id }}" method="post" action="{{ url_for('staff.update_exam_session_members', session_id=session.id) }}" data-session-members-form data-session-id="{{ session.id }}" data-saved-staff-confirmed="{{ 'true' if persisted_staff_confirmed_by_session.get(session.id) else 'false' }}" data-staffing-status="{{ staffing_readiness.get('status', 'not_configured') }}" data-staffing-final-email-ready="{{ 'true' if staffing_readiness.get('final_email_ready') else 'false' }}" data-staffing-email-blocker-message="{{ staffing_readiness.get('email_blocker_message', 'Email copy unavailable') }}" data-logistics-applies="{{ 'true' if logistics_readiness.get('applies') else 'false' }}" data-logistics-status="{{ logistics_readiness.get('status', 'not_applicable') }}" data-logistics-ready="{{ 'true' if logistics_readiness.get('ready') else 'false' }}" data-logistics-final-email-ready="{{ 'true' if logistics_readiness.get('final_email_ready') else 'false' }}" data-logistics-files-url="{{ session_logistics_config.logistics_files_url if session_logistics_config else '' }}" data-logistics-email-blocker-message="{{ logistics_readiness.get('email_blocker_message', 'Email copy unavailable') }}" data-device-dep-fee-currency="{{ device_dep_fee.currency if device_dep_fee else '' }}" data-device-dep-fee-value="{{ device_dep_fee.fee_value if device_dep_fee else '' }}" data-device-dep-fee-unit="{{ device_dep_fee.unit_of_measure if device_dep_fee else '' }}" data-commuting-fee-currency="{{ commuting_fee.currency if commuting_fee else '' }}" data-commuting-fee-value="{{ commuting_fee.fee_value if commuting_fee else '' }}" data-commuting-fee-unit="{{ commuting_fee.unit_of_measure if commuting_fee else '' }}" data-fuel-fee-currency="{{ fuel_fee.currency if fuel_fee else '' }}" data-fuel-fee-value="{{ fuel_fee.fee_value if fuel_fee else '' }}" data-fuel-fee-unit="{{ fuel_fee.unit_of_measure if fuel_fee else '' }}" data-vehicle-dep-fee-currency="{{ vehicle_dep_fee.currency if vehicle_dep_fee else '' }}" data-vehicle-dep-fee-value="{{ vehicle_dep_fee.fee_value if vehicle_dep_fee else '' }}" data-vehicle-dep-fee-unit="{{ vehicle_dep_fee.unit_of_measure if vehicle_dep_fee else '' }}">
         <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
         <input type="hidden" name="session_year" value="{{ selected_session_year }}">
+        <input type="hidden" name="session_non_available_member_ids" value="">
         <input type="hidden" name="logistics_confirmation_password" value="" data-logistics-confirmation-password>
         <div data-deleted-assignments></div>
         <section class="session-member-section" data-role-fee-label="supervisor" data-role-fee-currency="{{ supervisor_fee.currency if supervisor_fee else '' }}" data-role-fee-value="{{ supervisor_fee.fee_value if supervisor_fee else '' }}" data-role-fee-unit="{{ supervisor_fee.unit_of_measure if supervisor_fee else '' }}" data-supervisor-fee-currency="{{ supervisor_fee.currency if supervisor_fee else '' }}" data-supervisor-fee-value="{{ supervisor_fee.fee_value if supervisor_fee else '' }}" data-supervisor-fee-unit="{{ supervisor_fee.unit_of_measure if supervisor_fee else '' }}">

@@ -579,6 +579,9 @@ def create_app():
         if exam_session_columns and "shifts" not in exam_session_columns:
             db.session.execute(text("ALTER TABLE exam_session ADD COLUMN shifts VARCHAR(80) NOT NULL DEFAULT ''"))
             db.session.commit()
+        if exam_session_columns and "non_available_member_ids" not in exam_session_columns:
+            db.session.execute(text("ALTER TABLE exam_session ADD COLUMN non_available_member_ids TEXT NOT NULL DEFAULT '[]'"))
+            db.session.commit()
         if exam_session_columns and "status" in exam_session_columns:
             db.session.execute(text("UPDATE exam_session SET status = 'Pending' WHERE status IN ('Active', 'Inactive')"))
             db.session.commit()

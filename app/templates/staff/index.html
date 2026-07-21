@@ -310,7 +310,7 @@
               {% if entry.status in ['Interview confirmed', 'Induction confirmed'] %}
                 <span class="potential-status-meta">
                   <span>{{ entry.interview_date|display_date if entry.interview_date else '-' }}{% if entry.interview_time %} · {{ entry.interview_time|display_time }}{% endif %}</span>
-                  <span class="potential-status-platform">{{ platform_logo(entry.platform) }}<span>{{ 'Google Meet' if entry.platform == 'Meet' else entry.platform or '-' }}</span></span>
+	                  <span class="potential-status-platform">{{ platform_logo(entry.platform) }}</span>
                   <span>{{ entry.interviewer|display_interviewer if entry.interviewer else '-' }}</span>
                 </span>
               {% elif entry.status == 'Entry accepted (on hold)' %}
@@ -624,7 +624,21 @@
           {% endif %}
         </td>
         <td>
-          <span class="staff-session-count-chip">{{ confirmed_session_counts.get(member.id, 0) }}</span>
+          {% set member_session_details = staff_member_session_details.get(member.id, []) if staff_member_session_details is defined else [] %}
+          {% set member_sessions_email_payload = staff_sessions_email_payloads.get(member.id, {}) if staff_sessions_email_payloads is defined else {} %}
+          <div class="staff-session-count-actions">
+            <span class="staff-session-count-chip" {% if member_session_details %}title="{% for session_detail in member_session_details %}{{ session_detail.name }} ({{ session_detail.status|lower }}){% if not loop.last %}&#10;{% endif %}{% endfor %}"{% endif %}>{{ confirmed_session_counts.get(member.id, 0) }}</span>
+            <button class="copy-icon-button staff-session-email-copy-button" type="button" data-staff-sessions-copy-email data-staff-sessions-email-payload='{{ member_sessions_email_payload|tojson }}' aria-label="Copy sessions email" title="Copy sessions email" {% if not current_menu_can_edit %}disabled{% endif %}>
+              <svg class="copy-icon" viewBox="0 0 24 24" aria-hidden="true">
+                <rect x="9" y="9" width="10" height="10" rx="2"></rect>
+                <path d="M5 15V7a2 2 0 0 1 2-2h8"></path>
+              </svg>
+              <svg class="check-icon" viewBox="0 0 24 24" aria-hidden="true">
+                <path d="M20 6L9 17l-5-5"></path>
+              </svg>
+              <span class="copy-button-feedback">Copied</span>
+            </button>
+          </div>
         </td>
         <td class="datetime-cell">{{ member.updated_on|localdt }}</td>
         <td>
@@ -913,7 +927,7 @@
           <div><dt>CV</dt><dd>{% if entry.cv %}<a class="responsible-chip potential-cv-chip" href="{{ entry.cv }}" target="_blank" rel="noopener noreferrer">View</a>{% else %}<span class="muted">No CV recorded</span>{% endif %}</dd></div>
         </dl>
         {% if current_menu_can_edit %}
-          <form method="post" action="{{ url_for('staff.update_potential_entry', entry_id=entry.id) }}" class="potential-info-edit-form" data-potential-info-edit hidden>
+          <form method="post" action="{{ url_for('staff.update_potential_entry', entry_id=entry.id) }}" class="form-grid potential-info-edit-form" data-potential-info-edit hidden>
             <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
             <input type="hidden" name="status" value="{{ entry.status }}">
             <label>
@@ -1040,7 +1054,7 @@
               {% set selected_preassigned_ids = draft_preassigned_ids if draft_preassigned_ids is not none else selected_preassigned_sessions|map(attribute='id')|list %}
               {% set available_preassigned_ids = potential_preassigned_exam_session_options|map(attribute='id')|list %}
               <div class="interview-options-group potential-preassigned-sessions">
-                <span class="interview-options-title">Pre-assigned exam sessions</span>
+                <span class="interview-options-title">Sessions to check availability for</span>
                 <div class="interview-options-fieldset">
                   <label class="potential-preassigned-session-label">
                     Exam sessions
@@ -1143,11 +1157,13 @@
                 <div class="interview-option-shared-fields">
                   <label>
                     Platform
-                    <span class="interview-option-platform-field">
-                      <span class="interview-option-platform-preview" data-interview-option-platform-preview>
-                        {{ platform_logo(shared_platform) }}
-                        <span>{{ shared_platform or 'Select platform' }}</span>
-                      </span>
+	                    <span class="interview-option-platform-field">
+	                      <span class="interview-option-platform-preview" data-interview-option-platform-preview {% if not shared_platform %}hidden{% endif %}>
+		                        {% if shared_platform %}
+		                          {{ platform_logo(shared_platform) }}
+		                          <span>{{ shared_platform }}</span>
+		                        {% endif %}
+		                      </span>
                       <select name="interview_option_platform" data-interview-option-platform {% if not current_menu_can_edit %}disabled{% endif %}>
                         <option value="">Select platform</option>
                         <option value="Zoom" {% if shared_platform == 'Zoom' %}selected{% endif %}>Zoom</option>
@@ -1242,7 +1258,7 @@
           <div><dt>CV</dt><dd>{% if entry.cv %}<a class="responsible-chip potential-cv-chip" href="{{ entry.cv }}" target="_blank" rel="noopener noreferrer">View</a>{% else %}<span class="muted">No CV recorded</span>{% endif %}</dd></div>
         </dl>
         {% if current_menu_can_edit %}
-          <form method="post" action="{{ url_for('staff.update_potential_entry', entry_id=entry.id) }}" class="potential-info-edit-form" data-potential-info-edit hidden>
+          <form method="post" action="{{ url_for('staff.update_potential_entry', entry_id=entry.id) }}" class="form-grid potential-info-edit-form" data-potential-info-edit hidden>
             <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
             <input type="hidden" name="status" value="{{ entry.status }}">
             <label>
@@ -1351,10 +1367,111 @@
                       >Add</button>
                     </div>
                   </div>
-                {% endif %}
-              </div>
-            </div>
-            {% if entry.status == 'Entry accepted' %}
+	                {% endif %}
+	              </div>
+		              {% if entry.status == 'Interview confirmed' %}
+		                {% set readonly_preassigned_sessions = potential_preassigned_exam_sessions_by_entry.get(entry.id, []) if potential_preassigned_exam_sessions_by_entry else [] %}
+		                {% set readonly_preassigned_ids = readonly_preassigned_sessions|map(attribute='id')|list %}
+		                {% set available_preassigned_ids = potential_preassigned_exam_session_options|map(attribute='id')|list %}
+			                <section class="potential-preassigned-readonly" aria-label="Pre-assigned sessions" data-interview-preassigned-readonly {% if entry.interview_no_show %}hidden{% endif %}>
+		                  <div class="potential-preassigned-readonly-heading">
+		                    <span class="interview-options-title">Pre-assigned sessions</span>
+		                    {% if current_menu_can_edit %}
+		                      <button
+		                        class="potential-preassigned-edit-toggle"
+		                        type="button"
+		                        data-toggle-preassigned-session-editor
+		                        aria-label="Edit pre-assigned sessions"
+		                        title="Edit pre-assigned sessions"
+		                      >+</button>
+		                    {% endif %}
+		                  </div>
+		                  {% if readonly_preassigned_sessions %}
+		                    <ul class="potential-preassigned-readonly-list">
+		                      {% for selected_session in readonly_preassigned_sessions %}
+	                        <li>
+	                          {% if selected_session.available and selected_session.year %}
+	                            <a
+	                              href="{{ url_for('staff.exam_session_planner', session_year=selected_session.year, open_session_modal=selected_session.id) }}"
+	                              target="_blank"
+	                              rel="noopener noreferrer"
+	                              title="{{ selected_session.label }}"
+	                            >{{ selected_session.name }}</a>
+	                          {% else %}
+	                            <span class="muted">{{ selected_session.name }}</span>
+	                          {% endif %}
+	                        </li>
+	                      {% endfor %}
+	                    </ul>
+		                  {% else %}
+		                    <span class="muted potential-preassigned-readonly-empty">No pre-assigned sessions.</span>
+		                  {% endif %}
+		                  {% if current_menu_can_edit %}
+		                    <div class="potential-preassigned-session-editor" data-preassigned-session-editor hidden>
+		                      <label class="potential-preassigned-session-label">
+		                        Exam sessions
+		                        <details class="potential-session-picker" data-potential-session-multiselect>
+		                          <summary>
+		                            <span class="session-member-summary-tags" data-potential-session-tags></span>
+		                            <span class="session-member-summary-placeholder" data-potential-session-placeholder>Exam sessions</span>
+		                            <span class="session-member-summary-caret" aria-hidden="true">▼</span>
+		                          </summary>
+		                          <div class="potential-session-picker-panel">
+		                            {% for option in potential_preassigned_exam_session_options %}
+		                              <label class="potential-session-option" title="{{ option.label }}">
+		                                <input
+		                                  type="checkbox"
+		                                  name="preassigned_exam_session_ids"
+		                                  value="{{ option.id }}"
+		                                  data-session-label="{{ option.label }}"
+		                                  data-session-chip-label="{{ option.chip_label }}"
+		                                  {% if option.id in readonly_preassigned_ids %}checked{% endif %}
+		                                >
+		                                <span class="potential-session-option-check" aria-hidden="true">✓</span>
+		                                <span class="potential-session-option-copy">
+		                                  <span class="potential-session-option-name">{{ option.name }}</span>
+		                                  <span class="potential-session-option-meta">{{ option.meta }}</span>
+		                                </span>
+		                              </label>
+		                            {% endfor %}
+		                            {% for selected_session in readonly_preassigned_sessions %}
+		                              {% if selected_session.id not in available_preassigned_ids %}
+		                                <label class="potential-session-option {% if not selected_session.available %}is-unavailable{% endif %}" title="{{ selected_session.label }}">
+		                                  <input
+		                                    type="checkbox"
+		                                    name="preassigned_exam_session_ids"
+		                                    value="{{ selected_session.id }}"
+		                                    data-session-label="{{ selected_session.label }}"
+		                                    data-session-chip-label="{{ selected_session.chip_label }}"
+		                                    {% if not selected_session.available %}data-session-unavailable="true"{% endif %}
+		                                    checked
+		                                  >
+		                                  <span class="potential-session-option-check" aria-hidden="true">✓</span>
+		                                  <span class="potential-session-option-copy">
+		                                    <span class="potential-session-option-name">{{ selected_session.label }}</span>
+		                                    <span class="potential-session-option-meta">Session no longer available</span>
+		                                  </span>
+		                                </label>
+		                              {% endif %}
+		                            {% endfor %}
+		                            {% if not potential_preassigned_exam_session_options and not readonly_preassigned_sessions %}
+		                              <span class="potential-session-empty">No exam sessions available</span>
+		                            {% endif %}
+		                          </div>
+		                        </details>
+		                      </label>
+		                      <button
+		                        class="mini-button potential-preassigned-save-button"
+		                        type="submit"
+		                        formaction="{{ url_for('staff.save_potential_interview_preassigned_sessions', entry_id=entry.id) }}"
+		                        formnovalidate
+		                      >Save sessions</button>
+		                    </div>
+		                  {% endif %}
+		                </section>
+		              {% endif %}
+	            </div>
+	            {% if entry.status == 'Entry accepted' %}
               {% set entry_whatsapp_phone = entry.phone|whatsapp_phone %}
               <div class="interview-options-group">
                 <span class="interview-options-title">Entry accepted action</span>
@@ -1498,11 +1615,11 @@
                     <label>
                       <input type="radio" name="interview_outcome_status" value="attended" data-induction-status-option {% if not entry.interview_no_show %}checked{% endif %} {% if not current_menu_can_edit %}disabled{% endif %}>
                       <span>Attended</span>
-                    </label>
-                  </fieldset>
-                  <div class="induction-status-panel" data-induction-status-panel="reschedule" hidden>
-                    <span class="interview-options-title">Set new date and time</span>
-                    <div class="interview-options-fieldset" data-interview-options-root data-max-options="1">
+	                    </label>
+	                  </fieldset>
+		                  <div class="induction-status-panel" data-induction-status-panel="reschedule" hidden>
+	                    <span class="interview-options-title">Set new date and time</span>
+	                    <div class="interview-options-fieldset" data-interview-options-root data-max-options="1">
                       <div class="interview-options-list" data-interview-options-list>
                         <div class="interview-option-row" data-interview-option-row>
                           <label>
@@ -1521,11 +1638,13 @@
                         <div class="interview-option-shared-fields">
                           <label>
                             Platform
-                            <span class="interview-option-platform-field">
-                              <span class="interview-option-platform-preview" data-interview-option-platform-preview>
-                                {{ platform_logo(entry.platform) }}
-                                <span>{{ entry.platform or 'Select platform' }}</span>
-                              </span>
+	                            <span class="interview-option-platform-field">
+	                              <span class="interview-option-platform-preview" data-interview-option-platform-preview {% if not entry.platform %}hidden{% endif %}>
+	                                {% if entry.platform %}
+	                                  {{ platform_logo(entry.platform) }}
+	                                  <span>{{ entry.platform }}</span>
+	                                {% endif %}
+	                              </span>
                               <select name="interview_option_platform" data-interview-option-platform data-induction-reschedule-required {% if not current_menu_can_edit %}disabled{% endif %}>
                                 <option value="">Select platform</option>
                                 <option value="Zoom" {% if entry.platform == 'Zoom' %}selected{% endif %}>Zoom</option>
@@ -1595,11 +1714,11 @@
               <div class="interview-confirmed-fields-box" data-induction-status-root>
                 <span class="interview-options-title">Induction session status</span>
                 <div class="interview-options-fieldset potential-interview-outcome-fields">
-                  <fieldset class="inline-radio-group induction-status-options">
-                    <legend>Induction outcome</legend>
-                    <label>
-                      <input type="radio" name="induction_session_status" value="no_show" data-induction-status-option {% if entry.induction_session_status == 'no_show' %}checked{% endif %} {% if not current_menu_can_edit %}disabled{% endif %}>
-                      <span>No-show</span>
+	                  <fieldset class="inline-radio-group induction-status-options">
+	                    <legend>Induction outcome</legend>
+	                    <label>
+	                      <input type="radio" name="induction_session_status" value="no_show" data-induction-status-option {% if entry.induction_session_status == 'no_show' %}checked{% endif %} {% if not current_menu_can_edit %}disabled{% endif %}>
+	                      <span>No-show</span>
                     </label>
                     <label>
                       <input type="radio" name="induction_session_status" value="reschedule" data-induction-status-option {% if entry.induction_session_status == 'reschedule' %}checked{% endif %} {% if not current_menu_can_edit %}disabled{% endif %}>
@@ -1607,10 +1726,49 @@
                     </label>
                     <label>
                       <input type="radio" name="induction_session_status" value="attended" data-induction-status-option {% if entry.induction_session_status == 'attended' %}checked{% endif %} {% if not current_menu_can_edit %}disabled{% endif %}>
-                      <span>Attended</span>
-                    </label>
-                  </fieldset>
-                  <div class="induction-status-panel" data-induction-status-panel="reschedule" hidden>
+	                      <span>Attended</span>
+	                    </label>
+	                  </fieldset>
+	                  <div class="induction-status-panel" data-induction-status-panel="no_show" hidden>
+	                    <label class="checkbox-field">
+	                      <input
+	                        type="checkbox"
+		                        name="exam_session_participation_statuses_pre_confirmed"
+		                        value="1"
+		                        data-induction-no-show-required
+		                        {% if entry.exam_session_participation_statuses_pre_confirmed %}checked{% endif %}
+		                        {% if not current_menu_can_edit %}disabled{% endif %}
+		                      >
+		                      <span>The Entry has been removed from all pre-assigned exam session participations.</span>
+		                    </label>
+	                    {% set induction_no_show_preassigned_sessions = potential_preassigned_exam_sessions_by_entry.get(entry.id, []) if potential_preassigned_exam_sessions_by_entry else [] %}
+	                    <section class="potential-preassigned-readonly induction-preassigned-readonly" aria-label="Pre-assigned sessions">
+	                      <div class="potential-preassigned-readonly-heading">
+	                        <span class="interview-options-title">Pre-assigned sessions</span>
+	                      </div>
+	                      {% if induction_no_show_preassigned_sessions %}
+	                        <ul class="potential-preassigned-readonly-list">
+	                          {% for selected_session in induction_no_show_preassigned_sessions %}
+	                            <li>
+	                              {% if selected_session.available and selected_session.year %}
+	                                <a
+	                                  href="{{ url_for('staff.exam_session_planner', session_year=selected_session.year, open_session_modal=selected_session.id) }}"
+	                                  target="_blank"
+	                                  rel="noopener noreferrer"
+	                                  title="{{ selected_session.label }}"
+	                                >{{ selected_session.name }}</a>
+	                              {% else %}
+	                                <span class="muted">{{ selected_session.name }}</span>
+	                              {% endif %}
+	                            </li>
+	                          {% endfor %}
+	                        </ul>
+	                      {% else %}
+	                        <span class="muted potential-preassigned-readonly-empty">No pre-assigned sessions.</span>
+	                      {% endif %}
+	                    </section>
+	                  </div>
+	                  <div class="induction-status-panel" data-induction-status-panel="reschedule" hidden>
                     <span class="interview-options-title">Set new date and time</span>
                     <div class="interview-options-fieldset" data-interview-options-root data-max-options="1">
                       <div class="interview-options-list" data-interview-options-list>
@@ -1651,11 +1809,13 @@
                         <div class="interview-option-shared-fields">
                           <label>
                             Platform
-                            <span class="interview-option-platform-field">
-                              <span class="interview-option-platform-preview" data-interview-option-platform-preview>
-                                {{ platform_logo(entry.platform) }}
-                                <span>{{ entry.platform or 'Select platform' }}</span>
-                              </span>
+	                            <span class="interview-option-platform-field">
+	                              <span class="interview-option-platform-preview" data-interview-option-platform-preview {% if not entry.platform %}hidden{% endif %}>
+	                                {% if entry.platform %}
+	                                  {{ platform_logo(entry.platform) }}
+	                                  <span>{{ entry.platform }}</span>
+	                                {% endif %}
+	                              </span>
                               <select name="interview_option_platform" data-interview-option-platform data-induction-reschedule-required {% if not current_menu_can_edit %}disabled{% endif %}>
                                 <option value="">Select platform</option>
                                 <option value="Zoom" {% if entry.platform == 'Zoom' %}selected{% endif %}>Zoom</option>
@@ -1695,10 +1855,36 @@
                         data-induction-attended-required
                         {% if entry.exam_session_participation_statuses_pre_confirmed %}checked{% endif %}
                         {% if not current_menu_can_edit %}disabled{% endif %}
-                      >
-                      <span>Exam session participation statuses have been updated to Pre-confirmed</span>
-                    </label>
-                  </div>
+	                      >
+	                      <span>Exam session participation statuses have been updated to Pre-confirmed</span>
+	                    </label>
+	                    {% set induction_attended_preassigned_sessions = potential_preassigned_exam_sessions_by_entry.get(entry.id, []) if potential_preassigned_exam_sessions_by_entry else [] %}
+	                    <section class="potential-preassigned-readonly induction-preassigned-readonly" aria-label="Pre-assigned sessions">
+	                      <div class="potential-preassigned-readonly-heading">
+	                        <span class="interview-options-title">Pre-assigned sessions</span>
+	                      </div>
+	                      {% if induction_attended_preassigned_sessions %}
+	                        <ul class="potential-preassigned-readonly-list">
+	                          {% for selected_session in induction_attended_preassigned_sessions %}
+	                            <li>
+	                              {% if selected_session.available and selected_session.year %}
+	                                <a
+	                                  href="{{ url_for('staff.exam_session_planner', session_year=selected_session.year, open_session_modal=selected_session.id) }}"
+	                                  target="_blank"
+	                                  rel="noopener noreferrer"
+	                                  title="{{ selected_session.label }}"
+	                                >{{ selected_session.name }}</a>
+	                              {% else %}
+	                                <span class="muted">{{ selected_session.name }}</span>
+	                              {% endif %}
+	                            </li>
+	                          {% endfor %}
+	                        </ul>
+	                      {% else %}
+	                        <span class="muted potential-preassigned-readonly-empty">No pre-assigned sessions.</span>
+	                      {% endif %}
+	                    </section>
+	                  </div>
                 </div>
               </div>
             {% elif entry.status in ['Interview to be arranged', 'Interview invitation sent'] %}
@@ -1882,11 +2068,13 @@
                           <div class="interview-option-shared-fields">
                             <label>
                               Platform
-                              <span class="interview-option-platform-field">
-                                <span class="interview-option-platform-preview" data-interview-option-platform-preview>
-                                  {{ platform_logo(entry.platform) }}
-                                  <span>{{ entry.platform or 'Select platform' }}</span>
-                                </span>
+	                              <span class="interview-option-platform-field">
+	                                <span class="interview-option-platform-preview" data-interview-option-platform-preview {% if not entry.platform %}hidden{% endif %}>
+	                                  {% if entry.platform %}
+	                                    {{ platform_logo(entry.platform) }}
+	                                    <span>{{ entry.platform }}</span>
+	                                  {% endif %}
+	                                </span>
                                 <select name="platform" data-interview-option-platform data-onboarding-confirm-required>
                                   <option value="">Select platform</option>
                                   <option value="Zoom" {% if entry.platform == 'Zoom' %}selected{% endif %}>Zoom</option>
@@ -1939,11 +2127,37 @@
                         value="1"
                         data-onboarding-turn-down-required
                         {% if entry.onboarding_turn_down_trainer_notified %}checked{% endif %}
-                      >
-                      <span>The Trainer has been notified that the Entry will not attend the induction session.</span>
-                    </label>
-                  </fieldset>
-                </div>
+	                      >
+	                      <span>The Trainer has been notified that the Entry will not attend the induction session.</span>
+	                    </label>
+	                    {% set onboarding_turn_down_preassigned_sessions = potential_preassigned_exam_sessions_by_entry.get(entry.id, []) if potential_preassigned_exam_sessions_by_entry else [] %}
+	                    <section class="potential-preassigned-readonly onboarding-turn-down-preassigned" aria-label="Pre-assigned sessions">
+	                      <div class="potential-preassigned-readonly-heading">
+	                        <span class="interview-options-title">Pre-assigned sessions</span>
+	                      </div>
+	                      {% if onboarding_turn_down_preassigned_sessions %}
+	                        <ul class="potential-preassigned-readonly-list">
+	                          {% for selected_session in onboarding_turn_down_preassigned_sessions %}
+	                            <li>
+	                              {% if selected_session.available and selected_session.year %}
+	                                <a
+	                                  href="{{ url_for('staff.exam_session_planner', session_year=selected_session.year, open_session_modal=selected_session.id) }}"
+	                                  target="_blank"
+	                                  rel="noopener noreferrer"
+	                                  title="{{ selected_session.label }}"
+	                                >{{ selected_session.name }}</a>
+	                              {% else %}
+	                                <span class="muted">{{ selected_session.name }}</span>
+	                              {% endif %}
+	                            </li>
+	                          {% endfor %}
+	                        </ul>
+	                      {% else %}
+	                        <span class="muted potential-preassigned-readonly-empty">No pre-assigned sessions.</span>
+	                      {% endif %}
+	                    </section>
+	                  </fieldset>
+	                </div>
               </div>
             </div>
           {% endif %}
@@ -1975,10 +2189,10 @@
                   class="danger-button"
                   type="submit"
                   formaction="{{ url_for('staff.turn_down_potential_interview_invitation', entry_id=entry.id) }}"
-                  data-interview-turn-down-button
-                  disabled
-                  formnovalidate
-                >Turn down application</button>
+	                  data-interview-turn-down-button
+	                  disabled
+	                  formnovalidate
+	                >Reject entry</button>
                 <button
                   class="success-button"
                   type="submit"

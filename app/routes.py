@@ -2525,6 +2525,7 @@ def potential_preassigned_exam_session_option(session_record):
     return {
         "id": session_record.id,
         "name": session_record.exam_session_name,
+        "year": session_record.session_date.year if session_record.session_date else None,
         "meta": f"{date_label} · {meta_suffix}",
         "chip_label": f"{session_record.exam_session_name} · {chip_date}",
         "label": potential_preassigned_exam_session_label(session_record),
@@ -2579,6 +2580,8 @@ def potential_preassigned_exam_sessions_by_entry(entries, available_options=None
         label = option["label"] if option else "Session no longer available"
         selections.setdefault(link.potential_entry_id, []).append({
             "id": link.exam_session_id,
+            "name": option["name"] if option else "Session no longer available",
+            "year": option["year"] if option else None,
             "label": label,
             "chip_label": option["chip_label"] if option else "Session no longer available",
             "available": option is not None,
@@ -3477,7 +3480,7 @@ def build_staff_payment_rows(selected_year):
     return sorted(rows, key=lambda item: (item["member"].full_name.lower(), item["currency_label"]))
 
 
-def confirmed_session_counts_by_member(member_ids):
+def assigned_session_counts_by_member(member_ids, session_year=None):
     counts = {member_id: 0 for member_id in member_ids}
     session_ids_by_member = {member_id: set() for member_id in member_ids}
     if not member_ids:
@@ -3490,9 +3493,11 @@ def confirmed_session_counts_by_member(member_ids):
     for assignment_model in assignment_models:
         rows = (
             db.session.query(assignment_model.team_member_id, assignment_model.exam_session_id)
+            .join(ExamSession, ExamSession.id == assignment_model.exam_session_id)
             .filter(
                 assignment_model.team_member_id.in_(member_ids),
-                assignment_model.participation_status == "Confirmed",
+                assignment_model.team_member_id.isnot(None),
+                *([db.extract("year", ExamSession.session_date) == session_year] if session_year else []),
             )
             .all()
         )
@@ -3505,33 +3510,229 @@ def confirmed_session_counts_by_member(member_ids):
     }
 
 
-def staff_member_session_counts_subquery():
+def assigned_session_details_by_member(member_ids, session_year=None):
+    details_by_member = {member_id: {} for member_id in member_ids}
+    if not member_ids:
+        return details_by_member
+    assignment_models = (
+        ExamSessionSupervisorAssignment,
+        ExamSessionExaminerAssignment,
+        ExamSessionInternAssignment,
+    )
+    for assignment_model in assignment_models:
+        rows = (
+            db.session.query(
+                assignment_model.team_member_id,
+                assignment_model.participation_status,
+                ExamSession.id,
+                ExamSession.exam_session_name,
+                ExamSession.session_date,
+            )
+            .join(ExamSession, ExamSession.id == assignment_model.exam_session_id)
+            .filter(
+                assignment_model.team_member_id.in_(member_ids),
+                assignment_model.team_member_id.isnot(None),
+                *([db.extract("year", ExamSession.session_date) == session_year] if session_year else []),
+            )
+            .all()
+        )
+        for member_id, participation_status, session_id, session_name, session_date in rows:
+            if member_id not in details_by_member:
+                continue
+            status_label = (participation_status or "Pending").strip() or "Pending"
+            detail = details_by_member[member_id].get(session_id)
+            if detail is None:
+                details_by_member[member_id][session_id] = {
+                    "name": session_name or "Untitled exam session",
+                    "date": session_date,
+                    "statuses": {status_label},
+                }
+            else:
+                detail["statuses"].add(status_label)
+    return {
+        member_id: [
+            {
+                "name": detail["name"],
+                "status": ", ".join(sorted(detail["statuses"], key=str.lower)),
+            }
+            for detail in sorted(details.values(), key=lambda item: (item["date"], item["name"].lower()))
+        ]
+        for member_id, details in details_by_member.items()
+    }
+
+
+def staff_sessions_email_certification_programmes(member):
+    roles = [role for role in member.roles_list() if role in {"Examiner", "Supervisor"}]
+    programmes = []
+    module_by_role = {
+        "Examiner": EXAMINER_CERTIFICATION_MODULE_KEY,
+        "Supervisor": SUPERVISOR_CERTIFICATION_MODULE_KEY,
+    }
+    year_by_role = {
+        "Examiner": latest_active_examiner_certification_year,
+        "Supervisor": latest_active_supervisor_certification_year,
+    }
+    for role in ["Examiner", "Supervisor"]:
+        if role not in roles:
+            continue
+        selected_year = year_by_role[role]()
+        config = certification_year_configuration(module_by_role[role], selected_year)
+        remote_training = ""
+        annual_meeting = ""
+        if config and config.remote_training_start_date and config.remote_training_end_date:
+            remote_training = (
+                "from "
+                f"{potential_preassigned_exam_session_date(config.remote_training_start_date)} "
+                f"to {potential_preassigned_exam_session_date(config.remote_training_end_date)}"
+            )
+        if config and config.annual_meeting_date and config.annual_meeting_time:
+            start_hour = config.annual_meeting_time.strftime("%H:%M").lstrip("0")
+            if start_hour.endswith(":00"):
+                start_hour = start_hour[:-3]
+            annual_meeting = (
+                f"{potential_preassigned_exam_session_date(config.annual_meeting_date)} "
+                f"from {start_hour} to 16 h (GMT-3)"
+            )
+        programmes.append({
+            "role": role,
+            "remote_training_period": remote_training,
+            "annual_meeting": annual_meeting,
+        })
+    return {"roles": roles, "programmes": programmes}
+
+
+def staff_preconfirmation_email_certifications():
+    programmes = {}
+    module_by_role = {
+        "Examiner": EXAMINER_CERTIFICATION_MODULE_KEY,
+        "Supervisor": SUPERVISOR_CERTIFICATION_MODULE_KEY,
+    }
+    year_by_role = {
+        "Examiner": latest_active_examiner_certification_year,
+        "Supervisor": latest_active_supervisor_certification_year,
+    }
+    for role in ["Examiner", "Supervisor"]:
+        selected_year = year_by_role[role]()
+        config = certification_year_configuration(module_by_role[role], selected_year)
+        remote_training = ""
+        annual_meeting = ""
+        if config and config.remote_training_start_date and config.remote_training_end_date:
+            remote_training = (
+                "from "
+                f"{potential_preassigned_exam_session_date(config.remote_training_start_date)} "
+                f"to {potential_preassigned_exam_session_date(config.remote_training_end_date)}"
+            )
+        if config and config.annual_meeting_date and config.annual_meeting_time:
+            start_hour = config.annual_meeting_time.strftime("%H:%M").lstrip("0")
+            if start_hour.endswith(":00"):
+                start_hour = start_hour[:-3]
+            annual_meeting = (
+                f"{potential_preassigned_exam_session_date(config.annual_meeting_date)} "
+                f"from {start_hour} to 16 h (GMT-3)"
+            )
+        programmes[role] = {
+            "role": role,
+            "remote_training_period": remote_training,
+            "annual_meeting": annual_meeting,
+        }
+    return programmes
+
+
+def staff_sessions_email_payload_by_member(members, session_year=None):
+    payload_by_member = {
+        member.id: {
+            "full_name": member.full_name or "",
+            "roles": member.roles_list(),
+            "session_year": session_year,
+            "sessions": {},
+            "certification_programmes": staff_sessions_email_certification_programmes(member),
+        }
+        for member in members
+    }
+    if not members:
+        return {}
+    member_ids = [member.id for member in members]
+    assignment_models = (
+        ("Supervisor", ExamSessionSupervisorAssignment),
+        ("Examiner", ExamSessionExaminerAssignment),
+        ("Intern", ExamSessionInternAssignment),
+    )
+    for role, assignment_model in assignment_models:
+        rows = (
+            db.session.query(
+                assignment_model.team_member_id,
+                ExamSession.id,
+                ExamSession.exam_session_name,
+                ExamSession.session_date,
+                ExamSession.shifts,
+                ExamSession.format,
+                ExamSession.full_address_google_maps,
+            )
+            .join(ExamSession, ExamSession.id == assignment_model.exam_session_id)
+            .filter(
+                assignment_model.team_member_id.in_(member_ids),
+                assignment_model.team_member_id.isnot(None),
+                *([db.extract("year", ExamSession.session_date) == session_year] if session_year else []),
+            )
+            .all()
+        )
+        for member_id, session_id, name, session_date, shifts, format_label, address in rows:
+            member_payload = payload_by_member.get(member_id)
+            if not member_payload:
+                continue
+            session_payload = member_payload["sessions"].setdefault(session_id, {
+                "name": name or "",
+                "date": potential_preassigned_exam_session_date(session_date),
+                "sort_date": session_date.isoformat() if session_date else "",
+                "shift": (shifts or "").strip(),
+                "format": (format_label or "").strip(),
+                "address": (address or "").strip(),
+                "roles": [],
+            })
+            if role not in session_payload["roles"]:
+                session_payload["roles"].append(role)
+    for member_payload in payload_by_member.values():
+        sessions = sorted(
+            member_payload["sessions"].values(),
+            key=lambda item: (item.get("sort_date") or "", (item.get("name") or "").lower()),
+        )
+        for session_payload in sessions:
+            session_payload.pop("sort_date", None)
+        member_payload["sessions"] = sessions
+    return payload_by_member
+
+
+def staff_member_session_counts_subquery(session_year=None):
+    year_filter = [db.extract("year", ExamSession.session_date) == session_year] if session_year else []
     assignment_rows = union_all(
         db.session.query(
             ExamSessionSupervisorAssignment.team_member_id.label("member_id"),
             ExamSessionSupervisorAssignment.exam_session_id.label("session_id"),
         )
+        .join(ExamSession, ExamSession.id == ExamSessionSupervisorAssignment.exam_session_id)
         .filter(
             ExamSessionSupervisorAssignment.team_member_id.isnot(None),
-            ExamSessionSupervisorAssignment.participation_status == "Confirmed",
+            *year_filter,
         )
         .statement,
         db.session.query(
             ExamSessionExaminerAssignment.team_member_id.label("member_id"),
             ExamSessionExaminerAssignment.exam_session_id.label("session_id"),
         )
+        .join(ExamSession, ExamSession.id == ExamSessionExaminerAssignment.exam_session_id)
         .filter(
             ExamSessionExaminerAssignment.team_member_id.isnot(None),
-            ExamSessionExaminerAssignment.participation_status == "Confirmed",
+            *year_filter,
         )
         .statement,
         db.session.query(
             ExamSessionInternAssignment.team_member_id.label("member_id"),
             ExamSessionInternAssignment.exam_session_id.label("session_id"),
         )
+        .join(ExamSession, ExamSession.id == ExamSessionInternAssignment.exam_session_id)
         .filter(
             ExamSessionInternAssignment.team_member_id.isnot(None),
-            ExamSessionInternAssignment.participation_status == "Confirmed",
+            *year_filter,
         )
         .statement,
     ).subquery()
@@ -4433,6 +4634,11 @@ def latest_available_exam_session_year():
         return max(session_years)
     year_record = ExamSessionYear.query.order_by(ExamSessionYear.year.desc()).first()
     return year_record.year if year_record else None
+
+
+def latest_active_exam_session_year():
+    active_years = active_exam_session_years()
+    return active_years[-1].year if active_years else None
 
 
 def exam_session_year_redirect(year=None):
@@ -14720,7 +14926,7 @@ def exam_session_planner():
             staff_options_by_id.values(),
             key=lambda member: (member.full_name or "").lower(),
         )
-        selected_non_available_ids = set()
+        selected_non_available_ids = set(session_record.non_available_ids())
         for assignment in (
             supervisor_assignments.get(session_record.id, [])
             + examiner_assignments.get(session_record.id, [])
@@ -14787,6 +14993,7 @@ def exam_session_planner():
             .all()
         ),
         selected_session_year=selected_year,
+        staff_preconfirmation_certifications=staff_preconfirmation_email_certifications(),
         status_options=EXAM_SESSION_STATUS_OPTIONS,
         module_options=EXAM_SESSION_MODULE_OPTIONS,
         shift_options=EXAM_SESSION_SHIFT_OPTIONS,
@@ -15085,8 +15292,11 @@ def save_exam_session_assignment_section(
             assignment = existing_assignments.get(int(assignment_id_value))
 
         non_available_field = f"{section_key}_non_available_member_ids_{row_key}"
+        session_non_available_submitted = "session_non_available_member_ids" in request.form
         non_available_submitted = non_available_field in request.form
         non_available_ids = (
+            []
+            if session_non_available_submitted else
             [
                 int(value) for value in request.form.getlist(non_available_field)
                 if value.isdigit() and int(value) in valid_member_ids
@@ -15385,6 +15595,9 @@ def save_exam_session_assignment_section(
 
 def exam_session_staff_member_ids(session_id):
     member_ids = []
+    session_record = db.session.get(ExamSession, session_id)
+    if session_record:
+        member_ids.extend(session_record.non_available_ids())
     for model in (ExamSessionSupervisorAssignment, ExamSessionExaminerAssignment, ExamSessionInternAssignment):
         for assignment in model.query.filter_by(exam_session_id=session_id).all():
             member_ids.extend(assignment.non_available_ids())
@@ -15598,6 +15811,20 @@ def update_exam_session_members(session_id):
     session_record = ExamSession.query.get_or_404(session_id)
     selected_year = request.form.get("session_year", str(session_record.session_date.year)).strip()
     modal_action = request.form.get("modal_action", "save_close").strip()
+    if "session_non_available_member_ids" in request.form:
+        valid_non_available_ids = {
+            member.id
+            for member in (
+                supervisor_member_options()
+                + examiner_session_member_options()
+                + intern_session_member_options()
+            )
+        }
+        selected_non_available_ids = sorted({
+            int(value) for value in request.form.getlist("session_non_available_member_ids")
+            if value.isdigit() and int(value) in valid_non_available_ids
+        })
+        session_record.non_available_member_ids = json.dumps(selected_non_available_ids)
 
     def session_members_redirect(*, keep_open=False):
         args = {"session_year": selected_year}
@@ -16208,9 +16435,10 @@ def index():
     if has_car:
         query = query.filter(AcademicStaff.has_car == has_car)
 
+    staff_sessions_year = latest_active_exam_session_year()
     session_counts_sort = None
     if sort_by == "sessions":
-        session_counts_sort = staff_member_session_counts_subquery()
+        session_counts_sort = staff_member_session_counts_subquery(staff_sessions_year)
         query = query.outerjoin(session_counts_sort, session_counts_sort.c.member_id == AcademicStaff.id)
         sort_column = db.func.coalesce(session_counts_sort.c.session_count, 0)
         sort_expression = sort_column.desc() if sort_dir == "desc" else sort_column.asc()
@@ -16247,7 +16475,9 @@ def index():
         return url_for("staff.index", **args)
 
     members, pagination = paginate_query(query)
-    confirmed_session_counts = confirmed_session_counts_by_member([member.id for member in members])
+    confirmed_session_counts = assigned_session_counts_by_member([member.id for member in members], staff_sessions_year)
+    staff_member_session_details = assigned_session_details_by_member([member.id for member in members], staff_sessions_year)
+    staff_sessions_email_payloads = staff_sessions_email_payload_by_member(members, staff_sessions_year)
     staff_settings = staff_members_settings()
     create_member_draft = None
     if request.args.get("open_staff_modal") == "create-member":
@@ -16265,6 +16495,9 @@ def index():
         potential_reactivation_statuses=POTENTIAL_REACTIVATION_STATUS_OPTIONS,
         interviewer_options=INTERVIEWER_OPTIONS,
         confirmed_session_counts=confirmed_session_counts,
+        staff_member_session_details=staff_member_session_details,
+        staff_sessions_year=staff_sessions_year,
+        staff_sessions_email_payloads=staff_sessions_email_payloads,
         staff_settings_values=staff_members_settings_values(staff_settings),
         potential_entry_preassigned_email_sessions=potential_entry_preassigned_email_sessions,
         potential_entry_certification_email_programmes=potential_entry_certification_email_programmes,
@@ -16904,7 +17137,7 @@ def export_annual_certification():
     for selection in fut2_records:
         fut2_selections.setdefault(selection.member_id, []).append(selection)
 
-    session_counts = confirmed_session_counts_by_member([member.id for member in members])
+    session_counts = assigned_session_counts_by_member([member.id for member in members])
     workbook = build_full_annual_certification_export(
         members,
         certification_years,
@@ -17639,7 +17872,7 @@ def export_supervisor_certification():
     for selection in fut_records:
         fut_selections.setdefault(selection.member_id, []).append(selection)
 
-    session_counts = confirmed_session_counts_by_member(member_ids)
+    session_counts = assigned_session_counts_by_member(member_ids)
     workbook = build_full_annual_certification_export(
         members,
         {},
@@ -18252,7 +18485,7 @@ def export_intern_stages():
     for selection in fut_records:
         fut_selections.setdefault(selection.member_id, []).append(selection)
 
-    session_counts = confirmed_session_counts_by_member(member_ids)
+    session_counts = assigned_session_counts_by_member(member_ids)
     workbook = build_full_annual_certification_export(
         members,
         {},
@@ -18961,7 +19194,7 @@ def export_members():
         flash("No selected members were found.", "error")
         return redirect(url_for("staff.index"))
 
-    session_counts = confirmed_session_counts_by_member([member.id for member in members])
+    session_counts = assigned_session_counts_by_member([member.id for member in members])
     workbook = build_academic_staff_export(members, session_counts=session_counts)
     filename = f"academic-staff-export-{datetime.now(LOCAL_TZ).strftime('%Y-%m-%d')}.xlsx"
     return Response(
@@ -19289,7 +19522,7 @@ def apply_potential_cv_review_action(entry, next_status, success_message, requir
 
     append_potential_cv_review_notes(entry, request.form)
     entry.cv_review_interview_options = json.dumps(interview_options)
-    if entry.status == "CV to be reviewed":
+    if entry.status in {"CV to be reviewed", "Interview confirmed"}:
         sync_potential_preassigned_exam_sessions(entry, request.form)
     set_potential_entry_status(entry, next_status)
     if next_status == "Entry rejected":
@@ -19392,7 +19625,7 @@ def save_potential_cv_review_changes(
         if induction_status in {"no_show", "reschedule", "attended"}:
             entry.induction_session_status = induction_status
         entry.exam_session_participation_statuses_pre_confirmed = (
-            induction_status == "attended"
+            induction_status in {"attended", "no_show"}
             and request.form.get("exam_session_participation_statuses_pre_confirmed") == "1"
         )
     if is_induction_reschedule and interview_options:
@@ -19513,6 +19746,24 @@ def save_potential_cv_review(entry_id):
     return save_potential_cv_review_changes(entry, "CV review saved.")
 
 
+@staff_bp.route("/potential-entries/<int:entry_id>/interview/preassigned-sessions", methods=["POST"])
+@login_required
+def save_potential_interview_preassigned_sessions(entry_id):
+    if not validate_csrf():
+        flash("Security token expired. Please try again.", "error")
+        return redirect(url_for("staff.potential_entries"))
+
+    entry = PotentialEntry.query.get_or_404(entry_id)
+    if entry.is_rejected or entry.status != "Interview confirmed":
+        flash("Pre-assigned sessions can only be updated while the interview is confirmed.", "error")
+        return redirect(url_for("staff.potential_entries"))
+
+    sync_potential_preassigned_exam_sessions(entry, request.form)
+    db.session.commit()
+    flash("Pre-assigned sessions updated.", "success")
+    return redirect(url_for("staff.potential_entries", open_staff_modal=potential_review_modal_id(entry)))
+
+
 @staff_bp.route("/potential-entries/<int:entry_id>/induction/reject", methods=["POST"])
 @login_required
 def reject_potential_induction(entry_id):
@@ -19526,6 +19777,9 @@ def reject_potential_induction(entry_id):
         return redirect(url_for("staff.potential_entries"))
     if request.form.get("induction_session_status") != "no_show":
         flash("Select No-show before rejecting this entry.", "error")
+        return redirect(url_for("staff.potential_entries", open_staff_modal=potential_review_modal_id(entry)))
+    if request.form.get("exam_session_participation_statuses_pre_confirmed") != "1":
+        flash("Confirm that the Entry has been removed from all pre-assigned exam session participations before rejecting this entry.", "error")
         return redirect(url_for("staff.potential_entries", open_staff_modal=potential_review_modal_id(entry)))
 
     return save_potential_cv_review_changes(
@@ -19641,6 +19895,14 @@ def mark_potential_onboarding_email_sent(entry_id):
     if entry.is_rejected or entry.status != "Entry accepted":
         flash("Only accepted entries can be marked as onboarding email sent.", "error")
         return redirect(url_for("staff.potential_entries"))
+    check_fields = (
+        "entry_accepted_notes_checked",
+        "entry_accepted_email_sent",
+        "entry_accepted_whatsapp_sent",
+    )
+    if any(field_name in request.form for field_name in check_fields):
+        for field_name in check_fields:
+            setattr(entry, field_name, request.form.get(field_name) == "1")
     if not (
         entry.entry_accepted_notes_checked
         and entry.entry_accepted_email_sent

@@ -1,5 +1,351 @@
 const modalOpeners = new WeakMap();
 
+(() => {
+  const proceedButtonSelector = "[data-proceed-interview-button]";
+  const cleanDigits = (value) => String(value || "").replace(/\D/g, "");
+  const normalizeDate = (value) => {
+    const raw = String(value || "").trim();
+    if (!raw) return "";
+    if (raw.includes("/")) {
+      const parts = raw.split("/").map((part) => cleanDigits(part));
+      if (parts.length === 3 && parts[2].length === 4) {
+        return `${parts[0].padStart(2, "0").slice(-2)}/${parts[1].padStart(2, "0").slice(-2)}/${parts[2]}`;
+      }
+    }
+    const digits = cleanDigits(raw);
+    if (digits.length === 8) return `${digits.slice(0, 2)}/${digits.slice(2, 4)}/${digits.slice(4)}`;
+    return raw;
+  };
+  const dateIsComplete = (value) => {
+    const match = normalizeDate(value).match(/^(\d{2})\/(\d{2})\/(\d{4})$/);
+    if (!match) return false;
+    const day = Number.parseInt(match[1], 10);
+    const monthIndex = Number.parseInt(match[2], 10) - 1;
+    const year = Number.parseInt(match[3], 10);
+    const parsed = new Date(year, monthIndex, day);
+    return (
+      !Number.isNaN(parsed.getTime()) &&
+      parsed.getDate() === day &&
+      parsed.getMonth() === monthIndex &&
+      parsed.getFullYear() === year
+    );
+  };
+  const normalizeTime = (value) => {
+    const raw = String(value || "").replace(/h\.?/gi, "").trim();
+    if (!raw) return "";
+    const digits = cleanDigits(raw);
+    if (raw.includes(":")) {
+      const [hours = "", minutes = ""] = raw.split(":");
+      const cleanHours = cleanDigits(hours);
+      const cleanMinutes = cleanDigits(minutes);
+      if (!cleanHours) return "";
+      return `${cleanHours.padStart(2, "0").slice(-2)}:${(cleanMinutes || "00").padStart(2, "0").slice(0, 2)}`;
+    }
+    if (digits.length <= 2) return `${digits.padStart(2, "0")}:00`;
+    if (digits.length === 3) return `${digits.slice(0, 1).padStart(2, "0")}:${digits.slice(1)}`;
+    if (digits.length >= 4) return `${digits.slice(0, 2)}:${digits.slice(2, 4)}`;
+    return "";
+  };
+  const timeIsComplete = (value) => {
+    const match = normalizeTime(value).match(/^(\d{2}):(\d{2})$/);
+    if (!match) return false;
+    const hours = Number.parseInt(match[1], 10);
+    const minutes = Number.parseInt(match[2], 10);
+    return hours >= 0 && hours <= 24 && minutes >= 0 && minutes <= 60;
+  };
+  const syncButton = (form) => {
+    const button = form?.querySelector?.(proceedButtonSelector);
+    if (!button) return;
+    const dateFields = Array.from(form.querySelectorAll('input[name="interview_option_date"]'));
+    const timeFields = Array.from(form.querySelectorAll('input[name="interview_option_time"]'));
+    const hasDateAndTime = dateFields.some((dateField, index) => (
+      dateIsComplete(dateField?.value) && timeIsComplete(timeFields[index]?.value)
+    ));
+    const platform = form.querySelector('select[name="interview_option_platform"]')?.value.trim();
+    const interviewer = form.querySelector('select[name="interview_option_interviewer"]')?.value.trim();
+    const canProceed = Boolean(hasDateAndTime && platform && interviewer);
+    button.disabled = !canProceed;
+    if (canProceed) {
+      button.removeAttribute("title");
+    } else {
+      button.setAttribute("title", "Complete at least one date and time, platform, and interviewer before proceeding.");
+    }
+  };
+  const syncFromTarget = (target) => {
+    const form = target?.closest?.("form") || target?.querySelector?.("form") || target;
+    if (form?.querySelector?.(proceedButtonSelector)) syncButton(form);
+  };
+  const syncAll = () => {
+    document.querySelectorAll(proceedButtonSelector).forEach((button) => syncButton(button.closest("form")));
+  };
+  window.syncPotentialProceedInterviewButton = syncFromTarget;
+  window.syncPotentialProceedInterviewButtons = syncAll;
+  ["input", "change", "keyup", "blur", "paste"].forEach((eventName) => {
+    document.addEventListener(eventName, (event) => {
+      syncFromTarget(event.target);
+      window.requestAnimationFrame(syncAll);
+    }, true);
+  });
+  syncAll();
+})();
+
+(() => {
+  const syncInterviewInvitationActions = (form) => {
+    const root = form?.querySelector?.("[data-interview-confirm-root]");
+    if (!root) return;
+    const noReply = root.querySelector("[data-interview-no-reply]");
+    const choices = Array.from(root.querySelectorAll("[data-interview-option-choice]"));
+    const noReplyChecked = Boolean(noReply?.checked);
+    if (noReplyChecked) {
+      choices.forEach((choice) => {
+        choice.checked = false;
+        choice.disabled = true;
+      });
+    } else {
+      choices.forEach((choice) => {
+        choice.disabled = false;
+      });
+    }
+    const hasSelectedChoice = choices.some((choice) => choice.checked);
+    const rejectButton = form.querySelector("[data-interview-turn-down-button]");
+    const confirmButton = form.querySelector("[data-interview-confirm-button]");
+    const reviewButton = form.querySelector("[data-review-date-time-options-button]");
+    if (rejectButton) {
+      rejectButton.disabled = !noReplyChecked;
+      if (noReplyChecked) rejectButton.removeAttribute("title");
+      else rejectButton.setAttribute("title", "Select No reply before rejecting the entry.");
+    }
+    if (confirmButton) {
+      confirmButton.disabled = !hasSelectedChoice;
+      if (hasSelectedChoice) confirmButton.removeAttribute("title");
+      else confirmButton.setAttribute("title", "Select one date/time option before confirming the interview.");
+    }
+    if (reviewButton) {
+      const canReview = !noReplyChecked && !hasSelectedChoice;
+      reviewButton.disabled = !canReview;
+      if (canReview) reviewButton.removeAttribute("title");
+      else reviewButton.setAttribute("title", "Clear No reply and date/time selection to review options.");
+    }
+  };
+  const syncFromControl = (control) => {
+    const root = control?.closest?.("[data-interview-confirm-root]");
+    const form = root?.closest?.("form");
+    if (!root || !form) return;
+    const noReply = root.querySelector("[data-interview-no-reply]");
+    if (control.matches?.("[data-interview-no-reply]") && control.checked) {
+      root.querySelectorAll("[data-interview-option-choice]").forEach((choice) => {
+        choice.checked = false;
+      });
+    }
+    if (control.matches?.("[data-interview-option-choice]") && control.checked) {
+      if (noReply) noReply.checked = false;
+      root.querySelectorAll("[data-interview-option-choice]").forEach((choice) => {
+        if (choice !== control) choice.checked = false;
+      });
+    }
+    syncInterviewInvitationActions(form);
+  };
+  const syncAll = () => {
+    document.querySelectorAll("[data-interview-confirm-root]").forEach((root) => {
+      syncInterviewInvitationActions(root.closest("form"));
+    });
+  };
+  window.syncPotentialInterviewInvitationActions = syncInterviewInvitationActions;
+  document.addEventListener("change", (event) => {
+    const control = event.target.closest?.("[data-interview-no-reply], [data-interview-option-choice]");
+    if (!control) return;
+    syncFromControl(control);
+    window.requestAnimationFrame(syncAll);
+  }, true);
+  document.addEventListener("click", (event) => {
+    const control = event.target.closest?.("[data-interview-no-reply], [data-interview-option-choice]");
+    if (!control) return;
+    window.requestAnimationFrame(() => syncFromControl(control));
+  }, true);
+  syncAll();
+})();
+
+(() => {
+  const parseDdMmYyyyDate = (value) => {
+    const match = String(value || "").trim().match(/^(\d{2})\/(\d{2})\/(\d{4})$/);
+    if (!match) return null;
+    const day = Number.parseInt(match[1], 10);
+    const monthIndex = Number.parseInt(match[2], 10) - 1;
+    const year = Number.parseInt(match[3], 10);
+    const parsed = new Date(year, monthIndex, day);
+    if (
+      Number.isNaN(parsed.getTime()) ||
+      parsed.getDate() !== day ||
+      parsed.getMonth() !== monthIndex ||
+      parsed.getFullYear() !== year
+    ) {
+      return null;
+    }
+    return parsed;
+  };
+  const isFutureDdMmYyyyDate = (value) => {
+    const parsed = parseDdMmYyyyDate(value);
+    if (!parsed) return false;
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    return parsed >= today;
+  };
+  const syncOutcomePanels = (root) => {
+    if (!root) return;
+    const form = root.closest?.("form");
+    const selected = root.querySelector("[data-induction-status-option]:checked")?.value || "";
+    root.querySelectorAll("[data-induction-status-panel]").forEach((panel) => {
+      panel.hidden = panel.dataset.inductionStatusPanel !== selected;
+    });
+
+    const reactivationDateField = root.querySelector("[data-reactivation-date-field]");
+    const acceptanceOutcome = root.querySelector("input[name='entry_acceptance_outcome']:checked")?.value || "";
+    if (reactivationDateField) reactivationDateField.hidden = acceptanceOutcome !== "on_hold";
+
+    const rejectButton = form?.querySelector("[data-induction-reject-button]");
+    const rescheduleButton = form?.querySelector("[data-induction-reschedule-button]");
+    const acceptedButton = form?.querySelector("[data-application-accepted-button]");
+    const acceptedOnHoldButton = form?.querySelector("[data-application-accepted-on-hold-button]");
+    const activateButton = form?.querySelector("[data-induction-activate-button]");
+    const hasCar = Boolean(root.querySelector("input[name='interview_has_car']:checked"));
+    const hasRole = Boolean(root.querySelector("input[name='interview_roles']:checked"));
+    const rescheduleFields = Array.from(root.querySelectorAll("[data-induction-reschedule-required]"));
+    const rescheduleComplete = selected === "reschedule" && rescheduleFields.every((field) => {
+      if (field.disabled) return false;
+      if (field.type === "checkbox") return field.checked;
+      return Boolean(field.value?.trim());
+    });
+    const noShowCheck = root.querySelector("[data-induction-no-show-required]");
+    const noShowComplete = selected === "no_show" && (!noShowCheck || noShowCheck.checked);
+    const attendedComplete = selected === "attended" && Boolean(root.querySelector("[data-induction-attended-required]:checked"));
+    const interviewAttendedComplete = selected === "attended" && hasCar && hasRole && acceptanceOutcome === "sessions_pre_confirmation";
+    const reactivationDate = root.querySelector("[data-reactivation-date]")?.value || "";
+    const interviewOnHoldComplete = selected === "attended" && hasCar && hasRole && acceptanceOutcome === "on_hold" && isFutureDdMmYyyyDate(reactivationDate);
+    const interviewPreassigned = form?.querySelector("[data-interview-preassigned-readonly]");
+    if (interviewPreassigned) interviewPreassigned.hidden = selected === "no_show";
+
+    if (rejectButton) rejectButton.disabled = !noShowComplete;
+    if (rescheduleButton) rescheduleButton.disabled = !rescheduleComplete;
+    if (activateButton) activateButton.disabled = !attendedComplete;
+    if (acceptedButton) acceptedButton.disabled = !interviewAttendedComplete;
+    if (acceptedOnHoldButton) acceptedOnHoldButton.disabled = !interviewOnHoldComplete;
+  };
+
+  const rootFromTarget = (target) => target?.closest?.("[data-induction-status-root]") || null;
+  const syncFromTarget = (target) => {
+    const root = rootFromTarget(target);
+    if (root) syncOutcomePanels(root);
+  };
+  const syncAll = (scope = document) => {
+    scope.querySelectorAll?.("[data-induction-status-root]").forEach(syncOutcomePanels);
+  };
+  window.syncPotentialOutcomeStatusPanels = syncOutcomePanels;
+  window.syncPotentialOutcomeStatusPanelsIn = syncAll;
+  ["change", "input", "click", "keyup", "blur"].forEach((eventName) => {
+    document.addEventListener(eventName, (event) => {
+      const control = event.target.closest?.("[data-induction-status-option], [data-induction-reschedule-required], [data-induction-no-show-required], [data-induction-attended-required], input[name='interview_has_car'], input[name='interview_roles'], input[name='entry_acceptance_outcome'], [data-reactivation-date]");
+      if (!control) return;
+      syncFromTarget(control);
+      window.requestAnimationFrame(() => syncAll());
+    }, true);
+  });
+  syncAll();
+})();
+
+(() => {
+  const requiredNames = [
+    "entry_accepted_notes_checked",
+    "entry_accepted_email_sent",
+    "entry_accepted_whatsapp_sent",
+  ];
+  const syncButton = (form) => {
+    const button = form?.querySelector?.("[data-onboarding-email-sent-button]");
+    if (!button) return;
+    const canMarkSent = requiredNames.every((name) => form.querySelector(`input[name="${name}"]`)?.checked);
+    button.disabled = !canMarkSent;
+    if (canMarkSent) {
+      button.removeAttribute("title");
+    } else {
+      button.setAttribute("title", "Complete all three checks before marking onboarding email as sent.");
+    }
+  };
+  const syncFromTarget = (target) => {
+    const form = target?.closest?.("form") || target?.querySelector?.("form") || target;
+    if (form?.querySelector?.("[data-onboarding-email-sent-button]")) syncButton(form);
+  };
+  const syncAll = (scope = document) => {
+    scope.querySelectorAll?.("[data-onboarding-email-sent-button]").forEach((button) => syncButton(button.closest("form")));
+  };
+  window.syncPotentialEntryAcceptedOnboardingButton = syncFromTarget;
+  window.syncPotentialEntryAcceptedOnboardingButtonsIn = syncAll;
+  ["change", "click", "keyup"].forEach((eventName) => {
+    document.addEventListener(eventName, (event) => {
+      const checkbox = event.target.closest?.("[data-entry-accepted-check]");
+      if (!checkbox) return;
+      syncFromTarget(checkbox);
+      window.requestAnimationFrame(() => syncAll());
+    }, true);
+  });
+  syncAll();
+})();
+
+(() => {
+  const syncControls = (form) => {
+    const root = form?.querySelector?.("[data-onboarding-follow-up]");
+    if (!form || !root) return;
+    root.querySelectorAll("[data-interview-option-platform]").forEach((select) => {
+      if (typeof window.syncInterviewOptionPlatformPreview === "function") {
+        window.syncInterviewOptionPlatformPreview(select);
+      }
+    });
+    const choice = root.querySelector("[data-onboarding-choice]:checked")?.value || "";
+    root.querySelectorAll("[data-onboarding-panel]").forEach((panel) => {
+      panel.classList.toggle("is-active", panel.dataset.onboardingPanel === choice);
+    });
+    root.querySelectorAll("[data-onboarding-fieldset]").forEach((fieldset) => {
+      fieldset.disabled = fieldset.dataset.onboardingFieldset !== choice;
+    });
+    const confirmComplete = choice === "confirm" && Array.from(root.querySelectorAll("[data-onboarding-confirm-required]")).every((field) => {
+      if (field.closest("[data-onboarding-fieldset]")?.disabled) return false;
+      return Boolean(field.value?.trim());
+    });
+    const turnDownComplete = choice === "turn_down" && Array.from(root.querySelectorAll("[data-onboarding-turn-down-required]")).every((field) => {
+      if (field.closest("[data-onboarding-fieldset]")?.disabled) return false;
+      return field.checked;
+    });
+    const confirmButton = form.querySelector("[data-onboarding-confirm-button]");
+    const turnDownButton = form.querySelector("[data-onboarding-turn-down-button]");
+    if (confirmButton) {
+      confirmButton.disabled = !confirmComplete;
+      if (confirmComplete) confirmButton.removeAttribute("title");
+      else confirmButton.setAttribute("title", "Complete all required confirm application fields.");
+    }
+    if (turnDownButton) {
+      turnDownButton.disabled = !turnDownComplete;
+      if (turnDownComplete) turnDownButton.removeAttribute("title");
+      else turnDownButton.setAttribute("title", "Complete both turn down application checks.");
+    }
+  };
+  const syncFromTarget = (target) => {
+    const form = target?.closest?.("form") || target?.querySelector?.("form") || target;
+    if (form?.querySelector?.("[data-onboarding-follow-up]")) syncControls(form);
+  };
+  const syncAll = (scope = document) => {
+    scope.querySelectorAll?.("[data-onboarding-follow-up]").forEach((root) => syncControls(root.closest("form")));
+  };
+  window.syncPotentialOnboardingFollowUpControls = syncFromTarget;
+  window.syncPotentialOnboardingFollowUpControlsIn = syncAll;
+  ["change", "input", "keyup", "blur"].forEach((eventName) => {
+    document.addEventListener(eventName, (event) => {
+      const control = event.target.closest?.("[data-onboarding-choice], [data-onboarding-confirm-required], [data-onboarding-turn-down-required]");
+      if (!control) return;
+      syncFromTarget(control);
+      window.requestAnimationFrame(() => syncAll());
+    }, true);
+  });
+  syncAll();
+})();
+
 const initStaffInductionTimeInputs = () => {
   const selector = "input[name='upcoming_induction_session_start_time'], input[name='upcoming_induction_session_end_time'], input[name='annual_meeting_time'][data-annual-meeting-time]";
   const inputFromTarget = (target) => target?.closest?.(selector) || null;
@@ -474,10 +820,54 @@ const openModal = (id, { opener = null, focus = true } = {}) => {
   if (opener) modalOpeners.set(modal, opener);
   modal.classList.add("is-open");
   modal.setAttribute("aria-hidden", "false");
+  window.syncPotentialOutcomeStatusPanelsIn?.(modal);
+  modal.querySelectorAll("[data-interview-confirm-root]").forEach((root) => {
+    window.syncPotentialInterviewInvitationActions?.(root.closest("form"));
+  });
+  window.syncPotentialEntryAcceptedOnboardingButtonsIn?.(modal);
+  window.syncPotentialOnboardingFollowUpControlsIn?.(modal);
   if (focus) {
     window.requestAnimationFrame(() => focusModalHeading(modal));
   }
 };
+
+const setPotentialInfoEditing = (section, isEditing) => {
+  if (!section) return;
+  const view = section.querySelector("[data-potential-info-view]");
+  const form = section.querySelector("[data-potential-info-edit]");
+  const editButton = section.querySelector("[data-edit-potential-info]");
+  if (!view || !form) return;
+  view.hidden = isEditing;
+  form.hidden = !isEditing;
+  if (editButton) editButton.hidden = isEditing;
+  section.querySelectorAll("[data-potential-note-delete]").forEach((deleteForm) => {
+    deleteForm.hidden = !isEditing;
+  });
+  if (isEditing) {
+    window.requestAnimationFrame(() => {
+      form.querySelector("input:not([type='hidden']), select, textarea")?.focus();
+    });
+  }
+};
+
+document.addEventListener("click", (event) => {
+  const editButton = event.target.closest("[data-edit-potential-info]");
+  if (editButton) {
+    event.preventDefault();
+    event.stopPropagation();
+    setPotentialInfoEditing(editButton.closest(".potential-review-summary"), true);
+    return;
+  }
+
+  const cancelButton = event.target.closest("[data-cancel-potential-info-edit]");
+  if (cancelButton) {
+    event.preventDefault();
+    event.stopPropagation();
+    const form = cancelButton.closest("form");
+    form?.reset();
+    setPotentialInfoEditing(cancelButton.closest(".potential-review-summary"), false);
+  }
+});
 
 const targetAliases = {
   schedule: "schedule-actions",
@@ -3598,6 +3988,26 @@ const initPotentialSessionMultiselects = (root = document) => {
 };
 
 document.addEventListener("click", (event) => {
+  const toggle = event.target.closest("[data-toggle-preassigned-session-editor]");
+  if (!toggle) return;
+  event.preventDefault();
+  const section = toggle.closest(".potential-preassigned-readonly");
+  const editor = section?.querySelector("[data-preassigned-session-editor]");
+  if (!editor) return;
+  const shouldShow = editor.hidden;
+  editor.hidden = !shouldShow;
+  toggle.classList.toggle("is-active", shouldShow);
+  toggle.setAttribute("aria-expanded", shouldShow ? "true" : "false");
+  initPotentialSessionMultiselects(editor);
+  if (shouldShow) {
+    window.requestAnimationFrame(() => {
+      const picker = editor.querySelector("[data-potential-session-multiselect]");
+      picker?.querySelector("summary")?.focus();
+    });
+  }
+});
+
+document.addEventListener("click", (event) => {
   document.querySelectorAll("[data-member-multiselect][open]").forEach((picker) => {
     if (!picker.contains(event.target)) picker.open = false;
   });
@@ -3720,9 +4130,31 @@ const syncStaffMemberEmailCell = (select) => {
     <span class="copy-button-feedback">Copied!</span>
   `;
   wrapper.appendChild(button);
-  cell.replaceChildren(wrapper);
+  const emailChipRow = document.createElement("div");
+  emailChipRow.className = "staff-contact-email-chip-row";
+  emailChipRow.setAttribute("aria-label", "Staff email actions");
+  [
+    ["Pre-confirmation email", "staffPreconfirmationEmail"],
+    ["Official confirmation email", "staffConfirmationEmail"],
+    ["Final information email", "staffFinalInformationEmail"],
+  ].forEach(([label, dataKey]) => {
+    const chip = document.createElement("button");
+    chip.className = "staff-contact-email-chip";
+    chip.type = "button";
+    chip.dataset[dataKey] = "";
+    chip.textContent = label;
+    chip.disabled = document.querySelector("main[data-current-menu-can-edit='false']") !== null
+      || (dataKey === "staffConfirmationEmail" && row.closest("[data-session-modal-panel]")?.dataset.sessionFormat !== "Onsite");
+    if (dataKey === "staffConfirmationEmail" && chip.disabled) {
+      chip.title = "Official confirmation email is only available for onsite sessions.";
+    }
+    emailChipRow.appendChild(chip);
+  });
+  cell.replaceChildren(wrapper, emailChipRow);
   initStaffGmailLinks(cell);
   initInvitationEmailCopyButtons(cell);
+  initStaffPreconfirmationEmailButtons(cell);
+  initStaffOfficialConfirmationEmailButtons(cell);
   syncInvitationEmailCopyButtons(row.closest("[data-session-members-form]"));
 };
 
@@ -3850,6 +4282,9 @@ const syncCalculatedFieldLocks = (row) => {
       button.setAttribute("aria-label", state.title);
       button.classList.toggle("is-disabled", !state.enabled);
       if (state.enabled) delete button.dataset.rowLockDisabled;
+      return;
+    }
+    if (button.matches("[data-staff-preconfirmation-email], [data-staff-confirmation-email], [data-staff-final-information-email]")) {
       return;
     }
     if (locked) {
@@ -4863,6 +5298,432 @@ const entryAcceptedCertificationProgrammeText = (programme) => (
 );
 
 const ENTRY_ACCEPTED_CERTIFICATION_NOTE = "Further information, such as platform access details and any other relevant instructions, will be provided in due course.";
+const STAFF_SESSIONS_TIME_SLOTS_NOTE = "At this stage, we are unable to confirm further details, such as time slots or fees, as the final schedule will only be available once candidate registration closes in October.";
+const STAFF_SESSIONS_CERTIFICATION_NOTE = "Further information, such as platform access details and any other relevant instructions, will be provided in due course.";
+
+const getStaffSessionsEmailPayload = (button) => {
+  try {
+    const payload = JSON.parse(button?.dataset?.staffSessionsEmailPayload || "{}");
+    return payload && typeof payload === "object" ? payload : {};
+  } catch (error) {
+    return {};
+  }
+};
+
+const staffSessionsEmailProgrammes = (payload) => {
+  const programmesPayload = payload?.certification_programmes || payload?.certificationProgrammes || {};
+  const roles = Array.isArray(programmesPayload.roles)
+    ? programmesPayload.roles.map(cleanEmailValue).filter((role) => role === "Examiner" || role === "Supervisor")
+    : [];
+  const programmeByRole = {};
+  if (Array.isArray(programmesPayload.programmes)) {
+    programmesPayload.programmes.forEach((programme) => {
+      if (!programme || typeof programme !== "object") return;
+      const role = cleanEmailValue(programme.role);
+      if (role !== "Examiner" && role !== "Supervisor") return;
+      programmeByRole[role] = {
+        role,
+        remoteTrainingPeriod: cleanEmailValue(programme.remote_training_period || programme.remoteTrainingPeriod),
+        annualMeeting: cleanEmailValue(programme.annual_meeting || programme.annualMeeting),
+      };
+    });
+  }
+  return ["Examiner", "Supervisor"]
+    .filter((role) => roles.includes(role))
+    .map((role) => programmeByRole[role] || { role, remoteTrainingPeriod: "", annualMeeting: "" });
+};
+
+const staffSessionsEmailTitle = (payload) => {
+  const explicitYear = cleanEmailValue(payload?.session_year || payload?.sessionYear);
+  if (/^\d{4}$/.test(explicitYear)) {
+    return `${explicitYear} Path exam sessions and training programmes`;
+  }
+  const sessions = Array.isArray(payload?.sessions) ? payload.sessions : [];
+  const years = Array.from(new Set(sessions
+    .map((session) => cleanEmailValue(session?.date).match(/\b(\d{4})\b/)?.[1] || "")
+    .filter((year) => /^\d{4}$/.test(year))))
+    .sort();
+  if (years.length === 1) return `${years[0]} Path exam sessions and training programmes`;
+  if (years.length > 1) return `${years[0]}–${years[years.length - 1]} Path exam sessions and training programmes`;
+  return "Path exam sessions and training programmes";
+};
+
+const validateStaffSessionsEmailPayload = (payload) => {
+  const fullName = cleanEmailValue(payload?.full_name || payload?.fullName);
+  if (!fullName) return "Staff member full name is required.";
+  const sessions = Array.isArray(payload?.sessions) ? payload.sessions : [];
+  if (!sessions.length) return "No assigned exam sessions available for this staff member.";
+  const missingSessionData = sessions.some((session) => {
+    const roles = Array.isArray(session?.roles) ? session.roles.map(cleanEmailValue).filter(Boolean) : [];
+    const format = cleanEmailValue(session?.format);
+    return !cleanEmailValue(session?.name) || !cleanEmailValue(session?.date) || !roles.length || !format;
+  });
+  if (missingSessionData) return "Some assigned exam sessions are missing required information.";
+  const programmes = staffSessionsEmailProgrammes(payload);
+  const examinerProgramme = programmes.find((programme) => programme.role === "Examiner");
+  if (examinerProgramme && (!examinerProgramme.remoteTrainingPeriod || !examinerProgramme.annualMeeting)) {
+    return "Examiner certification dates are not configured.";
+  }
+  const supervisorProgramme = programmes.find((programme) => programme.role === "Supervisor");
+  if (supervisorProgramme && (!supervisorProgramme.remoteTrainingPeriod || !supervisorProgramme.annualMeeting)) {
+    return "Supervisor certification dates are not configured.";
+  }
+  return "";
+};
+
+const staffSessionsEmailSessionHtml = (session, index) => {
+  const roles = Array.isArray(session.roles) ? session.roles.map(cleanEmailValue).filter(Boolean).join(", ") : "";
+  const format = cleanEmailValue(session.format);
+  const shift = cleanEmailValue(session.shift);
+  const address = format === "Onsite"
+    ? cleanEmailValue(session.address) || "Address to be confirmed."
+    : "";
+  return `
+    <div style="margin:${index > 0 ? "12px 0 0" : "0"};padding:${index > 0 ? "12px 0 0" : "0"};${index > 0 ? "border-top:1px solid #d9dfdc;" : ""}">
+      <p style="margin:0 0 8px;color:#00506b;font:700 14px/1.45 Arial, Helvetica, sans-serif;"><strong>Exam session ${index + 1}: ${escapeEmailHtml(session.name)}</strong></p>
+      <p style="margin:0 0 5px;color:#111115;font:400 14px/1.5 Arial, Helvetica, sans-serif;"><strong>Date:</strong> ${escapeEmailHtml(session.date)}</p>
+      ${shift ? `<p style="margin:0 0 5px;color:#111115;font:400 14px/1.5 Arial, Helvetica, sans-serif;"><strong>Shift:</strong> ${escapeEmailHtml(shift)}</p>` : ""}
+      <p style="margin:0 0 5px;color:#111115;font:400 14px/1.5 Arial, Helvetica, sans-serif;"><strong>Role:</strong> ${escapeEmailHtml(roles)}</p>
+      <p style="margin:0${address ? " 0 5px" : ""};color:#111115;font:400 14px/1.5 Arial, Helvetica, sans-serif;"><strong>Format:</strong> ${escapeEmailHtml(format)}</p>
+      ${address ? `<p style="margin:0;color:#111115;font:400 14px/1.5 Arial, Helvetica, sans-serif;"><strong>Address:</strong> ${escapeEmailHtml(address)}</p>` : ""}
+    </div>
+  `;
+};
+
+const staffSessionsEmailSessionText = (session, index) => {
+  const roles = Array.isArray(session.roles) ? session.roles.map(cleanEmailValue).filter(Boolean).join(", ") : "";
+  const format = cleanEmailValue(session.format);
+  const shift = cleanEmailValue(session.shift);
+  const address = format === "Onsite"
+    ? cleanEmailValue(session.address) || "Address to be confirmed."
+    : "";
+  return [
+    `Exam session ${index + 1}: ${cleanEmailValue(session.name)}`,
+    `Date: ${cleanEmailValue(session.date)}`,
+    shift ? `Shift: ${shift}` : "",
+    `Role: ${roles}`,
+    `Format: ${format}`,
+    address ? `Address: ${address}` : "",
+  ].filter(Boolean).join("\n");
+};
+
+const staffSessionsCertificationProgrammeHtml = (programme) => `
+  <div style="margin:0 0 12px;padding:12px 14px;background:#ffffff;border:1px solid #d9dfdc;border-radius:10px;">
+    <p style="margin:0 0 8px;color:#00506b;font:700 13px/1.35 Arial, Helvetica, sans-serif;letter-spacing:.3px;text-transform:uppercase;">${escapeEmailHtml(programme.role)} CERTIFICATION</p>
+    <ul style="margin:0;padding-left:20px;color:#111115;font:400 14px/1.55 Arial, Helvetica, sans-serif;">
+      <li style="margin-bottom:6px;"><strong>Remote training period:</strong> ${escapeEmailHtml(programme.remoteTrainingPeriod)}</li>
+      <li><strong>Annual meeting:</strong> ${escapeEmailHtml(programme.annualMeeting)}</li>
+    </ul>
+  </div>
+`;
+
+const staffSessionsCertificationProgrammeText = (programme) => (
+  `${programme.role.toUpperCase()} CERTIFICATION\n\n`
+  + `* Remote training period: ${programme.remoteTrainingPeriod}\n`
+  + `* Annual meeting: ${programme.annualMeeting}`
+);
+
+const buildStaffSessionsEmail = (button) => {
+  const payload = getStaffSessionsEmailPayload(button);
+  const validationError = validateStaffSessionsEmailPayload(payload);
+  if (validationError) return { error: validationError };
+  const fullName = cleanEmailValue(payload.full_name || payload.fullName);
+  const emailTitle = staffSessionsEmailTitle(payload);
+  const sessions = payload.sessions;
+  const programmes = staffSessionsEmailProgrammes(payload);
+  const hasCertificationProgrammes = programmes.length > 0;
+  const sessionsHtml = sessions.map(staffSessionsEmailSessionHtml).join("");
+  const sessionsText = sessions.map(staffSessionsEmailSessionText).join("\n\n");
+  const certificationHtml = hasCertificationProgrammes ? `
+    <div style="margin:0 0 18px;padding:16px 18px;background:#f1f3f2;border:1px solid #d9dfdc;border-radius:12px;">
+      <p style="margin:0 0 12px;color:#00506b;font:700 15px Arial, Helvetica, sans-serif;">2. CONFIRM ANNUAL CERTIFICATION PROGRAMMES:</p>
+      ${programmes.map(staffSessionsCertificationProgrammeHtml).join("")}
+      <p style="margin:12px 0 0;color:#53615c;font:400 14px/1.55 Arial, Helvetica, sans-serif;">${escapeEmailHtml(STAFF_SESSIONS_CERTIFICATION_NOTE)}</p>
+    </div>
+  ` : "";
+  const certificationText = hasCertificationProgrammes
+    ? `\n\n2. CONFIRM ANNUAL CERTIFICATION PROGRAMMES:\n\n${programmes.map(staffSessionsCertificationProgrammeText).join("\n\n")}\n\n${STAFF_SESSIONS_CERTIFICATION_NOTE}`
+    : "";
+  const reviewSentence = hasCertificationProgrammes
+    ? "Please review the information above and reply to this email pre-confirming your availability for the assigned exam sessions and training programmes."
+    : "Please review the information above and reply to this email pre-confirming your availability for the assigned exam sessions.";
+  const reviewSentenceHtml = hasCertificationProgrammes
+    ? `Please review the information above and reply to this email <strong>${escapeEmailHtml("pre-confirming your availability for the assigned exam sessions and training programmes")}</strong>.`
+    : escapeEmailHtml(reviewSentence);
+  const bodyHtml = `
+    <p style="margin:0 0 14px;color:#111115;font:400 15px/1.55 Arial, Helvetica, sans-serif;">Dear ${escapeEmailHtml(fullName)},</p>
+    <p style="margin:0 0 14px;color:#111115;font:400 15px/1.55 Arial, Helvetica, sans-serif;">We hope you have had a great start to the year.</p>
+    <p style="margin:0 0 18px;color:#111115;font:400 15px/1.55 Arial, Helvetica, sans-serif;">We are writing to share important information regarding the upcoming Path Examinations cycle, including your assigned exam sessions${hasCertificationProgrammes ? " as well as key training programmes" : ""}.</p>
+    <div style="margin:0 0 18px;padding:16px 18px;background:#f1f3f2;border:1px solid #d9dfdc;border-radius:12px;">
+      <p style="margin:0 0 12px;color:#00506b;font:700 15px Arial, Helvetica, sans-serif;">1. PRE-CONFIRM YOUR PARTICIPATION IN EXAM SESSIONS:</p>
+      ${sessionsHtml}
+      <p style="margin:12px 0 0;color:#111115;font:400 14px/1.55 Arial, Helvetica, sans-serif;">${escapeEmailHtml(STAFF_SESSIONS_TIME_SLOTS_NOTE)}</p>
+    </div>
+    ${certificationHtml}
+    <p style="margin:0 0 14px;color:#111115;font:400 15px/1.55 Arial, Helvetica, sans-serif;">${reviewSentenceHtml} In the unlikely event of any changes (e.g. exam session cancellations), these will be replaced by online exam sessions.</p>
+    <p style="margin:0 0 14px;color:#111115;font:400 15px/1.55 Arial, Helvetica, sans-serif;">Thank you in advance for your collaboration. We look forward to working together towards a successful and well-organised exam cycle.</p>
+  `;
+  const html = pathEmailShell({
+    label: "Exam session cycle",
+    title: emailTitle,
+    bodyHtml,
+  });
+  const text = `Exam session cycle\n${emailTitle}\n\nDear ${fullName},\n\nWe hope you have had a great start to the year.\n\nWe are writing to share important information regarding the upcoming Path Examinations cycle, including your assigned exam sessions${hasCertificationProgrammes ? " as well as key training programmes" : ""}.\n\n1. PRE-CONFIRM YOUR PARTICIPATION IN EXAM SESSIONS:\n\n${sessionsText}\n\n${STAFF_SESSIONS_TIME_SLOTS_NOTE}${certificationText}\n\n${reviewSentence} In the unlikely event of any changes (e.g. exam session cancellations), these will be replaced by online exam sessions.\n\nThank you in advance for your collaboration. We look forward to working together towards a successful and well-organised exam cycle.`;
+  return { html, text };
+};
+
+const showStaffSessionsEmailCopyFeedback = (button, message, isError = false) => {
+  const feedback = button.querySelector(".copy-button-feedback");
+  if (feedback) feedback.textContent = message;
+  button.classList.toggle("is-error", isError);
+  button.classList.toggle("is-copied", !isError);
+  window.setTimeout(() => {
+    button.classList.remove("is-error", "is-copied");
+    if (feedback) feedback.textContent = "Copied";
+  }, isError ? 2600 : 1800);
+};
+
+const initStaffSessionsEmailCopyButtons = (root = document) => {
+  root.querySelectorAll("[data-staff-sessions-copy-email]").forEach((button) => {
+    if (button.dataset.staffSessionsCopyInitialized === "true") return;
+    button.dataset.staffSessionsCopyInitialized = "true";
+    button.addEventListener("click", async (event) => {
+      event.preventDefault();
+      if (button.disabled) return;
+      const payload = buildStaffSessionsEmail(button);
+      if (payload.error) {
+        showStaffSessionsEmailCopyFeedback(button, payload.error, true);
+        return;
+      }
+      try {
+        await copyRichTextToClipboard(payload);
+        showStaffSessionsEmailCopyFeedback(button, "Sessions email copied.");
+      } catch (error) {
+        showStaffSessionsEmailCopyFeedback(button, "Could not copy the sessions email. Please try again.", true);
+      }
+    });
+  });
+};
+
+if (typeof document !== "undefined") initStaffSessionsEmailCopyButtons();
+
+const STAFF_PRECONFIRMATION_STATUS = "⏳ Participation awaiting your pre-confirmation";
+
+const parseStaffPreconfirmationPayload = (button) => {
+  try {
+    const payload = JSON.parse(button?.dataset?.staffPreconfirmationEmailPayload || "{}");
+    return payload && typeof payload === "object" ? payload : {};
+  } catch (error) {
+    return {};
+  }
+};
+
+const staffPreconfirmationRoleFromSection = (sectionKey) => {
+  const normalized = cleanEmailValue(sectionKey).toLowerCase();
+  if (normalized === "supervisor") return "Supervisor";
+  if (normalized === "examiner") return "Examiner";
+  if (normalized === "intern") return "Intern";
+  return "";
+};
+
+const getStaffPreconfirmationEmailPayload = (button) => {
+  const explicitPayload = parseStaffPreconfirmationPayload(button);
+  if (Object.keys(explicitPayload).length) return explicitPayload;
+  const row = button?.closest?.("[data-supervisor-row]");
+  const panel = button?.closest?.("[data-session-modal-panel]");
+  const select = row?.querySelector?.("[data-team-member-select]");
+  const option = selectedTeamMemberOption(select);
+  let certifications = {};
+  try {
+    certifications = JSON.parse(panel?.dataset?.preconfirmationCertifications || "{}");
+  } catch (error) {
+    certifications = {};
+  }
+  return {
+    full_name: cleanEmailValue(option?.dataset?.name) || cleanEmailValue(row?.querySelector?.("[data-staff-card-title]")?.textContent),
+    role: staffPreconfirmationRoleFromSection(row?.dataset?.sectionKey),
+    session_name: cleanEmailValue(panel?.dataset?.sessionName),
+    session_date: cleanEmailValue(panel?.dataset?.sessionDateEmail || panel?.dataset?.sessionDateLabel),
+    shift: cleanEmailValue(panel?.dataset?.sessionShift),
+    format: cleanEmailValue(panel?.dataset?.sessionFormat),
+    address: cleanEmailValue(panel?.dataset?.sessionAddress),
+    certifications,
+  };
+};
+
+const staffPreconfirmationCertificationForRole = (payload, role) => {
+  const certifications = payload?.certifications && typeof payload.certifications === "object"
+    ? payload.certifications
+    : {};
+  const programme = certifications[role] || certifications[role?.toLowerCase?.()] || {};
+  return {
+    role,
+    remoteTrainingPeriod: cleanEmailValue(programme.remote_training_period || programme.remoteTrainingPeriod),
+    annualMeeting: cleanEmailValue(programme.annual_meeting || programme.annualMeeting),
+  };
+};
+
+const validateStaffPreconfirmationEmailPayload = (payload) => {
+  const fullName = cleanEmailValue(payload?.full_name || payload?.fullName);
+  if (!fullName) return "Staff member full name is required.";
+  const role = cleanEmailValue(payload?.role);
+  const sessionName = cleanEmailValue(payload?.session_name || payload?.sessionName);
+  const sessionDate = cleanEmailValue(payload?.session_date || payload?.sessionDate);
+  const format = cleanEmailValue(payload?.format);
+  if (!role || !sessionName || !sessionDate || !format) return "Exam session information is incomplete.";
+  if (format === "Onsite" && !cleanEmailValue(payload?.address)) {
+    return "Exam session address is required for onsite sessions.";
+  }
+  if (role === "Examiner" || role === "Supervisor") {
+    const programme = staffPreconfirmationCertificationForRole(payload, role);
+    if (!programme.remoteTrainingPeriod || !programme.annualMeeting) {
+      return `${role} certification dates are not configured.`;
+    }
+  }
+  return "";
+};
+
+const staffPreconfirmationSessionDetailsHtml = (payload) => {
+  const format = cleanEmailValue(payload.format);
+  const shift = cleanEmailValue(payload.shift);
+  const address = format === "Onsite" ? cleanEmailValue(payload.address) : "";
+  const lines = [
+    ["Exam session:", cleanEmailValue(payload.session_name || payload.sessionName)],
+    ["Date:", cleanEmailValue(payload.session_date || payload.sessionDate)],
+    shift ? ["Shift:", shift] : null,
+    ["Format:", format],
+    address ? ["Address:", address] : null,
+  ].filter(Boolean);
+  return `
+    <div style="margin:0 0 18px;padding:16px 18px;background:#f1f3f2;border:1px solid #d9dfdc;border-radius:12px;">
+      ${lines.map(([label, value]) => `<p style="margin:0 0 6px;color:#111115;font:400 14px/1.5 Arial, Helvetica, sans-serif;"><strong>${escapeEmailHtml(label)}</strong> ${escapeEmailHtml(value)}</p>`).join("")}
+    </div>
+  `;
+};
+
+const staffPreconfirmationSessionDetailsText = (payload) => {
+  const format = cleanEmailValue(payload.format);
+  const shift = cleanEmailValue(payload.shift);
+  const address = format === "Onsite" ? cleanEmailValue(payload.address) : "";
+  return [
+    `Exam session: ${cleanEmailValue(payload.session_name || payload.sessionName)}`,
+    `Date: ${cleanEmailValue(payload.session_date || payload.sessionDate)}`,
+    shift ? `Shift: ${shift}` : "",
+    `Format: ${format}`,
+    address ? `Address: ${address}` : "",
+  ].filter(Boolean).join("\n");
+};
+
+const staffPreconfirmationCertificationHtml = (programme) => `
+  <div style="margin:0 0 18px;padding:16px 18px;background:#f1f3f2;border:1px solid #d9dfdc;border-radius:12px;">
+    <p style="margin:0 0 10px;color:#00506b;font:700 13px/1.35 Arial, Helvetica, sans-serif;letter-spacing:.3px;text-transform:uppercase;">${escapeEmailHtml(programme.role.toUpperCase())} CERTIFICATION</p>
+    <ul style="margin:0;padding-left:20px;color:#111115;font:400 14px/1.55 Arial, Helvetica, sans-serif;">
+      <li style="margin-bottom:6px;"><strong>Remote training period:</strong> ${escapeEmailHtml(programme.remoteTrainingPeriod)}</li>
+      <li><strong>Annual meeting:</strong> ${escapeEmailHtml(programme.annualMeeting)}</li>
+    </ul>
+  </div>
+`;
+
+const staffPreconfirmationCertificationText = (programme) => (
+  `${programme.role.toUpperCase()} CERTIFICATION\n\n`
+  + `* Remote training period: ${programme.remoteTrainingPeriod}\n`
+  + `* Annual meeting: ${programme.annualMeeting}`
+);
+
+const buildStaffPreconfirmationEmail = (button) => {
+  const payload = getStaffPreconfirmationEmailPayload(button);
+  const validationError = validateStaffPreconfirmationEmailPayload(payload);
+  if (validationError) return { error: validationError };
+  const fullName = cleanEmailValue(payload.full_name || payload.fullName);
+  const role = cleanEmailValue(payload.role);
+  const hasCertification = role === "Examiner" || role === "Supervisor";
+  const programme = hasCertification ? staffPreconfirmationCertificationForRole(payload, role) : null;
+  const certificationHtml = programme ? staffPreconfirmationCertificationHtml(programme) : "";
+  const certificationText = programme ? staffPreconfirmationCertificationText(programme) : "";
+  const trainingIntro = hasCertification
+    ? "We would also like to remind you of the dates and times of the training programme for this role:"
+    : "";
+  const reviewSentence = hasCertification
+    ? "Please review the information above and reply to this email pre-confirming your availability for the assigned exam session and training programme. In the unlikely event of any changes (e.g. exam session cancellation), this will be replaced by an online exam session."
+    : "Please review the information above and reply to this email pre-confirming your availability for the assigned exam session. In the unlikely event of any changes (e.g. exam session cancellation), this will be replaced by an online exam session.";
+  const reviewSentenceHtml = hasCertification
+    ? `Please review the information above and reply to this email <strong>${escapeEmailHtml("pre-confirming your availability for the assigned exam session and training programme")}</strong>. In the unlikely event of any changes (e.g. exam session cancellation), this will be replaced by an online exam session.`
+    : escapeEmailHtml(reviewSentence);
+  const bodyHtml = `
+    <p style="margin:0 0 14px;color:#111115;font:400 15px/1.55 Arial, Helvetica, sans-serif;">Dear ${escapeEmailHtml(fullName)},</p>
+    <p style="margin:0 0 14px;color:#111115;font:400 15px/1.55 Arial, Helvetica, sans-serif;">Hope you’re doing very well.</p>
+    <p style="display:inline-block;margin:0 0 16px;padding:6px 11px;border-radius:999px;background:#fff3c4;color:#6f5100;font:700 12px Arial, Helvetica, sans-serif;">${escapeEmailHtml(STAFF_PRECONFIRMATION_STATUS)}</p>
+    <p style="margin:0 0 14px;color:#111115;font:400 15px/1.55 Arial, Helvetica, sans-serif;">We are pleased to inform you that you have been pre-selected as a <strong>${escapeEmailHtml(role)}</strong> for the upcoming Path exam session, subject to your pre-confirmation:</p>
+    ${staffPreconfirmationSessionDetailsHtml(payload)}
+    <p style="margin:0 0 14px;color:#111115;font:400 15px/1.55 Arial, Helvetica, sans-serif;">${escapeEmailHtml(STAFF_SESSIONS_TIME_SLOTS_NOTE)}</p>
+    ${hasCertification ? `<p style="margin:0 0 14px;color:#111115;font:400 15px/1.55 Arial, Helvetica, sans-serif;">${escapeEmailHtml(trainingIntro)}</p>${certificationHtml}<p style="margin:0 0 14px;color:#111115;font:400 15px/1.55 Arial, Helvetica, sans-serif;">${escapeEmailHtml(STAFF_SESSIONS_CERTIFICATION_NOTE)}</p>` : ""}
+    <p style="margin:0 0 14px;color:#111115;font:400 15px/1.55 Arial, Helvetica, sans-serif;">${reviewSentenceHtml}</p>
+    <p style="margin:0;color:#111115;font:400 15px/1.55 Arial, Helvetica, sans-serif;">Thank you in advance for your collaboration. We look forward to working together towards a successful and well-organised exam cycle.</p>
+  `;
+  const html = pathEmailShell({
+    label: "Pre-confirmation",
+    title: "Path exam session pre-confirmation",
+    bodyHtml,
+  });
+  const text = [
+    "Pre-confirmation",
+    "Path exam session pre-confirmation",
+    "",
+    `Dear ${fullName},`,
+    "",
+    "Hope you’re doing very well.",
+    "",
+    STAFF_PRECONFIRMATION_STATUS,
+    "",
+    `We are pleased to inform you that you have been pre-selected as a ${role} for the upcoming Path exam session, subject to your pre-confirmation:`,
+    "",
+    staffPreconfirmationSessionDetailsText(payload),
+    "",
+    STAFF_SESSIONS_TIME_SLOTS_NOTE,
+    hasCertification ? `\n${trainingIntro}\n\n${certificationText}\n\n${STAFF_SESSIONS_CERTIFICATION_NOTE}` : "",
+    "",
+    reviewSentence,
+    "",
+    "Thank you in advance for your collaboration. We look forward to working together towards a successful and well-organised exam cycle.",
+  ].filter((line) => line !== "").join("\n");
+  return { html, text };
+};
+
+const showStaffPreconfirmationEmailFeedback = (button, message, isError = false) => {
+  const originalText = button.dataset.originalText || button.textContent;
+  button.dataset.originalText = originalText;
+  button.textContent = message;
+  button.classList.toggle("is-error", isError);
+  button.classList.toggle("is-copied", !isError);
+  window.setTimeout(() => {
+    button.textContent = originalText;
+    button.classList.remove("is-error", "is-copied");
+  }, isError ? 2800 : 1900);
+};
+
+const initStaffPreconfirmationEmailButtons = (root = document) => {
+  root.querySelectorAll("[data-staff-preconfirmation-email]").forEach((button) => {
+    if (button.dataset.staffPreconfirmationInitialized === "true") return;
+    button.dataset.staffPreconfirmationInitialized = "true";
+    button.addEventListener("click", async (event) => {
+      event.preventDefault();
+      if (button.disabled) return;
+      const payload = buildStaffPreconfirmationEmail(button);
+      if (payload.error) {
+        showStaffPreconfirmationEmailFeedback(button, payload.error, true);
+        return;
+      }
+      try {
+        await copyRichTextToClipboard(payload);
+        showStaffPreconfirmationEmailFeedback(button, "Pre-confirmation email copied.");
+      } catch (error) {
+        showStaffPreconfirmationEmailFeedback(button, "Could not copy the pre-confirmation email. Please try again.", true);
+      }
+    });
+  });
+};
+
+if (typeof document !== "undefined") initStaffPreconfirmationEmailButtons();
 
 const buildSuccessfulApplicationEmail = (button) => {
   const source = button?.dataset?.fullName
@@ -5951,6 +6812,456 @@ Warm regards,`;
   return { html, text };
 };
 
+const OFFICIAL_CONFIRMATION_MATERIAL_URL = "https://drive.google.com/file/d/1FfzKcWq8pED3qv5yuzx2L9n_VEx0ZysM/view?usp=drive_link";
+
+const parseStaffOfficialConfirmationPayload = (button) => {
+  try {
+    const payload = JSON.parse(button?.dataset?.staffOfficialConfirmationEmailPayload || "{}");
+    return payload && typeof payload === "object" ? payload : {};
+  } catch (error) {
+    return {};
+  }
+};
+
+const officialArrivalMinutesForRole = (role) => (role === "Supervisor" ? "50" : "30");
+
+const officialDateLabel = (isoDate) => formatInvitationDate(isoDate);
+
+const officialTimeLabel = (value) => cleanEmailValue(value).replace(":", ".");
+
+const collectOfficialTimeRanges = (row) => Array.from(row?.querySelectorAll("[data-time-range-row]") || [])
+  .map((rangeRow) => {
+    const inputs = Array.from(rangeRow.querySelectorAll("[data-time-input]"));
+    const start = cleanEmailValue(inputs[0]?.value);
+    const end = cleanEmailValue(inputs[1]?.value);
+    return start && end ? `${officialTimeLabel(start)} to ${officialTimeLabel(end)} h` : "";
+  })
+  .filter(Boolean);
+
+const officialFeeLineFromInput = (row, label, selector, currencySelector) => {
+  const value = feeTextFromInput(row, selector, currencySelector);
+  const amount = parseFeeValue(value);
+  if (!value || amount === null || amount === 0) return null;
+  return { label, value };
+};
+
+const collectOfficialFeeLines = (row) => ([
+  ["Role fee", "[data-role-fee-input]", "[data-role-fee-currency-input]"],
+  ["Device depreciation", "[data-device-dep-input]", "[data-device-dep-currency-input]"],
+  ["Commuting", "[data-commuting-input]", "[data-commuting-currency-input]"],
+  ["Fuel", "[data-fuel-input]", "[data-fuel-currency-input]"],
+  ["Vehicle depreciation", "[data-vehicle-input]", "[data-vehicle-currency-input]"],
+  ["Seniority", "[data-seniority-input]", "[data-seniority-currency-input]"],
+]).map(([label, valueSelector, currencySelector]) => (
+  officialFeeLineFromInput(row, label, valueSelector, currencySelector)
+)).filter(Boolean);
+
+const collectOfficialSessionStaff = (form) => ([
+  ["supervisor", "Supervisor"],
+  ["examiner", "Examiner"],
+  ["intern", "Intern"],
+]).flatMap(([sectionKey, role]) => {
+  const rows = Array.from(form?.querySelectorAll(`[data-supervisor-row][data-section-key="${sectionKey}"]`) || []);
+  return rows.map((row, index) => {
+    const select = row.querySelector("[data-team-member-select]");
+    const option = select ? selectedTeamMemberOption(select) : null;
+    const name = cleanEmailValue(option?.dataset.name);
+    const participation = normalizeParticipationStatus(row.querySelector("[data-participation-select]")?.value);
+    const isConfirmed = participation === "Confirmed";
+    return {
+      label: rows.length > 1 ? `${role} ${index + 1}` : role,
+      role,
+      assigned: Boolean(name),
+      name,
+      phone: cleanEmailValue(option?.dataset.phone) || "Phone number not available",
+      status: isConfirmed ? "Confirmed" : "To be confirmed",
+      statusTone: isConfirmed ? "green" : "yellow",
+      emptyMessage: `This ${role.toLowerCase()} has not been assigned yet`,
+    };
+  });
+});
+
+const getStaffOfficialConfirmationEmailPayload = (button) => {
+  const explicitPayload = parseStaffOfficialConfirmationPayload(button);
+  if (Object.keys(explicitPayload).length) return explicitPayload;
+  const row = button?.closest?.("[data-supervisor-row]");
+  const form = button?.closest?.("[data-session-members-form]");
+  const panel = button?.closest?.("[data-session-modal-panel]");
+  const select = row?.querySelector?.("[data-team-member-select]");
+  const option = select ? selectedTeamMemberOption(select) : null;
+  const logisticsUrl = cleanEmailValue(form?.dataset?.logisticsFilesUrl)
+    || cleanEmailValue(form?.querySelector?.("[data-logistics-files-link]")?.getAttribute("href"))
+    || cleanEmailValue(form?.querySelector?.("[data-logistics-files-url]")?.value);
+  return {
+    full_name: cleanEmailValue(option?.dataset?.name) || cleanEmailValue(row?.querySelector?.("[data-staff-card-title]")?.textContent),
+    role: roleLabelForSection(row?.dataset?.sectionKey || ""),
+    session_name: cleanEmailValue(panel?.dataset?.sessionName),
+    session_date: officialDateLabel(panel?.dataset?.sessionDate),
+    time_ranges: collectOfficialTimeRanges(row),
+    format: cleanEmailValue(panel?.dataset?.sessionFormat),
+    address: cleanEmailValue(panel?.dataset?.sessionAddress),
+    fee_lines: collectOfficialFeeLines(row),
+    total_fee: cleanEmailValue(row?.querySelector?.("[data-total-fee-value]")?.textContent),
+    logistics_status: cleanEmailValue(row?.querySelector?.("[data-logistics-control]")?.value),
+    logistics_url: logisticsUrl,
+    contacts: collectOfficialSessionStaff(form),
+  };
+};
+
+const validateStaffOfficialConfirmationEmailPayload = (payload) => {
+  if (!cleanEmailValue(payload?.full_name || payload?.fullName)) return "Staff member full name is required.";
+  if (cleanEmailValue(payload?.format) !== "Onsite") return "Official confirmation email is only available for onsite sessions.";
+  if (!cleanEmailValue(payload?.role) || !cleanEmailValue(payload?.session_name || payload?.sessionName) || !cleanEmailValue(payload?.session_date || payload?.sessionDate)) {
+    return "Exam session information is incomplete.";
+  }
+  if (!Array.isArray(payload?.time_ranges || payload?.timeRanges) || !(payload.time_ranges || payload.timeRanges).length) {
+    return "Staff member time range is required for official confirmation emails.";
+  }
+  if (!cleanEmailValue(payload?.address)) return "Exam session address is required for onsite sessions.";
+  const totalFee = cleanEmailValue(payload?.total_fee || payload?.totalFee);
+  if (!totalFee || totalFee === "-" || totalFee.toLowerCase().includes("total fee -")) {
+    return "Total fee is required for official confirmation emails.";
+  }
+  const logisticsStatus = cleanEmailValue(payload?.logistics_status || payload?.logisticsStatus);
+  if (!["Does not apply", "Simple logistics", "Complex logistics"].includes(logisticsStatus)) {
+    return "Logistics status is required for official confirmation emails.";
+  }
+  if (logisticsStatus === "Simple logistics" && !emailLinkIsUsable(payload?.logistics_url || payload?.logisticsUrl)) {
+    return "Logistics folder link is required for simple logistics.";
+  }
+  if (logisticsStatus === "Complex logistics" && !emailLinkIsUsable(payload?.logistics_url || payload?.logisticsUrl)) {
+    return "Logistics folder link is required for complex logistics.";
+  }
+  return "";
+};
+
+const officialConfirmationStatusStyle = (tone) => {
+  if (tone === "green") return { background: "#eef5ed", border: "#86aa83", color: "#4f7f4c" };
+  if (tone === "red") return { background: "#fbecea", border: "#e7a59f", color: "#cd4d40" };
+  return { background: "#fff3c4", border: "#f3d67a", color: "#8a5a00" };
+};
+
+const officialMaterialRows = (role) => {
+  if (role === "Examiner") {
+    return [
+      ["🗓️ Exam session schedule", "Please access this section in advance to check your assigned exam rooms and ensure your schedule information is complete. You may have been assigned to the Listening and speaking module, the Reading and writing module, or both. To verify this, compare the start and end times in this email with those shown in the PDFs. Please also review the session timings, rooms and layout in advance."],
+      ["🎧🗣️ Listening and speaking module", "This section contains the materials needed to conduct the Listening and Speaking Module. Please access Sinapsis in advance to check that the required audio files are available and working properly before the exam session."],
+      ["✅ Examiner guidelines", "Please read the examiner instructions carefully and in advance to ensure that all required procedures and protocols are followed in line with Path Examinations’ quality policies."],
+    ];
+  }
+  if (role === "Supervisor") {
+    return [
+      ["🗓️ Exam session schedule", "Please access this folder in advance to understand the exam session you will be supervising, including timings, exam room layout, and the start and end times of each module. A careful review is required to ensure the session runs smoothly and to identify any details that may need attention beforehand."],
+      ["🎧🗣️ Material for examiners", "This folder contains the Listening and speaking module examiner guidelines and Listening audio files as back-up material. Examiners must access the official materials through Sinapsis, but these files are provided as a contingency resource in case of power or internet issues during the exam session."],
+      ["✅ Supervisor guidelines", "Please read these guidelines carefully to fully understand your responsibilities during the exam session. This will help you respond appropriately at each stage or in case of unexpected situations, while ensuring compliance with Path Examinations’ quality policies and procedures."],
+    ];
+  }
+  return [];
+};
+
+const officialConfirmationMaterialsHtml = (role, styles) => {
+  const rows = officialMaterialRows(role);
+  if (!rows.length) return "";
+  return `
+    <div style="${styles.section}">
+      <h2 style="${styles.sectionTitle}">SESSION MATERIALS</h2>
+      <p style="${styles.paragraph}">Please find below:</p>
+      ${rows.map(([label, description]) => `
+        <div style="margin:0 0 10px;padding:12px 14px;background:#f1f3f2;border:1px solid #d9dfdc;border-radius:10px;">
+          <p style="margin:0 0 5px;color:#111115;font:700 14px/1.4 Arial, Helvetica, sans-serif;">${escapeEmailHtml(label)} <a href="${escapeEmailAttribute(OFFICIAL_CONFIRMATION_MATERIAL_URL)}" style="float:right;color:#00506b;font-weight:700;text-decoration:none;">View material →</a></p>
+          <p style="margin:0;color:#62727a;font:italic 12px/1.45 Arial, Helvetica, sans-serif;">${escapeEmailHtml(description)}</p>
+        </div>
+      `).join("")}
+    </div>
+  `;
+};
+
+const officialConfirmationMaterialsText = (role) => {
+  const rows = officialMaterialRows(role);
+  if (!rows.length) return "";
+  return `SESSION MATERIALS\n\nPlease find below:\n\n${rows.map(([label, description]) => `${label}\nView material: ${OFFICIAL_CONFIRMATION_MATERIAL_URL}\n${description}`).join("\n\n")}`;
+};
+
+const officialContactsHtml = (contacts, recipientRole, styles) => `
+  <div style="${styles.section}">
+    <h2 style="${styles.sectionTitle}">STAFF MEMBERS AND EMERGENCY LINES</h2>
+    <p style="${styles.paragraph}">Below are the contact details of the staff members assigned to this exam session, as well as the Path emergency line for any urgent matters:</p>
+    ${contacts.map((contact) => {
+      if (!contact.assigned) {
+        const red = officialConfirmationStatusStyle("red");
+        return `<div style="margin:0 0 9px;padding:12px 14px;background:#f1f3f2;border:1px solid #d9dfdc;border-radius:10px;"><p style="margin:0 0 6px;color:#62727a;font:700 11px Arial, Helvetica, sans-serif;text-transform:uppercase;">${escapeEmailHtml(contact.label)}</p><span style="display:inline-block;padding:4px 9px;border-radius:999px;background:${red.background};border:1px solid ${red.border};color:${red.color};font:700 12px Arial, Helvetica, sans-serif;">${escapeEmailHtml(contact.emptyMessage)}</span></div>`;
+      }
+      const tone = officialConfirmationStatusStyle(contact.statusTone);
+      return `<div style="margin:0 0 9px;padding:12px 14px;background:#f1f3f2;border:1px solid #d9dfdc;border-radius:10px;"><p style="margin:0 0 4px;color:#62727a;font:700 11px Arial, Helvetica, sans-serif;text-transform:uppercase;">${escapeEmailHtml(contact.label)}</p><p style="margin:0;color:#111115;font:700 15px/1.35 Arial, Helvetica, sans-serif;">${escapeEmailHtml(contact.name)} <span style="display:inline-block;margin-left:6px;padding:3px 8px;border-radius:999px;background:${tone.background};border:1px solid ${tone.border};color:${tone.color};font:700 11px Arial, Helvetica, sans-serif;">${escapeEmailHtml(contact.status)}</span></p><p style="margin:3px 0 0;color:#00506b;font:600 13px Arial, Helvetica, sans-serif;">${escapeEmailHtml(contact.phone || "Phone number not available")}</p></div>`;
+    }).join("")}
+    <div style="margin-top:12px;padding:14px 16px;background:#fff4e8;border:1px solid #f1cfa8;border-radius:10px;">
+      <p style="margin:0 0 8px;color:#9a5a12;font:800 13px Arial, Helvetica, sans-serif;">Emergency lines</p>
+      ${["Examiner", "Intern"].includes(recipientRole) ? `<p style="margin:0 0 8px;color:#111115;font:400 13px/1.45 Arial, Helvetica, sans-serif;">Please contact your Supervisor first before using these emergency lines.</p>` : ""}
+      <p style="margin:0 0 5px;color:#111115;font:700 13px/1.45 Arial, Helvetica, sans-serif;">On business days from 9am to 3pm, contact:</p>
+      <ul style="margin:0 0 10px;padding-left:20px;color:#111115;font:400 13px/1.45 Arial, Helvetica, sans-serif;">
+        <li>Path Examinations office at <a href="https://wa.me/5491150954847" style="color:#00506b;font-weight:700;text-decoration:underline;">+5491150954847</a></li>
+      </ul>
+      <p style="margin:0 0 5px;color:#111115;font:700 13px/1.45 Arial, Helvetica, sans-serif;">Outside of business time, contact:</p>
+      <ul style="margin:0;padding-left:20px;color:#111115;font:400 13px/1.45 Arial, Helvetica, sans-serif;">
+        <li>Brenda Sartori at <a href="https://wa.me/5491133945761" style="color:#00506b;font-weight:700;text-decoration:underline;">+5491133945761</a></li>
+        <li>Agustina Savini at <a href="https://wa.me/5491155692629" style="color:#00506b;font-weight:700;text-decoration:underline;">+5491155692629</a></li>
+        <li>Pablo Demarchi at <a href="https://wa.me/5491128508482" style="color:#00506b;font-weight:700;text-decoration:underline;">+5491128508482</a></li>
+      </ul>
+    </div>
+  </div>
+`;
+
+const officialContactsText = (contacts, recipientRole) => (
+  "STAFF MEMBERS AND EMERGENCY LINES\n\n"
+  + "Below are the contact details of the staff members assigned to this exam session, as well as the Path emergency line for any urgent matters:\n\n"
+  + contacts.map((contact) => (
+    contact.assigned
+      ? `${contact.label}\n${contact.name} (${contact.status})\n${contact.phone || "Phone number not available"}`
+      : `${contact.label}\n${contact.emptyMessage}`
+  )).join("\n\n")
+  + `\n\nEmergency lines\n${["Examiner", "Intern"].includes(recipientRole) ? "Please contact your Supervisor first before using these emergency lines.\n" : ""}On business days from 9am to 3pm, contact:\n- Path Examinations office at +5491150954847 (https://wa.me/5491150954847)\n\nOutside of business time, contact:\n- Brenda Sartori at +5491133945761 (https://wa.me/5491133945761)\n- Agustina Savini at +5491155692629 (https://wa.me/5491155692629)\n- Pablo Demarchi at +5491128508482 (https://wa.me/5491128508482)`
+);
+
+const officialTravelCopy = (role, status, logisticsUrl) => {
+  const arrival = officialArrivalMinutesForRole(role);
+  if (status === "Does not apply") {
+    const suffix = role === "Supervisor"
+      ? `arrive ${arrival} minutes before the start of the exam session.`
+      : `arrive ${arrival} minutes before the start of your first assigned module.`;
+    return {
+      html: `You may travel to and from the exam centre using your own vehicle or public transport. Please plan your journey accordingly, allow sufficient travel time and ${suffix}`,
+      text: `You may travel to and from the exam centre using your own vehicle or public transport. Please plan your journey accordingly, allow sufficient travel time and ${suffix}`,
+    };
+  }
+  if (status === "Simple logistics") {
+    const suffix = role === "Supervisor"
+      ? `allow sufficient travel time, and arrive ${arrival} minutes before the start of the exam session.`
+      : `allow sufficient travel time and arrive ${arrival} minutes before the start of your first assigned module.`;
+    const text = `You may travel to and from the exam centre using a travel app, such as Uber or Cabify. Please plan your journey accordingly, ${suffix} Once the exam session is over, please access this folder and upload your travel receipts to the folder under your name. Do not include these expenses in your final invoice.`;
+    return {
+      html: `You may travel to and from the exam centre using a travel app, such as Uber or Cabify. Please plan your journey accordingly, ${suffix} Once the exam session is over, please access <a href="${escapeEmailAttribute(logisticsUrl)}" style="color:#00506b;font-weight:700;text-decoration:underline;">this folder</a> and upload your travel receipts to the folder under your name. Do not include these expenses in your final invoice.`,
+      text: `${text}\n${logisticsUrl}`,
+    };
+  }
+  const first = `All relevant information and documents for your trip or commute can be found in this folder. If anything is still pending, we will upload it as soon as it becomes available and let you know right away. You are also welcome to contact us at any time if there’s anything you’d like to ask or check with us.`;
+  const second = "After the exam session, if you have covered any additional expenses previously agreed or confirmed by Path Examinations, please upload the receipts to the folder under your name. Please note that expenses not previously agreed with Path Examinations, or without a corresponding receipt issued under the company’s name, cannot be reimbursed. Do not include these expenses in your final invoice.";
+  return {
+    html: `All relevant information and documents for your trip or commute can be found in <a href="${escapeEmailAttribute(logisticsUrl)}" style="color:#00506b;font-weight:700;text-decoration:underline;">this folder</a>. If anything is still pending, we will upload it as soon as it becomes available and let you know right away. You are also welcome to contact us at any time if there’s anything you’d like to ask or check with us.<br><br>${escapeEmailHtml(second)}`,
+    text: `${first}\n${logisticsUrl}\n\n${second}`,
+  };
+};
+
+const officialFinalInstructions = (role) => {
+  if (role === "Examiner") {
+    return {
+      title: "ATTENDANCE, MARKS AND RECORDINGS",
+      items: [
+        "complete attendance in Sinapsis for the modules you have been assigned to.",
+        "mark candidates’ speaking performance on the paper exam records after each interview.",
+        "upload the recordings of the Listening and speaking module within 24 working hours after the session ends.",
+      ],
+    };
+  }
+  if (role === "Supervisor") {
+    return {
+      title: "EXAM SESSION FINAL CHECKS",
+      items: [
+        "verify that all examiners have completed candidate attendance in Sinapsis and that no candidates remain with Pending status.",
+        "check with examiners that all paper candidate exam records have been marked, including those for absent candidates.",
+        "remind examiners to upload the recordings of the Listening and speaking module within 24 working hours after the session ends.",
+        "take an institutional picture with the Path staff and/or the Head(s) of centre.",
+        "complete the End-of-session report before leaving the exam session premises.",
+      ],
+    };
+  }
+  return null;
+};
+
+const buildStaffOfficialConfirmationEmail = (button) => {
+  const payload = getStaffOfficialConfirmationEmailPayload(button);
+  const validationError = validateStaffOfficialConfirmationEmailPayload(payload);
+  if (validationError) return { error: validationError };
+  const fullName = cleanEmailValue(payload.full_name || payload.fullName);
+  const role = cleanEmailValue(payload.role);
+  const sessionName = cleanEmailValue(payload.session_name || payload.sessionName);
+  const sessionDate = cleanEmailValue(payload.session_date || payload.sessionDate);
+  const timeRanges = payload.time_ranges || payload.timeRanges || [];
+  const timeLabel = timeRanges.join(" / ");
+  const address = cleanEmailValue(payload.address);
+  const totalFee = cleanEmailValue(payload.total_fee || payload.totalFee);
+  const feeLines = Array.isArray(payload.fee_lines || payload.feeLines) ? (payload.fee_lines || payload.feeLines) : [];
+  const logisticsStatus = cleanEmailValue(payload.logistics_status || payload.logisticsStatus);
+  const logisticsUrl = cleanEmailValue(payload.logistics_url || payload.logisticsUrl);
+  const contacts = Array.isArray(payload.contacts) ? payload.contacts : [];
+  const roleData = roleInvitationCopy(role);
+  const arrival = officialArrivalMinutesForRole(role);
+  const travel = officialTravelCopy(role, logisticsStatus, logisticsUrl);
+  const finalInstructions = officialFinalInstructions(role);
+  const styles = {
+    paragraph: "margin:0 0 14px;color:#111115;font:400 15px/1.55 Arial, Helvetica, sans-serif;",
+    section: "margin:0 0 18px;padding:16px 18px;background:#ffffff;border:1px solid #d9dfdc;border-left:4px solid #00506b;border-radius:12px;",
+    sectionTitle: "margin:0 0 12px;color:#00506b;font:800 15px/1.35 Arial, Helvetica, sans-serif;letter-spacing:.4px;text-transform:uppercase;",
+  };
+  const invitationSenderEmail = "admin@pathexaminations.com";
+  const replySubject = `Re: Path exam session invitation - ${sessionName || "Exam session"} - ${fullName}`;
+  const confirmMailto = buildMailtoLink({ to: invitationSenderEmail, subject: replySubject, body: "Dear Path Team,\r\n\r\nI confirm my participation in this exam session and acknowledge that I have received the session material correctly.\r\n\r\nKind regards," });
+  const questionMailto = buildMailtoLink({ to: invitationSenderEmail, subject: replySubject, body: "Dear Path Team,\r\n\r\nBefore confirming my participation, I would like to ask the following question(s):" });
+  const declineMailto = buildMailtoLink({ to: invitationSenderEmail, subject: replySubject, body: "Dear Path Team,\r\n\r\nI regret to inform you that I won’t be able to participate in this exam session.\r\n\r\nKind regards," });
+  const feeRowsHtml = feeLines.map((line) => `
+    <tr><td style="padding:9px 12px;border-bottom:1px solid #d9dfdc;color:#111115;font:600 14px Arial, Helvetica, sans-serif;">${escapeEmailHtml(line.label)}</td><td align="right" style="padding:9px 12px;border-bottom:1px solid #d9dfdc;color:#111115;font:700 14px Arial, Helvetica, sans-serif;">${escapeEmailHtml(line.value)}</td></tr>
+  `).join("");
+  const materialsText = officialConfirmationMaterialsText(role);
+  const finalInstructionsHtml = finalInstructions ? `
+    <div style="${styles.section}">
+      <h2 style="${styles.sectionTitle}">${escapeEmailHtml(finalInstructions.title)}</h2>
+      <p style="${styles.paragraph}"><strong>Please make sure to:</strong></p>
+      ${finalInstructions.items.map((item) => `<p style="margin:0 0 8px;color:#111115;font:400 14px/1.5 Arial, Helvetica, sans-serif;">✓ ${escapeEmailHtml(item)}</p>`).join("")}
+    </div>
+  ` : "";
+  const finalInstructionsText = finalInstructions
+    ? `${finalInstructions.title}\n\nPlease make sure to:\n\n${finalInstructions.items.map((item) => `✓ ${item}`).join("\n")}`
+    : "";
+  const supervisorMaterialHtml = role === "Supervisor" ? `
+    <div style="${styles.section}">
+      <h2 style="${styles.sectionTitle}">EXAM SESSION MATERIAL</h2>
+      <p style="${styles.paragraph};margin-bottom:0;">Once you confirm your participation as a Supervisor, our Logistics team will contact you in due course to arrange the delivery of the materials for your assigned exam session(s). You will also receive instructions on how to handle the materials after the exam session has ended.</p>
+    </div>
+  ` : "";
+  const supervisorMaterialText = role === "Supervisor"
+    ? "EXAM SESSION MATERIAL\n\nOnce you confirm your participation as a Supervisor, our Logistics team will contact you in due course to arrange the delivery of the materials for your assigned exam session(s). You will also receive instructions on how to handle the materials after the exam session has ended."
+    : "";
+  const actionTagsHtml = `
+    <p style="${styles.paragraph}">We’d appreciate it if you could confirm receipt of this email and verify that you can access all the materials mentioned above.</p>
+    <p style="margin:0 0 8px;"><a href="${escapeEmailAttribute(confirmMailto)}" style="display:inline-block;padding:9px 13px;border-radius:999px;background:#eef5ed;color:#4f7f4c;border:1px solid #86aa83;font:700 13px Arial, Helvetica, sans-serif;text-decoration:none;">Click here to confirm participation and material reception</a></p>
+    <p style="margin:0 0 8px;"><a href="${escapeEmailAttribute(questionMailto)}" style="display:inline-block;padding:9px 13px;border-radius:999px;background:#fff3c4;color:#8a5a00;border:1px solid #f3d67a;font:700 13px Arial, Helvetica, sans-serif;text-decoration:none;">Click here to ask a question before confirming</a></p>
+    <p style="margin:0 0 16px;"><a href="${escapeEmailAttribute(declineMailto)}" style="display:inline-block;padding:9px 13px;border-radius:999px;background:#fbecea;color:#cd4d40;border:1px solid #e7a59f;font:700 13px Arial, Helvetica, sans-serif;text-decoration:none;">Click here to decline participation in this session</a></p>
+  `;
+  const bodyHtml = `
+    <div style="margin:0;padding:24px;background:#00506b;font-family:Arial, Helvetica, sans-serif;color:#111115;">
+      <div style="max-width:680px;margin:0 auto;background:#ffffff;border:1px solid #d9dfdc;border-radius:16px;padding:26px 28px;">
+        <p style="display:inline-block;margin:0 0 14px;padding:5px 10px;border-radius:999px;background:#e7f5f8;color:#00506b;font:700 11px Arial, Helvetica, sans-serif;letter-spacing:.5px;text-transform:uppercase;">OFFICIAL CONFIRMATION</p>
+        <h1 style="margin:0 0 18px;color:#00506b;font:700 24px/1.25 Arial, Helvetica, sans-serif;">Path exam session official confirmation</h1>
+        <p style="${styles.paragraph}">Dear ${escapeEmailHtml(fullName)},</p>
+        <p style="${styles.paragraph}">Hope you’re doing very well.</p>
+        <p style="display:inline-block;margin:0 0 16px;padding:6px 11px;border-radius:999px;background:#fff3c4;color:#8a5a00;font:700 12px Arial, Helvetica, sans-serif;">⏳ Participation awaiting your confirmation</p>
+        <p style="${styles.paragraph}">We’re pleased to inform you that you have been selected as ${escapeEmailHtml(roleData.article)} <strong>${escapeEmailHtml(role)}</strong> for the upcoming Path exam session, subject to your confirmation.</p>
+        <div style="${styles.section}">
+          <h2 style="${styles.sectionTitle}">EXAM SESSION INFORMATION</h2>
+          <p style="margin:0 0 4px;color:#62727a;font:800 12px Arial, Helvetica, sans-serif;">🗓️ Date</p>
+          <p style="margin:0 0 12px;color:#111115;font:700 16px Arial, Helvetica, sans-serif;">${escapeEmailHtml(sessionDate)}</p>
+          <p style="margin:0 0 4px;color:#62727a;font:800 12px Arial, Helvetica, sans-serif;">🕗 Time</p>
+          <p style="margin:0 0 12px;color:#111115;font:700 16px Arial, Helvetica, sans-serif;">${escapeEmailHtml(timeLabel)} GMT-3 <em style="color:#62727a;font:italic 13px/1.4 Arial, Helvetica, sans-serif;">(Please make sure to arrive at least ${arrival} minutes before the session begins)</em></p>
+          <p style="margin:0 0 4px;color:#62727a;font:800 12px Arial, Helvetica, sans-serif;">💻 Format</p>
+          <p style="margin:0 0 12px;color:#111115;font:700 16px Arial, Helvetica, sans-serif;">Onsite</p>
+          <p style="margin:0 0 4px;color:#62727a;font:800 12px Arial, Helvetica, sans-serif;">📍 Venue</p>
+          <p style="margin:0;color:#111115;font:700 16px Arial, Helvetica, sans-serif;">${escapeEmailHtml(address)}</p>
+        </div>
+        <div style="${styles.section}">
+          <h2 style="${styles.sectionTitle}">FEES AND INVOICE</h2>
+          <p style="${styles.paragraph}">Below you’ll find the breakdown of your exam session fee:</p>
+          <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="border-collapse:collapse;border:1px solid #d9dfdc;border-radius:10px;overflow:hidden;margin:0 0 14px;">${feeRowsHtml}<tr><td style="padding:12px;background:#e7f5f8;color:#00506b;font:800 15px Arial, Helvetica, sans-serif;">TOTAL FEE:</td><td align="right" style="padding:12px;background:#e7f5f8;color:#00506b;font:800 15px Arial, Helvetica, sans-serif;">${escapeEmailHtml(totalFee)}</td></tr></table>
+          <p style="${styles.paragraph};margin-bottom:0;">Once <strong><em><u>all your exam sessions</u></em></strong> are over, please send a <strong><em><u>unified invoice</u></em></strong> with the TOTAL FEE of all sessions to <a href="mailto:finance@pathexaminations.com" style="color:#00506b;font-weight:700;text-decoration:underline;">finance@pathexaminations.com</a>.</p>
+        </div>
+        ${officialConfirmationMaterialsHtml(role, styles)}
+        ${officialContactsHtml(contacts, role, styles)}
+        ${supervisorMaterialHtml}
+        <div style="${styles.section}">
+          <h2 style="${styles.sectionTitle}">TRAVEL AND COMMUTING</h2>
+          <p style="${styles.paragraph};margin-bottom:0;">${travel.html}</p>
+        </div>
+        ${finalInstructionsHtml}
+        ${actionTagsHtml}
+        <p style="${styles.paragraph};font-weight:600;">Thank you very much for your collaboration and commitment! 💙</p>
+        <p style="margin:0;color:#111115;font:400 15px/1.55 Arial, Helvetica, sans-serif;">Warm regards,</p>
+        <p style="margin:4px 0 0;color:#00506b;font:700 15px/1.55 Arial, Helvetica, sans-serif;">Path International Examinations</p>
+      </div>
+    </div>
+  `;
+  const feeText = feeLines.map((line) => `${line.label}: ${line.value}`).join("\n");
+  const text = [
+    "OFFICIAL CONFIRMATION",
+    "Path exam session official confirmation",
+    "",
+    `Dear ${fullName},`,
+    "",
+    "Hope you’re doing very well.",
+    "",
+    "⏳ Participation awaiting your confirmation",
+    "",
+    `We’re pleased to inform you that you have been selected as ${roleData.article} ${role} for the upcoming Path exam session, subject to your confirmation.`,
+    "",
+    "EXAM SESSION INFORMATION",
+    `🗓️ Date\n${sessionDate}`,
+    `🕗 Time\n${timeLabel} GMT-3 (Please make sure to arrive at least ${arrival} minutes before the session begins)`,
+    "💻 Format\nOnsite",
+    `📍 Venue\n${address}`,
+    "",
+    "FEES AND INVOICE",
+    "Below you’ll find the breakdown of your exam session fee:",
+    feeText,
+    `TOTAL FEE: ${totalFee}`,
+    "Once all your exam sessions are over, please send a unified invoice with the TOTAL FEE of all sessions to finance@pathexaminations.com.",
+    materialsText,
+    officialContactsText(contacts, role),
+    supervisorMaterialText,
+    "TRAVEL AND COMMUTING",
+    travel.text,
+    finalInstructionsText,
+    "We’d appreciate it if you could confirm receipt of this email and verify that you can access all the materials mentioned above.",
+    `Click here to confirm participation and material reception:\n${confirmMailto}`,
+    `Click here to ask a question before confirming:\n${questionMailto}`,
+    `Click here to decline participation in this session:\n${declineMailto}`,
+    "Thank you very much for your collaboration and commitment! 💙",
+    "",
+    "Warm regards,",
+    "Path International Examinations",
+  ].filter(Boolean).join("\n\n");
+  return { html: bodyHtml, text };
+};
+
+const showStaffOfficialConfirmationEmailFeedback = showStaffPreconfirmationEmailFeedback;
+
+const syncStaffOfficialConfirmationEmailButtons = (root = document) => {
+  root.querySelectorAll?.("[data-staff-confirmation-email]").forEach((button) => {
+    const panel = button.closest("[data-session-modal-panel]");
+    const row = button.closest("[data-supervisor-row]");
+    const viewOnly = document.querySelector("main[data-current-menu-can-edit='false']") !== null;
+    const hasMember = Boolean(row?.querySelector("[data-team-member-select]")?.value);
+    const onsite = panel?.dataset.sessionFormat === "Onsite";
+    button.disabled = viewOnly || !hasMember || !onsite;
+    button.title = !onsite
+      ? "Official confirmation email is only available for onsite sessions."
+      : !hasMember
+        ? "Select a staff member before copying the official confirmation email."
+        : "Copy official confirmation email";
+  });
+};
+
+const initStaffOfficialConfirmationEmailButtons = (root = document) => {
+  syncStaffOfficialConfirmationEmailButtons(root);
+  root.querySelectorAll("[data-staff-confirmation-email]").forEach((button) => {
+    if (button.dataset.staffOfficialConfirmationInitialized === "true") return;
+    button.dataset.staffOfficialConfirmationInitialized = "true";
+    button.addEventListener("click", async (event) => {
+      event.preventDefault();
+      if (button.disabled) return;
+      const payload = buildStaffOfficialConfirmationEmail(button);
+      if (payload.error) {
+        showStaffOfficialConfirmationEmailFeedback(button, payload.error, true);
+        return;
+      }
+      try {
+        await copyRichTextToClipboard(payload);
+        showStaffOfficialConfirmationEmailFeedback(button, "Official confirmation email copied.");
+      } catch (error) {
+        showStaffOfficialConfirmationEmailFeedback(button, "Could not copy the official confirmation email. Please try again.", true);
+      }
+    });
+  });
+};
+
+if (typeof document !== "undefined") initStaffOfficialConfirmationEmailButtons();
+
 const initInvitationEmailCopyButtons = (root = document) => {
   root.querySelectorAll("[data-copy-invitation-email]").forEach((button) => {
     const state = invitationEmailButtonState(button);
@@ -6046,6 +7357,7 @@ const initTeamMemberSelects = (root = document) => {
   initEntryAcceptedEmailButtons(root);
   initEntryAcceptedWhatsAppButtons(root);
   initPotentialGmailButtons(root);
+  initStaffPreconfirmationEmailButtons(root);
 };
 
 document.querySelectorAll("[data-copy-link]").forEach((button) => {
@@ -6074,6 +7386,7 @@ initInterviewInvitationEmailButtons();
 initEntryAcceptedEmailButtons();
 initEntryAcceptedWhatsAppButtons();
 initPotentialGmailButtons();
+initStaffPreconfirmationEmailButtons();
 initPotentialSessionMultiselects();
 initNoteRecipientSelects();
 
@@ -7906,7 +9219,7 @@ const parseTimeMaskValue = (value) => {
   if (!match) return null;
   const hours = Number.parseInt(match[1], 10);
   const minutes = Number.parseInt(match[2], 10);
-  if (hours < 0 || hours > 23 || minutes < 0 || minutes > 59) return null;
+  if (hours < 0 || hours > 24 || minutes < 0 || minutes > 60) return null;
   return (hours * 60) + minutes;
 };
 
@@ -7971,23 +9284,13 @@ const focusNextTimeMaskInput = (input) => {
 
 const syncProceedInterviewButton = (element) => {
   const form = element?.closest?.("form") || element?.querySelector?.("form") || element;
-  const root = form?.querySelector?.("[data-interview-options-root]");
-  const button = form?.querySelector?.("[data-proceed-interview-button]");
-  if (!root || !button) return;
-  const hasDateAndTime = Array.from(root.querySelectorAll("[data-interview-option-row]")).some((row) => {
-    const date = row.querySelector("[data-interview-option-date]")?.value.trim();
-    const time = row.querySelector("[data-interview-option-time]")?.value.trim();
-    return Boolean(date && time);
-  });
-  const platform = root.querySelector("[data-interview-option-platform]")?.value.trim();
-  const interviewer = root.querySelector("select[name='interview_option_interviewer']")?.value.trim();
-  const canProceed = Boolean(hasDateAndTime && platform && interviewer);
-  button.disabled = !canProceed;
-  if (canProceed) {
-    button.removeAttribute("title");
-  } else {
-    button.setAttribute("title", "Complete at least one date and time, platform, and interviewer to proceed.");
-  }
+  window.syncPotentialProceedInterviewButton?.(form);
+};
+
+const scheduleProceedInterviewButtonSync = (element) => {
+  const form = element?.closest?.("form") || element?.querySelector?.("form") || element;
+  if (!form?.querySelector?.("[data-proceed-interview-button]")) return;
+  window.requestAnimationFrame(() => syncProceedInterviewButton(form));
 };
 
 const syncInterviewOptionControls = (root) => {
@@ -8009,13 +9312,16 @@ const syncInterviewOptionControls = (root) => {
 const platformPreviewHtml = (platform) => {
   if (platform === "Zoom") return '<img class="platform-logo-img" src="/static/img/zoom.png" alt="Zoom" title="Zoom"><span>Zoom</span>';
   if (platform === "Meet") return '<img class="platform-logo-img platform-logo-meet" src="/static/img/google-meet.png" alt="Google Meet" title="Google Meet"><span>Meet</span>';
-  return '<span class="muted">Select platform</span>';
+  return "";
 };
 
 const syncInterviewOptionPlatformPreview = (select) => {
   const root = select?.closest("[data-interview-options-root]") || select?.closest(".onboarding-induction-group") || select?.closest("form");
   const preview = root?.querySelector("[data-interview-option-platform-preview]");
-  if (preview) preview.innerHTML = platformPreviewHtml(select.value);
+  if (preview) {
+    preview.innerHTML = platformPreviewHtml(select.value);
+    preview.hidden = !select.value;
+  }
 };
 
 document.querySelectorAll("[data-interview-options-root]").forEach(syncInterviewOptionControls);
@@ -8062,6 +9368,10 @@ document.querySelectorAll("[data-interview-no-show]").forEach((checkbox) => {
 
 const syncInterviewInvitationConfirmation = (element) => {
   const form = element?.closest?.("form") || element?.querySelector?.("form") || element;
+  if (window.syncPotentialInterviewInvitationActions) {
+    window.syncPotentialInterviewInvitationActions(form);
+    return;
+  }
   const root = form?.querySelector?.("[data-interview-confirm-root]");
   if (!form || !root) return;
   const noReply = Boolean(root.querySelector("[data-interview-no-reply]")?.checked);
@@ -8098,6 +9408,10 @@ document.querySelectorAll("[data-interview-confirm-root]").forEach((root) => {
 
 const syncEntryAcceptedOnboardingButton = (element) => {
   const form = element?.closest?.("form") || element?.querySelector?.("form") || element;
+  if (window.syncPotentialEntryAcceptedOnboardingButton) {
+    window.syncPotentialEntryAcceptedOnboardingButton(form);
+    return;
+  }
   const button = form?.querySelector?.("[data-onboarding-email-sent-button]");
   if (!form || !button) return;
   const requiredNames = [
@@ -8120,6 +9434,10 @@ document.querySelectorAll("[data-onboarding-email-sent-button]").forEach((button
 
 const syncOnboardingFollowUpControls = (element) => {
   const form = element?.closest?.("form") || element?.querySelector?.("form") || element;
+  if (window.syncPotentialOnboardingFollowUpControls) {
+    window.syncPotentialOnboardingFollowUpControls(form);
+    return;
+  }
   const root = form?.querySelector?.("[data-onboarding-follow-up]");
   if (!form || !root) return;
   root.querySelectorAll("[data-interview-option-platform]").forEach(syncInterviewOptionPlatformPreview);
@@ -8158,6 +9476,10 @@ document.querySelectorAll("[data-onboarding-follow-up]").forEach((root) => {
 
 const syncInductionStatusPanels = (element) => {
   const root = element?.closest?.("[data-induction-status-root]") || element;
+  if (window.syncPotentialOutcomeStatusPanels) {
+    window.syncPotentialOutcomeStatusPanels(root);
+    return;
+  }
   if (!root) return;
   const form = root.closest("form");
   const selected = root.querySelector("[data-induction-status-option]:checked")?.value || "";
@@ -8169,6 +9491,8 @@ const syncInductionStatusPanels = (element) => {
     if (field.type === "checkbox") return field.checked;
     return Boolean(field.value?.trim());
   });
+  const noShowCheck = root.querySelector("[data-induction-no-show-required]");
+  const noShowComplete = selected === "no_show" && (!noShowCheck || noShowCheck.checked);
   const attendedComplete = selected === "attended" && Boolean(root.querySelector("[data-induction-attended-required]:checked"));
   const acceptanceOutcome = root.querySelector("input[name='entry_acceptance_outcome']:checked")?.value || "";
   const reactivationDateField = root.querySelector("[data-reactivation-date-field]");
@@ -8188,7 +9512,9 @@ const syncInductionStatusPanels = (element) => {
   const activateButton = form?.querySelector("[data-induction-activate-button]");
   const acceptedButton = form?.querySelector("[data-application-accepted-button]");
   const acceptedOnHoldButton = form?.querySelector("[data-application-accepted-on-hold-button]");
-  if (rejectButton) rejectButton.disabled = selected !== "no_show";
+  const interviewPreassigned = form?.querySelector("[data-interview-preassigned-readonly]");
+  if (interviewPreassigned) interviewPreassigned.hidden = selected === "no_show";
+  if (rejectButton) rejectButton.disabled = !noShowComplete;
   if (rescheduleButton) rescheduleButton.disabled = !rescheduleComplete;
   if (activateButton) activateButton.disabled = !attendedComplete;
   if (acceptedButton) acceptedButton.disabled = !interviewAttendedComplete;
@@ -8202,11 +9528,10 @@ const syncEntryAcceptedCheck = async (checkbox) => {
   if (!action) return;
   const root = checkbox.closest("[data-entry-accepted-email-root]");
   const status = root?.querySelector("[data-entry-accepted-email-status]");
-  const formData = new FormData();
-  formData.set("csrf_token", document.querySelector("input[name='csrf_token']")?.value || "");
-  formData.set(checkbox.name, checkbox.checked ? "1" : "0");
-  checkbox.disabled = true;
-  try {
+	  const formData = new FormData();
+	  formData.set("csrf_token", document.querySelector("input[name='csrf_token']")?.value || "");
+	  formData.set(checkbox.name, checkbox.checked ? "1" : "0");
+	  try {
     const response = await fetch(action, {
       method: "POST",
       body: formData,
@@ -8233,42 +9558,10 @@ const syncEntryAcceptedCheck = async (checkbox) => {
         status.classList.remove("is-error");
       }, 2400);
     }
-  } finally {
-    checkbox.disabled = false;
-    syncEntryAcceptedOnboardingButton(checkbox.closest("form"));
-  }
-};
-
-document.addEventListener("click", (event) => {
-  const editButton = event.target.closest("[data-edit-potential-info]");
-  if (editButton) {
-    event.preventDefault();
-    const section = editButton.closest(".potential-review-summary");
-    section?.querySelector("[data-potential-info-view]")?.setAttribute("hidden", "");
-    section?.querySelector("[data-potential-info-edit]")?.removeAttribute("hidden");
-    section?.querySelectorAll("[data-potential-note-delete]").forEach((form) => {
-      form.hidden = false;
-    });
-    editButton.hidden = true;
-    section?.querySelector("[data-potential-info-edit] input:not([type='hidden'])")?.focus();
-    return;
-  }
-
-  const cancelButton = event.target.closest("[data-cancel-potential-info-edit]");
-  if (cancelButton) {
-    event.preventDefault();
-    const section = cancelButton.closest(".potential-review-summary");
-    const form = cancelButton.closest("form");
-    form?.reset();
-    section?.querySelector("[data-potential-info-edit]")?.setAttribute("hidden", "");
-    section?.querySelector("[data-potential-info-view]")?.removeAttribute("hidden");
-    section?.querySelectorAll("[data-potential-note-delete]").forEach((form) => {
-      form.hidden = true;
-    });
-    const edit = section?.querySelector("[data-edit-potential-info]");
-    if (edit) edit.hidden = false;
-  }
-});
+	  } finally {
+	    syncEntryAcceptedOnboardingButton(checkbox.closest("form"));
+	  }
+	};
 
 document.addEventListener("input", (event) => {
   const onboardingField = event.target.closest("[data-onboarding-confirm-required]");
@@ -8281,7 +9574,7 @@ document.addEventListener("input", (event) => {
     maskedDateInput.value = formatInterviewOptionDateTyping(maskedDateInput.value, { completeSegments: !isDeleting });
     validateDateMaskInput(maskedDateInput);
     if (maskedDateInput.matches("[data-interview-option-date]")) {
-      syncProceedInterviewButton(maskedDateInput.closest("form"));
+      scheduleProceedInterviewButtonSync(maskedDateInput);
       syncInductionStatusPanels(maskedDateInput);
     } else if (maskedDateInput.matches("[data-reactivation-date]")) {
       syncInductionStatusPanels(maskedDateInput);
@@ -8292,9 +9585,11 @@ document.addEventListener("input", (event) => {
   if (timeInput) {
     timeInput.value = formatInterviewOptionTimeTyping(timeInput.value);
     validateTimeMaskInput(timeInput);
-    syncProceedInterviewButton(timeInput.closest("form"));
+    scheduleProceedInterviewButtonSync(timeInput);
     if (timeInput.matches("[data-interview-option-time]")) syncInductionStatusPanels(timeInput);
+    return;
   }
+  scheduleProceedInterviewButtonSync(event.target);
 });
 
 document.addEventListener("change", (event) => {
@@ -8317,6 +9612,8 @@ document.addEventListener("change", (event) => {
   if (interviewConfirmControl) {
     if (interviewConfirmControl.matches("[data-interview-option-choice]") && interviewConfirmControl.checked) {
       const root = interviewConfirmControl.closest("[data-interview-confirm-root]");
+      const noReply = root?.querySelector("[data-interview-no-reply]");
+      if (noReply) noReply.checked = false;
       root?.querySelectorAll("[data-interview-option-choice]").forEach((option) => {
         if (option !== interviewConfirmControl) option.checked = false;
       });
@@ -8324,7 +9621,7 @@ document.addEventListener("change", (event) => {
     syncInterviewInvitationConfirmation(interviewConfirmControl.closest("form"));
     return;
   }
-  const inductionStatusOption = event.target.closest("[data-induction-status-option], [data-induction-reschedule-required], [data-induction-attended-required], input[name='interview_has_car'], input[name='interview_roles'], input[name='entry_acceptance_outcome']");
+  const inductionStatusOption = event.target.closest("[data-induction-status-option], [data-induction-reschedule-required], [data-induction-no-show-required], [data-induction-attended-required], input[name='interview_has_car'], input[name='interview_roles'], input[name='entry_acceptance_outcome']");
   if (inductionStatusOption) {
     syncInductionStatusPanels(inductionStatusOption);
     return;
@@ -8332,11 +9629,20 @@ document.addEventListener("change", (event) => {
   const platformSelect = event.target.closest("[data-interview-option-platform]");
   if (platformSelect) {
     syncInterviewOptionPlatformPreview(platformSelect);
-    syncProceedInterviewButton(platformSelect.closest("form"));
+    scheduleProceedInterviewButtonSync(platformSelect);
     return;
   }
   const interviewerSelect = event.target.closest("select[name='interview_option_interviewer']");
-  if (interviewerSelect) syncProceedInterviewButton(interviewerSelect.closest("form"));
+  if (interviewerSelect) {
+    scheduleProceedInterviewButtonSync(interviewerSelect);
+    return;
+  }
+  scheduleProceedInterviewButtonSync(event.target);
+});
+
+document.addEventListener("paste", (event) => {
+  const field = event.target.closest("[data-interview-option-date], [data-interview-option-time]");
+  if (field) scheduleProceedInterviewButtonSync(field);
 });
 
 document.addEventListener("blur", (event) => {
@@ -8345,7 +9651,7 @@ document.addEventListener("blur", (event) => {
     maskedDateInput.value = normalizeInterviewOptionDate(maskedDateInput.value);
     validateDateMaskInput(maskedDateInput);
     if (maskedDateInput.matches("[data-interview-option-date]")) {
-      syncProceedInterviewButton(maskedDateInput.closest("form"));
+      scheduleProceedInterviewButtonSync(maskedDateInput);
       syncInductionStatusPanels(maskedDateInput);
     } else if (maskedDateInput.matches("[data-reactivation-date]")) {
       syncInductionStatusPanels(maskedDateInput);
@@ -8355,7 +9661,7 @@ document.addEventListener("blur", (event) => {
   const timeInput = timeMaskInputFromTarget(event.target);
   if (timeInput) {
     completeTimeMaskInput(timeInput);
-    syncProceedInterviewButton(timeInput.closest("form"));
+    scheduleProceedInterviewButtonSync(timeInput);
     if (timeInput.matches("[data-interview-option-time]")) syncInductionStatusPanels(timeInput);
   }
 }, true);
@@ -8366,10 +9672,12 @@ document.addEventListener("keydown", (event) => {
     if (event.key === "/") {
       event.preventDefault();
       advanceDateMaskSegment(maskedDateInput);
+      scheduleProceedInterviewButtonSync(maskedDateInput);
       return;
     }
     if (event.key === "Tab") {
       completeCurrentDateMaskSegment(maskedDateInput);
+      scheduleProceedInterviewButtonSync(maskedDateInput);
     }
   }
   const timeInput = timeMaskInputFromTarget(event.target);
@@ -8384,21 +9692,26 @@ document.addEventListener("keydown", (event) => {
   if (event.key === ":") {
     event.preventDefault();
     advanceTimeMaskSegment(timeInput);
+    scheduleProceedInterviewButtonSync(timeInput);
     return;
   }
   if (event.key === "Tab") {
     completeTimeMaskInput(timeInput);
+    scheduleProceedInterviewButtonSync(timeInput);
   }
 });
 
 document.addEventListener("keyup", (event) => {
   if (event.key !== "Shift") return;
-  completeCurrentDateMaskSegment(dateMaskInputFromTarget(event.target));
+  const dateInput = dateMaskInputFromTarget(event.target);
+  completeCurrentDateMaskSegment(dateInput);
+  scheduleProceedInterviewButtonSync(dateInput);
   const timeInput = timeMaskInputFromTarget(event.target);
   if (!timeInput) return;
   const shouldAdvance = timeInput.dataset.shiftTimeAdvance === "true";
   delete timeInput.dataset.shiftTimeAdvance;
   completeTimeMaskInput(timeInput);
+  scheduleProceedInterviewButtonSync(timeInput);
   if (shouldAdvance) focusNextTimeMaskInput(timeInput);
 });
 

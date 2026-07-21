@@ -1837,6 +1837,16 @@ th {
   opacity: 1;
 }
 
+.copy-icon-button.is-error .copy-button-feedback {
+  opacity: 1;
+  background: var(--badge-red-bg);
+  color: var(--badge-red-text);
+  max-width: 280px;
+  white-space: normal;
+  text-align: center;
+  line-height: 1.25;
+}
+
 .copy-icon-button .check-icon {
   display: none;
 }
@@ -3528,6 +3538,48 @@ span.session-marker-chip {
   align-items: center;
   gap: 8px;
   max-width: 100%;
+}
+
+.staff-contact-email-chip-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.staff-contact-email-chip {
+  border: 1px solid rgba(0, 80, 107, 0.18);
+  border-radius: 999px;
+  background: var(--path-blue-50);
+  color: var(--color-primary);
+  cursor: pointer;
+  font-size: 11px;
+  font-weight: 800;
+  line-height: 1.2;
+  padding: 5px 9px;
+  white-space: nowrap;
+}
+
+.staff-contact-email-chip:hover {
+  border-color: rgba(0, 80, 107, 0.34);
+  background: white;
+}
+
+.staff-contact-email-chip:disabled {
+  cursor: not-allowed;
+  opacity: 0.58;
+}
+
+.staff-contact-email-chip.is-copied {
+  border-color: rgba(58, 125, 68, 0.32);
+  background: #e5f4e8;
+  color: #2f6f3a;
+}
+
+.staff-contact-email-chip.is-error {
+  border-color: rgba(168, 83, 54, 0.34);
+  background: #fff0e8;
+  color: #8a3f25;
 }
 
 .staff-email-cell a {
@@ -7902,6 +7954,10 @@ span.session-marker-chip {
   font-weight: 700;
 }
 
+.cv-review-notes-box {
+  gap: calc(6px + 3mm);
+}
+
 .cv-review-notes-panel {
   display: grid;
   gap: 10px;
@@ -8293,6 +8349,111 @@ span.session-marker-chip {
 
 .potential-preassigned-sessions .interview-options-fieldset {
   min-height: 0;
+}
+
+.potential-preassigned-readonly {
+  display: grid;
+  gap: 6px;
+  margin-top: 3mm;
+  min-width: 0;
+}
+
+.potential-preassigned-readonly-heading {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.potential-preassigned-readonly-heading .interview-options-title {
+  font-weight: 700;
+}
+
+.induction-preassigned-readonly .potential-preassigned-readonly-heading .interview-options-title {
+  color: var(--color-primary-dark);
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.potential-preassigned-edit-toggle {
+  display: inline-grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  border: 1px solid var(--color-border);
+  border-radius: 999px;
+  background: var(--badge-grey-bg);
+  color: var(--badge-grey-text);
+  font-size: 16px;
+  font-weight: 900;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.potential-preassigned-edit-toggle:hover,
+.potential-preassigned-edit-toggle.is-active {
+  border-color: var(--color-muted);
+  background: var(--color-background);
+  color: var(--color-primary-dark);
+}
+
+.potential-preassigned-readonly-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.potential-preassigned-readonly-list li {
+  min-width: 0;
+}
+
+.potential-preassigned-readonly-list a,
+.potential-preassigned-readonly-list .muted,
+.potential-preassigned-readonly-empty {
+  display: inline-flex;
+  align-items: center;
+  max-width: 100%;
+  border-radius: 999px;
+  padding: 4px 8px;
+  background: var(--path-cyan-50);
+  color: var(--badge-blue-text);
+  font-size: 12px;
+  font-weight: 800;
+  line-height: 1.2;
+  text-decoration: none;
+}
+
+.potential-preassigned-readonly-list a:hover {
+  color: var(--color-primary-dark);
+  text-decoration: underline;
+}
+
+.potential-preassigned-readonly-list .muted,
+.potential-preassigned-readonly-empty {
+  background: var(--badge-grey-bg);
+  color: var(--badge-grey-text);
+}
+
+.potential-preassigned-session-editor {
+  display: grid;
+  gap: 8px;
+  max-width: 520px;
+  margin-top: 4px;
+}
+
+.potential-preassigned-session-editor[hidden] {
+  display: none;
+}
+
+.onboarding-turn-down-preassigned,
+.induction-preassigned-readonly {
+  margin-top: 8px;
+}
+
+.potential-preassigned-save-button {
+  justify-self: start;
 }
 
 .potential-preassigned-session-label {
@@ -8792,6 +8953,10 @@ span.session-marker-chip {
   color: var(--color-primary-dark);
   font-size: 12px;
   font-weight: 800;
+}
+
+.interview-option-platform-preview:empty {
+  display: none;
 }
 
 .interview-option-shared-fields {
@@ -9333,6 +9498,29 @@ span.session-marker-chip {
   font-size: 12px;
   font-weight: 900;
   line-height: 1;
+}
+
+.staff-session-count-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  white-space: nowrap;
+}
+
+.staff-session-email-copy-button {
+  min-width: 26px;
+  min-height: 26px;
+  padding: 0 6px;
+}
+
+.staff-session-email-copy-button:disabled {
+  opacity: 0.42;
+  cursor: not-allowed;
+}
+
+.staff-session-email-copy-button:disabled:hover {
+  border-color: var(--color-border);
+  background: white;
 }
 
 .session-count-detail {
