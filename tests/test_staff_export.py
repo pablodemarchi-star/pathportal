@@ -52,6 +52,7 @@ class StaffExportTest(unittest.TestCase):
             location_point="https://maps.example.com/location-point",
             cv="https://example.com/cv.pdf",
             profile_picture="https://example.com/profile.jpg",
+            dietary_requirements="Vegetarian",
         )
 
         workbook_bytes = build_academic_staff_export([member], session_counts={member.id: 3})
@@ -67,8 +68,10 @@ class StaffExportTest(unittest.TestCase):
         self.assertNotIn("Street number", headers)
         self.assertNotIn("Postcode", headers)
         self.assertEqual(headers.index("Full address"), headers.index("Has a car") + 1)
+        self.assertEqual(headers.index("Dietary requirements"), headers.index("Profile picture") + 1)
         self.assertEqual(headers.index("Sessions"), headers.index("Started in") + 1)
         self.assertEqual(first_data_row[headers.index("Full address")], member.full_address_google_maps)
+        self.assertEqual(first_data_row[headers.index("Dietary requirements")], member.dietary_requirements)
         self.assertEqual(first_data_row[headers.index("Sessions")], 3)
         self.assertNotIn("https://maps.example.com/location-point", first_data_row)
         self.assertNotIn("Old Street", first_data_row)
@@ -99,6 +102,7 @@ class StaffExportTest(unittest.TestCase):
             account_id="ACC-8",
             account_owner="Path",
             profile_picture="https://example.com/john-profile.jpg",
+            dietary_requirements="Gluten-free meal",
         )
         workbook_bytes = build_academic_staff_export([source_member], session_counts={source_member.id: 2})
 
@@ -108,10 +112,12 @@ class StaffExportTest(unittest.TestCase):
 
         row_data = payload["rows"][0]["data"]
         self.assertEqual(row_data["Full address"], source_member.full_address_google_maps)
+        self.assertEqual(row_data["Dietary requirements"], source_member.dietary_requirements)
 
         imported_member = AcademicStaff()
         apply_import_row(imported_member, row_data, update_empty_fields=True)
         self.assertEqual(imported_member.full_address_google_maps, source_member.full_address_google_maps)
+        self.assertEqual(imported_member.dietary_requirements, source_member.dietary_requirements)
 
     def test_import_requires_complete_member_fields_except_seniority_and_history(self):
         source_member = AcademicStaff(
@@ -187,7 +193,7 @@ class StaffExportTest(unittest.TestCase):
 
         self.assertEqual(sheet.title, "Examiner Certification")
         self.assertEqual(sheet["A1"].value, "Examiner Certification Export")
-        self.assertEqual(headers[:19], [
+        self.assertEqual(headers[:20], [
             "Status",
             "Title",
             "Full name",
@@ -204,6 +210,7 @@ class StaffExportTest(unittest.TestCase):
             "Account ID",
             "Account owner",
             "Profile picture",
+            "Dietary requirements",
             "Started in",
             "Sessions",
             "Seniority",
@@ -255,7 +262,7 @@ class StaffExportTest(unittest.TestCase):
         headers = [cell.value for cell in sheet[3]]
         first_data_row = [cell.value for cell in sheet[4]]
 
-        self.assertEqual(headers[:19], [
+        self.assertEqual(headers[:20], [
             "Status",
             "Title",
             "Full name",
@@ -272,6 +279,7 @@ class StaffExportTest(unittest.TestCase):
             "Account ID",
             "Account owner",
             "Profile picture",
+            "Dietary requirements",
             "Started in",
             "Sessions",
             "Seniority",

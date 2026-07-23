@@ -1884,6 +1884,7 @@ ACADEMIC_STAFF_EXPORT_HEADERS = [
     "Account ID",
     "Account owner",
     "Profile picture",
+    "Dietary requirements",
     "Started in",
     "Sessions",
     "Seniority",
@@ -1909,6 +1910,7 @@ def academic_staff_export_row(member, session_counts=None):
         member.account_id or "",
         member.account_owner or "",
         member.profile_picture or "",
+        member.dietary_requirements or "",
         member.started_in or "",
         session_counts.get(member.id, 0),
         "Yes" if member.seniority else "No",
@@ -2259,6 +2261,7 @@ IMPORT_OPTIONAL_HEADERS = {
     "Postcode",
     "Location point",
     "History",
+    "Dietary requirements",
     "Sessions",
     "Updated on",
     "Seniority",
@@ -2457,6 +2460,7 @@ def apply_import_row(member, row_data, update_empty_fields):
         "Account ID": "account_id",
         "Account owner": "account_owner",
         "Profile picture": "profile_picture",
+        "Dietary requirements": "dietary_requirements",
         "Started in": "started_in",
     }
     for header, attr in mapping.items():
