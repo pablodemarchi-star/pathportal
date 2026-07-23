@@ -527,6 +527,7 @@
         <th>Account ID</th>
         <th>Account owner</th>
         <th>Profile picture</th>
+        <th>Dietary requirements</th>
         <th>
           <a class="table-sort {% if filters.sort == 'started_in' %}is-active{% endif %}" href="{{ sort_url('started_in') }}">
             Started in
@@ -609,6 +610,13 @@
         <td>
           {% if member.profile_picture %}
             <a class="mini-button link-button" href="{{ member.profile_picture }}" target="_blank" rel="noopener noreferrer">See</a>
+          {% else %}
+            <span class="muted">-</span>
+          {% endif %}
+        </td>
+        <td>
+          {% if member.dietary_requirements %}
+            <span class="dietary-requirements-chip">{{ member.dietary_requirements }}</span>
           {% else %}
             <span class="muted">-</span>
           {% endif %}
@@ -1374,9 +1382,9 @@
 		                {% set readonly_preassigned_ids = readonly_preassigned_sessions|map(attribute='id')|list %}
 		                {% set available_preassigned_ids = potential_preassigned_exam_session_options|map(attribute='id')|list %}
 			                <section class="potential-preassigned-readonly" aria-label="Pre-assigned sessions" data-interview-preassigned-readonly {% if entry.interview_no_show %}hidden{% endif %}>
-		                  <div class="potential-preassigned-readonly-heading">
-		                    <span class="interview-options-title">Pre-assigned sessions</span>
-		                    {% if current_menu_can_edit %}
+			                  <div class="potential-preassigned-readonly-heading">
+				                    <span class="interview-options-title">Sessions to check availability for</span>
+			                    {% if current_menu_can_edit %}
 		                      <button
 		                        class="potential-preassigned-edit-toggle"
 		                        type="button"
@@ -1384,10 +1392,10 @@
 		                        aria-label="Edit pre-assigned sessions"
 		                        title="Edit pre-assigned sessions"
 		                      >+</button>
-		                    {% endif %}
-		                  </div>
-		                  {% if readonly_preassigned_sessions %}
-		                    <ul class="potential-preassigned-readonly-list">
+			                    {% endif %}
+			                  </div>
+				                  {% if readonly_preassigned_sessions %}
+				                    <ul class="potential-preassigned-readonly-list">
 		                      {% for selected_session in readonly_preassigned_sessions %}
 	                        <li>
 	                          {% if selected_session.available and selected_session.year %}
@@ -1403,10 +1411,26 @@
 	                        </li>
 	                      {% endfor %}
 	                    </ul>
-		                  {% else %}
-		                    <span class="muted potential-preassigned-readonly-empty">No pre-assigned sessions.</span>
-		                  {% endif %}
-		                  {% if current_menu_can_edit %}
+			                  {% else %}
+			                    <span class="muted potential-preassigned-readonly-empty">No pre-assigned sessions.</span>
+			                  {% endif %}
+					                  <div
+					                    class="potential-preassigned-acceptance-checks"
+					                    data-interview-acceptance-checks
+					                    {% if not entry.entry_added_in_sessions_pre_confirmation %}hidden{% endif %}
+					                  >
+			                  <label class="checkbox-field">
+	                    <input
+	                      type="checkbox"
+				                        name="entry_assigned_to_exam_sessions_pending_status"
+				                        value="1"
+				                        data-interview-acceptance-required
+				                        {% if not current_menu_can_edit %}disabled{% endif %}
+				                      >
+				                      <span>Entry assigned to exam sessions with Pending status.</span>
+				                    </label>
+				                  </div>
+			                  {% if current_menu_can_edit %}
 		                    <div class="potential-preassigned-session-editor" data-preassigned-session-editor hidden>
 		                      <label class="potential-preassigned-session-label">
 		                        Exam sessions
@@ -1485,7 +1509,7 @@
                   data-preassigned-exam-sessions='{{ potential_entry_preassigned_email_sessions(entry)|tojson }}'
                   data-certification-programmes='{{ potential_entry_certification_email_programmes(entry)|tojson }}'
                 >
-                  <label class="checkbox-field">
+			                  <label class="checkbox-field">
                     <input
                       type="checkbox"
                       name="entry_accepted_notes_checked"
@@ -1594,9 +1618,47 @@
                       {% if entry.entry_accepted_whatsapp_sent %}checked{% endif %}
                       {% if not current_menu_can_edit %}disabled{% endif %}
                     >
-                    <span>Mark as WhatsApp sent</span>
-                  </label>
-                </div>
+		                    <span>Mark as WhatsApp sent</span>
+		                  </label>
+		                  {% set entry_accepted_assigned_sessions = potential_preassigned_exam_sessions_by_entry.get(entry.id, []) if potential_preassigned_exam_sessions_by_entry else [] %}
+		                  <section class="potential-preassigned-readonly entry-accepted-assigned-sessions" aria-label="Assigned exam sessions">
+		                    <div class="potential-preassigned-readonly-heading">
+		                      <span class="interview-options-title">Assigned exam sessions</span>
+		                    </div>
+		                    {% if entry_accepted_assigned_sessions %}
+		                      <ul class="potential-preassigned-readonly-list">
+		                        {% for selected_session in entry_accepted_assigned_sessions %}
+		                          <li>
+		                            {% if selected_session.available and selected_session.year %}
+		                              <a
+		                                href="{{ url_for('staff.exam_session_planner', session_year=selected_session.year, open_session_modal=selected_session.id) }}"
+		                                target="_blank"
+		                                rel="noopener noreferrer"
+		                                title="{{ selected_session.label }}"
+		                              >{{ selected_session.name }}</a>
+		                            {% else %}
+		                              <span class="muted">{{ selected_session.name }}</span>
+		                            {% endif %}
+		                          </li>
+		                        {% endfor %}
+		                      </ul>
+		                    {% else %}
+		                      <span class="muted potential-preassigned-readonly-empty">No assigned sessions.</span>
+		                    {% endif %}
+		                  </section>
+		                  <label class="checkbox-field">
+	                    <input
+	                      type="checkbox"
+	                      name="entry_accepted_pre_confirmation_sent"
+	                      value="1"
+	                      data-entry-accepted-check
+	                      data-action="{{ url_for('staff.update_entry_accepted_notes_checked', entry_id=entry.id) }}"
+	                      {% if entry.entry_accepted_pre_confirmation_sent %}checked{% endif %}
+	                      {% if not current_menu_can_edit %}disabled{% endif %}
+	                    >
+	                    <span>Participation status has been updated to Pre-confirmation sent for sessions assigned to Entry.</span>
+	                  </label>
+	                </div>
               </div>
             {% elif entry.status == 'Interview confirmed' %}
               <div class="interview-confirmed-fields-box" data-induction-status-root>
@@ -1696,7 +1758,7 @@
                       <legend>Acceptance outcome</legend>
                       <label>
                         <input type="radio" name="entry_acceptance_outcome" value="sessions_pre_confirmation" {% if entry.entry_added_in_sessions_pre_confirmation %}checked{% endif %} {% if not current_menu_can_edit %}disabled{% endif %}>
-                        <span>Entry added in sessions for pre-confirmation</span>
+	                        <span>Entry accepted and ready for onboarding</span>
                       </label>
                       <label>
                         <input type="radio" name="entry_acceptance_outcome" value="on_hold" {% if entry.reactivation_date %}checked{% endif %} {% if not current_menu_can_edit %}disabled{% endif %}>
@@ -1739,7 +1801,7 @@
 		                        {% if entry.exam_session_participation_statuses_pre_confirmed %}checked{% endif %}
 		                        {% if not current_menu_can_edit %}disabled{% endif %}
 		                      >
-		                      <span>The Entry has been removed from all pre-assigned exam session participations.</span>
+			                      <span>Entry has been removed from all assigned exam sessions.</span>
 		                    </label>
 	                    {% set induction_no_show_preassigned_sessions = potential_preassigned_exam_sessions_by_entry.get(entry.id, []) if potential_preassigned_exam_sessions_by_entry else [] %}
 	                    <section class="potential-preassigned-readonly induction-preassigned-readonly" aria-label="Pre-assigned sessions">
@@ -1846,45 +1908,7 @@
                       </div>
                     </div>
                   </div>
-                  <div class="induction-status-panel" data-induction-status-panel="attended" hidden>
-                    <label class="checkbox-field">
-                      <input
-                        type="checkbox"
-                        name="exam_session_participation_statuses_pre_confirmed"
-                        value="1"
-                        data-induction-attended-required
-                        {% if entry.exam_session_participation_statuses_pre_confirmed %}checked{% endif %}
-                        {% if not current_menu_can_edit %}disabled{% endif %}
-	                      >
-	                      <span>Exam session participation statuses have been updated to Pre-confirmed</span>
-	                    </label>
-	                    {% set induction_attended_preassigned_sessions = potential_preassigned_exam_sessions_by_entry.get(entry.id, []) if potential_preassigned_exam_sessions_by_entry else [] %}
-	                    <section class="potential-preassigned-readonly induction-preassigned-readonly" aria-label="Pre-assigned sessions">
-	                      <div class="potential-preassigned-readonly-heading">
-	                        <span class="interview-options-title">Pre-assigned sessions</span>
-	                      </div>
-	                      {% if induction_attended_preassigned_sessions %}
-	                        <ul class="potential-preassigned-readonly-list">
-	                          {% for selected_session in induction_attended_preassigned_sessions %}
-	                            <li>
-	                              {% if selected_session.available and selected_session.year %}
-	                                <a
-	                                  href="{{ url_for('staff.exam_session_planner', session_year=selected_session.year, open_session_modal=selected_session.id) }}"
-	                                  target="_blank"
-	                                  rel="noopener noreferrer"
-	                                  title="{{ selected_session.label }}"
-	                                >{{ selected_session.name }}</a>
-	                              {% else %}
-	                                <span class="muted">{{ selected_session.name }}</span>
-	                              {% endif %}
-	                            </li>
-	                          {% endfor %}
-	                        </ul>
-	                      {% else %}
-	                        <span class="muted potential-preassigned-readonly-empty">No pre-assigned sessions.</span>
-	                      {% endif %}
-	                    </section>
-	                  </div>
+	                  <div class="induction-status-panel" data-induction-status-panel="attended" hidden></div>
                 </div>
               </div>
             {% elif entry.status in ['Interview to be arranged', 'Interview invitation sent'] %}
@@ -2034,9 +2058,9 @@
                         <input name="account_owner_id" value="{{ entry.account_owner_id or '' }}" maxlength="120" data-onboarding-confirm-required>
                       </label>
                     </div>
-                    <div class="interview-options-group onboarding-induction-group">
-                      <span class="interview-options-title">Confirmed induction session date and time</span>
-                      <div class="interview-options-fieldset">
+	                    <div class="interview-options-group onboarding-induction-group">
+	                      <span class="interview-options-title">Confirmed induction session date and time</span>
+	                      <div class="interview-options-fieldset">
                         <div class="interview-options-list">
                           <div class="interview-option-row">
                             <label>
@@ -2092,52 +2116,17 @@
                               </select>
                             </label>
                           </div>
-                        </div>
-                      </div>
-                    </div>
-                  </fieldset>
-                </div>
-                <div class="onboarding-follow-up-column" data-onboarding-panel="turn_down">
-                  <label class="onboarding-follow-up-title">
-                    <input
-                      type="radio"
-                      name="onboarding_follow_up_choice"
-                      value="turn_down"
-                      data-onboarding-choice
-                      {% if entry.onboarding_follow_up_choice == 'turn_down' %}checked{% endif %}
-                      {% if not current_menu_can_edit %}disabled{% endif %}
-                    >
-                    <span>Turn down application</span>
-                  </label>
-                  <fieldset class="onboarding-follow-up-fieldset" data-onboarding-fieldset="turn_down" {% if entry.onboarding_follow_up_choice != 'turn_down' or not current_menu_can_edit %}disabled{% endif %}>
-                    <label class="checkbox-field">
-                      <input
-                        type="checkbox"
-                        name="onboarding_turn_down_sessions_removed"
-                        value="1"
-                        data-onboarding-turn-down-required
-                        {% if entry.onboarding_turn_down_sessions_removed %}checked{% endif %}
-                      >
-                      <span>The Entry has been removed from all pre-assigned exam session participations.</span>
-                    </label>
-                    <label class="checkbox-field">
-                      <input
-                        type="checkbox"
-                        name="onboarding_turn_down_trainer_notified"
-                        value="1"
-                        data-onboarding-turn-down-required
-                        {% if entry.onboarding_turn_down_trainer_notified %}checked{% endif %}
-	                      >
-	                      <span>The Trainer has been notified that the Entry will not attend the induction session.</span>
-	                    </label>
-	                    {% set onboarding_turn_down_preassigned_sessions = potential_preassigned_exam_sessions_by_entry.get(entry.id, []) if potential_preassigned_exam_sessions_by_entry else [] %}
-	                    <section class="potential-preassigned-readonly onboarding-turn-down-preassigned" aria-label="Pre-assigned sessions">
-	                      <div class="potential-preassigned-readonly-heading">
-	                        <span class="interview-options-title">Pre-assigned sessions</span>
+	                        </div>
 	                      </div>
-	                      {% if onboarding_turn_down_preassigned_sessions %}
+	                    </div>
+	                    {% set onboarding_confirm_preassigned_sessions = potential_preassigned_exam_sessions_by_entry.get(entry.id, []) if potential_preassigned_exam_sessions_by_entry else [] %}
+		                    <section class="potential-preassigned-readonly onboarding-confirm-preassigned" aria-label="Pre-confirm participation in exam sessions">
+		                      <div class="potential-preassigned-readonly-heading">
+		                        <span class="interview-options-title">Pre-confirm participation in exam sessions</span>
+	                      </div>
+	                      {% if onboarding_confirm_preassigned_sessions %}
 	                        <ul class="potential-preassigned-readonly-list">
-	                          {% for selected_session in onboarding_turn_down_preassigned_sessions %}
+	                          {% for selected_session in onboarding_confirm_preassigned_sessions %}
 	                            <li>
 	                              {% if selected_session.available and selected_session.year %}
 	                                <a
@@ -2155,7 +2144,88 @@
 	                      {% else %}
 	                        <span class="muted potential-preassigned-readonly-empty">No pre-assigned sessions.</span>
 	                      {% endif %}
+	                      <label class="checkbox-field">
+	                        <input
+	                          type="checkbox"
+	                          name="onboarding_confirm_notes_checked"
+	                          value="1"
+	                          data-onboarding-confirm-required
+	                          {% if entry.onboarding_confirm_notes_checked %}checked{% endif %}
+	                        >
+		                        <span>Participation status has been updated to Pre-confirmed for sessions accepted by Entry.</span>
+	                      </label>
+	                      <label class="checkbox-field">
+	                        <input
+	                          type="checkbox"
+	                          name="onboarding_confirm_examiner_assigned"
+	                          value="1"
+	                          data-onboarding-confirm-required
+	                          {% if entry.onboarding_confirm_examiner_assigned %}checked{% endif %}
+	                        >
+		                        <span>Entry has been removed from declined sessions, and role is now marked as Role to cover.</span>
+	                      </label>
 	                    </section>
+	                  </fieldset>
+                </div>
+                <div class="onboarding-follow-up-column" data-onboarding-panel="turn_down">
+                  <label class="onboarding-follow-up-title">
+                    <input
+                      type="radio"
+                      name="onboarding_follow_up_choice"
+                      value="turn_down"
+                      data-onboarding-choice
+                      {% if entry.onboarding_follow_up_choice == 'turn_down' %}checked{% endif %}
+                      {% if not current_menu_can_edit %}disabled{% endif %}
+                    >
+                    <span>Turn down application</span>
+	                  </label>
+			                  <fieldset class="onboarding-follow-up-fieldset" data-onboarding-fieldset="turn_down" {% if entry.onboarding_follow_up_choice != 'turn_down' or not current_menu_can_edit %}disabled{% endif %}>
+			                    <label class="checkbox-field">
+			                      <input
+			                        type="checkbox"
+			                        name="onboarding_turn_down_trainer_notified"
+			                        value="1"
+			                        data-onboarding-turn-down-required
+			                        {% if entry.onboarding_turn_down_trainer_notified %}checked{% endif %}
+			                      >
+				                      <span>Trainer has been notified that the Entry will not attend the induction session.</span>
+			                    </label>
+		                    {% set onboarding_turn_down_assigned_sessions = potential_preassigned_exam_sessions_by_entry.get(entry.id, []) if potential_preassigned_exam_sessions_by_entry else [] %}
+		                    <section class="potential-preassigned-readonly onboarding-turn-down-assigned" aria-label="Exam sessions assigned">
+		                      <div class="potential-preassigned-readonly-heading">
+		                        <span class="interview-options-title">Exam sessions assigned</span>
+		                      </div>
+		                      {% if onboarding_turn_down_assigned_sessions %}
+		                        <ul class="potential-preassigned-readonly-list">
+		                          {% for selected_session in onboarding_turn_down_assigned_sessions %}
+		                            <li>
+		                              {% if selected_session.available and selected_session.year %}
+		                                <a
+		                                  href="{{ url_for('staff.exam_session_planner', session_year=selected_session.year, open_session_modal=selected_session.id) }}"
+		                                  target="_blank"
+		                                  rel="noopener noreferrer"
+		                                  title="{{ selected_session.label }}"
+		                                >{{ selected_session.name }}</a>
+		                              {% else %}
+		                                <span class="muted">{{ selected_session.name }}</span>
+		                              {% endif %}
+		                            </li>
+		                          {% endfor %}
+		                        </ul>
+		                      {% else %}
+		                        <span class="muted potential-preassigned-readonly-empty">No assigned sessions.</span>
+		                      {% endif %}
+		                    </section>
+			                    <label class="checkbox-field">
+		                      <input
+		                        type="checkbox"
+	                        name="onboarding_turn_down_sessions_removed"
+	                        value="1"
+	                        data-onboarding-turn-down-required
+	                        {% if entry.onboarding_turn_down_sessions_removed %}checked{% endif %}
+		                      >
+		                      <span>Entry has been removed from all assigned sessions.</span>
+		                    </label>
 	                  </fieldset>
 	                </div>
               </div>
@@ -2229,20 +2299,21 @@
                 <button
                   class="success-button"
                   type="submit"
-                  formaction="{{ url_for('staff.accept_potential_interview_application', entry_id=entry.id) }}"
-                  data-application-accepted-button
-                  {% if entry.interview_no_show or not (entry.has_car in ['Yes', 'No'] and entry.roles_list() and entry.entry_added_in_sessions_pre_confirmation) %}disabled title="{% if entry.interview_no_show %}No-show entries cannot be accepted.{% else %}Complete Has a car, Roles, and session pre-confirmation before accepting.{% endif %}"{% endif %}
-                  formnovalidate
-                >Entry accepted</button>
+	                  formaction="{{ url_for('staff.accept_potential_interview_application', entry_id=entry.id) }}"
+	                  data-application-accepted-button
+	                  disabled
+	                  title="{% if entry.interview_no_show %}No-show entries cannot be accepted.{% else %}Complete Has a car, Roles, session pre-confirmation, and confirmation before accepting.{% endif %}"
+	                  formnovalidate
+	                >Entry accepted</button>
               {% elif entry.status == 'Entry accepted' %}
                 <button
                   class="success-button"
                   type="submit"
-                  formaction="{{ url_for('staff.mark_potential_onboarding_email_sent', entry_id=entry.id) }}"
-                  data-onboarding-email-sent-button
-                  {% if not (entry.entry_accepted_notes_checked and entry.entry_accepted_email_sent and entry.entry_accepted_whatsapp_sent) %}disabled title="Complete all three checks before marking onboarding email as sent."{% endif %}
-                  formnovalidate
-                >Onboarding email sent</button>
+	                  formaction="{{ url_for('staff.mark_potential_onboarding_email_sent', entry_id=entry.id) }}"
+	                  data-onboarding-email-sent-button
+	                  {% if not (entry.entry_accepted_notes_checked and entry.entry_accepted_email_sent and entry.entry_accepted_whatsapp_sent and entry.entry_accepted_pre_confirmation_sent) %}disabled title="Complete all four checks before marking onboarding email as sent."{% endif %}
+	                  formnovalidate
+	                >Onboarding email sent</button>
               {% elif entry.status == 'Onboarding email sent' %}
                 <button
                   class="info-button"

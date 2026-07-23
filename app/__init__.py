@@ -356,7 +356,10 @@ def create_app():
             "entry_accepted_notes_checked": "BOOLEAN NOT NULL DEFAULT 0",
             "entry_accepted_email_sent": "BOOLEAN NOT NULL DEFAULT 0",
             "entry_accepted_whatsapp_sent": "BOOLEAN NOT NULL DEFAULT 0",
+            "entry_accepted_pre_confirmation_sent": "BOOLEAN NOT NULL DEFAULT 0",
             "onboarding_follow_up_choice": "VARCHAR(20)",
+            "onboarding_confirm_notes_checked": "BOOLEAN NOT NULL DEFAULT 0",
+            "onboarding_confirm_examiner_assigned": "BOOLEAN NOT NULL DEFAULT 0",
             "onboarding_turn_down_sessions_removed": "BOOLEAN NOT NULL DEFAULT 0",
             "onboarding_turn_down_trainer_notified": "BOOLEAN NOT NULL DEFAULT 0",
             "induction_session_status": "VARCHAR(20)",
@@ -515,6 +518,9 @@ def create_app():
             db.session.commit()
         if "profile_picture" not in existing_columns:
             db.session.execute(text("ALTER TABLE academic_staff ADD COLUMN profile_picture VARCHAR(500)"))
+            db.session.commit()
+        if "dietary_requirements" not in existing_columns:
+            db.session.execute(text("ALTER TABLE academic_staff ADD COLUMN dietary_requirements VARCHAR(500)"))
             db.session.commit()
         if "title" not in existing_columns:
             db.session.execute(text("ALTER TABLE academic_staff ADD COLUMN title VARCHAR(120)"))

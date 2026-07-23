@@ -3983,6 +3983,51 @@ def build_exam_session_same_date_duplicate_tags(visible_session_ids):
     return tags
 
 
+def build_exam_session_dietary_requirement_alerts(
+    session_ids,
+    supervisor_assignment_records,
+    examiner_assignment_records,
+    intern_assignment_records,
+):
+    session_ids = set(session_ids)
+    alerts = {session_id: [] for session_id in session_ids}
+    assignments = (
+        list(supervisor_assignment_records)
+        + list(examiner_assignment_records)
+        + list(intern_assignment_records)
+    )
+    member_ids = {
+        assignment.team_member_id
+        for assignment in assignments
+        if assignment.exam_session_id in session_ids and assignment.team_member_id
+    }
+    if not member_ids:
+        return alerts
+
+    members_by_id = {
+        member.id: member
+        for member in AcademicStaff.query.filter(AcademicStaff.id.in_(member_ids)).all()
+    }
+    seen_by_session = {session_id: set() for session_id in session_ids}
+    for assignment in assignments:
+        session_id = assignment.exam_session_id
+        member_id = assignment.team_member_id
+        if session_id not in session_ids or not member_id or member_id in seen_by_session[session_id]:
+            continue
+        member = members_by_id.get(member_id)
+        dietary_requirements = (member.dietary_requirements or "").strip() if member else ""
+        if not dietary_requirements:
+            continue
+        seen_by_session[session_id].add(member_id)
+        alerts[session_id].append(
+            {
+                "name": member.full_name or "Staff member",
+                "description": dietary_requirements,
+            }
+        )
+    return alerts
+
+
 def calculate_timed_fee_from_ranges(time_ranges, fee):
     if not fee:
         return None
@@ -11319,6 +11364,7 @@ def apply_form(member, form):
     member.account_id = form.get("account_id", "").strip()
     member.account_owner = form.get("account_owner", "").strip()
     member.profile_picture = form.get("profile_picture", "").strip()
+    member.dietary_requirements = form.get("dietary_requirements", "").strip()
 
 
 def member_draft_payload(form):
@@ -11340,6 +11386,7 @@ def member_draft_payload(form):
         "account_id": form.get("account_id", "").strip(),
         "account_owner": form.get("account_owner", "").strip(),
         "profile_picture": form.get("profile_picture", "").strip(),
+        "dietary_requirements": form.get("dietary_requirements", "").strip(),
     }
 
 
@@ -14935,6 +14982,12 @@ def exam_session_planner():
     session_page_cost_totals = build_exam_session_page_cost_totals(session_cost_summaries)
     same_date_assignment_conflicts = build_exam_session_same_date_conflicts(session_ids)
     same_date_duplicate_tags = build_exam_session_same_date_duplicate_tags(session_ids)
+    session_dietary_requirement_alerts = build_exam_session_dietary_requirement_alerts(
+        session_ids,
+        assignment_records,
+        examiner_assignment_records,
+        intern_assignment_records,
+    )
     supervisor_member_map = {member.id: member for member in supervisor_members}
     examiner_member_map = {member.id: member for member in examiner_members}
     intern_member_map = {member.id: member for member in intern_members}
@@ -15033,6 +15086,7 @@ def exam_session_planner():
         session_page_cost_totals=session_page_cost_totals,
         same_date_assignment_conflicts=same_date_assignment_conflicts,
         same_date_duplicate_tags=same_date_duplicate_tags,
+        session_dietary_requirement_alerts=session_dietary_requirement_alerts,
         session_years=session_years,
         archived_session_years=(
             ExamSessionYear.query.filter_by(is_archived=True)
@@ -19673,7 +19727,7 @@ def save_potential_cv_review_changes(
         if induction_status in {"no_show", "reschedule", "attended"}:
             entry.induction_session_status = induction_status
         entry.exam_session_participation_statuses_pre_confirmed = (
-            induction_status in {"attended", "no_show"}
+            induction_status == "no_show"
             and request.form.get("exam_session_participation_statuses_pre_confirmed") == "1"
         )
     if is_induction_reschedule and interview_options:
@@ -19827,7 +19881,7 @@ def reject_potential_induction(entry_id):
         flash("Select No-show before rejecting this entry.", "error")
         return redirect(url_for("staff.potential_entries", open_staff_modal=potential_review_modal_id(entry)))
     if request.form.get("exam_session_participation_statuses_pre_confirmed") != "1":
-        flash("Confirm that the Entry has been removed from all pre-assigned exam session participations before rejecting this entry.", "error")
+        flash("Confirm that the Entry has been removed from all assigned exam sessions before rejecting this entry.", "error")
         return redirect(url_for("staff.potential_entries", open_staff_modal=potential_review_modal_id(entry)))
 
     return save_potential_cv_review_changes(
@@ -19873,9 +19927,6 @@ def activate_potential_as_staff_member(entry_id):
     if request.form.get("induction_session_status") != "attended":
         flash("Select Attended before activating this entry as a Staff member.", "error")
         return redirect(url_for("staff.potential_entries", open_staff_modal=potential_review_modal_id(entry)))
-    if request.form.get("exam_session_participation_statuses_pre_confirmed") != "1":
-        flash("Exam session participation statuses must be updated to Pre-confirmed before activation.", "error")
-        return redirect(url_for("staff.potential_entries", open_staff_modal=potential_review_modal_id(entry)))
 
     member, errors = active_member_errors_from_potential_entry(entry)
     if errors:
@@ -19885,7 +19936,7 @@ def activate_potential_as_staff_member(entry_id):
 
     append_potential_cv_review_notes(entry, request.form)
     entry.induction_session_status = "attended"
-    entry.exam_session_participation_statuses_pre_confirmed = True
+    entry.exam_session_participation_statuses_pre_confirmed = False
     set_potential_entry_status(entry, "Onboarding finalised")
     db.session.add(member)
     db.session.commit()
@@ -19913,6 +19964,7 @@ def update_entry_accepted_notes_checked(entry_id):
         "entry_accepted_notes_checked",
         "entry_accepted_email_sent",
         "entry_accepted_whatsapp_sent",
+        "entry_accepted_pre_confirmation_sent",
     }
     changed = False
     for field_name in allowed_fields:
@@ -19928,6 +19980,7 @@ def update_entry_accepted_notes_checked(entry_id):
             "entry_accepted_notes_checked": entry.entry_accepted_notes_checked,
             "entry_accepted_email_sent": entry.entry_accepted_email_sent,
             "entry_accepted_whatsapp_sent": entry.entry_accepted_whatsapp_sent,
+            "entry_accepted_pre_confirmation_sent": entry.entry_accepted_pre_confirmation_sent,
         })
     return redirect(url_for("staff.potential_entries", open_staff_modal=potential_review_modal_id(entry)))
 
@@ -19947,6 +20000,7 @@ def mark_potential_onboarding_email_sent(entry_id):
         "entry_accepted_notes_checked",
         "entry_accepted_email_sent",
         "entry_accepted_whatsapp_sent",
+        "entry_accepted_pre_confirmation_sent",
     )
     if any(field_name in request.form for field_name in check_fields):
         for field_name in check_fields:
@@ -19955,8 +20009,9 @@ def mark_potential_onboarding_email_sent(entry_id):
         entry.entry_accepted_notes_checked
         and entry.entry_accepted_email_sent
         and entry.entry_accepted_whatsapp_sent
+        and entry.entry_accepted_pre_confirmation_sent
     ):
-        flash("Complete all three checks before marking onboarding email as sent.", "error")
+        flash("Complete all four checks before marking onboarding email as sent.", "error")
         return redirect(url_for("staff.potential_entries", open_staff_modal=potential_review_modal_id(entry)))
 
     set_potential_entry_status(entry, "Onboarding email sent")
@@ -19987,6 +20042,8 @@ def validate_and_apply_onboarding_follow_up(entry, form, require_action=None):
         induction_time = form.get("interview_time", "").strip()
         platform = form.get("platform", "").strip()
         trainer = display_interviewer(form.get("interviewer", "").strip())
+        onboarding_confirm_notes_checked = form.get("onboarding_confirm_notes_checked") == "1"
+        onboarding_confirm_examiner_assigned = form.get("onboarding_confirm_examiner_assigned") == "1"
 
         required_values = {
             "Title is required.": title,
@@ -20015,6 +20072,11 @@ def validate_and_apply_onboarding_follow_up(entry, form, require_action=None):
             errors.append("Platform is required.")
         if trainer and trainer not in INTERVIEWER_OPTIONS:
             errors.append("Trainer is required.")
+        if require_action == "confirm":
+            if not onboarding_confirm_notes_checked:
+                errors.append("Participation status has been updated to Pre-confirmed for sessions accepted by Entry is required.")
+            if not onboarding_confirm_examiner_assigned:
+                errors.append("Entry has been removed from declined sessions, and role is now marked as Role to cover is required.")
         if induction_date and re.fullmatch(r"\d{4}-\d{2}-\d{2}", induction_date) and time_match:
             induction_time_value = f"{induction_time[:5]}:00" if len(induction_time) == 5 else induction_time
             induction_datetime = datetime.strptime(f"{induction_date} {induction_time_value}", "%Y-%m-%d %H:%M:%S").replace(tzinfo=LOCAL_TZ)
@@ -20032,14 +20094,16 @@ def validate_and_apply_onboarding_follow_up(entry, form, require_action=None):
         entry.interview_time = f"{induction_time[:5]}:00" if time_match and len(induction_time) == 5 else induction_time
         entry.platform = platform
         entry.interviewer = trainer
+        entry.onboarding_confirm_notes_checked = onboarding_confirm_notes_checked
+        entry.onboarding_confirm_examiner_assigned = onboarding_confirm_examiner_assigned
     elif choice == "turn_down":
         entry.onboarding_turn_down_sessions_removed = form.get("onboarding_turn_down_sessions_removed") == "1"
         entry.onboarding_turn_down_trainer_notified = form.get("onboarding_turn_down_trainer_notified") == "1"
         if require_action == "turn_down":
             if not entry.onboarding_turn_down_sessions_removed:
-                errors.append("The Entry has been removed from all pre-assigned exam session participations is required.")
+                errors.append("Entry has been removed from all assigned sessions is required.")
             if not entry.onboarding_turn_down_trainer_notified:
-                errors.append("The Trainer has been notified that the Entry will not attend the induction session is required.")
+                errors.append("Trainer has been notified that the Entry will not attend the induction session is required.")
 
     return errors
 
@@ -20354,6 +20418,9 @@ def accept_potential_interview_application(entry_id):
     legacy_sessions_added = request.form.get("entry_added_in_sessions_pre_confirmation") == "1"
     if acceptance_outcome not in {"sessions_pre_confirmation", ""} or (not legacy_sessions_added and acceptance_outcome != "sessions_pre_confirmation"):
         flash("Entry added in sessions for pre-confirmation is required.", "error")
+        return redirect(url_for("staff.potential_entries", open_staff_modal=potential_review_modal_id(entry)))
+    if request.form.get("entry_assigned_to_exam_sessions_pending_status") != "1":
+        flash("Entry assigned to exam sessions with Pending status is required.", "error")
         return redirect(url_for("staff.potential_entries", open_staff_modal=potential_review_modal_id(entry)))
 
     return save_potential_cv_review_changes(

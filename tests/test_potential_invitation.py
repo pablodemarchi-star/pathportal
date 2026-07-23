@@ -622,14 +622,17 @@ class PotentialInvitationTest(unittest.TestCase):
         self.assertIn("full name *", modal_html)
         self.assertIn("ID *", modal_html)
         self.assertIn("Confirmed induction session date and time", modal_html)
+        self.assertIn("Pre-confirm participation in exam sessions", modal_html)
+        self.assertIn("Participation status has been updated to Pre-confirmed for sessions accepted by Entry.", modal_html)
+        self.assertIn("Entry has been removed from declined sessions, and role is now marked as Role to cover.", modal_html)
         self.assertIn("Trainer", modal_html)
-        self.assertIn("The Entry has been removed from all pre-assigned exam session participations.", modal_html)
-        self.assertIn("The Trainer has been notified that the Entry will not attend the induction session.", modal_html)
+        self.assertNotIn("The Entry has been removed from all pre-assigned exam session participations.", modal_html)
+        self.assertIn("Trainer has been notified that the Entry will not attend the induction session.", modal_html)
         self.assertIn("Save and close", modal_html)
         self.assertIn('data-onboarding-turn-down-button', modal_html)
         self.assertIn('data-onboarding-confirm-button', modal_html)
 
-    def test_onboarding_turn_down_section_shows_readonly_preassigned_sessions(self):
+    def test_onboarding_turn_down_section_shows_assigned_sessions(self):
         session_record = self.add_session(
             exam_session_name="London Bridge Institute",
             session_date=date(2027, 7, 20),
@@ -650,15 +653,58 @@ class PotentialInvitationTest(unittest.TestCase):
         turn_down_html = turn_down_html[:turn_down_html.index("</fieldset>")]
 
         self.assertEqual(response.status_code, 200)
-        self.assertIn("Pre-assigned sessions", turn_down_html)
+        self.assertIn("Trainer has been notified that the Entry will not attend the induction session.", turn_down_html)
+        self.assertIn("Entry has been removed from all assigned sessions.", turn_down_html)
+        self.assertIn("Exam sessions assigned", turn_down_html)
+        self.assertLess(
+            turn_down_html.index("Trainer has been notified that the Entry will not attend the induction session."),
+            turn_down_html.index("Exam sessions assigned"),
+        )
+        self.assertLess(
+            turn_down_html.index("Exam sessions assigned"),
+            turn_down_html.index("Entry has been removed from all assigned sessions."),
+        )
         self.assertIn("London Bridge Institute", turn_down_html)
         self.assertIn(
             f'/exam-session-planner?session_year=2027&amp;open_session_modal={session_record.id}',
             turn_down_html,
         )
         self.assertIn('target="_blank"', turn_down_html)
+        self.assertNotIn("The Entry has been removed from all pre-assigned exam session participations.", turn_down_html)
+        self.assertNotIn("Pre-assigned sessions", turn_down_html)
         self.assertNotIn('data-toggle-preassigned-session-editor', turn_down_html)
         self.assertNotIn('data-preassigned-session-editor', turn_down_html)
+
+    def test_onboarding_confirm_section_shows_readonly_preassigned_sessions(self):
+        session_record = self.add_session(
+            exam_session_name="London Bridge Institute",
+            session_date=date(2027, 7, 20),
+            format="Online",
+        )
+        entry = self.add_entry(status="Onboarding email sent")
+        db.session.add(PotentialEntryPreassignedExamSession(
+            potential_entry_id=entry.id,
+            exam_session_id=session_record.id,
+        ))
+        db.session.commit()
+
+        response = self.client().get("/potential-entries")
+        html = response.get_data(as_text=True)
+        modal_html = html[html.index(f'id="interview-arrange-potential-entry-{entry.id}"'):]
+        modal_html = modal_html[:modal_html.index(f'id="potential-note-{entry.id}"')]
+        confirm_html = modal_html[modal_html.index('data-onboarding-fieldset="confirm"'):]
+        confirm_html = confirm_html[:confirm_html.index('data-onboarding-panel="turn_down"')]
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("Pre-confirm participation in exam sessions", confirm_html)
+        self.assertIn("London Bridge Institute", confirm_html)
+        self.assertIn(
+            f'/exam-session-planner?session_year=2027&amp;open_session_modal={session_record.id}',
+            confirm_html,
+        )
+        self.assertIn('target="_blank"', confirm_html)
+        self.assertNotIn('data-toggle-preassigned-session-editor', confirm_html)
+        self.assertNotIn('data-preassigned-session-editor', confirm_html)
 
     def test_onboarding_confirm_application_requires_required_fields(self):
         entry = self.add_entry(status="Onboarding email sent")
@@ -692,6 +738,8 @@ class PotentialInvitationTest(unittest.TestCase):
                 "interview_time": "10:30",
                 "platform": "Zoom",
                 "interviewer": "Prof. Brenda Sartori",
+                "onboarding_confirm_notes_checked": "1",
+                "onboarding_confirm_examiner_assigned": "1",
             },
             follow_redirects=True,
         )
@@ -720,6 +768,8 @@ class PotentialInvitationTest(unittest.TestCase):
                 "interview_time": "10:30",
                 "platform": "Zoom",
                 "interviewer": "Prof. Brenda Sartori",
+                "onboarding_confirm_notes_checked": "1",
+                "onboarding_confirm_examiner_assigned": "1",
             },
             follow_redirects=True,
         )
@@ -741,15 +791,27 @@ class PotentialInvitationTest(unittest.TestCase):
         self.assertEqual(updated_entry.interview_time, "10:30:00")
         self.assertEqual(updated_entry.platform, "Zoom")
         self.assertEqual(updated_entry.interviewer, "Prof. Brenda Sartori")
+        self.assertTrue(updated_entry.onboarding_confirm_notes_checked)
+        self.assertTrue(updated_entry.onboarding_confirm_examiner_assigned)
 
-    def test_onboarding_turn_down_requires_both_checks(self):
+    def test_onboarding_confirm_application_requires_preconfirmed_session_checks(self):
         entry = self.add_entry(status="Onboarding email sent")
         response = self.client().post(
-            f"/potential-entries/{entry.id}/onboarding/turn-down",
+            f"/potential-entries/{entry.id}/onboarding/confirm",
             data={
                 "csrf_token": "token",
-                "onboarding_follow_up_choice": "turn_down",
-                "onboarding_turn_down_sessions_removed": "1",
+                "onboarding_follow_up_choice": "confirm",
+                "title": "Prof.",
+                "full_address_google_maps": "https://maps.google.com/?q=Path",
+                "country": "Argentina",
+                "profile_picture": "https://example.com/profile.jpg",
+                "account_id": "123456",
+                "account_owner": "Jane Candidate",
+                "account_owner_id": "ID-123",
+                "interview_date": "2026-08-10",
+                "interview_time": "10:30",
+                "platform": "Zoom",
+                "interviewer": "Prof. Brenda Sartori",
             },
             follow_redirects=True,
         )
@@ -757,7 +819,28 @@ class PotentialInvitationTest(unittest.TestCase):
         updated_entry = db.session.get(PotentialEntry, entry.id)
 
         self.assertEqual(response.status_code, 200)
-        self.assertIn("The Trainer has been notified that the Entry will not attend the induction session is required.", html)
+        self.assertIn("Participation status has been updated to Pre-confirmed for sessions accepted by Entry is required.", html)
+        self.assertIn("Entry has been removed from declined sessions, and role is now marked as Role to cover is required.", html)
+        self.assertEqual(updated_entry.status, "Onboarding email sent")
+        self.assertFalse(updated_entry.onboarding_confirm_notes_checked)
+        self.assertFalse(updated_entry.onboarding_confirm_examiner_assigned)
+
+    def test_onboarding_turn_down_requires_removal_and_trainer_notification_checks(self):
+        entry = self.add_entry(status="Onboarding email sent")
+        response = self.client().post(
+            f"/potential-entries/{entry.id}/onboarding/turn-down",
+            data={
+                "csrf_token": "token",
+                "onboarding_follow_up_choice": "turn_down",
+            },
+            follow_redirects=True,
+        )
+        html = response.get_data(as_text=True)
+        updated_entry = db.session.get(PotentialEntry, entry.id)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("Entry has been removed from all assigned sessions is required.", html)
+        self.assertIn("Trainer has been notified that the Entry will not attend the induction session is required.", html)
         self.assertEqual(updated_entry.status, "Onboarding email sent")
         self.assertFalse(updated_entry.is_rejected)
 
@@ -862,9 +945,8 @@ class PotentialInvitationTest(unittest.TestCase):
         self.assertIn('name="interview_option_platform"', modal_html)
         self.assertIn('name="interview_option_interviewer"', modal_html)
         self.assertIn('data-induction-status-panel="attended" hidden', modal_html)
-        self.assertIn("The Entry has been removed from all pre-assigned exam session participations.", modal_html)
-        self.assertIn("Exam session participation statuses have been updated to Pre-confirmed", modal_html)
-        self.assertEqual(modal_html.count("Exam session participation statuses have been updated to Pre-confirmed"), 1)
+        self.assertIn("Entry has been removed from all assigned exam sessions.", modal_html)
+        self.assertNotIn("Exam session participation statuses have been updated to Pre-confirmed", modal_html)
         self.assertIn("The trainer has been notified of this change", modal_html)
         self.assertIn('name="induction_reschedule_trainer_notified"', modal_html)
         self.assertIn("Save and close", modal_html)
@@ -875,7 +957,7 @@ class PotentialInvitationTest(unittest.TestCase):
         self.assertIn('data-induction-activate-button', modal_html)
         self.assertIn(">Activate as Staff member</button>", modal_html)
 
-    def test_induction_confirmed_no_show_and_attended_show_readonly_preassigned_sessions(self):
+    def test_induction_confirmed_no_show_shows_readonly_preassigned_sessions(self):
         session_record = self.add_session(
             exam_session_name="London Bridge Institute",
             session_date=date(2027, 7, 20),
@@ -897,7 +979,7 @@ class PotentialInvitationTest(unittest.TestCase):
 
         self.assertEqual(response.status_code, 200)
         self.assertIn("Pre-assigned sessions", no_show_panel)
-        self.assertIn("The Entry has been removed from all pre-assigned exam session participations.", no_show_panel)
+        self.assertIn("Entry has been removed from all assigned exam sessions.", no_show_panel)
         self.assertIn("data-induction-no-show-required", no_show_panel)
         self.assertIn("London Bridge Institute", no_show_panel)
         self.assertIn(
@@ -905,12 +987,12 @@ class PotentialInvitationTest(unittest.TestCase):
             no_show_panel,
         )
         self.assertIn('data-induction-status-panel="attended" hidden', modal_html)
-        self.assertEqual(modal_html.count("potential-preassigned-readonly induction-preassigned-readonly"), 2)
+        self.assertEqual(modal_html.count("potential-preassigned-readonly induction-preassigned-readonly"), 1)
         self.assertEqual(
             modal_html.count(f'/exam-session-planner?session_year=2027&amp;open_session_modal={session_record.id}'),
-            2,
+            1,
         )
-        self.assertEqual(modal_html.count('target="_blank"'), 2)
+        self.assertEqual(modal_html.count('target="_blank"'), 1)
         self.assertNotIn('data-toggle-preassigned-session-editor', modal_html)
         self.assertNotIn('data-preassigned-session-editor', modal_html)
 
@@ -988,7 +1070,7 @@ class PotentialInvitationTest(unittest.TestCase):
 
         self.assertEqual(response.status_code, 200)
         self.assertIn(
-            "Confirm that the Entry has been removed from all pre-assigned exam session participations before rejecting this entry.",
+            "Confirm that the Entry has been removed from all assigned exam sessions before rejecting this entry.",
             html,
         )
         self.assertEqual(updated_entry.status, "Induction confirmed")
@@ -1046,7 +1128,6 @@ class PotentialInvitationTest(unittest.TestCase):
             data={
                 "csrf_token": "token",
                 "induction_session_status": "attended",
-                "exam_session_participation_statuses_pre_confirmed": "1",
             },
             follow_redirects=True,
         )
@@ -1058,7 +1139,7 @@ class PotentialInvitationTest(unittest.TestCase):
         self.assertIn("Entry activated as Staff member.", html)
         self.assertEqual(updated_entry.status, "Onboarding finalised")
         self.assertEqual(updated_entry.induction_session_status, "attended")
-        self.assertTrue(updated_entry.exam_session_participation_statuses_pre_confirmed)
+        self.assertFalse(updated_entry.exam_session_participation_statuses_pre_confirmed)
         self.assertIsNotNone(member)
         self.assertEqual(member.status, "Active")
         self.assertEqual(member.full_name, "Final Candidate")
@@ -1321,8 +1402,16 @@ class PotentialInvitationTest(unittest.TestCase):
         invitation_modal_html = invitation_modal_html[:invitation_modal_html.index(f'id="potential-note-{invitation_entry.id}"')]
 
         self.assertEqual(response.status_code, 200)
-        self.assertIn("Pre-assigned sessions", modal_html)
+        self.assertIn("Sessions to check availability for", modal_html)
         self.assertIn("London Bridge Institute", modal_html)
+        self.assertLess(
+            modal_html.index("Sessions to check availability for"),
+            modal_html.index("London Bridge Institute"),
+        )
+        self.assertLess(
+            modal_html.index("London Bridge Institute"),
+            modal_html.index("Entry assigned to exam sessions with Pending status."),
+        )
         self.assertIn(
             f'/exam-session-planner?session_year=2027&amp;open_session_modal={session_record.id}',
             modal_html,
@@ -1334,7 +1423,7 @@ class PotentialInvitationTest(unittest.TestCase):
         self.assertIn('name="preassigned_exam_session_ids"', modal_html)
         self.assertIn(f'/potential-entries/{entry.id}/interview/preassigned-sessions', modal_html)
         self.assertIn("Save sessions", modal_html)
-        self.assertNotIn("Pre-assigned sessions", invitation_modal_html)
+        self.assertNotIn("Sessions to check availability for", invitation_modal_html)
 
     def test_interview_confirmed_preassigned_session_editor_persists_changes(self):
         old_session = self.add_session(
@@ -1589,6 +1678,7 @@ console.log(JSON.stringify({ noReplyState, choiceState }));
             + """
 const rejectButton = { disabled: true };
 const rescheduleButton = { disabled: true };
+const activateButton = { disabled: true };
 const acceptedButton = { disabled: true };
 const acceptedOnHoldButton = { disabled: true };
 const noShowPanel = { dataset: { inductionStatusPanel: "no_show" }, hidden: true };
@@ -1596,6 +1686,17 @@ const reschedulePanel = { dataset: { inductionStatusPanel: "reschedule" }, hidde
 const attendedPanel = { dataset: { inductionStatusPanel: "attended" }, hidden: true };
 const noShowCheckbox = { checked: false };
 const preassignedSection = { hidden: false };
+const hasCarSelection = { checked: true };
+const roleSelection = { checked: true };
+const outcomeSelection = { value: "sessions_pre_confirmation" };
+const acceptanceChecks = [{ checked: false }];
+const acceptanceChecksContainer = {
+  hidden: false,
+  querySelectorAll(selector) {
+    if (selector === "[data-interview-acceptance-required]") return acceptanceChecks;
+    return [];
+  },
+};
 let requiresNoShowCheck = true;
 const selected = { value: "reschedule" };
 const fields = [
@@ -1609,18 +1710,18 @@ const root = {
   closest(selector) { return selector === "form" ? form : null; },
   querySelector(selector) {
     if (selector === "[data-induction-status-option]:checked") return selected;
-    if (selector === "input[name='interview_has_car']:checked") return null;
-    if (selector === "input[name='interview_roles']:checked") return null;
-    if (selector === "input[name='entry_acceptance_outcome']:checked") return null;
+    if (selector === "input[name='interview_has_car']:checked") return hasCarSelection.checked ? hasCarSelection : null;
+    if (selector === "input[name='interview_roles']:checked") return roleSelection.checked ? roleSelection : null;
+    if (selector === "input[name='entry_acceptance_outcome']:checked") return outcomeSelection;
     if (selector === "[data-induction-no-show-required]") return requiresNoShowCheck ? noShowCheckbox : null;
     if (selector === "[data-induction-no-show-required]:checked") return noShowCheckbox.checked ? noShowCheckbox : null;
-    if (selector === "[data-induction-attended-required]:checked") return null;
     if (selector === "[data-reactivation-date]") return { value: "" };
     return null;
   },
   querySelectorAll(selector) {
     if (selector === "[data-induction-status-panel]") return [noShowPanel, reschedulePanel, attendedPanel];
     if (selector === "[data-induction-reschedule-required]") return fields;
+    if (selector === "[data-interview-acceptance-required]") return acceptanceChecks;
     return [];
   },
 };
@@ -1628,10 +1729,16 @@ const form = {
   querySelector(selector) {
     if (selector === "[data-induction-reject-button]") return rejectButton;
     if (selector === "[data-induction-reschedule-button]") return rescheduleButton;
+    if (selector === "[data-induction-activate-button]") return activateButton;
     if (selector === "[data-application-accepted-button]") return acceptedButton;
     if (selector === "[data-application-accepted-on-hold-button]") return acceptedOnHoldButton;
     if (selector === "[data-interview-preassigned-readonly]") return preassignedSection;
+    if (selector === "[data-interview-acceptance-checks]") return acceptanceChecksContainer;
     return null;
+  },
+  querySelectorAll(selector) {
+    if (selector === "[data-interview-acceptance-required]") return acceptanceChecks;
+    return [];
   },
 };
 window.syncPotentialOutcomeStatusPanels(root);
@@ -1642,6 +1749,7 @@ const rescheduleState = {
   preassignedHidden: preassignedSection.hidden,
   rejectDisabled: rejectButton.disabled,
   rescheduleDisabled: rescheduleButton.disabled,
+  activateDisabled: activateButton.disabled,
 };
 selected.value = "attended";
 window.syncPotentialOutcomeStatusPanels(root);
@@ -1652,7 +1760,24 @@ const attendedState = {
   preassignedHidden: preassignedSection.hidden,
   rejectDisabled: rejectButton.disabled,
   rescheduleDisabled: rescheduleButton.disabled,
+  activateDisabled: activateButton.disabled,
+  acceptedDisabled: acceptedButton.disabled,
+  acceptanceChecksHidden: acceptanceChecksContainer.hidden,
 };
+acceptanceChecks.forEach((field) => { field.checked = true; });
+window.syncPotentialOutcomeStatusPanels(root);
+const attendedAcceptedState = {
+  acceptedDisabled: acceptedButton.disabled,
+  acceptanceChecksHidden: acceptanceChecksContainer.hidden,
+};
+outcomeSelection.value = "on_hold";
+window.syncPotentialOutcomeStatusPanels(root);
+const attendedOnHoldState = {
+  acceptedDisabled: acceptedButton.disabled,
+  acceptanceChecksHidden: acceptanceChecksContainer.hidden,
+  acceptanceCheckChecked: acceptanceChecks[0].checked,
+};
+outcomeSelection.value = "sessions_pre_confirmation";
 selected.value = "no_show";
 noShowCheckbox.checked = false;
 window.syncPotentialOutcomeStatusPanels(root);
@@ -1684,7 +1809,7 @@ const interviewNoShowState = {
   preassignedHidden: preassignedSection.hidden,
   rejectDisabled: rejectButton.disabled,
 };
-console.log(JSON.stringify({ rescheduleState, attendedState, noShowUncheckedState, noShowCheckedState, interviewNoShowState }));
+console.log(JSON.stringify({ rescheduleState, attendedState, attendedAcceptedState, attendedOnHoldState, noShowUncheckedState, noShowCheckedState, interviewNoShowState }));
 """
         )
         result = subprocess.run(["node", "-e", script], check=True, capture_output=True, text=True)
@@ -1694,9 +1819,10 @@ console.log(JSON.stringify({ rescheduleState, attendedState, noShowUncheckedStat
             "noShowHidden": True,
             "rescheduleHidden": False,
             "attendedHidden": True,
-            "preassignedHidden": False,
+            "preassignedHidden": True,
             "rejectDisabled": True,
             "rescheduleDisabled": False,
+            "activateDisabled": True,
         })
         self.assertEqual(payload["attendedState"], {
             "noShowHidden": True,
@@ -1705,6 +1831,18 @@ console.log(JSON.stringify({ rescheduleState, attendedState, noShowUncheckedStat
             "preassignedHidden": False,
             "rejectDisabled": True,
             "rescheduleDisabled": True,
+            "activateDisabled": False,
+            "acceptedDisabled": True,
+            "acceptanceChecksHidden": False,
+        })
+        self.assertEqual(payload["attendedAcceptedState"], {
+            "acceptedDisabled": False,
+            "acceptanceChecksHidden": False,
+        })
+        self.assertEqual(payload["attendedOnHoldState"], {
+            "acceptedDisabled": True,
+            "acceptanceChecksHidden": True,
+            "acceptanceCheckChecked": False,
         })
         self.assertEqual(payload["noShowUncheckedState"], {
             "noShowHidden": False,
@@ -1835,7 +1973,7 @@ console.log(JSON.stringify({ rescheduleState, attendedState, noShowUncheckedStat
         )
         self.assertIn("Interview confirmed", modal_html)
         self.assertIn("Notes", modal_html)
-        self.assertIn(f'<h3 id="interview-arrange-title-{entry.id}">Onboarding email sent</h3>', modal_html)
+        self.assertIn(f'<h3 id="interview-arrange-title-{entry.id}">Interview confirmed</h3>', modal_html)
         self.assertIn('type="radio" name="interview_outcome_status" value="no_show" data-induction-status-option checked', modal_html)
         self.assertIn("No-show", modal_html)
         self.assertIn("Has a car", modal_html)
@@ -1849,8 +1987,12 @@ console.log(JSON.stringify({ rescheduleState, attendedState, noShowUncheckedStat
         self.assertIn('type="checkbox" name="interview_roles" value="Other" checked', modal_html)
         self.assertIn('type="radio" name="entry_acceptance_outcome" value="sessions_pre_confirmation" checked', modal_html)
         self.assertIn('type="radio" name="entry_acceptance_outcome" value="on_hold"', modal_html)
+        self.assertIn('name="entry_assigned_to_exam_sessions_pending_status"', modal_html)
+        self.assertIn("Entry assigned to exam sessions with Pending status.", modal_html)
+        self.assertNotIn('name="admin_will_assign_entry_as_examiner"', modal_html)
+        self.assertNotIn("Admin will assign Entry as Examiner. If another role is required, leave a note specifying it.", modal_html)
         self.assertIn('name="reactivation_date"', modal_html)
-        self.assertIn("Entry added in sessions for pre-confirmation", modal_html)
+        self.assertIn("Entry accepted and ready for onboarding", modal_html)
         self.assertIn("Entry accepted and placed on hold", modal_html)
         self.assertIn("Reject Entry", modal_html)
         self.assertIn(f'/potential-entries/{entry.id}/cv-review/decline-application', modal_html)
@@ -1860,7 +2002,7 @@ console.log(JSON.stringify({ rescheduleState, attendedState, noShowUncheckedStat
         self.assertIn(f'/potential-entries/{entry.id}/cv-review/accept-application', modal_html)
         self.assertIn('data-application-accepted-on-hold-button', modal_html)
         self.assertIn('data-application-accepted-button', modal_html)
-        self.assertIn('disabled title="No-show entries cannot be accepted."', modal_html)
+        self.assertIn('title="No-show entries cannot be accepted."', modal_html)
         self.assertNotIn("Save and close", modal_html)
         self.assertNotIn("Information for interview arrangement", modal_html)
         self.assertNotIn("Send email", modal_html)
@@ -1918,6 +2060,7 @@ console.log(JSON.stringify({ rescheduleState, attendedState, noShowUncheckedStat
                 "interview_has_car": "Yes",
                 "interview_roles": ["RSG", "Supervisor"],
                 "entry_added_in_sessions_pre_confirmation": "1",
+                "entry_assigned_to_exam_sessions_pending_status": "1",
             },
             follow_redirects=True,
         )
@@ -1935,6 +2078,34 @@ console.log(JSON.stringify({ rescheduleState, attendedState, noShowUncheckedStat
         self.assertIn("CV review: Candidate is ready to continue.", updated_entry.interview)
         self.assertIn("From:", updated_entry.interview)
         self.assertIn("To: -", updated_entry.interview)
+
+    def test_interview_confirmed_application_accepted_requires_session_confirmation_checks(self):
+        entry = self.add_entry(
+            status="Interview confirmed",
+            interview="",
+            has_car="No",
+            acceptance_roles="",
+            interview_no_show=False,
+        )
+        response = self.client().post(
+            f"/potential-entries/{entry.id}/cv-review/accept-application",
+            data={
+                "csrf_token": "token",
+                "cv_review_notes": "Candidate is ready to continue.",
+                "cv_review_note_to_user_id": "",
+                "interview_outcome_status": "attended",
+                "interview_has_car": "Yes",
+                "interview_roles": ["Examiner"],
+                "entry_acceptance_outcome": "sessions_pre_confirmation",
+            },
+            follow_redirects=True,
+        )
+        html = response.get_data(as_text=True)
+        updated_entry = db.session.get(PotentialEntry, entry.id)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("Entry assigned to exam sessions with Pending status is required.", html)
+        self.assertEqual(updated_entry.status, "Interview confirmed")
 
     def test_interview_confirmed_application_accepted_on_hold_saves_reactivation_date(self):
         entry = self.add_entry(
@@ -2076,11 +2247,20 @@ console.log(JSON.stringify({ rescheduleState, attendedState, noShowUncheckedStat
         self.assertEqual(updated_entry.roles_list(), ["Examiner"])
 
     def test_entry_accepted_perform_action_shows_notes_check_and_email_actions(self):
+        session_record = self.add_session(
+            exam_session_name="London Bridge Institute",
+            session_date=date(2027, 7, 20),
+            format="Online",
+        )
         entry = self.add_entry(
             status="Entry accepted",
             phone="+54 (9) 11-5555-0000",
             entry_accepted_notes_checked=False,
         )
+        db.session.add(PotentialEntryPreassignedExamSession(
+            potential_entry_id=entry.id,
+            exam_session_id=session_record.id,
+        ))
         db.session.add(
             StaffMembersSettings(
                 upcoming_induction_session_options=json.dumps([
@@ -2123,9 +2303,31 @@ console.log(JSON.stringify({ rescheduleState, attendedState, noShowUncheckedStat
         self.assertIn('aria-label="Copy WhatsApp message"', modal_html)
         self.assertIn("Mark as WhatsApp sent", modal_html)
         self.assertIn('name="entry_accepted_whatsapp_sent"', modal_html)
+        self.assertIn("Assigned exam sessions", modal_html)
+        assigned_sessions_html = modal_html[modal_html.index('aria-label="Assigned exam sessions"'):]
+        assigned_sessions_html = assigned_sessions_html[:assigned_sessions_html.index('name="entry_accepted_pre_confirmation_sent"')]
+        self.assertIn("London Bridge Institute", assigned_sessions_html)
+        self.assertIn(
+            f'/exam-session-planner?session_year=2027&amp;open_session_modal={session_record.id}',
+            assigned_sessions_html,
+        )
+        self.assertLess(
+            assigned_sessions_html.index("Assigned exam sessions"),
+            assigned_sessions_html.index("London Bridge Institute"),
+        )
+        self.assertLess(
+            modal_html.index("Mark as WhatsApp sent"),
+            modal_html.index('aria-label="Assigned exam sessions"'),
+        )
+        self.assertLess(
+            modal_html.index('aria-label="Assigned exam sessions"'),
+            modal_html.index("Participation status has been updated to Pre-confirmation sent for sessions assigned to Entry."),
+        )
+        self.assertIn("Participation status has been updated to Pre-confirmation sent for sessions assigned to Entry.", modal_html)
+        self.assertIn('name="entry_accepted_pre_confirmation_sent"', modal_html)
         self.assertIn("Onboarding email sent", modal_html)
         self.assertIn('data-onboarding-email-sent-button', modal_html)
-        self.assertIn('disabled title="Complete all three checks before marking onboarding email as sent."', modal_html)
+        self.assertIn('disabled title="Complete all four checks before marking onboarding email as sent."', modal_html)
         self.assertNotIn('href="https://wa.me/"', modal_html)
         self.assertNotIn("Reject application", modal_html)
         self.assertNotIn("Proceed to interview", modal_html)
@@ -2161,6 +2363,7 @@ console.log(JSON.stringify({ rescheduleState, attendedState, noShowUncheckedStat
             status="Entry accepted",
             entry_accepted_email_sent=False,
             entry_accepted_whatsapp_sent=False,
+            entry_accepted_pre_confirmation_sent=False,
         )
 
         email_response = self.client().post(
@@ -2173,12 +2376,19 @@ console.log(JSON.stringify({ rescheduleState, attendedState, noShowUncheckedStat
             data={"csrf_token": "token", "entry_accepted_whatsapp_sent": "1"},
             follow_redirects=True,
         )
+        pre_confirmation_response = self.client().post(
+            f"/potential-entries/{entry.id}/entry-accepted/notes-checked",
+            data={"csrf_token": "token", "entry_accepted_pre_confirmation_sent": "1"},
+            follow_redirects=True,
+        )
         updated_entry = db.session.get(PotentialEntry, entry.id)
 
         self.assertEqual(email_response.status_code, 200)
         self.assertEqual(whatsapp_response.status_code, 200)
+        self.assertEqual(pre_confirmation_response.status_code, 200)
         self.assertTrue(updated_entry.entry_accepted_email_sent)
         self.assertTrue(updated_entry.entry_accepted_whatsapp_sent)
+        self.assertTrue(updated_entry.entry_accepted_pre_confirmation_sent)
         self.assertEqual(updated_entry.status, "Entry accepted")
 
     def test_entry_accepted_onboarding_button_enabled_when_all_checks_are_complete(self):
@@ -2187,6 +2397,7 @@ console.log(JSON.stringify({ rescheduleState, attendedState, noShowUncheckedStat
             entry_accepted_notes_checked=True,
             entry_accepted_email_sent=True,
             entry_accepted_whatsapp_sent=True,
+            entry_accepted_pre_confirmation_sent=True,
         )
         response = self.client().get("/potential-entries")
         html = response.get_data(as_text=True)
@@ -2195,9 +2406,9 @@ console.log(JSON.stringify({ rescheduleState, attendedState, noShowUncheckedStat
 
         self.assertIn("Onboarding email sent", modal_html)
         self.assertIn('data-onboarding-email-sent-button', modal_html)
-        self.assertNotIn('disabled title="Complete all three checks before marking onboarding email as sent."', modal_html)
+        self.assertNotIn('disabled title="Complete all four checks before marking onboarding email as sent."', modal_html)
 
-    def test_entry_accepted_onboarding_button_syncs_after_three_checks_in_js(self):
+    def test_entry_accepted_onboarding_button_syncs_after_four_checks_in_js(self):
         with open("app/static/js/app.js", encoding="utf-8") as handle:
             js = handle.read()
         start = js.index("const modalOpeners")
@@ -2214,10 +2425,11 @@ const button = {
   setAttribute(name, value) { if (name === "title") this.title = value; },
 };
 const checks = {
-  entry_accepted_notes_checked: { checked: true },
-  entry_accepted_email_sent: { checked: true },
-  entry_accepted_whatsapp_sent: { checked: false },
-};
+	  entry_accepted_notes_checked: { checked: true },
+	  entry_accepted_email_sent: { checked: true },
+	  entry_accepted_whatsapp_sent: { checked: true },
+	  entry_accepted_pre_confirmation_sent: { checked: false },
+	};
 const form = {
   querySelector(selector) {
     if (selector === "[data-onboarding-email-sent-button]") return button;
@@ -2227,21 +2439,21 @@ const form = {
   },
 };
 window.syncPotentialEntryAcceptedOnboardingButton(form);
-const twoChecksState = { disabled: button.disabled, title: button.title };
-checks.entry_accepted_whatsapp_sent.checked = true;
-window.syncPotentialEntryAcceptedOnboardingButton(form);
 const threeChecksState = { disabled: button.disabled, title: button.title };
-console.log(JSON.stringify({ twoChecksState, threeChecksState }));
+checks.entry_accepted_pre_confirmation_sent.checked = true;
+window.syncPotentialEntryAcceptedOnboardingButton(form);
+const fourChecksState = { disabled: button.disabled, title: button.title };
+console.log(JSON.stringify({ threeChecksState, fourChecksState }));
 """
         )
         result = subprocess.run(["node", "-e", script], check=True, capture_output=True, text=True)
         payload = json.loads(result.stdout)
 
-        self.assertEqual(payload["twoChecksState"], {
+        self.assertEqual(payload["threeChecksState"], {
             "disabled": True,
-            "title": "Complete all three checks before marking onboarding email as sent.",
+            "title": "Complete all four checks before marking onboarding email as sent.",
         })
-        self.assertEqual(payload["threeChecksState"], {"disabled": False, "title": ""})
+        self.assertEqual(payload["fourChecksState"], {"disabled": False, "title": ""})
 
     def test_onboarding_follow_up_buttons_sync_in_js(self):
         with open("app/static/js/app.js", encoding="utf-8") as handle:
@@ -2275,10 +2487,10 @@ const confirmFields = Array.from({ length: 10 }, () => ({
   value: "complete",
   closest(selector) { return selector === "[data-onboarding-fieldset]" ? confirmFieldset : null; },
 }));
-const turnDownFields = [
-  { checked: true, closest(selector) { return selector === "[data-onboarding-fieldset]" ? turnDownFieldset : null; } },
-  { checked: true, closest(selector) { return selector === "[data-onboarding-fieldset]" ? turnDownFieldset : null; } },
-];
+	const turnDownFields = [
+	  { checked: true, closest(selector) { return selector === "[data-onboarding-fieldset]" ? turnDownFieldset : null; } },
+	  { checked: true, closest(selector) { return selector === "[data-onboarding-fieldset]" ? turnDownFieldset : null; } },
+	];
 const root = {
   querySelector(selector) {
     if (selector === "[data-onboarding-choice]:checked") return confirmChoice.checked ? confirmChoice : (turnDownChoice.checked ? turnDownChoice : null);
@@ -2346,6 +2558,7 @@ console.log(JSON.stringify({ confirmState, turnDownState }));
             entry_accepted_notes_checked=True,
             entry_accepted_email_sent=True,
             entry_accepted_whatsapp_sent=False,
+            entry_accepted_pre_confirmation_sent=True,
         )
         response = self.client().post(
             f"/potential-entries/{entry.id}/entry-accepted/onboarding-email-sent",
@@ -2356,7 +2569,7 @@ console.log(JSON.stringify({ confirmState, turnDownState }));
         updated_entry = db.session.get(PotentialEntry, entry.id)
 
         self.assertEqual(response.status_code, 200)
-        self.assertIn("Complete all three checks before marking onboarding email as sent.", html)
+        self.assertIn("Complete all four checks before marking onboarding email as sent.", html)
         self.assertEqual(updated_entry.status, "Entry accepted")
 
     def test_entry_accepted_onboarding_email_sent_changes_status_when_checks_complete(self):
@@ -2365,6 +2578,7 @@ console.log(JSON.stringify({ confirmState, turnDownState }));
             entry_accepted_notes_checked=True,
             entry_accepted_email_sent=True,
             entry_accepted_whatsapp_sent=True,
+            entry_accepted_pre_confirmation_sent=True,
         )
         response = self.client().post(
             f"/potential-entries/{entry.id}/entry-accepted/onboarding-email-sent",
@@ -2385,6 +2599,7 @@ console.log(JSON.stringify({ confirmState, turnDownState }));
             entry_accepted_notes_checked=False,
             entry_accepted_email_sent=False,
             entry_accepted_whatsapp_sent=False,
+            entry_accepted_pre_confirmation_sent=False,
         )
         response = self.client().post(
             f"/potential-entries/{entry.id}/entry-accepted/onboarding-email-sent",
@@ -2393,6 +2608,7 @@ console.log(JSON.stringify({ confirmState, turnDownState }));
                 "entry_accepted_notes_checked": "1",
                 "entry_accepted_email_sent": "1",
                 "entry_accepted_whatsapp_sent": "1",
+                "entry_accepted_pre_confirmation_sent": "1",
             },
             follow_redirects=True,
         )
@@ -2401,11 +2617,12 @@ console.log(JSON.stringify({ confirmState, turnDownState }));
 
         self.assertEqual(response.status_code, 200)
         self.assertIn("Onboarding email sent.", html)
-        self.assertNotIn("Complete all three checks before marking onboarding email as sent.", html)
+        self.assertNotIn("Complete all four checks before marking onboarding email as sent.", html)
         self.assertEqual(updated_entry.status, "Onboarding email sent")
         self.assertTrue(updated_entry.entry_accepted_notes_checked)
         self.assertTrue(updated_entry.entry_accepted_email_sent)
         self.assertTrue(updated_entry.entry_accepted_whatsapp_sent)
+        self.assertTrue(updated_entry.entry_accepted_pre_confirmation_sent)
 
     def test_entry_accepted_email_gmail_url_uses_subject_without_body(self):
         result = self.build_entry_accepted_email(
@@ -4132,6 +4349,8 @@ console.log(JSON.stringify({ enabledState, missingState }));
         self.assertIn('name="profile_picture" type="url" value="" placeholder="https://example.com/profile-picture" maxlength="500" required', html)
         self.assertIn('name="account_id" value="" maxlength="120" required', html)
         self.assertIn('name="account_owner" value="" maxlength="160" required', html)
+        self.assertIn('name="dietary_requirements" value="" maxlength="500"', html)
+        self.assertNotIn('name="dietary_requirements" value="" maxlength="500" required', html)
         self.assertNotIn('name="seniority" type="checkbox" required', html)
         self.assertNotIn('textarea name="interview" rows="5" maxlength="4000" placeholder="Add a new interview note. It will be saved with date and time." required', html)
 
@@ -4482,6 +4701,40 @@ console.log(JSON.stringify({ enabledState, missingState }));
         self.assertIn("Profile picture is required.", html)
         self.assertIn("Account ID is required.", html)
         self.assertIn("Account owner is required.", html)
+
+    def test_create_member_saves_and_displays_dietary_requirements_chip(self):
+        response = self.client().post(
+            "/members",
+            data={
+                "csrf_token": "token",
+                "status": "Active",
+                "title": "Prof.",
+                "full_name": "Dietary Staff",
+                "roles": ["Examiner"],
+                "phone": "555-777",
+                "email": "dietary@example.com",
+                "has_car": "Yes",
+                "started_in": "2026",
+                "full_address_google_maps": "https://maps.google.com/?q=Path",
+                "city": "CABA",
+                "province": "Buenos Aires",
+                "country": "Argentina",
+                "cv": "https://example.com/cv.pdf",
+                "account_id": "ACC-777",
+                "profile_picture": "https://example.com/profile.jpg",
+                "account_owner": "Dietary Staff",
+                "dietary_requirements": "Vegetarian",
+            },
+            follow_redirects=True,
+        )
+
+        html = response.get_data(as_text=True)
+        member = AcademicStaff.query.filter_by(email="dietary@example.com").first()
+        self.assertEqual(response.status_code, 200)
+        self.assertIsNotNone(member)
+        self.assertEqual(member.dietary_requirements, "Vegetarian")
+        self.assertIn("<th>Dietary requirements</th>", html)
+        self.assertIn('<span class="dietary-requirements-chip">Vegetarian</span>', html)
 
     def test_accept_potential_entry_requires_complete_member_fields_except_seniority_and_history(self):
         entry = self.add_entry(full_name="Incomplete Accepted Candidate")

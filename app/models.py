@@ -50,6 +50,7 @@ class AcademicStaff(db.Model):
     account_id = db.Column(db.String(120), nullable=True, index=True)
     account_owner = db.Column(db.String(160), nullable=True, index=True)
     profile_picture = db.Column(db.String(500), nullable=True)
+    dietary_requirements = db.Column(db.String(500), nullable=True)
     created_on = db.Column(db.DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))
     updated_on = db.Column(
         db.DateTime(timezone=True),
@@ -1706,7 +1707,10 @@ class PotentialEntry(db.Model):
     entry_accepted_notes_checked = db.Column(db.Boolean, nullable=False, default=False, index=True)
     entry_accepted_email_sent = db.Column(db.Boolean, nullable=False, default=False, index=True)
     entry_accepted_whatsapp_sent = db.Column(db.Boolean, nullable=False, default=False, index=True)
+    entry_accepted_pre_confirmation_sent = db.Column(db.Boolean, nullable=False, default=False, index=True)
     onboarding_follow_up_choice = db.Column(db.String(20), nullable=True)
+    onboarding_confirm_notes_checked = db.Column(db.Boolean, nullable=False, default=False, index=True)
+    onboarding_confirm_examiner_assigned = db.Column(db.Boolean, nullable=False, default=False, index=True)
     onboarding_turn_down_sessions_removed = db.Column(db.Boolean, nullable=False, default=False, index=True)
     onboarding_turn_down_trainer_notified = db.Column(db.Boolean, nullable=False, default=False, index=True)
     induction_session_status = db.Column(db.String(20), nullable=True)

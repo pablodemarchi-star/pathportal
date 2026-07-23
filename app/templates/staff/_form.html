@@ -75,16 +75,20 @@
     <input name="cv" type="url" value="{{ member.cv if member else '' }}" placeholder="https://example.com/cv" maxlength="500" {% if require_complete %}required{% endif %}>
   </label>
   <label>
-    Profile picture{% if require_complete %} *{% endif %}
-    <input name="profile_picture" type="url" value="{{ member.profile_picture if member else '' }}" placeholder="https://example.com/profile-picture" maxlength="500" {% if require_complete %}required{% endif %}>
-  </label>
-  <label>
     Account ID{% if require_complete %} *{% endif %}
     <input name="account_id" value="{{ member.account_id if member else '' }}" maxlength="120" {% if require_complete %}required{% endif %}>
   </label>
   <label>
+    Profile picture{% if require_complete %} *{% endif %}
+    <input name="profile_picture" type="url" value="{{ member.profile_picture if member else '' }}" placeholder="https://example.com/profile-picture" maxlength="500" {% if require_complete %}required{% endif %}>
+  </label>
+  <label>
     Account owner{% if require_complete %} *{% endif %}
     <input name="account_owner" value="{{ member.account_owner if member else '' }}" maxlength="160" {% if require_complete %}required{% endif %}>
+  </label>
+  <label>
+    Dietary requirements
+    <input name="dietary_requirements" value="{{ member.dietary_requirements if member else '' }}" maxlength="500">
   </label>
   <label class="full-span">
     History

@@ -1955,6 +1955,70 @@ class ScheduleWorkflowTest(unittest.TestCase):
         self.assertIn("data-session-date-email=\"Thursday 25 June 2026\"", html)
         self.assertIn("data-session-shift=\"Morning\"", html)
 
+    def test_exam_session_planner_modal_lists_assigned_staff_dietary_requirements(self):
+        supervisor = self.create_supervisor(staff_id=1, name="Laura Mendez")
+        supervisor.title = "Lic."
+        supervisor.dietary_requirements = "Gluten-free meal"
+        examiner = AcademicStaff(
+            id=2,
+            status="Active",
+            title="Mr",
+            full_name="Noah Rivers",
+            roles="Examiner",
+            dietary_requirements="Vegetarian lunch",
+        )
+        other_session = ExamSession(
+            exam_session_name="Same date session",
+            status="Pending",
+            session_date=self.session_record.session_date,
+            shifts="Afternoon",
+            modules="Speaking",
+            format="Online",
+        )
+        db.session.add_all([examiner, other_session])
+        db.session.flush()
+        db.session.add_all([
+            ExamSessionSupervisorAssignment(
+                exam_session_id=self.session_record.id,
+                team_member_id=supervisor.id,
+                participation_status="Pending",
+            ),
+            ExamSessionSupervisorAssignment(
+                exam_session_id=other_session.id,
+                team_member_id=supervisor.id,
+                participation_status="Pending",
+            ),
+            ExamSessionExaminerAssignment(
+                exam_session_id=self.session_record.id,
+                team_member_id=examiner.id,
+                participation_status="Pending",
+            ),
+        ])
+        db.session.commit()
+
+        response = self.login_client().get("/exam-session-planner?session_year=2026")
+        html = response.get_data(as_text=True)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("same-date-conflict-alert", html)
+        self.assertIn("dietary-requirements-alert", html)
+        self.assertLess(
+            html.index("same-date-conflict-alert"),
+            html.index("dietary-requirements-alert"),
+        )
+        self.assertIn("Dietary requirements for Laura Mendez: Gluten-free meal", html)
+        self.assertIn("Dietary requirements for Noah Rivers: Vegetarian lunch", html)
+        self.assertIn("session-dietary-requirements-tag", html)
+        self.assertIn(">Dietary requirements</span>", html)
+        self.assertIn(
+            "Dietary requirements for Laura Mendez: Gluten-free meal&#10;Dietary requirements for Noah Rivers: Vegetarian lunch",
+            html,
+        )
+        self.assertIn('data-title="Lic."', html)
+        self.assertIn('data-dietary-requirements="Gluten-free meal"', html)
+        self.assertIn('data-title="Mr"', html)
+        self.assertIn('data-dietary-requirements="Vegetarian lunch"', html)
+
     def test_staff_preconfirmation_email_for_supervisor_includes_session_and_certification(self):
         payload = self.build_staff_preconfirmation_email({
             "full_name": "Laura Mendez",
@@ -2103,7 +2167,10 @@ class ScheduleWorkflowTest(unittest.TestCase):
                     "role": "Supervisor",
                     "assigned": True,
                     "name": "Laura Mendez",
+                    "title": "Lic.",
                     "phone": "+5491128508482",
+                    "dietaryRequirements": "Celiaque",
+                    "seniority": True,
                     "status": "Confirmed",
                     "statusTone": "green",
                 },
@@ -2112,6 +2179,7 @@ class ScheduleWorkflowTest(unittest.TestCase):
                     "role": "Examiner",
                     "assigned": True,
                     "name": "Noah Rivers",
+                    "title": "Mr",
                     "phone": "",
                     "status": "To be confirmed",
                     "statusTone": "yellow",
@@ -2161,13 +2229,37 @@ class ScheduleWorkflowTest(unittest.TestCase):
         self.assertIn("<strong>at 5:00 pm (GMT-3)</strong>", result["html"])
         self.assertIn("Bellis Ignis Group SRL", result["text"])
         self.assertIn("SESSION MATERIALS", result["html"])
+        self.assertLess(
+            result["html"].index("Exam session schedule"),
+            result["html"].index("Exam box shipment"),
+        )
+        self.assertLess(
+            result["html"].index("Exam box shipment"),
+            result["html"].index("Material for examiners"),
+        )
+        self.assertIn("Once you confirm your participation as a Supervisor, our Logistics team will contact you in due course to arrange the delivery of the materials for your assigned exam session(s).", result["html"])
+        self.assertIn("Exam box shipment\nView material:", result["text"])
         self.assertIn("Supervisor guidelines", result["html"])
         self.assertIn("View material", result["html"])
         self.assertIn("STAFF MEMBERS AND EMERGENCY LINES", result["html"])
+        self.assertIn("Path emergency lines for any urgent matters", result["html"])
+        self.assertIn("Path emergency lines for any urgent matters", result["text"])
+        self.assertNotIn("this exam session, as well as the Path emergency line for any urgent matters", result["html"])
+        self.assertIn("Lic. Laura Mendez", result["html"])
+        self.assertIn("Mr Noah Rivers", result["html"])
+        self.assertLess(
+            result["html"].index(">Senior</span>"),
+            result["html"].index(">Confirmed</span>"),
+        )
         self.assertIn("Confirmed", result["html"])
         self.assertIn("To be confirmed", result["html"])
+        self.assertIn("Celiaque", result["html"])
+        self.assertIn("background:#e7f5f8", result["html"])
+        self.assertIn("Lic. Laura Mendez (Senior) (Confirmed) - Dietary requirements: Celiaque", result["text"])
         self.assertIn("This intern has not been assigned yet", result["html"])
         self.assertIn("Phone number not available", result["text"])
+        self.assertIn('href="https://wa.me/5491128508482"', result["html"])
+        self.assertIn("+5491128508482 (https://wa.me/5491128508482)", result["text"])
         self.assertIn("Emergency lines", result["text"])
         self.assertNotIn("Please contact your Supervisor first before using these emergency lines.", result["text"])
         self.assertIn("https://wa.me/5491150954847", result["html"])
@@ -2175,7 +2267,7 @@ class ScheduleWorkflowTest(unittest.TestCase):
         self.assertIn("https://wa.me/5491155692629", result["html"])
         self.assertIn("https://wa.me/5491128508482", result["html"])
         self.assertIn("- Path Examinations office at +5491150954847", result["text"])
-        self.assertIn("EXAM SESSION MATERIAL", result["html"])
+        self.assertNotIn("EXAM SESSION MATERIAL", result["html"])
         self.assertIn("TRAVEL AND COMMUTING", result["html"])
         self.assertIn('href="https://example.com/logistics"', result["html"])
         self.assertIn("EXAM SESSION FINAL CHECKS", result["html"])
@@ -2199,6 +2291,8 @@ class ScheduleWorkflowTest(unittest.TestCase):
         self.assertIn("selected as an <strong>Examiner</strong>", result["html"])
         self.assertIn("30 minutes", result["text"])
         self.assertIn("Examiner guidelines", result["html"])
+        self.assertIn("This section contains the materials needed to conduct the Listening and speaking module.", result["html"])
+        self.assertNotIn("Listening and Speaking Module", result["html"])
         self.assertIn("ATTENDANCE, MARKS AND RECORDINGS", result["html"])
         self.assertIn("Please contact your Supervisor first before using these emergency lines.", result["text"])
         self.assertNotIn("EXAM SESSION MATERIAL", result["html"])

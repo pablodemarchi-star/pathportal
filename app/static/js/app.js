@@ -209,6 +209,16 @@ const modalOpeners = new WeakMap();
     const activateButton = form?.querySelector("[data-induction-activate-button]");
     const hasCar = Boolean(root.querySelector("input[name='interview_has_car']:checked"));
     const hasRole = Boolean(root.querySelector("input[name='interview_roles']:checked"));
+    const acceptanceChecksContainer = form?.querySelector("[data-interview-acceptance-checks]");
+    if (acceptanceChecksContainer) {
+      acceptanceChecksContainer.hidden = acceptanceOutcome !== "sessions_pre_confirmation";
+      if (acceptanceOutcome !== "sessions_pre_confirmation") {
+        acceptanceChecksContainer.querySelectorAll("[data-interview-acceptance-required]").forEach((field) => {
+          field.checked = false;
+        });
+      }
+    }
+    const acceptanceChecksComplete = acceptanceOutcome !== "sessions_pre_confirmation" || Array.from(form?.querySelectorAll("[data-interview-acceptance-required]") || []).every((field) => field.checked);
     const rescheduleFields = Array.from(root.querySelectorAll("[data-induction-reschedule-required]"));
     const rescheduleComplete = selected === "reschedule" && rescheduleFields.every((field) => {
       if (field.disabled) return false;
@@ -217,12 +227,12 @@ const modalOpeners = new WeakMap();
     });
     const noShowCheck = root.querySelector("[data-induction-no-show-required]");
     const noShowComplete = selected === "no_show" && (!noShowCheck || noShowCheck.checked);
-    const attendedComplete = selected === "attended" && Boolean(root.querySelector("[data-induction-attended-required]:checked"));
-    const interviewAttendedComplete = selected === "attended" && hasCar && hasRole && acceptanceOutcome === "sessions_pre_confirmation";
+    const attendedComplete = selected === "attended";
+    const interviewAttendedComplete = selected === "attended" && hasCar && hasRole && acceptanceOutcome === "sessions_pre_confirmation" && acceptanceChecksComplete;
     const reactivationDate = root.querySelector("[data-reactivation-date]")?.value || "";
     const interviewOnHoldComplete = selected === "attended" && hasCar && hasRole && acceptanceOutcome === "on_hold" && isFutureDdMmYyyyDate(reactivationDate);
     const interviewPreassigned = form?.querySelector("[data-interview-preassigned-readonly]");
-    if (interviewPreassigned) interviewPreassigned.hidden = selected === "no_show";
+    if (interviewPreassigned) interviewPreassigned.hidden = selected !== "attended";
 
     if (rejectButton) rejectButton.disabled = !noShowComplete;
     if (rescheduleButton) rescheduleButton.disabled = !rescheduleComplete;
@@ -243,7 +253,7 @@ const modalOpeners = new WeakMap();
   window.syncPotentialOutcomeStatusPanelsIn = syncAll;
   ["change", "input", "click", "keyup", "blur"].forEach((eventName) => {
     document.addEventListener(eventName, (event) => {
-      const control = event.target.closest?.("[data-induction-status-option], [data-induction-reschedule-required], [data-induction-no-show-required], [data-induction-attended-required], input[name='interview_has_car'], input[name='interview_roles'], input[name='entry_acceptance_outcome'], [data-reactivation-date]");
+      const control = event.target.closest?.("[data-induction-status-option], [data-induction-reschedule-required], [data-induction-no-show-required], [data-interview-acceptance-required], input[name='interview_has_car'], input[name='interview_roles'], input[name='entry_acceptance_outcome'], [data-reactivation-date]");
       if (!control) return;
       syncFromTarget(control);
       window.requestAnimationFrame(() => syncAll());
@@ -257,6 +267,7 @@ const modalOpeners = new WeakMap();
     "entry_accepted_notes_checked",
     "entry_accepted_email_sent",
     "entry_accepted_whatsapp_sent",
+    "entry_accepted_pre_confirmation_sent",
   ];
   const syncButton = (form) => {
     const button = form?.querySelector?.("[data-onboarding-email-sent-button]");
@@ -266,7 +277,7 @@ const modalOpeners = new WeakMap();
     if (canMarkSent) {
       button.removeAttribute("title");
     } else {
-      button.setAttribute("title", "Complete all three checks before marking onboarding email as sent.");
+      button.setAttribute("title", "Complete all four checks before marking onboarding email as sent.");
     }
   };
   const syncFromTarget = (target) => {
@@ -305,10 +316,11 @@ const modalOpeners = new WeakMap();
     root.querySelectorAll("[data-onboarding-fieldset]").forEach((fieldset) => {
       fieldset.disabled = fieldset.dataset.onboardingFieldset !== choice;
     });
-    const confirmComplete = choice === "confirm" && Array.from(root.querySelectorAll("[data-onboarding-confirm-required]")).every((field) => {
-      if (field.closest("[data-onboarding-fieldset]")?.disabled) return false;
-      return Boolean(field.value?.trim());
-    });
+	    const confirmComplete = choice === "confirm" && Array.from(root.querySelectorAll("[data-onboarding-confirm-required]")).every((field) => {
+	      if (field.closest("[data-onboarding-fieldset]")?.disabled) return false;
+	      if (field.type === "checkbox") return field.checked;
+	      return Boolean(field.value?.trim());
+	    });
     const turnDownComplete = choice === "turn_down" && Array.from(root.querySelectorAll("[data-onboarding-turn-down-required]")).every((field) => {
       if (field.closest("[data-onboarding-fieldset]")?.disabled) return false;
       return field.checked;
@@ -6866,6 +6878,7 @@ const collectOfficialSessionStaff = (form) => ([
     const select = row.querySelector("[data-team-member-select]");
     const option = select ? selectedTeamMemberOption(select) : null;
     const name = cleanEmailValue(option?.dataset.name);
+    const title = cleanEmailValue(option?.dataset.title);
     const participation = normalizeParticipationStatus(row.querySelector("[data-participation-select]")?.value);
     const isConfirmed = participation === "Confirmed";
     return {
@@ -6873,7 +6886,11 @@ const collectOfficialSessionStaff = (form) => ([
       role,
       assigned: Boolean(name),
       name,
+      title,
+      displayName: [title, name].filter(Boolean).join(" "),
       phone: cleanEmailValue(option?.dataset.phone) || "Phone number not available",
+      dietaryRequirements: cleanEmailValue(option?.dataset.dietaryRequirements),
+      seniority: option?.dataset.seniority === "true",
       status: isConfirmed ? "Confirmed" : "To be confirmed",
       statusTone: isConfirmed ? "green" : "yellow",
       emptyMessage: `This ${role.toLowerCase()} has not been assigned yet`,
@@ -6941,22 +6958,35 @@ const validateStaffOfficialConfirmationEmailPayload = (payload) => {
 
 const officialConfirmationStatusStyle = (tone) => {
   if (tone === "green") return { background: "#eef5ed", border: "#86aa83", color: "#4f7f4c" };
+  if (tone === "blue") return { background: "#e7f5f8", border: "#8fd4e6", color: "#087896" };
   if (tone === "red") return { background: "#fbecea", border: "#e7a59f", color: "#cd4d40" };
   return { background: "#fff3c4", border: "#f3d67a", color: "#8a5a00" };
+};
+
+const officialContactDisplayName = (contact) => (
+  cleanEmailValue(contact.displayName)
+  || [cleanEmailValue(contact.title), cleanEmailValue(contact.name)].filter(Boolean).join(" ")
+  || cleanEmailValue(contact.name)
+);
+
+const officialContactWhatsAppUrl = (phone) => {
+  const digits = cleanEmailValue(phone).replace(/\D/g, "");
+  return digits ? `https://wa.me/${digits}` : "";
 };
 
 const officialMaterialRows = (role) => {
   if (role === "Examiner") {
     return [
       ["🗓️ Exam session schedule", "Please access this section in advance to check your assigned exam rooms and ensure your schedule information is complete. You may have been assigned to the Listening and speaking module, the Reading and writing module, or both. To verify this, compare the start and end times in this email with those shown in the PDFs. Please also review the session timings, rooms and layout in advance."],
-      ["🎧🗣️ Listening and speaking module", "This section contains the materials needed to conduct the Listening and Speaking Module. Please access Sinapsis in advance to check that the required audio files are available and working properly before the exam session."],
+      ["🎧🗣️ Listening and speaking module", "This section contains the materials needed to conduct the Listening and speaking module. Please access Sinapsis in advance to check that the required audio files are available and working properly before the exam session."],
       ["✅ Examiner guidelines", "Please read the examiner instructions carefully and in advance to ensure that all required procedures and protocols are followed in line with Path Examinations’ quality policies."],
     ];
   }
-  if (role === "Supervisor") {
-    return [
-      ["🗓️ Exam session schedule", "Please access this folder in advance to understand the exam session you will be supervising, including timings, exam room layout, and the start and end times of each module. A careful review is required to ensure the session runs smoothly and to identify any details that may need attention beforehand."],
-      ["🎧🗣️ Material for examiners", "This folder contains the Listening and speaking module examiner guidelines and Listening audio files as back-up material. Examiners must access the official materials through Sinapsis, but these files are provided as a contingency resource in case of power or internet issues during the exam session."],
+	  if (role === "Supervisor") {
+	    return [
+	      ["🗓️ Exam session schedule", "Please access this folder in advance to understand the exam session you will be supervising, including timings, exam room layout, and the start and end times of each module. A careful review is required to ensure the session runs smoothly and to identify any details that may need attention beforehand."],
+	      ["📦🚚 Exam box shipment", "Once you confirm your participation as a Supervisor, our Logistics team will contact you in due course to arrange the delivery of the materials for your assigned exam session(s). You will also receive instructions on how to handle the materials after the exam session has ended."],
+	      ["🎧🗣️ Material for examiners", "This folder contains the Listening and speaking module examiner guidelines and Listening audio files as back-up material. Examiners must access the official materials through Sinapsis, but these files are provided as a contingency resource in case of power or internet issues during the exam session."],
       ["✅ Supervisor guidelines", "Please read these guidelines carefully to fully understand your responsibilities during the exam session. This will help you respond appropriately at each stage or in case of unexpected situations, while ensuring compliance with Path Examinations’ quality policies and procedures."],
     ];
   }
@@ -6989,14 +7019,24 @@ const officialConfirmationMaterialsText = (role) => {
 const officialContactsHtml = (contacts, recipientRole, styles) => `
   <div style="${styles.section}">
     <h2 style="${styles.sectionTitle}">STAFF MEMBERS AND EMERGENCY LINES</h2>
-    <p style="${styles.paragraph}">Below are the contact details of the staff members assigned to this exam session, as well as the Path emergency line for any urgent matters:</p>
+    <p style="${styles.paragraph}">Below are the contact details of the staff members assigned to this exam session, as well as the Path emergency lines for any urgent matters:</p>
     ${contacts.map((contact) => {
       if (!contact.assigned) {
         const red = officialConfirmationStatusStyle("red");
         return `<div style="margin:0 0 9px;padding:12px 14px;background:#f1f3f2;border:1px solid #d9dfdc;border-radius:10px;"><p style="margin:0 0 6px;color:#62727a;font:700 11px Arial, Helvetica, sans-serif;text-transform:uppercase;">${escapeEmailHtml(contact.label)}</p><span style="display:inline-block;padding:4px 9px;border-radius:999px;background:${red.background};border:1px solid ${red.border};color:${red.color};font:700 12px Arial, Helvetica, sans-serif;">${escapeEmailHtml(contact.emptyMessage)}</span></div>`;
       }
       const tone = officialConfirmationStatusStyle(contact.statusTone);
-      return `<div style="margin:0 0 9px;padding:12px 14px;background:#f1f3f2;border:1px solid #d9dfdc;border-radius:10px;"><p style="margin:0 0 4px;color:#62727a;font:700 11px Arial, Helvetica, sans-serif;text-transform:uppercase;">${escapeEmailHtml(contact.label)}</p><p style="margin:0;color:#111115;font:700 15px/1.35 Arial, Helvetica, sans-serif;">${escapeEmailHtml(contact.name)} <span style="display:inline-block;margin-left:6px;padding:3px 8px;border-radius:999px;background:${tone.background};border:1px solid ${tone.border};color:${tone.color};font:700 11px Arial, Helvetica, sans-serif;">${escapeEmailHtml(contact.status)}</span></p><p style="margin:3px 0 0;color:#00506b;font:600 13px Arial, Helvetica, sans-serif;">${escapeEmailHtml(contact.phone || "Phone number not available")}</p></div>`;
+      const dietaryRequirements = cleanEmailValue(contact.dietaryRequirements || contact.dietary_requirements);
+      const dietaryTone = officialConfirmationStatusStyle("blue");
+      const seniorTone = officialConfirmationStatusStyle("green");
+      const seniorChip = contact.seniority || contact.isSenior ? ` <span style="display:inline-block;margin-left:6px;padding:3px 8px;border-radius:999px;background:${seniorTone.background};border:1px solid ${seniorTone.border};color:${seniorTone.color};font:700 11px Arial, Helvetica, sans-serif;">Senior</span>` : "";
+      const dietaryChip = dietaryRequirements ? ` <span style="display:inline-block;margin-left:6px;padding:3px 8px;border-radius:999px;background:${dietaryTone.background};border:1px solid ${dietaryTone.border};color:${dietaryTone.color};font:700 11px Arial, Helvetica, sans-serif;">${escapeEmailHtml(dietaryRequirements)}</span>` : "";
+      const phoneText = cleanEmailValue(contact.phone) || "Phone number not available";
+      const phoneUrl = officialContactWhatsAppUrl(phoneText);
+      const phoneHtml = phoneUrl
+        ? `<a href="${escapeEmailAttribute(phoneUrl)}" style="color:#00506b;font:600 13px Arial, Helvetica, sans-serif;text-decoration:underline;">${escapeEmailHtml(phoneText)}</a>`
+        : escapeEmailHtml(phoneText);
+      return `<div style="margin:0 0 9px;padding:12px 14px;background:#f1f3f2;border:1px solid #d9dfdc;border-radius:10px;"><p style="margin:0 0 4px;color:#62727a;font:700 11px Arial, Helvetica, sans-serif;text-transform:uppercase;">${escapeEmailHtml(contact.label)}</p><p style="margin:0;color:#111115;font:700 15px/1.35 Arial, Helvetica, sans-serif;">${escapeEmailHtml(officialContactDisplayName(contact))}${seniorChip} <span style="display:inline-block;margin-left:6px;padding:3px 8px;border-radius:999px;background:${tone.background};border:1px solid ${tone.border};color:${tone.color};font:700 11px Arial, Helvetica, sans-serif;">${escapeEmailHtml(contact.status)}</span>${dietaryChip}</p><p style="margin:3px 0 0;color:#00506b;font:600 13px Arial, Helvetica, sans-serif;">${phoneHtml}</p></div>`;
     }).join("")}
     <div style="margin-top:12px;padding:14px 16px;background:#fff4e8;border:1px solid #f1cfa8;border-radius:10px;">
       <p style="margin:0 0 8px;color:#9a5a12;font:800 13px Arial, Helvetica, sans-serif;">Emergency lines</p>
@@ -7017,10 +7057,10 @@ const officialContactsHtml = (contacts, recipientRole, styles) => `
 
 const officialContactsText = (contacts, recipientRole) => (
   "STAFF MEMBERS AND EMERGENCY LINES\n\n"
-  + "Below are the contact details of the staff members assigned to this exam session, as well as the Path emergency line for any urgent matters:\n\n"
+  + "Below are the contact details of the staff members assigned to this exam session, as well as the Path emergency lines for any urgent matters:\n\n"
   + contacts.map((contact) => (
     contact.assigned
-      ? `${contact.label}\n${contact.name} (${contact.status})\n${contact.phone || "Phone number not available"}`
+      ? `${contact.label}\n${officialContactDisplayName(contact)}${contact.seniority || contact.isSenior ? " (Senior)" : ""} (${contact.status})${cleanEmailValue(contact.dietaryRequirements || contact.dietary_requirements) ? ` - Dietary requirements: ${cleanEmailValue(contact.dietaryRequirements || contact.dietary_requirements)}` : ""}\n${contact.phone || "Phone number not available"}${officialContactWhatsAppUrl(contact.phone) ? ` (${officialContactWhatsAppUrl(contact.phone)})` : ""}`
       : `${contact.label}\n${contact.emptyMessage}`
   )).join("\n\n")
   + `\n\nEmergency lines\n${["Examiner", "Intern"].includes(recipientRole) ? "Please contact your Supervisor first before using these emergency lines.\n" : ""}On business days from 9am to 3pm, contact:\n- Path Examinations office at +5491150954847 (https://wa.me/5491150954847)\n\nOutside of business time, contact:\n- Brenda Sartori at +5491133945761 (https://wa.me/5491133945761)\n- Agustina Savini at +5491155692629 (https://wa.me/5491155692629)\n- Pablo Demarchi at +5491128508482 (https://wa.me/5491128508482)`
@@ -7126,15 +7166,6 @@ const buildStaffOfficialConfirmationEmail = (button) => {
   const finalInstructionsText = finalInstructions
     ? `${finalInstructions.title}\n\nPlease make sure to:\n\n${finalInstructions.items.map((item) => `✓ ${item}`).join("\n")}`
     : "";
-  const supervisorMaterialHtml = role === "Supervisor" ? `
-    <div style="${styles.section}">
-      <h2 style="${styles.sectionTitle}">EXAM SESSION MATERIAL</h2>
-      <p style="${styles.paragraph};margin-bottom:0;">Once you confirm your participation as a Supervisor, our Logistics team will contact you in due course to arrange the delivery of the materials for your assigned exam session(s). You will also receive instructions on how to handle the materials after the exam session has ended.</p>
-    </div>
-  ` : "";
-  const supervisorMaterialText = role === "Supervisor"
-    ? "EXAM SESSION MATERIAL\n\nOnce you confirm your participation as a Supervisor, our Logistics team will contact you in due course to arrange the delivery of the materials for your assigned exam session(s). You will also receive instructions on how to handle the materials after the exam session has ended."
-    : "";
   const actionTagsHtml = `
     <p style="${styles.paragraph}">We’d appreciate it if you could confirm receipt of this email and verify that you can access all the materials mentioned above.</p>
     <p style="margin:0 0 8px;"><a href="${escapeEmailAttribute(confirmMailto)}" style="display:inline-block;padding:9px 13px;border-radius:999px;background:#eef5ed;color:#4f7f4c;border:1px solid #86aa83;font:700 13px Arial, Helvetica, sans-serif;text-decoration:none;">Click here to confirm participation and material reception</a></p>
@@ -7172,7 +7203,6 @@ const buildStaffOfficialConfirmationEmail = (button) => {
 	        </div>
         ${officialConfirmationMaterialsHtml(role, styles)}
         ${officialContactsHtml(contacts, role, styles)}
-        ${supervisorMaterialHtml}
         <div style="${styles.section}">
           <h2 style="${styles.sectionTitle}">TRAVEL AND COMMUTING</h2>
           <p style="${styles.paragraph};margin-bottom:0;">${travel.html}</p>
@@ -7212,7 +7242,6 @@ const buildStaffOfficialConfirmationEmail = (button) => {
 	    `Payments will be processed on ${nextPaymentDate} at 5:00 pm (GMT-3) and will appear as Bellis Ignis Group SRL. First-time payments may take up to 72 working hours after processing; previous recipients should receive payment immediately.`,
     materialsText,
     officialContactsText(contacts, role),
-    supervisorMaterialText,
     "TRAVEL AND COMMUTING",
     travel.text,
     finalInstructionsText,
@@ -9356,13 +9385,23 @@ const syncPotentialInterviewNoShow = (element) => {
   const hasCar = Boolean(form.querySelector("input[name='interview_has_car']:checked"));
   const hasRole = Boolean(form.querySelector("input[name='interview_roles']:checked"));
   const outcome = form.querySelector("input[name='entry_acceptance_outcome']:checked")?.value || "";
+  const acceptanceChecksContainer = form.querySelector("[data-interview-acceptance-checks]");
+  if (acceptanceChecksContainer) {
+    acceptanceChecksContainer.hidden = outcome !== "sessions_pre_confirmation";
+    if (outcome !== "sessions_pre_confirmation") {
+      acceptanceChecksContainer.querySelectorAll("[data-interview-acceptance-required]").forEach((field) => {
+        field.checked = false;
+      });
+    }
+  }
+  const acceptanceChecksComplete = outcome !== "sessions_pre_confirmation" || Array.from(form.querySelectorAll("[data-interview-acceptance-required]")).every((field) => field.checked);
   const reactivationDate = form.querySelector("[data-reactivation-date]")?.value || "";
-  const canAccept = Boolean(!isNoShow && hasCar && hasRole && outcome === "sessions_pre_confirmation");
+  const canAccept = Boolean(!isNoShow && hasCar && hasRole && outcome === "sessions_pre_confirmation" && acceptanceChecksComplete);
   const canAcceptOnHold = Boolean(!isNoShow && hasCar && hasRole && outcome === "on_hold" && isFutureDdMmYyyyDate(reactivationDate));
   if (acceptedButton) {
     acceptedButton.disabled = !canAccept;
     if (canAccept) acceptedButton.removeAttribute("title");
-    else acceptedButton.setAttribute("title", isNoShow ? "No-show entries cannot be accepted." : "Complete Has a car, Roles, and session pre-confirmation before accepting.");
+    else acceptedButton.setAttribute("title", isNoShow ? "No-show entries cannot be accepted." : "Complete Has a car, Roles, session pre-confirmation, and confirmation before accepting.");
   }
   if (acceptedOnHoldButton) {
     acceptedOnHoldButton.disabled = !canAcceptOnHold;
@@ -9427,13 +9466,14 @@ const syncEntryAcceptedOnboardingButton = (element) => {
     "entry_accepted_notes_checked",
     "entry_accepted_email_sent",
     "entry_accepted_whatsapp_sent",
+    "entry_accepted_pre_confirmation_sent",
   ];
   const canMarkSent = requiredNames.every((name) => form.querySelector(`input[name="${name}"]`)?.checked);
   button.disabled = !canMarkSent;
   if (canMarkSent) {
     button.removeAttribute("title");
   } else {
-    button.setAttribute("title", "Complete all three checks before marking onboarding email as sent.");
+    button.setAttribute("title", "Complete all four checks before marking onboarding email as sent.");
   }
 };
 
@@ -9458,10 +9498,11 @@ const syncOnboardingFollowUpControls = (element) => {
   root.querySelectorAll("[data-onboarding-fieldset]").forEach((fieldset) => {
     fieldset.disabled = fieldset.dataset.onboardingFieldset !== choice;
   });
-  const confirmComplete = Boolean(choice === "confirm") && Array.from(root.querySelectorAll("[data-onboarding-confirm-required]")).every((field) => {
-    if (field.disabled) return false;
-    return Boolean(field.value?.trim());
-  });
+	  const confirmComplete = Boolean(choice === "confirm") && Array.from(root.querySelectorAll("[data-onboarding-confirm-required]")).every((field) => {
+	    if (field.disabled) return false;
+	    if (field.type === "checkbox") return field.checked;
+	    return Boolean(field.value?.trim());
+	  });
   const turnDownComplete = Boolean(choice === "turn_down") && Array.from(root.querySelectorAll("[data-onboarding-turn-down-required]")).every((field) => (
     !field.disabled && field.checked
   ));
@@ -9502,15 +9543,26 @@ const syncInductionStatusPanels = (element) => {
   });
   const noShowCheck = root.querySelector("[data-induction-no-show-required]");
   const noShowComplete = selected === "no_show" && (!noShowCheck || noShowCheck.checked);
-  const attendedComplete = selected === "attended" && Boolean(root.querySelector("[data-induction-attended-required]:checked"));
+  const attendedComplete = selected === "attended";
   const acceptanceOutcome = root.querySelector("input[name='entry_acceptance_outcome']:checked")?.value || "";
   const reactivationDateField = root.querySelector("[data-reactivation-date-field]");
   const reactivationDateInput = root.querySelector("[data-reactivation-date]");
   if (reactivationDateField) reactivationDateField.hidden = acceptanceOutcome !== "on_hold";
+  const acceptanceChecksContainer = form?.querySelector("[data-interview-acceptance-checks]");
+  if (acceptanceChecksContainer) {
+    acceptanceChecksContainer.hidden = acceptanceOutcome !== "sessions_pre_confirmation";
+    if (acceptanceOutcome !== "sessions_pre_confirmation") {
+      acceptanceChecksContainer.querySelectorAll("[data-interview-acceptance-required]").forEach((field) => {
+        field.checked = false;
+      });
+    }
+  }
+  const acceptanceChecksComplete = acceptanceOutcome !== "sessions_pre_confirmation" || Array.from(form?.querySelectorAll("[data-interview-acceptance-required]") || []).every((field) => field.checked);
   const interviewAttendedComplete = selected === "attended"
     && Boolean(root.querySelector("input[name='interview_has_car']:checked"))
     && Boolean(root.querySelector("input[name='interview_roles']:checked"))
-    && acceptanceOutcome === "sessions_pre_confirmation";
+    && acceptanceOutcome === "sessions_pre_confirmation"
+    && acceptanceChecksComplete;
   const interviewOnHoldComplete = selected === "attended"
     && Boolean(root.querySelector("input[name='interview_has_car']:checked"))
     && Boolean(root.querySelector("input[name='interview_roles']:checked"))
@@ -9522,7 +9574,7 @@ const syncInductionStatusPanels = (element) => {
   const acceptedButton = form?.querySelector("[data-application-accepted-button]");
   const acceptedOnHoldButton = form?.querySelector("[data-application-accepted-on-hold-button]");
   const interviewPreassigned = form?.querySelector("[data-interview-preassigned-readonly]");
-  if (interviewPreassigned) interviewPreassigned.hidden = selected === "no_show";
+  if (interviewPreassigned) interviewPreassigned.hidden = selected !== "attended";
   if (rejectButton) rejectButton.disabled = !noShowComplete;
   if (rescheduleButton) rescheduleButton.disabled = !rescheduleComplete;
   if (activateButton) activateButton.disabled = !attendedComplete;
@@ -9630,7 +9682,7 @@ document.addEventListener("change", (event) => {
     syncInterviewInvitationConfirmation(interviewConfirmControl.closest("form"));
     return;
   }
-  const inductionStatusOption = event.target.closest("[data-induction-status-option], [data-induction-reschedule-required], [data-induction-no-show-required], [data-induction-attended-required], input[name='interview_has_car'], input[name='interview_roles'], input[name='entry_acceptance_outcome']");
+  const inductionStatusOption = event.target.closest("[data-induction-status-option], [data-induction-reschedule-required], [data-induction-no-show-required], [data-interview-acceptance-required], input[name='interview_has_car'], input[name='interview_roles'], input[name='entry_acceptance_outcome']");
   if (inductionStatusOption) {
     syncInductionStatusPanels(inductionStatusOption);
     return;

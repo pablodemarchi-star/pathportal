@@ -224,13 +224,13 @@
             <span class="team-member-caret">▼</span>
           </summary>
           <div class="team-member-picker-panel">
-            <button class="team-member-option" type="button" data-team-member-option data-value="" data-name="" data-state="" data-full-address="" data-email="" data-phone="" data-base-label="Select staff member">
+            <button class="team-member-option" type="button" data-team-member-option data-value="" data-name="" data-title="" data-state="" data-full-address="" data-email="" data-phone="" data-dietary-requirements="" data-base-label="Select staff member">
               <span class="team-member-placeholder">Role to cover</span>
             </button>
             {% for member in section_members %}
               {% set state = section_states.get(session.id, {}).get(member.id, 'warning') %}
               {% set session_count = member_session_counts.get(member.id, 0) %}
-              <button class="team-member-option" type="button" data-team-member-option data-value="{{ member.id }}" data-name="{{ member.full_name }}" data-state="{{ state }}" data-full-address="{{ member.full_address_google_maps or '' }}" data-email="{{ member.email or '' }}" data-phone="{{ member.phone or '' }}" data-seniority="{{ 'true' if member.seniority else 'false' }}" data-has-car="{{ 'true' if member.has_car == 'Yes' else 'false' }}" data-session-count="{{ session_count }}" data-base-session-count="{{ session_count }}" data-base-label="{{ member_option_label(member) }}">
+              <button class="team-member-option" type="button" data-team-member-option data-value="{{ member.id }}" data-name="{{ member.full_name }}" data-title="{{ member.title or '' }}" data-state="{{ state }}" data-full-address="{{ member.full_address_google_maps or '' }}" data-email="{{ member.email or '' }}" data-phone="{{ member.phone or '' }}" data-dietary-requirements="{{ member.dietary_requirements or '' }}" data-seniority="{{ 'true' if member.seniority else 'false' }}" data-has-car="{{ 'true' if member.has_car == 'Yes' else 'false' }}" data-session-count="{{ session_count }}" data-base-session-count="{{ session_count }}" data-base-label="{{ member_option_label(member) }}">
                 {{ staff_member_option_markup(member, session_count) }}
                 <span class="team-member-assigned-note">Already assigned</span>
               </button>
@@ -665,6 +665,10 @@
               {% for duplicate_tag in same_date_duplicate_tags.get(session.id, []) %}
                 <span class="member-duplication-tag {{ duplicate_tag.class }}" title="{{ duplicate_tag.title }}">{{ duplicate_tag.label }}</span>
               {% endfor %}
+              {% set date_dietary_requirements = session_dietary_requirement_alerts.get(session.id, []) %}
+              {% if date_dietary_requirements %}
+                <span class="session-dietary-requirements-tag" title="{% for dietary_requirement in date_dietary_requirements %}Dietary requirements for {{ dietary_requirement.name }}: {{ dietary_requirement.description }}{% if not loop.last %}&#10;{% endif %}{% endfor %}">Dietary requirements</span>
+              {% endif %}
             </div>
           </td>
           <td class="badge-list">
@@ -880,15 +884,28 @@
           </div>
         </div>
         {% set modal_conflicts = same_date_assignment_conflicts.get(session.id, []) %}
-        <div class="same-date-conflict-alert" role="alert" aria-label="Same date staff assignment warning" data-same-date-conflict-alert {% if not modal_conflicts %}hidden{% endif %}>
-          <span class="same-date-conflict-icon">!</span>
-          <div data-same-date-conflict-messages>
-            {% if modal_conflicts %}
-              {% for conflict_message in modal_conflicts %}
-                <p>{{ conflict_message }}</p>
-              {% endfor %}
-            {% endif %}
+        {% set modal_dietary_requirements = session_dietary_requirement_alerts.get(session.id, []) %}
+        <div class="session-modal-alerts">
+          <div class="same-date-conflict-alert" role="alert" aria-label="Same date staff assignment warning" data-same-date-conflict-alert {% if not modal_conflicts %}hidden{% endif %}>
+            <span class="same-date-conflict-icon">!</span>
+            <div data-same-date-conflict-messages>
+              {% if modal_conflicts %}
+                {% for conflict_message in modal_conflicts %}
+                  <p>{{ conflict_message }}</p>
+                {% endfor %}
+              {% endif %}
+            </div>
           </div>
+          {% if modal_dietary_requirements %}
+            <div class="dietary-requirements-alert" role="alert" aria-label="Dietary requirements warning">
+              <span class="dietary-requirements-alert-icon">i</span>
+              <div>
+                {% for dietary_requirement in modal_dietary_requirements %}
+                  <p>Dietary requirements for {{ dietary_requirement.name }}: {{ dietary_requirement.description }}</p>
+                {% endfor %}
+              </div>
+            </div>
+          {% endif %}
         </div>
         <button class="icon-button" type="button" data-close-modal>&times;</button>
       </div>

@@ -2356,6 +2356,20 @@ td .centered-dash {
   color: #9a4a1f;
 }
 
+.session-dietary-requirements-tag {
+  display: inline-flex;
+  align-items: center;
+  width: fit-content;
+  border-radius: 999px;
+  padding: 3px 7px;
+  background: var(--path-blue-303up);
+  color: white;
+  font-size: 10px;
+  font-weight: 600;
+  line-height: 1.1;
+  white-space: nowrap;
+}
+
 .centre-type-chip {
   display: inline-flex;
   align-items: center;
@@ -2981,6 +2995,18 @@ span.session-marker-chip {
   flex-shrink: 0;
 }
 
+.session-modal-alerts {
+  display: grid;
+  gap: 8px;
+  width: min(520px, 42vw);
+  margin-left: auto;
+}
+
+.session-modal-alerts .same-date-conflict-alert {
+  max-width: none;
+  margin-left: 0;
+}
+
 .same-date-conflict-alert {
   display: inline-flex;
   align-items: flex-start;
@@ -2998,15 +3024,18 @@ span.session-marker-chip {
   line-height: 1.25;
 }
 
-.same-date-conflict-alert p {
+.same-date-conflict-alert p,
+.dietary-requirements-alert p {
   margin: 0 0 4px;
 }
 
-.same-date-conflict-alert p:last-child {
+.same-date-conflict-alert p:last-child,
+.dietary-requirements-alert p:last-child {
   margin-bottom: 0;
 }
 
-.same-date-conflict-icon {
+.same-date-conflict-icon,
+.dietary-requirements-alert-icon {
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -3019,6 +3048,26 @@ span.session-marker-chip {
   font-size: 13px;
   font-weight: 950;
   line-height: 1;
+}
+
+.dietary-requirements-alert {
+  display: inline-flex;
+  align-items: flex-start;
+  gap: 8px;
+  border: 1px solid rgba(11, 143, 178, 0.28);
+  border-radius: 8px;
+  padding: 9px 10px;
+  background: var(--badge-blue-bg);
+  color: var(--badge-blue-text);
+  box-shadow: 0 10px 24px rgba(11, 143, 178, 0.12);
+  font-size: 12px;
+  font-weight: 850;
+  line-height: 1.25;
+}
+
+.dietary-requirements-alert-icon {
+  background: var(--badge-blue-text);
+  color: white;
 }
 
 .session-modal-bottom-bar {
@@ -8764,6 +8813,17 @@ span.session-marker-chip {
   opacity: 1;
 }
 
+.onboarding-follow-up-fieldset[data-onboarding-fieldset="turn_down"] {
+  gap: 8px;
+  min-height: auto;
+  padding: 8px;
+}
+
+.onboarding-follow-up-fieldset[data-onboarding-fieldset="turn_down"] .checkbox-field {
+  min-height: 36px;
+  padding: 8px 10px;
+}
+
 .onboarding-confirm-fields {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -9531,6 +9591,20 @@ span.session-marker-chip {
   align-items: center;
   gap: 6px;
   white-space: nowrap;
+}
+
+.dietary-requirements-chip {
+  display: inline-flex;
+  align-items: center;
+  max-width: 220px;
+  border-radius: 999px;
+  padding: 5px 10px;
+  background: var(--badge-blue-bg);
+  color: var(--badge-blue-text);
+  font-size: 12px;
+  font-weight: 800;
+  line-height: 1.2;
+  overflow-wrap: anywhere;
 }
 
 .staff-session-email-copy-button {
