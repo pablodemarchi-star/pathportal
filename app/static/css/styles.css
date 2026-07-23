@@ -2993,6 +2993,86 @@ span.session-marker-chip {
   margin-top: 0;
   margin-left: auto;
   flex-shrink: 0;
+  align-items: flex-start;
+}
+
+.modal-bottom-actions > .secondary-button,
+.modal-bottom-actions > .save-close-action-stack > .primary-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  box-sizing: border-box;
+  min-height: 40px;
+  padding-top: 0;
+  padding-bottom: 0;
+}
+
+.save-close-action-stack {
+  display: inline-flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+}
+
+.session-open-new-tab-link {
+  color: var(--color-muted);
+  font-size: 11px;
+  font-weight: 850;
+  line-height: 1.1;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.session-open-new-tab-link:hover {
+  color: var(--path-blue);
+}
+
+.session-fullscreen-shell {
+  grid-template-columns: 1fr;
+}
+
+.session-fullscreen-shell .sidebar {
+  display: none;
+}
+
+.session-fullscreen-shell .main-content {
+  min-width: 0;
+  max-width: none;
+  padding: 18px;
+}
+
+.exam-session-fullscreen-page {
+  min-height: calc(100vh - 36px);
+}
+
+.session-fullscreen-modal.modal,
+.session-fullscreen-modal.modal.is-open {
+  position: static;
+  display: block;
+  inset: auto;
+  z-index: auto;
+  overflow: visible;
+  width: 100%;
+  min-height: auto;
+  padding: 0;
+  background: transparent;
+}
+
+.session-fullscreen-modal .modal-panel.extra-large {
+  width: 100%;
+  max-width: none;
+  min-height: calc(100vh - 36px);
+  border-radius: 0;
+  padding: 0;
+  box-shadow: none;
+}
+
+.session-fullscreen-modal .modal-header {
+  top: 0;
+}
+
+.session-fullscreen-modal .session-modal-bottom-bar {
+  padding-bottom: 0;
 }
 
 .session-modal-alerts {
@@ -3771,6 +3851,8 @@ span.session-marker-chip {
   max-height: 260px;
   box-sizing: border-box;
   overflow: auto;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
   border: 1px solid rgba(0, 0, 0, 0.7);
   border-radius: 8px;
   padding: 8px 0;
@@ -3976,8 +4058,10 @@ span.session-marker-chip {
   z-index: 1200;
   display: grid;
   gap: 0;
-  max-height: none;
-  overflow: visible;
+  max-height: min(320px, calc(100vh - 24px));
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
   border: 1px solid rgba(0, 0, 0, 0.7);
   border-radius: 8px;
   padding: 8px 0;

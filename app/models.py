@@ -680,9 +680,27 @@ class ExamSession(db.Model):
 
     def non_available_ids(self):
         try:
-            return [int(value) for value in json.loads(self.non_available_member_ids or "[]")]
+            return [
+                int(value)
+                for value in json.loads(self.non_available_member_ids or "[]")
+                if str(value).isdigit()
+            ]
         except (TypeError, ValueError, json.JSONDecodeError):
             return []
+
+    def non_available_refs(self):
+        try:
+            values = json.loads(self.non_available_member_ids or "[]")
+        except (TypeError, ValueError, json.JSONDecodeError):
+            return []
+        refs = []
+        for value in values:
+            text = str(value).strip()
+            if text.isdigit():
+                refs.append(text)
+            elif text.startswith("staff:") or text.startswith("potential:"):
+                refs.append(text)
+        return refs
 
 
 class ExamSessionJourneyShare(db.Model):
@@ -1308,6 +1326,7 @@ class ExamSessionSupervisorAssignment(db.Model):
     exam_session_id = db.Column(db.Integer, db.ForeignKey("exam_session.id"), nullable=False, index=True)
     non_available_member_ids = db.Column(db.Text, nullable=False, default="[]")
     team_member_id = db.Column(db.Integer, db.ForeignKey("academic_staff.id"), nullable=True, index=True)
+    potential_entry_id = db.Column(db.Integer, db.ForeignKey("potential_entry.id"), nullable=True, index=True)
     participation_status = db.Column(db.String(40), nullable=False, default="Pending", index=True)
     logistics_enabled = db.Column(db.Boolean, nullable=False, default=False)
     logistics_type = db.Column(db.String(40), nullable=False, default="Does not apply", index=True)
@@ -1365,12 +1384,31 @@ class ExamSessionSupervisorAssignment(db.Model):
 
     exam_session = db.relationship("ExamSession", backref=db.backref("supervisor_assignments", lazy=True))
     team_member = db.relationship("AcademicStaff", foreign_keys=[team_member_id])
+    potential_entry = db.relationship("PotentialEntry", foreign_keys=[potential_entry_id])
 
     def non_available_ids(self):
         try:
-            return [int(value) for value in json.loads(self.non_available_member_ids or "[]")]
+            return [
+                int(value)
+                for value in json.loads(self.non_available_member_ids or "[]")
+                if str(value).isdigit()
+            ]
         except (TypeError, ValueError, json.JSONDecodeError):
             return []
+
+    def non_available_refs(self):
+        try:
+            values = json.loads(self.non_available_member_ids or "[]")
+        except (TypeError, ValueError, json.JSONDecodeError):
+            return []
+        refs = []
+        for value in values:
+            text = str(value).strip()
+            if text.isdigit():
+                refs.append(text)
+            elif text.startswith("staff:") or text.startswith("potential:"):
+                refs.append(text)
+        return refs
 
     def time_ranges_list(self):
         try:
@@ -1397,6 +1435,7 @@ class ExamSessionExaminerAssignment(db.Model):
     exam_session_id = db.Column(db.Integer, db.ForeignKey("exam_session.id"), nullable=False, index=True)
     non_available_member_ids = db.Column(db.Text, nullable=False, default="[]")
     team_member_id = db.Column(db.Integer, db.ForeignKey("academic_staff.id"), nullable=True, index=True)
+    potential_entry_id = db.Column(db.Integer, db.ForeignKey("potential_entry.id"), nullable=True, index=True)
     participation_status = db.Column(db.String(40), nullable=False, default="Pending", index=True)
     logistics_enabled = db.Column(db.Boolean, nullable=False, default=False)
     logistics_type = db.Column(db.String(40), nullable=False, default="Does not apply", index=True)
@@ -1454,12 +1493,31 @@ class ExamSessionExaminerAssignment(db.Model):
 
     exam_session = db.relationship("ExamSession", backref=db.backref("examiner_assignments", lazy=True))
     team_member = db.relationship("AcademicStaff", foreign_keys=[team_member_id])
+    potential_entry = db.relationship("PotentialEntry", foreign_keys=[potential_entry_id])
 
     def non_available_ids(self):
         try:
-            return [int(value) for value in json.loads(self.non_available_member_ids or "[]")]
+            return [
+                int(value)
+                for value in json.loads(self.non_available_member_ids or "[]")
+                if str(value).isdigit()
+            ]
         except (TypeError, ValueError, json.JSONDecodeError):
             return []
+
+    def non_available_refs(self):
+        try:
+            values = json.loads(self.non_available_member_ids or "[]")
+        except (TypeError, ValueError, json.JSONDecodeError):
+            return []
+        refs = []
+        for value in values:
+            text = str(value).strip()
+            if text.isdigit():
+                refs.append(text)
+            elif text.startswith("staff:") or text.startswith("potential:"):
+                refs.append(text)
+        return refs
 
     def time_ranges_list(self):
         try:
@@ -1486,6 +1544,7 @@ class ExamSessionInternAssignment(db.Model):
     exam_session_id = db.Column(db.Integer, db.ForeignKey("exam_session.id"), nullable=False, index=True)
     non_available_member_ids = db.Column(db.Text, nullable=False, default="[]")
     team_member_id = db.Column(db.Integer, db.ForeignKey("academic_staff.id"), nullable=True, index=True)
+    potential_entry_id = db.Column(db.Integer, db.ForeignKey("potential_entry.id"), nullable=True, index=True)
     participation_status = db.Column(db.String(40), nullable=False, default="Pending", index=True)
     logistics_enabled = db.Column(db.Boolean, nullable=False, default=False)
     logistics_type = db.Column(db.String(40), nullable=False, default="Does not apply", index=True)
@@ -1543,12 +1602,31 @@ class ExamSessionInternAssignment(db.Model):
 
     exam_session = db.relationship("ExamSession", backref=db.backref("intern_assignments", lazy=True))
     team_member = db.relationship("AcademicStaff", foreign_keys=[team_member_id])
+    potential_entry = db.relationship("PotentialEntry", foreign_keys=[potential_entry_id])
 
     def non_available_ids(self):
         try:
-            return [int(value) for value in json.loads(self.non_available_member_ids or "[]")]
+            return [
+                int(value)
+                for value in json.loads(self.non_available_member_ids or "[]")
+                if str(value).isdigit()
+            ]
         except (TypeError, ValueError, json.JSONDecodeError):
             return []
+
+    def non_available_refs(self):
+        try:
+            values = json.loads(self.non_available_member_ids or "[]")
+        except (TypeError, ValueError, json.JSONDecodeError):
+            return []
+        refs = []
+        for value in values:
+            text = str(value).strip()
+            if text.isdigit():
+                refs.append(text)
+            elif text.startswith("staff:") or text.startswith("potential:"):
+                refs.append(text)
+        return refs
 
     def time_ranges_list(self):
         try:

@@ -120,9 +120,19 @@
 
 {% macro member_option_label(member) -%}
   {{ member.full_name }}
-  {% for role in member.roles_list() %}
-    [{{ role }}]
-  {% endfor %}
+  {% if not (member.is_potential_entry is defined and member.is_potential_entry) %}
+    {% for role in member.roles_list() %}
+      [{{ role }}]
+    {% endfor %}
+  {% endif %}
+{%- endmacro %}
+
+{% macro member_option_value(member) -%}
+  {%- if member.is_potential_entry is defined and member.is_potential_entry -%}
+    {{ member.option_value }}
+  {%- else -%}
+    {{ member.id }}
+  {%- endif -%}
 {%- endmacro %}
 
 {% macro member_location_label(member) -%}
@@ -138,9 +148,11 @@
 {% macro staff_member_option_markup(member, session_count=0) -%}
   <span class="staff-option-main">
     <span>{{ member.full_name }}</span>
-    {% for role in member.roles_list() %}
-      <span class="staff-option-role">[{{ role }}]</span>
-    {% endfor %}
+    {% if not (member.is_potential_entry is defined and member.is_potential_entry) %}
+      {% for role in member.roles_list() %}
+        <span class="staff-option-role">[{{ role }}]</span>
+      {% endfor %}
+    {% endif %}
   </span>
   {% set location_label = member_location_label(member) %}
   {% if location_label %}
@@ -157,8 +169,11 @@
 
 {% macro staff_assignment_row(session, section_key, row_key, assignment, section_members, section_member_map, section_states, member_session_counts, participation_options, shipment_recipient_supervisor_id=none) -%}
   {% set selected_team_id = assignment.team_member_id if assignment else none %}
-  {% set selected_member = section_member_map.get(selected_team_id) if selected_team_id else none %}
-  {% set selected_state = section_states.get(session.id, {}).get(selected_team_id, 'warning') if selected_team_id else '' %}
+  {% set selected_potential_entry_id = assignment.potential_entry_id if assignment else none %}
+  {% set selected_value = selected_team_id|string if selected_team_id else ('potential:' ~ selected_potential_entry_id if selected_potential_entry_id else '') %}
+  {% set selected_member = section_member_map.get(selected_value) if selected_value else none %}
+  {% set selected_is_potential = selected_member and selected_member.is_potential_entry is defined and selected_member.is_potential_entry %}
+  {% set selected_state = section_states.get(session.id, {}).get(selected_value, 'warning') if selected_value else '' %}
   {% set is_shipment_recipient = section_key == 'supervisor' and selected_team_id and shipment_recipient_supervisor_id and selected_team_id == shipment_recipient_supervisor_id %}
   {% set raw_participation_status = assignment.participation_status if assignment else 'Pending' %}
   {% set participation_status = 'Pre-confirmation sent' if raw_participation_status == 'Sent' else raw_participation_status %}
@@ -166,7 +181,7 @@
   {% set raw_logistics_type = assignment.logistics_type if assignment and assignment.logistics_type else '' %}
   {% set logistics_type = raw_logistics_type if raw_logistics_type in logistics_type_options else ('Simple logistics' if assignment and assignment.logistics_enabled else 'Does not apply') %}
   {% set logistics_type_class = logistics_type|lower|replace(' ', '-') %}
-  <article class="staff-assignment-card" data-supervisor-row data-section-key="{{ section_key }}" data-saved-team-member-id="{{ selected_team_id or '' }}" data-saved-participation-status="{{ assignment.participation_status if assignment else '' }}" {% if is_shipment_recipient %}data-shipment-recipient-row="true"{% endif %}>
+  <article class="staff-assignment-card" data-supervisor-row data-section-key="{{ section_key }}" data-saved-team-member-id="{{ selected_value }}" data-saved-participation-status="{{ assignment.participation_status if assignment else '' }}" {% if is_shipment_recipient %}data-shipment-recipient-row="true"{% endif %}>
     <div class="staff-card-header">
       <div class="staff-card-title-stack">
         <span class="staff-card-role-label">{{ 'Supervisor' if section_key == 'supervisor' else 'Examiner' if section_key == 'examiner' else 'Intern' }}</span>
@@ -199,7 +214,7 @@
       <input type="hidden" name="{{ section_key }}_manual_fee_override_{{ row_key }}" value="{{ '1' if assignment and assignment.manual_fee_override and assignment.participation_status == 'Pending' else '' }}" data-manual-fee-override>
       <span data-row-non-available-fields data-non-available-section-key="{{ section_key }}" data-non-available-row-key="{{ row_key }}" hidden></span>
       <div class="staff-member-select-row">
-        <input type="hidden" name="{{ section_key }}_team_member_id_{{ row_key }}" value="{{ selected_team_id or '' }}" data-original-value="{{ selected_team_id or '' }}" data-team-member-select>
+        <input type="hidden" name="{{ section_key }}_team_member_id_{{ row_key }}" value="{{ selected_value }}" data-original-value="{{ selected_value }}" data-team-member-select>
         <details class="team-member-picker" data-team-member-picker>
           <summary>
             <span class="team-member-summary-content" data-team-member-selected>
@@ -224,13 +239,15 @@
             <span class="team-member-caret">▼</span>
           </summary>
           <div class="team-member-picker-panel">
-            <button class="team-member-option" type="button" data-team-member-option data-value="" data-name="" data-title="" data-state="" data-full-address="" data-email="" data-phone="" data-dietary-requirements="" data-base-label="Select staff member">
+            <button class="team-member-option" type="button" data-team-member-option data-value="" data-name="" data-title="" data-state="" data-full-address="" data-email="" data-phone="" data-dietary-requirements="" data-entry-type="staff" data-base-label="Select staff member">
               <span class="team-member-placeholder">Role to cover</span>
             </button>
             {% for member in section_members %}
-              {% set state = section_states.get(session.id, {}).get(member.id, 'warning') %}
-              {% set session_count = member_session_counts.get(member.id, 0) %}
-              <button class="team-member-option" type="button" data-team-member-option data-value="{{ member.id }}" data-name="{{ member.full_name }}" data-title="{{ member.title or '' }}" data-state="{{ state }}" data-full-address="{{ member.full_address_google_maps or '' }}" data-email="{{ member.email or '' }}" data-phone="{{ member.phone or '' }}" data-dietary-requirements="{{ member.dietary_requirements or '' }}" data-seniority="{{ 'true' if member.seniority else 'false' }}" data-has-car="{{ 'true' if member.has_car == 'Yes' else 'false' }}" data-session-count="{{ session_count }}" data-base-session-count="{{ session_count }}" data-base-label="{{ member_option_label(member) }}">
+              {% set option_value = member_option_value(member)|trim %}
+              {% set is_potential_option = member.is_potential_entry is defined and member.is_potential_entry %}
+              {% set state = section_states.get(session.id, {}).get(option_value, 'warning') %}
+              {% set session_count = 0 if is_potential_option else member_session_counts.get(member.id, 0) %}
+              <button class="team-member-option" type="button" data-team-member-option data-value="{{ option_value }}" data-name="{{ member.full_name }}" data-title="{{ member.title or '' }}" data-state="{{ state }}" data-full-address="{{ member.full_address_google_maps or '' }}" data-email="{{ member.email or '' }}" data-phone="{{ member.phone or '' }}" data-dietary-requirements="{{ member.dietary_requirements or '' }}" data-entry-type="{{ 'potential' if is_potential_option else 'staff' }}" data-seniority="{{ 'true' if member.seniority else 'false' }}" data-has-car="{{ 'true' if member.has_car == 'Yes' else 'false' }}" data-session-count="{{ session_count }}" data-base-session-count="{{ session_count }}" data-base-label="{{ member_option_label(member) }}">
                 {{ staff_member_option_markup(member, session_count) }}
                 <span class="team-member-assigned-note">Already assigned</span>
               </button>
@@ -254,7 +271,7 @@
       <div class="participation-cell-stack">
         <select name="{{ section_key }}_participation_status_{{ row_key }}" class="participation-select participation-{{ participation_class }}" data-participation-select>
           {% for option in participation_options %}
-            <option value="{{ option }}" {% if participation_status == option %}selected{% endif %} {% if not selected_team_id and option != 'Pending' %}disabled{% endif %}>{{ option }}</option>
+            <option value="{{ option }}" {% if participation_status == option %}selected{% endif %} {% if (not selected_value and option != 'Pending') or (selected_is_potential and option not in potential_entry_participation_options) %}disabled hidden{% endif %}>{{ option }}</option>
           {% endfor %}
         </select>
         <span class="fee-state-chip {{ 'is-live' if participation_status == 'Pending' else 'is-locked' }}" data-fee-state-chip>
@@ -435,8 +452,10 @@
         </div>
         <div class="staff-contact-email-chip-row" aria-label="Staff email actions">
           <button class="staff-contact-email-chip" type="button" data-staff-preconfirmation-email {% if not current_menu_can_edit %}disabled{% endif %}>Pre-confirmation email</button>
-          <button class="staff-contact-email-chip" type="button" data-staff-confirmation-email {% if not current_menu_can_edit or session.format != 'Onsite' %}disabled{% endif %} {% if session.format != 'Onsite' %}title="Official confirmation email is only available for onsite sessions."{% endif %}>Official confirmation email</button>
-          <button class="staff-contact-email-chip" type="button" data-staff-final-information-email {% if not current_menu_can_edit %}disabled{% endif %}>Final information email</button>
+          {% if not selected_is_potential %}
+            <button class="staff-contact-email-chip" type="button" data-staff-confirmation-email {% if not current_menu_can_edit or session.format != 'Onsite' %}disabled{% endif %} {% if session.format != 'Onsite' %}title="Official confirmation email is only available for onsite sessions."{% endif %}>Official confirmation email</button>
+            <button class="staff-contact-email-chip" type="button" data-staff-final-information-email {% if not current_menu_can_edit %}disabled{% endif %}>Final information email</button>
+          {% endif %}
         </div>
       {% else %}
         <span class="muted">-</span>
@@ -533,6 +552,8 @@
 {% block title %}Exam session planner | Path Examinations{% endblock %}
 
 {% block content %}
+<div class="{% if session_fullscreen %}exam-session-fullscreen-page{% endif %}">
+{% if not session_fullscreen %}
 <header class="page-header">
   <div>
     <p class="eyebrow">Exam session planner</p>
@@ -802,6 +823,7 @@
     </div>
   </div>
 </div>
+{% endif %}
 
 <div class="modal nested-modal logistics-confirmed-password-modal" id="logistics-confirmed-password-modal" aria-hidden="true">
   <div class="modal-panel confirm-panel">
@@ -825,7 +847,7 @@
 </div>
 
 {% for session in sessions %}
-  <div class="modal" id="exam-session-members-{{ session.id }}" aria-hidden="true">
+  <div class="modal {% if session_fullscreen %}is-open session-fullscreen-modal{% endif %}" id="exam-session-members-{{ session.id }}" aria-hidden="{{ 'false' if session_fullscreen else 'true' }}">
     <div class="modal-panel extra-large" data-session-modal-panel data-session-id="{{ session.id }}" data-session-name="{{ session.exam_session_name }}" data-session-date="{{ session.session_date.isoformat() }}" data-session-date-label="{{ session.session_date|long_session_date }}" data-session-date-email="{{ session.session_date.strftime('%A') }} {{ session.session_date.day }} {{ session.session_date.strftime('%B') }} {{ session.session_date.year }}" data-session-shift="{{ session.shifts or '' }}" data-session-format="{{ session.format }}" data-session-address="{{ session.full_address_google_maps or '' }}" data-session-city="{{ session.city or '' }}" data-session-province="{{ session.province or '' }}" data-session-details-url="{{ session.details_url or '' }}" data-staff-payment-next-payment-date="{{ staff_payment_next_payment_date }}" data-preconfirmation-certifications='{{ staff_preconfirmation_certifications|tojson }}'>
       <div class="modal-header">
         <div>
@@ -873,8 +895,9 @@
               <div class="session-member-picker-panel">
                 <div class="session-member-picker-panel-title">Non-available staff members</div>
                 {% for member in session_non_available_options %}
+                  {% set option_value = member_option_value(member)|trim %}
                   <label class="session-member-option">
-                    <input type="checkbox" name="session_non_available_member_ids" value="{{ member.id }}" form="exam-session-members-form-{{ session.id }}" data-member-name="{{ member.full_name }}" {% if member.id in selected_non_available_ids %}checked{% endif %}>
+                    <input type="checkbox" name="session_non_available_member_ids" value="{{ option_value }}" form="exam-session-members-form-{{ session.id }}" data-member-name="{{ member.full_name }}" {% if option_value in selected_non_available_ids %}checked{% endif %}>
                     <span data-base-label="{{ member_option_label(member) }}">{{ staff_member_option_markup(member, 0) }}</span>
                     <span class="session-member-assigned-note">Already assigned</span>
                   </label>
@@ -907,7 +930,9 @@
             </div>
           {% endif %}
         </div>
-        <button class="icon-button" type="button" data-close-modal>&times;</button>
+        {% if not session_fullscreen %}
+          <button class="icon-button" type="button" data-close-modal>&times;</button>
+        {% endif %}
       </div>
       {% set session_logistics_config = logistics_by_session.get(session.id) %}
       {% set staffing_readiness = staffing_readiness_by_session.get(session.id, {}) %}
@@ -915,6 +940,9 @@
       <form id="exam-session-members-form-{{ session.id }}" method="post" action="{{ url_for('staff.update_exam_session_members', session_id=session.id) }}" data-session-members-form data-session-id="{{ session.id }}" data-saved-staff-confirmed="{{ 'true' if persisted_staff_confirmed_by_session.get(session.id) else 'false' }}" data-staffing-status="{{ staffing_readiness.get('status', 'not_configured') }}" data-staffing-final-email-ready="{{ 'true' if staffing_readiness.get('final_email_ready') else 'false' }}" data-staffing-email-blocker-message="{{ staffing_readiness.get('email_blocker_message', 'Email copy unavailable') }}" data-logistics-applies="{{ 'true' if logistics_readiness.get('applies') else 'false' }}" data-logistics-status="{{ logistics_readiness.get('status', 'not_applicable') }}" data-logistics-ready="{{ 'true' if logistics_readiness.get('ready') else 'false' }}" data-logistics-final-email-ready="{{ 'true' if logistics_readiness.get('final_email_ready') else 'false' }}" data-logistics-files-url="{{ session_logistics_config.logistics_files_url if session_logistics_config else '' }}" data-logistics-email-blocker-message="{{ logistics_readiness.get('email_blocker_message', 'Email copy unavailable') }}" data-device-dep-fee-currency="{{ device_dep_fee.currency if device_dep_fee else '' }}" data-device-dep-fee-value="{{ device_dep_fee.fee_value if device_dep_fee else '' }}" data-device-dep-fee-unit="{{ device_dep_fee.unit_of_measure if device_dep_fee else '' }}" data-commuting-fee-currency="{{ commuting_fee.currency if commuting_fee else '' }}" data-commuting-fee-value="{{ commuting_fee.fee_value if commuting_fee else '' }}" data-commuting-fee-unit="{{ commuting_fee.unit_of_measure if commuting_fee else '' }}" data-fuel-fee-currency="{{ fuel_fee.currency if fuel_fee else '' }}" data-fuel-fee-value="{{ fuel_fee.fee_value if fuel_fee else '' }}" data-fuel-fee-unit="{{ fuel_fee.unit_of_measure if fuel_fee else '' }}" data-vehicle-dep-fee-currency="{{ vehicle_dep_fee.currency if vehicle_dep_fee else '' }}" data-vehicle-dep-fee-value="{{ vehicle_dep_fee.fee_value if vehicle_dep_fee else '' }}" data-vehicle-dep-fee-unit="{{ vehicle_dep_fee.unit_of_measure if vehicle_dep_fee else '' }}">
         <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
         <input type="hidden" name="session_year" value="{{ selected_session_year }}">
+        {% if session_fullscreen %}
+          <input type="hidden" name="session_fullscreen" value="1">
+        {% endif %}
         <input type="hidden" name="session_non_available_member_ids" value="">
         <input type="hidden" name="logistics_confirmation_password" value="" data-logistics-confirmation-password>
         <div data-deleted-assignments></div>
@@ -1068,9 +1096,20 @@
           {{ session_marker_badges(session) }}
         </div>
         <div class="form-actions modal-bottom-actions">
-          <button class="secondary-button" type="button" data-close-modal>Cancel</button>
+          {% if session_fullscreen %}
+            <a class="secondary-button link-button" href="{{ url_for('staff.exam_session_planner', session_year=session.session_date.year if session.session_date else selected_session_year) }}">Cancel</a>
+          {% else %}
+            <button class="secondary-button" type="button" data-close-modal>Cancel</button>
+          {% endif %}
           <button class="secondary-button" type="submit" name="modal_action" value="save" form="exam-session-members-form-{{ session.id }}" data-session-members-save>Save</button>
-          <button class="primary-button" type="submit" name="modal_action" value="save_close" form="exam-session-members-form-{{ session.id }}" data-session-members-save>Save and close</button>
+          <span class="save-close-action-stack">
+            <button class="primary-button" type="submit" name="modal_action" value="save_close" form="exam-session-members-form-{{ session.id }}" data-session-members-save>Save and close</button>
+            {% if session_fullscreen %}
+              <a class="session-open-new-tab-link" href="{{ url_for('staff.exam_session_planner', session_year=session.session_date.year if session.session_date else selected_session_year) }}">Back to planner</a>
+            {% else %}
+              <a class="session-open-new-tab-link" href="{{ url_for('staff.exam_session_planner', session_year=session.session_date.year if session.session_date else selected_session_year, open_session_modal=session.id, session_fullscreen=1) }}" target="_blank" rel="noopener noreferrer">Open in new tab</a>
+            {% endif %}
+          </span>
         </div>
       </div>
     </div>
@@ -1131,16 +1170,19 @@
     </div>
   {% endfor %}
 
-  <div class="modal" id="edit-exam-session-{{ session.id }}" aria-hidden="true">
-    <div class="modal-panel large">
-      <div class="modal-header">
-        <h2>Edit exam session</h2>
-        <button class="icon-button" type="button" data-close-modal>&times;</button>
+  {% if not session_fullscreen %}
+    <div class="modal" id="edit-exam-session-{{ session.id }}" aria-hidden="true">
+      <div class="modal-panel large">
+        <div class="modal-header">
+          <h2>Edit exam session</h2>
+          <button class="icon-button" type="button" data-close-modal>&times;</button>
+        </div>
+        {{ session_form(session, url_for('staff.update_exam_session', session_id=session.id), 'Save changes', status_options, module_options, shift_options, format_options, category_options, csrf_token, selected_session_year) }}
       </div>
-      {{ session_form(session, url_for('staff.update_exam_session', session_id=session.id), 'Save changes', status_options, module_options, shift_options, format_options, category_options, csrf_token, selected_session_year) }}
     </div>
-  </div>
+  {% endif %}
 {% endfor %}
+</div>
 
 {% for provider in logistics_provider_options %}
   <div class="modal nested-modal" id="provider-details-{{ provider.id }}" aria-hidden="true">

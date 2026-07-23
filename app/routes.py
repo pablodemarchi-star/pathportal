@@ -242,6 +242,17 @@ EXAM_SESSION_PARTICIPATION_OPTIONS = [
     "Official confirmation sent",
     "Confirmed",
 ]
+POTENTIAL_ENTRY_EXAM_SESSION_PARTICIPATION_OPTIONS = [
+    "Pending",
+    "Pre-confirmation sent",
+    "Pre-confirmed",
+]
+POTENTIAL_ENTRY_ASSIGNMENT_EXCLUDED_STATUSES = {
+    "Entry rejected",
+    "Archived rejected entry",
+    "Onboarding finalised",
+    "Archived accepted entry",
+}
 EXAM_SESSION_LOGISTICS_TYPE_OPTIONS = [
     "Does not apply",
     "Simple logistics",
@@ -1356,8 +1367,9 @@ def staffing_readiness_contract(supervisor_assignments=None, examiner_assignment
         for assignment in assignments:
             assignment_id = getattr(assignment, "id", None)
             team_member_id = getattr(assignment, "team_member_id", None)
+            potential_entry_id = getattr(assignment, "potential_entry_id", None)
             participation_status = normalize_participation_status(getattr(assignment, "participation_status", "Pending"))
-            has_member = team_member_id is not None
+            has_member = team_member_id is not None or potential_entry_id is not None
 
             counts["required"] += 1
             if has_member:
@@ -3765,29 +3777,52 @@ def staff_member_session_counts_subquery(session_year=None):
     )
 
 
-def future_session_names_by_member(member_ids):
+def active_exam_session_names_by_member(member_ids):
     member_ids = [member_id for member_id in member_ids if member_id]
     if not member_ids:
         return {}
-    today = datetime.now(LOCAL_TZ).date()
     names_by_member = {member_id: set() for member_id in member_ids}
+    archived_years = {
+        year
+        for (year,) in ExamSessionYear.query.with_entities(ExamSessionYear.year)
+        .filter_by(is_archived=True)
+        .all()
+    }
+    active_year_filter = []
+    if archived_years:
+        active_year_filter.append(~db.extract("year", ExamSession.session_date).in_(archived_years))
     assignment_models = (
         ExamSessionSupervisorAssignment,
         ExamSessionExaminerAssignment,
         ExamSessionInternAssignment,
     )
     for assignment_model in assignment_models:
-        rows = (
-            db.session.query(assignment_model.team_member_id, ExamSession.exam_session_name)
+        assignments = (
+            assignment_model.query
             .join(ExamSession, ExamSession.id == assignment_model.exam_session_id)
             .filter(
-                assignment_model.team_member_id.in_(member_ids),
-                ExamSession.session_date > today,
+                db.or_(
+                    assignment_model.team_member_id.in_(member_ids),
+                    assignment_model.non_available_member_ids != "[]",
+                ),
+                *active_year_filter,
             )
             .all()
         )
-        for member_id, session_name in rows:
-            names_by_member.setdefault(member_id, set()).add(session_name or "Untitled exam session")
+        for assignment in assignments:
+            session_name = assignment.exam_session.exam_session_name if assignment.exam_session else "Untitled exam session"
+            if assignment.team_member_id in member_ids:
+                names_by_member.setdefault(assignment.team_member_id, set()).add(session_name or "Untitled exam session")
+            non_available_refs = set(assignment.non_available_refs())
+            for member_id in member_ids:
+                if str(member_id) in non_available_refs:
+                    names_by_member.setdefault(member_id, set()).add(session_name or "Untitled exam session")
+    active_sessions = ExamSession.query.filter(*active_year_filter).all()
+    for session_record in active_sessions:
+        non_available_refs = set(session_record.non_available_refs())
+        for member_id in member_ids:
+            if str(member_id) in non_available_refs:
+                names_by_member.setdefault(member_id, set()).add(session_record.exam_session_name or "Untitled exam session")
     return {
         member_id: sorted(session_names)
         for member_id, session_names in names_by_member.items()
@@ -3795,18 +3830,21 @@ def future_session_names_by_member(member_ids):
     }
 
 
-def flash_future_session_status_blockers(members):
-    blockers = future_session_names_by_member([member.id for member in members])
+def flash_active_exam_session_status_blockers(members):
+    blockers = active_exam_session_names_by_member([member.id for member in members])
     for member in members:
         session_names = blockers.get(member.id)
         if not session_names:
             continue
-        flash(
-            f"{member.full_name} is assigned to future exam session(s): {', '.join(session_names)}. "
-            "Remove the member from those sessions in Exam session planner before changing the status to Inactive or Archived.",
-            "error",
-        )
+        flash("Staff member cannot be inactivated because they are still assigned to active exam sessions.", "error")
     return bool(blockers)
+
+
+def flash_active_exam_session_delete_blocker(member):
+    if not active_exam_session_names_by_member([member.id]).get(member.id):
+        return False
+    flash("Staff member cannot be deleted because they are still assigned to active exam sessions.", "error")
+    return True
 
 
 def build_exam_session_cost_summaries(
@@ -10584,6 +10622,38 @@ def intern_stage_state(member_id, year):
     return "warning"
 
 
+class PotentialEntryAssignmentOption:
+    is_potential_entry = True
+    title = ""
+    full_address_google_maps = ""
+    has_car = ""
+    dietary_requirements = ""
+    seniority = False
+
+    def __init__(self, entry):
+        self.id = entry.id
+        self.option_value = f"potential:{entry.id}"
+        self.entry = entry
+        self.full_name = f"{entry.full_name} (potential entry)"
+        self.email = entry.email or ""
+        self.phone = entry.phone or ""
+        self.city = entry.city or ""
+        self.province = entry.province or ""
+
+    def roles_list(self):
+        return []
+
+
+def active_potential_entry_assignment_options():
+    return [
+        PotentialEntryAssignmentOption(entry)
+        for entry in PotentialEntry.query.filter(
+            PotentialEntry.status.notin_(POTENTIAL_ENTRY_ASSIGNMENT_EXCLUDED_STATUSES),
+            PotentialEntry.is_rejected == False,
+        ).order_by(PotentialEntry.full_name.asc()).all()
+    ]
+
+
 def supervisor_member_options():
     return [
         member
@@ -10647,6 +10717,7 @@ def session_staff_member_order(session_record, members):
     return sorted(
         members,
         key=lambda member: (
+            bool(getattr(member, "is_potential_entry", False)),
             not session_city or normalized_location_value(member.city) != session_city,
             not session_province or normalized_location_value(member.province) != session_province,
             member.full_name.lower(),
@@ -14786,20 +14857,27 @@ def delete_package_unit(unit_id):
 @login_required
 def exam_session_planner():
     selected_year, session_years = selected_exam_session_year()
+    session_fullscreen = request.args.get("session_fullscreen") == "1"
+    fullscreen_session_id = request.args.get("open_session_modal", "").strip()
     examiner_certification_year = latest_active_examiner_certification_year()
     supervisor_certification_year = latest_active_supervisor_certification_year()
     intern_stage_year = latest_active_intern_stage_year()
-    query = (
-        ExamSession.query.filter(
-            db.extract("year", ExamSession.session_date) == selected_year
+    if session_fullscreen:
+        query = ExamSession.query.filter(
+            ExamSession.id == int(fullscreen_session_id) if fullscreen_session_id.isdigit() else -1
         )
-        .order_by(ExamSession.session_date.asc(), ExamSession.updated_on.desc())
-    )
+    else:
+        query = ExamSession.query.filter(db.extract("year", ExamSession.session_date) == selected_year)
+    query = query.order_by(ExamSession.session_date.asc(), ExamSession.updated_on.desc())
     sessions, pagination = paginate_query(query)
     sync_exam_session_overall_statuses(sessions)
     supervisor_members = supervisor_member_options()
     examiner_members = examiner_session_member_options()
     intern_members = intern_session_member_options()
+    potential_entry_members = active_potential_entry_assignment_options()
+    supervisor_assignment_options = supervisor_members + potential_entry_members
+    examiner_assignment_options = examiner_members + potential_entry_members
+    intern_assignment_options = intern_members + potential_entry_members
     supervisor_fee = role_fee_for_role("Supervisor")
     examiner_fee = role_fee_for_role("Examiner")
     intern_fee = role_fee_for_role("Intern")
@@ -14992,9 +15070,18 @@ def exam_session_planner():
         examiner_assignment_records,
         intern_assignment_records,
     )
-    supervisor_member_map = {member.id: member for member in supervisor_members}
-    examiner_member_map = {member.id: member for member in examiner_members}
-    intern_member_map = {member.id: member for member in intern_members}
+    supervisor_member_map = {
+        **{str(member.id): member for member in supervisor_members},
+        **{member.option_value: member for member in potential_entry_members},
+    }
+    examiner_member_map = {
+        **{str(member.id): member for member in examiner_members},
+        **{member.option_value: member for member in potential_entry_members},
+    }
+    intern_member_map = {
+        **{str(member.id): member for member in intern_members},
+        **{member.option_value: member for member in potential_entry_members},
+    }
     supervisor_states = {}
     examiner_states = {}
     intern_states = {}
@@ -15005,38 +15092,42 @@ def exam_session_planner():
     session_non_available_member_ids = {}
     for session_record in sessions:
         supervisor_states[session_record.id] = {
-            member.id: supervisor_certification_state(member.id, supervisor_certification_year)
+            str(member.id): supervisor_certification_state(member.id, supervisor_certification_year)
             for member in supervisor_members
         }
+        supervisor_states[session_record.id].update({member.option_value: "warning" for member in potential_entry_members})
         examiner_states[session_record.id] = {
-            member.id: examiner_certification_state(member.id, examiner_certification_year)
+            str(member.id): examiner_certification_state(member.id, examiner_certification_year)
             for member in examiner_members
         }
+        examiner_states[session_record.id].update({member.option_value: "warning" for member in potential_entry_members})
         intern_states[session_record.id] = {
-            member.id: intern_stage_state(member.id, intern_stage_year)
+            str(member.id): intern_stage_state(member.id, intern_stage_year)
             for member in intern_members
         }
-        session_supervisor_members[session_record.id] = session_staff_member_order(session_record, supervisor_members)
-        session_examiner_members[session_record.id] = session_staff_member_order(session_record, examiner_members)
-        session_intern_members[session_record.id] = session_staff_member_order(session_record, intern_members)
+        intern_states[session_record.id].update({member.option_value: "warning" for member in potential_entry_members})
+        session_supervisor_members[session_record.id] = session_staff_member_order(session_record, supervisor_assignment_options)
+        session_examiner_members[session_record.id] = session_staff_member_order(session_record, examiner_assignment_options)
+        session_intern_members[session_record.id] = session_staff_member_order(session_record, intern_assignment_options)
         staff_options_by_id = {}
         for member in (
             session_supervisor_members[session_record.id]
             + session_examiner_members[session_record.id]
             + session_intern_members[session_record.id]
         ):
-            staff_options_by_id.setdefault(member.id, member)
+            option_value = getattr(member, "option_value", str(member.id))
+            staff_options_by_id.setdefault(option_value, member)
         session_non_available_staff_members[session_record.id] = sorted(
             staff_options_by_id.values(),
-            key=lambda member: (member.full_name or "").lower(),
+            key=lambda member: (bool(getattr(member, "is_potential_entry", False)), (member.full_name or "").lower()),
         )
-        selected_non_available_ids = set(session_record.non_available_ids())
+        selected_non_available_ids = set(session_record.non_available_refs())
         for assignment in (
             supervisor_assignments.get(session_record.id, [])
             + examiner_assignments.get(session_record.id, [])
             + intern_assignments.get(session_record.id, [])
         ):
-            selected_non_available_ids.update(assignment.non_available_ids())
+            selected_non_available_ids.update(assignment.non_available_refs())
         session_non_available_member_ids[session_record.id] = selected_non_available_ids
     return render_template(
         "exam_sessions/index.html",
@@ -15072,6 +15163,7 @@ def exam_session_planner():
         examiner_member_session_counts=examiner_member_session_counts,
         intern_member_session_counts=intern_member_session_counts,
         participation_options=EXAM_SESSION_PARTICIPATION_OPTIONS,
+        potential_entry_participation_options=POTENTIAL_ENTRY_EXAM_SESSION_PARTICIPATION_OPTIONS,
         logistics_type_options=EXAM_SESSION_LOGISTICS_TYPE_OPTIONS,
         logistics_status_options=LOGISTICS_STATUS_OPTIONS,
         logistics_provider_type_options=logistics_provider_type_records,
@@ -15097,6 +15189,7 @@ def exam_session_planner():
             .order_by(ExamSessionYear.year.desc())
             .all()
         ),
+        session_fullscreen=session_fullscreen,
         selected_session_year=selected_year,
         staff_preconfirmation_certifications=staff_preconfirmation_email_certifications(),
         staff_payment_next_payment_date=staff_payment_settings_values(staff_payment_settings())["next_payment_date"],
@@ -15368,6 +15461,13 @@ def save_exam_session_assignment_section(
 ):
     member_map = {member.id: member for member in member_options}
     valid_member_ids = set(member_map)
+    valid_potential_entry_ids = {
+        entry.id
+        for entry in PotentialEntry.query.with_entities(PotentialEntry.id).filter(
+            PotentialEntry.status.notin_(POTENTIAL_ENTRY_ASSIGNMENT_EXCLUDED_STATUSES),
+            PotentialEntry.is_rejected == False,
+        ).all()
+    }
     existing_assignments = {
         assignment.id: assignment
         for assignment in assignment_model.query.filter_by(exam_session_id=session_record.id).all()
@@ -15400,27 +15500,51 @@ def save_exam_session_assignment_section(
         non_available_field = f"{section_key}_non_available_member_ids_{row_key}"
         session_non_available_submitted = "session_non_available_member_ids" in request.form
         non_available_submitted = non_available_field in request.form
+        def parse_assignment_person_value(value):
+            value = (value or "").strip()
+            if value.isdigit() and int(value) in valid_member_ids:
+                return int(value), None, value
+            if value.startswith("potential:"):
+                entry_id_value = value.split(":", 1)[1]
+                if entry_id_value.isdigit() and int(entry_id_value) in valid_potential_entry_ids:
+                    return None, int(entry_id_value), f"potential:{int(entry_id_value)}"
+            return None, None, ""
+
+        def parse_non_available_value(value):
+            team_id, entry_id, token = parse_assignment_person_value(value)
+            if team_id is not None:
+                return str(team_id)
+            if entry_id is not None:
+                return token
+            return ""
+
         non_available_ids = (
             []
             if session_non_available_submitted else
             [
-                int(value) for value in request.form.getlist(non_available_field)
-                if value.isdigit() and int(value) in valid_member_ids
+                parsed_value for parsed_value in (
+                    parse_non_available_value(value)
+                    for value in request.form.getlist(non_available_field)
+                )
+                if parsed_value
             ]
-            if non_available_submitted else (assignment.non_available_ids() if assignment else [])
+            if non_available_submitted else (assignment.non_available_refs() if assignment else [])
         )
         team_member_value = request.form.get(f"{section_key}_team_member_id_{row_key}", "").strip()
-        team_member_id = int(team_member_value) if team_member_value.isdigit() and int(team_member_value) in valid_member_ids else None
+        team_member_id, potential_entry_id, selected_person_token = parse_assignment_person_value(team_member_value)
         participation_status = normalize_participation_status(
             request.form.get(f"{section_key}_participation_status_{row_key}", "Pending")
         )
         if participation_status not in EXAM_SESSION_PARTICIPATION_OPTIONS:
             flash("Please select a valid Participation status.", "error")
             return None
-        if team_member_id is None and participation_status != "Pending":
+        if potential_entry_id is not None and participation_status not in POTENTIAL_ENTRY_EXAM_SESSION_PARTICIPATION_OPTIONS:
+            flash("Potential entries can only use Pending, Pre-confirmation sent or Pre-confirmed participation status.", "error")
+            return None
+        if team_member_id is None and potential_entry_id is None and participation_status != "Pending":
             flash("A staff position without an assigned member must remain Pending.", "error")
             return None
-        if team_member_id is None:
+        if team_member_id is None and potential_entry_id is None:
             participation_status = "Pending"
         legacy_logistics_enabled = request.form.get(f"{section_key}_logistics_enabled_{row_key}", "").strip() == "1"
         logistics_type = normalize_assignment_logistics_type(
@@ -15585,14 +15709,15 @@ def save_exam_session_assignment_section(
         seniority_fee = normalize_money_display_value(seniority_fee)
 
         row_member_ids = list(non_available_ids) if non_available_submitted else []
-        if team_member_id is not None:
-            row_member_ids.append(team_member_id)
+        if selected_person_token:
+            row_member_ids.append(selected_person_token)
         used_member_ids.extend(row_member_ids)
         prepared_rows.append(
             {
                 "assignment": assignment,
                 "non_available_ids": sorted(set(non_available_ids)),
                 "team_member_id": team_member_id,
+                "potential_entry_id": potential_entry_id,
                 "participation_status": participation_status,
                 "logistics_enabled": logistics_enabled,
                 "logistics_type": logistics_type,
@@ -15642,6 +15767,7 @@ def save_exam_session_assignment_section(
 
         assignment.non_available_member_ids = json.dumps(row_data["non_available_ids"])
         assignment.team_member_id = row_data["team_member_id"]
+        assignment.potential_entry_id = row_data["potential_entry_id"]
         assignment.participation_status = row_data["participation_status"]
         assignment.logistics_enabled = row_data["logistics_enabled"]
         assignment.logistics_type = row_data["logistics_type"]
@@ -15703,12 +15829,14 @@ def exam_session_staff_member_ids(session_id):
     member_ids = []
     session_record = db.session.get(ExamSession, session_id)
     if session_record:
-        member_ids.extend(session_record.non_available_ids())
+        member_ids.extend(session_record.non_available_refs())
     for model in (ExamSessionSupervisorAssignment, ExamSessionExaminerAssignment, ExamSessionInternAssignment):
         for assignment in model.query.filter_by(exam_session_id=session_id).all():
-            member_ids.extend(assignment.non_available_ids())
+            member_ids.extend(assignment.non_available_refs())
             if assignment.team_member_id is not None:
-                member_ids.append(assignment.team_member_id)
+                member_ids.append(str(assignment.team_member_id))
+            if getattr(assignment, "potential_entry_id", None) is not None:
+                member_ids.append(f"potential:{assignment.potential_entry_id}")
     return member_ids
 
 
@@ -15917,6 +16045,7 @@ def update_exam_session_members(session_id):
     session_record = ExamSession.query.get_or_404(session_id)
     selected_year = request.form.get("session_year", str(session_record.session_date.year)).strip()
     modal_action = request.form.get("modal_action", "save_close").strip()
+    return_to_fullscreen = request.form.get("session_fullscreen") == "1"
     if "session_non_available_member_ids" in request.form:
         valid_non_available_ids = {
             member.id
@@ -15926,15 +16055,33 @@ def update_exam_session_members(session_id):
                 + intern_session_member_options()
             )
         }
+        valid_potential_entry_ids = {
+            entry.id
+            for entry in PotentialEntry.query.with_entities(PotentialEntry.id).filter(
+                PotentialEntry.status.notin_(POTENTIAL_ENTRY_ASSIGNMENT_EXCLUDED_STATUSES),
+                PotentialEntry.is_rejected == False,
+            ).all()
+        }
+        selected_non_available_values = []
+        for value in request.form.getlist("session_non_available_member_ids"):
+            value = value.strip()
+            if value.isdigit() and int(value) in valid_non_available_ids:
+                selected_non_available_values.append(value)
+            elif value.startswith("potential:"):
+                entry_id_value = value.split(":", 1)[1]
+                if entry_id_value.isdigit() and int(entry_id_value) in valid_potential_entry_ids:
+                    selected_non_available_values.append(f"potential:{int(entry_id_value)}")
         selected_non_available_ids = sorted({
-            int(value) for value in request.form.getlist("session_non_available_member_ids")
-            if value.isdigit() and int(value) in valid_non_available_ids
+            value for value in selected_non_available_values
         })
         session_record.non_available_member_ids = json.dumps(selected_non_available_ids)
 
     def session_members_redirect(*, keep_open=False):
         args = {"session_year": selected_year}
-        if keep_open:
+        if return_to_fullscreen and keep_open:
+            args["session_fullscreen"] = 1
+            args["open_session_modal"] = session_record.id
+        elif keep_open:
             args["open_session_modal"] = session_record.id
         return redirect(url_for("staff.exam_session_planner", **args))
 
@@ -16095,6 +16242,7 @@ def duplicate_exam_session_year():
                     exam_session_id=session_map[assignment.exam_session_id],
                     non_available_member_ids=assignment.non_available_member_ids,
                     team_member_id=assignment.team_member_id,
+                    potential_entry_id=assignment.potential_entry_id,
                     participation_status=assignment.participation_status,
                     logistics_enabled=assignment.logistics_enabled,
                     logistics_type=normalize_assignment_logistics_type(
@@ -16156,6 +16304,7 @@ def duplicate_exam_session_year():
                     exam_session_id=session_map[assignment.exam_session_id],
                     non_available_member_ids=assignment.non_available_member_ids,
                     team_member_id=assignment.team_member_id,
+                    potential_entry_id=assignment.potential_entry_id,
                     participation_status=assignment.participation_status,
                     logistics_enabled=assignment.logistics_enabled,
                     logistics_type=normalize_assignment_logistics_type(
@@ -16217,6 +16366,7 @@ def duplicate_exam_session_year():
                     exam_session_id=session_map[assignment.exam_session_id],
                     non_available_member_ids=assignment.non_available_member_ids,
                     team_member_id=assignment.team_member_id,
+                    potential_entry_id=assignment.potential_entry_id,
                     participation_status=assignment.participation_status,
                     logistics_enabled=assignment.logistics_enabled,
                     logistics_type=normalize_assignment_logistics_type(
@@ -19333,6 +19483,13 @@ def bulk_update_members():
         if not members:
             flash("No archived members were found for permanent deletion.", "error")
             return redirect(url_for("staff.index", show_archived=1))
+        delete_blockers = active_exam_session_names_by_member([member.id for member in members])
+        if delete_blockers:
+            for member in members:
+                if member.id not in delete_blockers:
+                    continue
+                flash("Staff member cannot be deleted because they are still assigned to active exam sessions.", "error")
+            return redirect(url_for("staff.index", show_archived=1))
         count = len(members)
         for member in members:
             delete_archived_member(member)
@@ -19354,7 +19511,7 @@ def bulk_update_members():
         if status not in EDIT_STATUS_OPTIONS:
             flash("Please select a valid Status.", "error")
             return redirect(url_for("staff.index"))
-        if status in {"Inactive", "Archived"} and flash_future_session_status_blockers(members):
+        if status in {"Inactive", "Archived"} and flash_active_exam_session_status_blockers(members):
             return redirect(url_for("staff.index"))
         for member in members:
             member.status = status
@@ -19406,6 +19563,8 @@ def delete_member(member_id):
     if member.status != "Archived":
         flash("Only archived members can be permanently deleted.", "error")
         return redirect(url_for("staff.index"))
+    if flash_active_exam_session_delete_blocker(member):
+        return redirect(url_for("staff.index", show_archived=1))
 
     delete_archived_member(member)
     db.session.commit()
@@ -19519,7 +19678,7 @@ def update_member(member_id):
             flash("Archive confirmation is required.", "error")
             return redirect(url_for("staff.index"))
     if request.form.get("status") in {"Inactive", "Archived"} and previous_status != request.form.get("status"):
-        if flash_future_session_status_blockers([member]):
+        if flash_active_exam_session_status_blockers([member]):
             return redirect(url_for("staff.index", show_archived=1 if previous_status == "Archived" else 0))
 
     apply_form(member, request.form)
@@ -19630,6 +19789,9 @@ def apply_potential_cv_review_action(entry, next_status, success_message, requir
     entry.cv_review_interview_options = json.dumps(interview_options)
     if entry.status in {"CV to be reviewed", "Interview confirmed"}:
         sync_potential_preassigned_exam_sessions(entry, request.form)
+    if next_status == "Entry rejected" and potential_entry_has_exam_session_assignments(entry.id):
+        db.session.rollback()
+        return potential_entry_rejection_block_redirect(entry)
     set_potential_entry_status(entry, next_status)
     if next_status == "Entry rejected":
         entry.is_rejected = True
@@ -19746,8 +19908,14 @@ def save_potential_cv_review_changes(
     if entry.status == "CV to be reviewed":
         sync_potential_preassigned_exam_sessions(entry, request.form)
     if next_status:
+        if next_status == "Entry rejected" and potential_entry_has_exam_session_assignments(entry.id):
+            db.session.rollback()
+            return potential_entry_rejection_block_redirect(entry)
         set_potential_entry_status(entry, next_status)
     if mark_rejected:
+        if potential_entry_has_exam_session_assignments(entry.id):
+            db.session.rollback()
+            return potential_entry_rejection_block_redirect(entry)
         entry.is_rejected = True
         entry.rejected_on = datetime.now(timezone.utc)
     db.session.commit()
@@ -19780,6 +19948,63 @@ def potential_entry_to_active_member(entry):
     member.account_owner = (entry.account_owner or "").strip()
     member.profile_picture = (entry.profile_picture or "").strip()
     return member
+
+
+def potential_entry_has_exam_session_assignments(entry_id):
+    for assignment_model in (ExamSessionSupervisorAssignment, ExamSessionExaminerAssignment, ExamSessionInternAssignment):
+        exists = db.session.query(assignment_model.id).filter_by(potential_entry_id=entry_id).first()
+        if exists:
+            return True
+    token = f"potential:{entry_id}"
+    pattern = f"%{token}%"
+    if db.session.query(ExamSession.id).filter(ExamSession.non_available_member_ids.like(pattern)).first():
+        return True
+    for assignment_model in (ExamSessionSupervisorAssignment, ExamSessionExaminerAssignment, ExamSessionInternAssignment):
+        if db.session.query(assignment_model.id).filter(assignment_model.non_available_member_ids.like(pattern)).first():
+            return True
+    return False
+
+
+def potential_entry_rejection_block_redirect(entry):
+    flash("Entry cannot be rejected because it is still assigned to exam sessions.", "error")
+    return redirect(url_for("staff.potential_entries", open_staff_modal=potential_review_modal_id(entry)))
+
+
+def replace_potential_entry_ref_values(raw_value, entry_id, member_id):
+    token = f"potential:{entry_id}"
+    try:
+        values = json.loads(raw_value or "[]")
+    except (TypeError, ValueError, json.JSONDecodeError):
+        return raw_value
+    changed = False
+    updated_values = []
+    for value in values:
+        text = str(value).strip()
+        if text == token:
+            updated_values.append(str(member_id))
+            changed = True
+        else:
+            updated_values.append(value)
+    return json.dumps(updated_values) if changed else raw_value
+
+
+def promote_potential_entry_exam_session_assignments(entry, member):
+    for assignment_model in (ExamSessionSupervisorAssignment, ExamSessionExaminerAssignment, ExamSessionInternAssignment):
+        for assignment in assignment_model.query.filter_by(potential_entry_id=entry.id).all():
+            assignment.team_member_id = member.id
+            assignment.potential_entry_id = None
+        for assignment in assignment_model.query.filter(assignment_model.non_available_member_ids.like(f"%potential:{entry.id}%")).all():
+            assignment.non_available_member_ids = replace_potential_entry_ref_values(
+                assignment.non_available_member_ids,
+                entry.id,
+                member.id,
+            )
+    for session_record in ExamSession.query.filter(ExamSession.non_available_member_ids.like(f"%potential:{entry.id}%")).all():
+        session_record.non_available_member_ids = replace_potential_entry_ref_values(
+            session_record.non_available_member_ids,
+            entry.id,
+            member.id,
+        )
 
 
 def active_member_errors_from_potential_entry(entry):
@@ -19943,6 +20168,8 @@ def activate_potential_as_staff_member(entry_id):
     entry.exam_session_participation_statuses_pre_confirmed = False
     set_potential_entry_status(entry, "Onboarding finalised")
     db.session.add(member)
+    db.session.flush()
+    promote_potential_entry_exam_session_assignments(entry, member)
     db.session.commit()
     flash("Entry activated as Staff member.", "success")
     return redirect(url_for("staff.index"))
@@ -20080,7 +20307,7 @@ def validate_and_apply_onboarding_follow_up(entry, form, require_action=None):
             if not onboarding_confirm_notes_checked:
                 errors.append("Participation status has been updated to Pre-confirmed for sessions accepted by Entry is required.")
             if not onboarding_confirm_examiner_assigned:
-                errors.append("Entry has been removed from declined sessions, and role is now marked as Role to cover is required.")
+                errors.append("Entry has been removed from declined sessions and added to the Non-available staff members list. The role is now marked as Role to cover is required.")
         if induction_date and re.fullmatch(r"\d{4}-\d{2}-\d{2}", induction_date) and time_match:
             induction_time_value = f"{induction_time[:5]}:00" if len(induction_time) == 5 else induction_time
             induction_datetime = datetime.strptime(f"{induction_date} {induction_time_value}", "%Y-%m-%d %H:%M:%S").replace(tzinfo=LOCAL_TZ)
@@ -20182,6 +20409,9 @@ def turn_down_potential_onboarding_application(entry_id):
         for error in errors:
             flash(error, "error")
         return redirect(url_for("staff.potential_entries", open_staff_modal=potential_review_modal_id(entry)))
+    if potential_entry_has_exam_session_assignments(entry.id):
+        db.session.rollback()
+        return potential_entry_rejection_block_redirect(entry)
     set_potential_entry_status(entry, "Entry rejected")
     entry.is_rejected = True
     entry.rejected_on = datetime.now(timezone.utc)
@@ -20532,6 +20762,8 @@ def reject_potential_entry(entry_id):
         return redirect(url_for("staff.potential_entries"))
 
     entry = PotentialEntry.query.get_or_404(entry_id)
+    if potential_entry_has_exam_session_assignments(entry.id):
+        return potential_entry_rejection_block_redirect(entry)
     set_potential_entry_status(entry, "Entry rejected")
     entry.is_rejected = True
     entry.rejected_on = datetime.now(timezone.utc)
@@ -20557,6 +20789,8 @@ def archive_potential_entry(entry_id):
             flash("Potential entry saved.", "success")
             return redirect(url_for("staff.potential_entries"))
         if entry.status == "Entry accepted (on hold)" and archive_status == "Entry rejected":
+            if potential_entry_has_exam_session_assignments(entry.id):
+                return potential_entry_rejection_block_redirect(entry)
             set_potential_entry_status(entry, "Entry rejected")
             entry.is_rejected = True
             entry.rejected_on = datetime.now(timezone.utc)
@@ -20603,6 +20837,8 @@ def reactivate_potential_entry(entry_id):
     if reactivation_status not in POTENTIAL_REACTIVATION_STATUS_OPTIONS:
         flash("Please select a valid reactivation status.", "error")
         return redirect(url_for("staff.potential_entries", show_archived=1, open_staff_modal=f"potential-entry-{entry.id}"))
+    if reactivation_status == "Entry rejected" and potential_entry_has_exam_session_assignments(entry.id):
+        return potential_entry_rejection_block_redirect(entry)
 
     set_potential_entry_status(entry, reactivation_status)
     entry.is_rejected = reactivation_status == "Entry rejected"
@@ -20665,6 +20901,8 @@ def accept_potential_entry(entry_id):
     member.interview = entry.interview
     apply_form(member, request.form)
     db.session.add(member)
+    db.session.flush()
+    promote_potential_entry_exam_session_assignments(entry, member)
     db.session.delete(entry)
     db.session.commit()
     flash("Potential entry accepted and moved to academic staff.", "success")

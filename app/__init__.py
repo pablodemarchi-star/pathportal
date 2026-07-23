@@ -612,6 +612,9 @@ def create_app():
         if supervisor_assignment_columns and "time_ranges" not in supervisor_assignment_columns:
             db.session.execute(text("ALTER TABLE exam_session_supervisor_assignment ADD COLUMN time_ranges TEXT"))
             db.session.commit()
+        if supervisor_assignment_columns and "potential_entry_id" not in supervisor_assignment_columns:
+            db.session.execute(text("ALTER TABLE exam_session_supervisor_assignment ADD COLUMN potential_entry_id INTEGER"))
+            db.session.commit()
         for column_name in ("role_fee", "device_dep", "commuting", "fuel", "vehicle_dep", "seniority_fee"):
             if supervisor_assignment_columns and column_name not in supervisor_assignment_columns:
                 db.session.execute(text(f"ALTER TABLE exam_session_supervisor_assignment ADD COLUMN {column_name} VARCHAR(80)"))
@@ -635,6 +638,9 @@ def create_app():
                 text("UPDATE exam_session_examiner_assignment SET participation_status = 'Pre-confirmation sent' WHERE participation_status = 'Sent'")
             )
             db.session.commit()
+        if examiner_assignment_columns and "potential_entry_id" not in examiner_assignment_columns:
+            db.session.execute(text("ALTER TABLE exam_session_examiner_assignment ADD COLUMN potential_entry_id INTEGER"))
+            db.session.commit()
         for column_name, column_type in supervisor_fee_columns.items():
             if examiner_assignment_columns and column_name not in examiner_assignment_columns:
                 db.session.execute(text(f"ALTER TABLE exam_session_examiner_assignment ADD COLUMN {column_name} {column_type}"))
@@ -646,6 +652,9 @@ def create_app():
             db.session.execute(
                 text("UPDATE exam_session_intern_assignment SET participation_status = 'Pre-confirmation sent' WHERE participation_status = 'Sent'")
             )
+            db.session.commit()
+        if intern_assignment_columns and "potential_entry_id" not in intern_assignment_columns:
+            db.session.execute(text("ALTER TABLE exam_session_intern_assignment ADD COLUMN potential_entry_id INTEGER"))
             db.session.commit()
         for column_name, column_type in supervisor_fee_columns.items():
             if intern_assignment_columns and column_name not in intern_assignment_columns:

@@ -1067,6 +1067,7 @@ const openRequestedSessionModal = () => {
   const params = new URLSearchParams(window.location.search);
   const sessionId = params.get("open_session_modal");
   if (!sessionId) return;
+  if (params.get("session_fullscreen") === "1") return;
   openModal(`exam-session-members-${sessionId}`);
   params.delete("open_session_modal");
   const query = params.toString();
@@ -3802,10 +3803,12 @@ const positionTeamMemberPickerPanel = (picker) => {
   const left = Math.min(Math.max(rect.left, viewportGap), window.innerWidth - panelWidth - viewportGap);
   const availableBelow = window.innerHeight - rect.bottom - viewportGap;
   const availableAbove = rect.top - viewportGap;
-  const panelHeight = panel.scrollHeight || 0;
-  const openAbove = availableAbove >= panelHeight + 6 || availableAbove > availableBelow;
+  const openAbove = availableAbove >= 180 || availableAbove > availableBelow;
+  const maxHeight = Math.max(180, Math.min(320, openAbove ? availableAbove - 6 : availableBelow - 6));
   panel.style.width = `${panelWidth}px`;
+  panel.style.maxHeight = `${maxHeight}px`;
   panel.style.left = `${left}px`;
+  const panelHeight = Math.min(panel.scrollHeight || maxHeight, maxHeight);
   panel.style.top = openAbove
     ? `${Math.max(viewportGap, rect.top - panelHeight - 6)}px`
     : `${Math.min(window.innerHeight - viewportGap, rect.bottom + 6)}px`;
@@ -3831,6 +3834,26 @@ const selectedTeamMemberOption = (input) => {
 };
 
 const staffAssignmentRow = (element) => element?.closest?.("[data-supervisor-row]") || null;
+const selectedAssignmentIsPotentialEntry = (row) => {
+  const input = row?.querySelector("[data-team-member-select]");
+  const option = input ? selectedTeamMemberOption(input) : null;
+  return option?.dataset.entryType === "potential";
+};
+
+const syncPotentialEntryParticipationOptions = (row) => {
+  const select = row?.querySelector("[data-participation-select]");
+  if (!select) return;
+  const allowedForPotential = new Set(["Pending", "Pre-confirmation sent", "Pre-confirmed"]);
+  const isPotentialEntry = selectedAssignmentIsPotentialEntry(row);
+  Array.from(select.options).forEach((option) => {
+    const blocked = isPotentialEntry && !allowedForPotential.has(option.value);
+    option.disabled = blocked;
+    option.hidden = blocked;
+  });
+  if (isPotentialEntry && !allowedForPotential.has(select.value)) {
+    select.value = "Pending";
+  }
+};
 
 const resetParticipationWithoutTeamMember = (row) => {
   const teamMemberSelect = row?.querySelector("[data-team-member-select]");
@@ -3838,7 +3861,13 @@ const resetParticipationWithoutTeamMember = (row) => {
   if (!teamMemberSelect || !participationSelect) return false;
   const hasTeamMember = Boolean(teamMemberSelect.value);
   Array.from(participationSelect.options).forEach((option) => {
+    if (selectedAssignmentIsPotentialEntry(row) && !["Pending", "Pre-confirmation sent", "Pre-confirmed"].includes(option.value)) {
+      option.disabled = true;
+      option.hidden = true;
+      return;
+    }
     option.disabled = !hasTeamMember && option.value !== "Pending";
+    option.hidden = false;
   });
   if (hasTeamMember) return false;
   if (participationSelect.value !== "Pending") {
@@ -3851,6 +3880,7 @@ const resetParticipationWithoutTeamMember = (row) => {
 };
 
 const syncSameDateAssignmentConflictAlerts = () => {
+  if (document.querySelector(".session-fullscreen-modal")) return;
   const panels = Array.from(document.querySelectorAll("[data-session-modal-panel]"));
   const messagesBySession = new Map(panels.map((panel) => [panel.dataset.sessionId || "", []]));
   const groupedAssignments = new Map();
@@ -4078,6 +4108,7 @@ const syncTeamMemberSelect = (select) => {
     return;
   }
   const state = option.dataset.state || "warning";
+  syncPotentialEntryParticipationOptions(staffAssignmentRow(select));
   select.classList.add(state === "completed" ? "is-complete" : "is-warning");
   picker?.classList.add(state === "completed" ? "is-complete" : "is-warning");
   if (summary) {
@@ -4145,11 +4176,15 @@ const syncStaffMemberEmailCell = (select) => {
   const emailChipRow = document.createElement("div");
   emailChipRow.className = "staff-contact-email-chip-row";
   emailChipRow.setAttribute("aria-label", "Staff email actions");
-  [
+  const emailActions = [
     ["Pre-confirmation email", "staffPreconfirmationEmail"],
     ["Official confirmation email", "staffConfirmationEmail"],
     ["Final information email", "staffFinalInformationEmail"],
-  ].forEach(([label, dataKey]) => {
+  ];
+  emailActions.forEach(([label, dataKey]) => {
+    if (option?.dataset.entryType === "potential" && ["staffConfirmationEmail", "staffFinalInformationEmail"].includes(dataKey)) {
+      return;
+    }
     const chip = document.createElement("button");
     chip.className = "staff-contact-email-chip";
     chip.type = "button";
@@ -7626,6 +7661,7 @@ const syncStaffHeaderLogisticsTag = (row, value) => {
 
 const syncParticipationSelect = (select) => {
   const row = staffAssignmentRow(select);
+  syncPotentialEntryParticipationOptions(row);
   const teamMemberSelect = row?.querySelector("[data-team-member-select]");
   if (teamMemberSelect && !teamMemberSelect.value && select.value !== "Pending") {
     select.value = "Pending";

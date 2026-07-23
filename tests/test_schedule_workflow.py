@@ -50,6 +50,7 @@ from app.models import (
     ExamSessionSinapsisEvent,
     ExamSessionStaffingControl,
     ExamSessionSupervisorAssignment,
+    PotentialEntry,
     StaffPaymentSettings,
     Provider,
     ProviderType,
@@ -85,6 +86,7 @@ from app.routes import (
     packages_action_contract,
     packages_readiness_contract,
     path_session_journey_contract,
+    promote_potential_entry_exam_session_assignments,
     reconcile_auto_shipment_bundles,
     shipment_bundle_readiness_contract,
     shipment_planning_action_contract,
@@ -210,6 +212,18 @@ class ScheduleWorkflowTest(unittest.TestCase):
         db.session.add(supervisor)
         db.session.commit()
         return supervisor
+
+    def create_potential_entry(self, entry_id=100, name="Ceeriolo", status="Interview confirmed"):
+        entry = PotentialEntry(
+            id=entry_id,
+            status=status,
+            full_name=name,
+            email=f"{name.lower()}@example.com",
+            is_rejected=status in {"Entry rejected", "Archived rejected entry"},
+        )
+        db.session.add(entry)
+        db.session.commit()
+        return entry
 
     def build_staff_preconfirmation_email(self, dataset):
         with open("app/static/js/app.js", encoding="utf-8") as handle:
@@ -3128,6 +3142,127 @@ class ScheduleWorkflowTest(unittest.TestCase):
             team_member_id=assigned_supervisor.id,
         ).one()
         self.assertEqual(assignment.non_available_ids(), [unavailable_supervisor.id])
+
+    def test_exam_session_planner_lists_potential_entries_after_staff_options(self):
+        supervisor = self.create_supervisor(staff_id=1, name="Laura Mendez")
+        potential_entry = self.create_potential_entry(entry_id=100, name="Ceeriolo")
+        self.create_potential_entry(entry_id=101, name="Rejected Person", status="Entry rejected")
+        self.create_potential_entry(entry_id=102, name="Mr hi", status="Onboarding finalised")
+        self.create_potential_entry(entry_id=103, name="Archived Accepted", status="Archived accepted entry")
+        client = self.login_client()
+
+        html = client.get("/exam-session-planner?session_year=2026").get_data(as_text=True)
+
+        self.assertIn(f'data-value="{supervisor.id}"', html)
+        self.assertIn('data-value="potential:100"', html)
+        self.assertIn("Ceeriolo (potential entry)", html)
+        self.assertLess(html.index('data-value="1"'), html.index('data-value="potential:100"'))
+        self.assertNotIn("Rejected Person (potential entry)", html)
+        self.assertNotIn("Mr hi (potential entry)", html)
+        self.assertNotIn("Archived Accepted (potential entry)", html)
+
+    def test_exam_session_planner_saves_potential_entry_assignment_with_limited_status(self):
+        potential_entry = self.create_potential_entry(entry_id=100, name="Ceeriolo")
+        client = self.login_client()
+
+        response = client.post(
+            f"/exam-session-planner/sessions/{self.session_record.id}/members",
+            data={
+                "csrf_token": "token",
+                "session_year": "2026",
+                "modal_action": "save",
+                "supervisor_row_keys": "new-1",
+                "supervisor_assignment_id_new-1": "",
+                "supervisor_team_member_id_new-1": "potential:100",
+                "supervisor_participation_status_new-1": "Pre-confirmed",
+                "supervisor_logistics_type_new-1": "Does not apply",
+            },
+            follow_redirects=False,
+        )
+
+        self.assertEqual(response.status_code, 302)
+        assignment = ExamSessionSupervisorAssignment.query.filter_by(
+            exam_session_id=self.session_record.id,
+            potential_entry_id=potential_entry.id,
+        ).one()
+        self.assertIsNone(assignment.team_member_id)
+        self.assertEqual(assignment.participation_status, "Pre-confirmed")
+
+        html = client.get("/exam-session-planner?session_year=2026").get_data(as_text=True)
+        row_start = html.index("Ceeriolo (potential entry)")
+        row_end = html.index("</article>", row_start)
+        potential_row_html = html[row_start:row_end]
+        self.assertIn("Pre-confirmation email", potential_row_html)
+        self.assertNotIn("Official confirmation email", potential_row_html)
+        self.assertNotIn("Final information email", potential_row_html)
+
+    def test_exam_session_planner_rejects_confirmed_status_for_potential_entry_assignment(self):
+        self.create_potential_entry(entry_id=100, name="Ceeriolo")
+        client = self.login_client()
+
+        response = client.post(
+            f"/exam-session-planner/sessions/{self.session_record.id}/members",
+            data={
+                "csrf_token": "token",
+                "session_year": "2026",
+                "modal_action": "save",
+                "supervisor_row_keys": "new-1",
+                "supervisor_assignment_id_new-1": "",
+                "supervisor_team_member_id_new-1": "potential:100",
+                "supervisor_participation_status_new-1": "Confirmed",
+                "supervisor_logistics_type_new-1": "Does not apply",
+            },
+            follow_redirects=True,
+        )
+        html = response.get_data(as_text=True)
+
+        self.assertIn("Potential entries can only use Pending, Pre-confirmation sent or Pre-confirmed participation status.", html)
+        self.assertEqual(ExamSessionSupervisorAssignment.query.count(), 0)
+
+    def test_potential_entry_assignment_blocks_rejection(self):
+        potential_entry = self.create_potential_entry(entry_id=100, name="Ceeriolo")
+        db.session.add(ExamSessionExaminerAssignment(
+            exam_session_id=self.session_record.id,
+            potential_entry_id=potential_entry.id,
+            participation_status="Pending",
+        ))
+        db.session.commit()
+        client = self.login_client()
+
+        response = client.post(
+            f"/potential-entries/{potential_entry.id}/reject",
+            data={"csrf_token": "token"},
+            follow_redirects=True,
+        )
+        html = response.get_data(as_text=True)
+        db.session.refresh(potential_entry)
+
+        self.assertIn("Entry cannot be rejected because it is still assigned to exam sessions.", html)
+        self.assertEqual(potential_entry.status, "Interview confirmed")
+        self.assertFalse(potential_entry.is_rejected)
+
+    def test_potential_entry_assignments_are_promoted_to_staff_member_assignments(self):
+        potential_entry = self.create_potential_entry(entry_id=100, name="Ceeriolo")
+        member = AcademicStaff(status="Active", full_name="Ceeriolo", roles="Examiner")
+        db.session.add_all([
+            member,
+            ExamSessionExaminerAssignment(
+                exam_session_id=self.session_record.id,
+                potential_entry_id=potential_entry.id,
+                participation_status="Pre-confirmed",
+            ),
+        ])
+        self.session_record.non_available_member_ids = '["potential:100"]'
+        db.session.flush()
+
+        promote_potential_entry_exam_session_assignments(potential_entry, member)
+        db.session.commit()
+
+        assignment = ExamSessionExaminerAssignment.query.one()
+        self.assertEqual(assignment.team_member_id, member.id)
+        self.assertIsNone(assignment.potential_entry_id)
+        db.session.refresh(self.session_record)
+        self.assertEqual(self.session_record.non_available_ids(), [member.id])
 
     def test_session_header_non_available_staff_persists_on_session_without_assignment_rows(self):
         unavailable_supervisor = self.create_supervisor(staff_id=4, name="Mateo Silva")

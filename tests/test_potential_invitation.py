@@ -624,7 +624,7 @@ class PotentialInvitationTest(unittest.TestCase):
         self.assertIn("Confirmed induction session date and time", modal_html)
         self.assertIn("Pre-confirm participation in exam sessions", modal_html)
         self.assertIn("Participation status has been updated to Pre-confirmed for sessions accepted by Entry.", modal_html)
-        self.assertIn("Entry has been removed from declined sessions, and role is now marked as Role to cover.", modal_html)
+        self.assertIn("Entry has been removed from declined sessions and added to the Non-available staff members list. The role is now marked as Role to cover.", modal_html)
         self.assertIn("Trainer", modal_html)
         self.assertNotIn("The Entry has been removed from all pre-assigned exam session participations.", modal_html)
         self.assertIn("Trainer has been notified that the Entry will not attend the induction session.", modal_html)
@@ -820,7 +820,7 @@ class PotentialInvitationTest(unittest.TestCase):
 
         self.assertEqual(response.status_code, 200)
         self.assertIn("Participation status has been updated to Pre-confirmed for sessions accepted by Entry is required.", html)
-        self.assertIn("Entry has been removed from declined sessions, and role is now marked as Role to cover is required.", html)
+        self.assertIn("Entry has been removed from declined sessions and added to the Non-available staff members list. The role is now marked as Role to cover is required.", html)
         self.assertEqual(updated_entry.status, "Onboarding email sent")
         self.assertFalse(updated_entry.onboarding_confirm_notes_checked)
         self.assertFalse(updated_entry.onboarding_confirm_examiner_assigned)
@@ -4049,6 +4049,8 @@ console.log(JSON.stringify({ enabledState, missingState }));
             ]
         )
         db.session.commit()
+        ExamSessionYear.query.filter_by(year=session_record.session_date.year).update({"is_archived": True})
+        db.session.commit()
         bundle_id = bundle.id
         response = self.client().get("/staff-members?show_archived=1")
         html = response.get_data(as_text=True)
@@ -4084,6 +4086,31 @@ console.log(JSON.stringify({ enabledState, missingState }));
         self.assertEqual(ExamSessionShipmentBundleSession.query.filter_by(bundle_id=bundle_id).count(), 0)
         self.assertEqual(ExamSessionShipmentChecklistItem.query.filter_by(bundle_id=bundle_id).count(), 0)
         self.assertEqual(ExamSessionShipmentEvent.query.filter_by(bundle_id=bundle_id).count(), 0)
+
+    def test_archived_staff_member_delete_blocks_active_exam_session_assignments(self):
+        member = self.add_member(status="Archived", full_name="Active Assigned Archived Staff", email="active-archived@example.com")
+        session_record = self.add_session(exam_session_name="Active assigned session", session_date=date(2026, 6, 20))
+        db.session.add(
+            ExamSessionSupervisorAssignment(
+                exam_session_id=session_record.id,
+                team_member_id=member.id,
+                participation_status="Pending",
+            )
+        )
+        db.session.commit()
+
+        response = self.client().post(
+            f"/members/{member.id}/delete",
+            data={"csrf_token": "token", "deletion_password": "Path1234"},
+            follow_redirects=True,
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn(
+            "Staff member cannot be deleted because they are still assigned to active exam sessions.",
+            response.get_data(as_text=True),
+        )
+        self.assertIsNotNone(db.session.get(AcademicStaff, member.id))
 
     def test_non_rejected_potential_entry_cannot_be_deleted(self):
         entry = self.add_entry(is_rejected=False)
@@ -4767,9 +4794,9 @@ console.log(JSON.stringify({ enabledState, missingState }));
         self.assertIn("At least one role is required.", html)
         self.assertIn("Email is required.", html)
 
-    def test_member_cannot_be_inactivated_or_archived_when_assigned_to_future_session(self):
-        member = self.add_member(full_name="Future Assigned Staff", email="future-assigned@example.com")
-        session_record = self.add_session(exam_session_name="Future Blocking Session", session_date=date(2026, 7, 20))
+    def test_member_cannot_be_inactivated_or_archived_when_assigned_to_active_session(self):
+        member = self.add_member(full_name="Active Assigned Staff", email="active-assigned@example.com")
+        session_record = self.add_session(exam_session_name="Active Blocking Session", session_date=date(2026, 7, 20))
         db.session.add(
             ExamSessionExaminerAssignment(
                 exam_session_id=session_record.id,
@@ -4784,19 +4811,18 @@ console.log(JSON.stringify({ enabledState, missingState }));
             data={
                 "csrf_token": "token",
                 "status": "Inactive",
-                "full_name": "Future Assigned Staff",
+                "full_name": "Active Assigned Staff",
             },
             follow_redirects=True,
         )
 
         html = response.get_data(as_text=True)
-        self.assertIn("Future Blocking Session", html)
-        self.assertIn("Remove the member from those sessions in Exam session planner", html)
+        self.assertIn("Staff member cannot be inactivated because they are still assigned to active exam sessions.", html)
         self.assertEqual(db.session.get(AcademicStaff, member.id).status, "Active")
 
-    def test_bulk_status_change_blocks_members_assigned_to_future_sessions(self):
-        member = self.add_member(full_name="Bulk Future Staff", email="bulk-future@example.com")
-        session_record = self.add_session(exam_session_name="Bulk Future Session", session_date=date(2026, 9, 20))
+    def test_bulk_status_change_blocks_members_assigned_to_active_sessions(self):
+        member = self.add_member(full_name="Bulk Active Staff", email="bulk-active@example.com")
+        session_record = self.add_session(exam_session_name="Bulk Active Session", session_date=date(2026, 9, 20))
         db.session.add(
             ExamSessionSupervisorAssignment(
                 exam_session_id=session_record.id,
@@ -4818,7 +4844,7 @@ console.log(JSON.stringify({ enabledState, missingState }));
         )
 
         html = response.get_data(as_text=True)
-        self.assertIn("Bulk Future Session", html)
+        self.assertIn("Staff member cannot be inactivated because they are still assigned to active exam sessions.", html)
         self.assertEqual(db.session.get(AcademicStaff, member.id).status, "Active")
 
     def test_save_acceptance_draft_persists_without_creating_member(self):

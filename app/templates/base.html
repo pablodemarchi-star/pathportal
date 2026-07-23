@@ -7,7 +7,7 @@
     <link rel="stylesheet" href="{{ url_for('static', filename='css/styles.css', v='20260721-staff-payments-next-date-01') }}">
   </head>
   <body>
-    <div class="app-shell">
+    <div class="app-shell {% if request.args.get('session_fullscreen') == '1' %}session-fullscreen-shell{% endif %}">
       {% if g.user %}
       <aside class="sidebar">
         <div class="brand">
