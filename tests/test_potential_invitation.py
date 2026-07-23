@@ -373,6 +373,50 @@ class PotentialInvitationTest(unittest.TestCase):
         self.assertEqual(track.changed_by_department, "ADMISSIONS")
         self.assertEqual(track.changed_by_user_id, user.id)
 
+    def test_potential_entry_status_update_to_on_hold_blocks_active_session_assignment(self):
+        entry = self.add_entry(status="Entry accepted", full_name="Assigned Candidate", email="assigned@example.com")
+        session_record = ExamSession(
+            exam_session_name="Assigned active session",
+            session_date=date(2026, 9, 20),
+            shifts="Morning",
+            modules="Speaking",
+            format="Online",
+            status="Pending",
+        )
+        db.session.add(session_record)
+        db.session.flush()
+        db.session.add(ExamSessionExaminerAssignment(
+            exam_session_id=session_record.id,
+            potential_entry_id=entry.id,
+            participation_status="Pending",
+        ))
+        db.session.commit()
+
+        response = self.client().post(
+            f"/potential-entries/{entry.id}",
+            data={
+                "csrf_token": "token",
+                "status": "Entry accepted (on hold)",
+                "full_name": "Assigned Candidate",
+                "phone": "",
+                "email": "assigned@example.com",
+                "city": "",
+                "province": "",
+                "cv": "",
+                "interview_date": "",
+                "interview_time": "",
+                "platform": "",
+                "interviewer": "",
+            },
+            follow_redirects=True,
+        )
+        html = response.get_data(as_text=True)
+        db.session.refresh(entry)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("Entry cannot be put on hold because it is currently assigned to active exam sessions.", html)
+        self.assertEqual(entry.status, "Entry accepted")
+
     def test_potential_entry_save_without_status_change_does_not_create_track(self):
         entry = self.add_entry(status="CV to be reviewed", full_name="No Track Candidate", email="notrack@example.com")
 
@@ -2141,6 +2185,45 @@ console.log(JSON.stringify({ rescheduleState, attendedState, attendedAcceptedSta
         self.assertEqual(updated_entry.roles_list(), ["Examiner"])
         self.assertEqual(updated_entry.reactivation_date, (date.today() + timedelta(days=7)).isoformat())
         self.assertIn("Reactivation date set for", html)
+
+    def test_interview_confirmed_application_accepted_on_hold_blocks_active_session_assignment(self):
+        entry = self.add_entry(status="Interview confirmed")
+        session_record = ExamSession(
+            exam_session_name="Assigned active session",
+            session_date=date(2026, 9, 20),
+            shifts="Morning",
+            modules="Speaking",
+            format="Online",
+            status="Pending",
+        )
+        db.session.add(session_record)
+        db.session.flush()
+        db.session.add(ExamSessionExaminerAssignment(
+            exam_session_id=session_record.id,
+            potential_entry_id=entry.id,
+            participation_status="Pending",
+        ))
+        db.session.commit()
+        future_date = (date.today() + timedelta(days=7)).strftime("%d/%m/%Y")
+
+        response = self.client().post(
+            f"/potential-entries/{entry.id}/cv-review/accept-application-on-hold",
+            data={
+                "csrf_token": "token",
+                "interview_outcome_status": "attended",
+                "interview_has_car": "Yes",
+                "interview_roles": ["Examiner"],
+                "entry_acceptance_outcome": "on_hold",
+                "reactivation_date": future_date,
+            },
+            follow_redirects=True,
+        )
+        html = response.get_data(as_text=True)
+        updated_entry = db.session.get(PotentialEntry, entry.id)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("Entry cannot be put on hold because it is currently assigned to active exam sessions.", html)
+        self.assertEqual(updated_entry.status, "Interview confirmed")
 
     def test_interview_confirmed_application_accepted_on_hold_requires_future_reactivation_date(self):
         entry = self.add_entry(status="Interview confirmed")

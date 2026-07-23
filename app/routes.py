@@ -249,6 +249,7 @@ POTENTIAL_ENTRY_EXAM_SESSION_PARTICIPATION_OPTIONS = [
 ]
 POTENTIAL_ENTRY_ASSIGNMENT_EXCLUDED_STATUSES = {
     "Entry rejected",
+    "Entry accepted (on hold)",
     "Archived rejected entry",
     "Onboarding finalised",
     "Archived accepted entry",
@@ -19740,6 +19741,11 @@ def update_potential_entry(entry_id):
             flash(error, "error")
         return redirect(url_for("staff.potential_entries"))
 
+    next_status = request.form.get("status", "").strip()
+    if next_status == "Entry accepted (on hold)" and entry.status != next_status:
+        if potential_entry_has_active_exam_session_assignments(entry.id):
+            return potential_entry_on_hold_block_redirect(entry)
+
     apply_potential_form(entry, request.form)
     db.session.commit()
     flash("Potential entry updated successfully.", "success")
@@ -19965,8 +19971,61 @@ def potential_entry_has_exam_session_assignments(entry_id):
     return False
 
 
+def potential_entry_has_active_exam_session_assignments(entry_id):
+    archived_years = {
+        year
+        for (year,) in ExamSessionYear.query.with_entities(ExamSessionYear.year)
+        .filter_by(is_archived=True)
+        .all()
+    }
+    active_year_filter = []
+    if archived_years:
+        active_year_filter.append(~db.extract("year", ExamSession.session_date).in_(archived_years))
+    for assignment_model in (ExamSessionSupervisorAssignment, ExamSessionExaminerAssignment, ExamSessionInternAssignment):
+        exists = (
+            db.session.query(assignment_model.id)
+            .join(ExamSession, ExamSession.id == assignment_model.exam_session_id)
+            .filter(
+                assignment_model.potential_entry_id == entry_id,
+                *active_year_filter,
+            )
+            .first()
+        )
+        if exists:
+            return True
+    token = f"potential:{entry_id}"
+    pattern = f"%{token}%"
+    if (
+        db.session.query(ExamSession.id)
+        .filter(
+            ExamSession.non_available_member_ids.like(pattern),
+            *active_year_filter,
+        )
+        .first()
+    ):
+        return True
+    for assignment_model in (ExamSessionSupervisorAssignment, ExamSessionExaminerAssignment, ExamSessionInternAssignment):
+        exists = (
+            db.session.query(assignment_model.id)
+            .join(ExamSession, ExamSession.id == assignment_model.exam_session_id)
+            .filter(
+                assignment_model.non_available_member_ids.like(pattern),
+                *active_year_filter,
+            )
+            .first()
+        )
+        if exists:
+            return True
+    return False
+
+
 def potential_entry_rejection_block_redirect(entry):
     flash("Entry cannot be rejected because it is still assigned to exam sessions.", "error")
+    return redirect(url_for("staff.potential_entries", open_staff_modal=potential_review_modal_id(entry)))
+
+
+def potential_entry_on_hold_block_redirect(entry):
+    flash("Entry cannot be put on hold because it is currently assigned to active exam sessions.", "error")
     return redirect(url_for("staff.potential_entries", open_staff_modal=potential_review_modal_id(entry)))
 
 
@@ -20691,6 +20750,8 @@ def accept_potential_interview_application_on_hold(entry_id):
     if reactivation_error:
         flash(reactivation_error, "error")
         return redirect(url_for("staff.potential_entries", open_staff_modal=potential_review_modal_id(entry)))
+    if potential_entry_has_active_exam_session_assignments(entry.id):
+        return potential_entry_on_hold_block_redirect(entry)
 
     return save_potential_cv_review_changes(
         entry,

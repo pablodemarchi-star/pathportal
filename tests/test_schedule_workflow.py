@@ -50,6 +50,7 @@ from app.models import (
     ExamSessionSinapsisEvent,
     ExamSessionStaffingControl,
     ExamSessionSupervisorAssignment,
+    ExamSessionYear,
     PotentialEntry,
     StaffPaymentSettings,
     Provider,
@@ -3147,6 +3148,7 @@ class ScheduleWorkflowTest(unittest.TestCase):
         supervisor = self.create_supervisor(staff_id=1, name="Laura Mendez")
         potential_entry = self.create_potential_entry(entry_id=100, name="Ceeriolo")
         self.create_potential_entry(entry_id=101, name="Rejected Person", status="Entry rejected")
+        self.create_potential_entry(entry_id=104, name="On Hold Person", status="Entry accepted (on hold)")
         self.create_potential_entry(entry_id=102, name="Mr hi", status="Onboarding finalised")
         self.create_potential_entry(entry_id=103, name="Archived Accepted", status="Archived accepted entry")
         client = self.login_client()
@@ -3158,6 +3160,7 @@ class ScheduleWorkflowTest(unittest.TestCase):
         self.assertIn("Ceeriolo (potential entry)", html)
         self.assertLess(html.index('data-value="1"'), html.index('data-value="potential:100"'))
         self.assertNotIn("Rejected Person (potential entry)", html)
+        self.assertNotIn("On Hold Person (potential entry)", html)
         self.assertNotIn("Mr hi (potential entry)", html)
         self.assertNotIn("Archived Accepted (potential entry)", html)
 
@@ -3240,6 +3243,66 @@ class ScheduleWorkflowTest(unittest.TestCase):
         self.assertIn("Entry cannot be rejected because it is still assigned to exam sessions.", html)
         self.assertEqual(potential_entry.status, "Interview confirmed")
         self.assertFalse(potential_entry.is_rejected)
+
+    def test_potential_entry_assignment_blocks_on_hold_for_active_sessions(self):
+        potential_entry = self.create_potential_entry(entry_id=100, name="Ceeriolo")
+        db.session.add(ExamSessionExaminerAssignment(
+            exam_session_id=self.session_record.id,
+            potential_entry_id=potential_entry.id,
+            participation_status="Pending",
+        ))
+        db.session.commit()
+        client = self.login_client()
+        future_date = (date.today() + timedelta(days=7)).strftime("%d/%m/%Y")
+
+        response = client.post(
+            f"/potential-entries/{potential_entry.id}/cv-review/accept-application-on-hold",
+            data={
+                "csrf_token": "token",
+                "interview_outcome_status": "attended",
+                "interview_has_car": "Yes",
+                "interview_roles": ["Examiner"],
+                "entry_acceptance_outcome": "on_hold",
+                "reactivation_date": future_date,
+            },
+            follow_redirects=True,
+        )
+        html = response.get_data(as_text=True)
+        db.session.refresh(potential_entry)
+
+        self.assertIn("Entry cannot be put on hold because it is currently assigned to active exam sessions.", html)
+        self.assertEqual(potential_entry.status, "Interview confirmed")
+
+    def test_potential_entry_assignment_allows_on_hold_for_archived_session_year(self):
+        potential_entry = self.create_potential_entry(entry_id=100, name="Ceeriolo")
+        db.session.add_all([
+            ExamSessionYear(year=self.session_record.session_date.year, is_archived=True),
+            ExamSessionExaminerAssignment(
+                exam_session_id=self.session_record.id,
+                potential_entry_id=potential_entry.id,
+                participation_status="Pending",
+            ),
+        ])
+        db.session.commit()
+        client = self.login_client()
+        future_date = (date.today() + timedelta(days=7)).strftime("%d/%m/%Y")
+
+        response = client.post(
+            f"/potential-entries/{potential_entry.id}/cv-review/accept-application-on-hold",
+            data={
+                "csrf_token": "token",
+                "interview_outcome_status": "attended",
+                "interview_has_car": "Yes",
+                "interview_roles": ["Examiner"],
+                "entry_acceptance_outcome": "on_hold",
+                "reactivation_date": future_date,
+            },
+            follow_redirects=False,
+        )
+        db.session.refresh(potential_entry)
+
+        self.assertEqual(response.status_code, 302)
+        self.assertEqual(potential_entry.status, "Entry accepted (on hold)")
 
     def test_potential_entry_assignments_are_promoted_to_staff_member_assignments(self):
         potential_entry = self.create_potential_entry(entry_id=100, name="Ceeriolo")
