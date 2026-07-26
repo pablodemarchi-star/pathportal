@@ -3251,6 +3251,66 @@ span.session-marker-chip {
   padding-left: 16px;
 }
 
+.modal-emergency-contact-control {
+  display: grid;
+  gap: 7px;
+  width: min(520px, 100%);
+  margin-top: 10px;
+}
+
+.modal-emergency-contact-options {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px 18px;
+}
+
+.modal-emergency-contact-checkbox {
+  display: grid;
+  grid-template-columns: auto minmax(0, max-content);
+  align-items: center;
+  justify-self: start;
+  text-align: left;
+  gap: 7px;
+  max-width: 100%;
+  color: var(--color-primary-dark);
+  font-size: 12px;
+  font-weight: 800;
+  line-height: 1.2;
+  white-space: nowrap;
+}
+
+.modal-emergency-contact-checkbox input {
+  margin: 0;
+}
+
+.modal-emergency-contact-checkbox span {
+  white-space: nowrap;
+}
+
+.modal-emergency-contact-select {
+  display: grid;
+  gap: 5px;
+  color: var(--color-muted);
+  font-size: 10px;
+  font-weight: 900;
+  letter-spacing: 0;
+  text-transform: uppercase;
+}
+
+.modal-emergency-contact-select select {
+  width: min(320px, 100%);
+  min-height: 36px;
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  padding: 5px 8px;
+  background: white;
+  color: var(--color-primary-dark);
+  font-size: 12px;
+  font-weight: 800;
+  text-transform: none;
+}
+
 .compact-table-wrap {
   box-shadow: none;
   background: white;
@@ -4157,6 +4217,7 @@ span.session-marker-chip {
   display: inline-flex;
   align-items: center;
   justify-content: center;
+  gap: 5px;
   border: 1px solid rgba(35, 121, 92, 0.28);
   border-radius: 999px;
   padding: 2px 7px;
@@ -4166,6 +4227,47 @@ span.session-marker-chip {
   font-weight: 900;
   line-height: 1.1;
   white-space: nowrap;
+}
+
+.shipment-recipient-chip button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 13px;
+  height: 13px;
+  border: 0;
+  border-radius: 999px;
+  padding: 0;
+  background: rgba(22, 104, 77, 0.16);
+  color: inherit;
+  cursor: pointer;
+  font: inherit;
+  font-size: 10px;
+  line-height: 1;
+}
+
+.shipment-recipient-checkbox {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border: 1px solid rgba(35, 121, 92, 0.28);
+  border-radius: 8px;
+  background: #f7fbf9;
+  cursor: pointer;
+  font-size: 15px;
+  line-height: 1;
+}
+
+.shipment-recipient-checkbox input {
+  position: absolute;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.shipment-recipient-checkbox:hover {
+  background: #e7f6ef;
 }
 
 .staff-option-count {

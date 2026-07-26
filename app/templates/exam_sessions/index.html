@@ -167,14 +167,15 @@
   <span class="staff-option-count">({{ session_count }})</span>
 {%- endmacro %}
 
-{% macro staff_assignment_row(session, section_key, row_key, assignment, section_members, section_member_map, section_states, member_session_counts, participation_options, shipment_recipient_supervisor_id=none) -%}
+{% macro staff_assignment_row(session, section_key, row_key, assignment, section_members, section_member_map, section_states, member_session_counts, participation_options) -%}
   {% set selected_team_id = assignment.team_member_id if assignment else none %}
   {% set selected_potential_entry_id = assignment.potential_entry_id if assignment else none %}
   {% set selected_value = selected_team_id|string if selected_team_id else ('potential:' ~ selected_potential_entry_id if selected_potential_entry_id else '') %}
   {% set selected_member = section_member_map.get(selected_value) if selected_value else none %}
   {% set selected_is_potential = selected_member and selected_member.is_potential_entry is defined and selected_member.is_potential_entry %}
   {% set selected_state = section_states.get(session.id, {}).get(selected_value, 'warning') if selected_value else '' %}
-  {% set is_shipment_recipient = section_key == 'supervisor' and selected_team_id and shipment_recipient_supervisor_id and selected_team_id == shipment_recipient_supervisor_id %}
+  {% set is_shipment_recipient = assignment and assignment.is_shipment_recipient %}
+  {% set shipment_recipient_value = section_key ~ ':' ~ row_key %}
   {% set raw_participation_status = assignment.participation_status if assignment else 'Pending' %}
   {% set participation_status = 'Pre-confirmation sent' if raw_participation_status == 'Sent' else raw_participation_status %}
   {% set participation_class = participation_status|lower|replace(' ', '-') %}
@@ -192,8 +193,16 @@
         </div>
       </div>
       <div class="staff-card-header-actions">
-        {% if is_shipment_recipient %}
-          <span class="shipment-recipient-chip">Receives shipment</span>
+        {% if session.format == 'Onsite' %}
+          <span class="shipment-recipient-chip" data-shipment-recipient-chip {% if not is_shipment_recipient %}hidden{% endif %}>
+            <span>Receives shipment</span>
+            <button type="button" data-clear-shipment-recipient aria-label="Clear shipment recipient">&times;</button>
+          </span>
+          <input type="hidden" name="shipment_recipient_assignment" value="{{ shipment_recipient_value }}" data-shipment-recipient-input {% if not is_shipment_recipient %}disabled{% endif %}>
+          <label class="shipment-recipient-checkbox" title="Receives shipment" aria-label="Receives shipment" data-shipment-recipient-picker {% if is_shipment_recipient %}hidden{% endif %}>
+            <input type="checkbox" value="{{ shipment_recipient_value }}" data-shipment-recipient-checkbox>
+            <span aria-hidden="true">🚚</span>
+          </label>
         {% endif %}
         <button class="danger-button compact-action" type="button" data-remove-supervisor-row aria-label="Remove {{ 'supervisor' if section_key == 'supervisor' else 'examiner' if section_key == 'examiner' else 'intern' }}">Remove</button>
       </div>
@@ -905,6 +914,27 @@
               </div>
             </details>
           </div>
+          <div class="modal-emergency-contact-control" data-emergency-contact-control>
+            <div class="modal-emergency-contact-options">
+              <label class="checkbox-label modal-emergency-contact-checkbox">
+                <input type="checkbox" name="emergency_contact_required" value="1" form="exam-session-members-form-{{ session.id }}" data-emergency-contact-required {% if session.emergency_contact_required and not session.emergency_contact_not_required %}checked{% endif %}>
+                <span>Emergency contact required</span>
+              </label>
+              <label class="checkbox-label modal-emergency-contact-checkbox">
+                <input type="checkbox" name="emergency_contact_not_required" value="1" form="exam-session-members-form-{{ session.id }}" data-emergency-contact-not-required {% if session.emergency_contact_not_required %}checked{% endif %}>
+                <span>Emergency contact NOT required</span>
+              </label>
+            </div>
+            <label class="modal-emergency-contact-select" data-emergency-contact-select-wrap {% if not session.emergency_contact_required or session.emergency_contact_not_required %}hidden{% endif %}>
+              Emergency contact
+              <select name="emergency_contact_member_id" form="exam-session-members-form-{{ session.id }}" data-emergency-contact-select {% if not session.emergency_contact_required or session.emergency_contact_not_required %}disabled{% endif %}>
+                <option value="">Select active staff member</option>
+                {% for member in emergency_contact_members %}
+                  <option value="{{ member.id }}" {% if session.emergency_contact_member_id == member.id %}selected{% endif %}>{{ member_option_label(member) }}</option>
+                {% endfor %}
+              </select>
+            </label>
+          </div>
         </div>
         {% set modal_conflicts = same_date_assignment_conflicts.get(session.id, []) %}
         {% set modal_dietary_requirements = session_dietary_requirement_alerts.get(session.id, []) %}
@@ -958,9 +988,8 @@
             </div>
           </div>
           <div class="staff-card-grid" data-supervisor-rows>
-            {% set shipment_recipient_supervisor = shipment_recipient_supervisors.get(session.id) %}
             {% for assignment in supervisor_assignments.get(session.id, []) %}
-              {{ staff_assignment_row(session, 'supervisor', 'existing-' ~ assignment.id, assignment, session_supervisors, supervisor_member_map, supervisor_states, member_session_counts, participation_options, shipment_recipient_supervisor.id if shipment_recipient_supervisor else none) }}
+              {{ staff_assignment_row(session, 'supervisor', 'existing-' ~ assignment.id, assignment, session_supervisors, supervisor_member_map, supervisor_states, member_session_counts, participation_options) }}
             {% endfor %}
           </div>
           <template data-supervisor-row-template>

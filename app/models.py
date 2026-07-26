@@ -664,6 +664,9 @@ class ExamSession(db.Model):
     location_url = db.Column(db.String(500), nullable=True)
     details_url = db.Column(db.String(500), nullable=True)
     non_available_member_ids = db.Column(db.Text, nullable=False, default="[]")
+    emergency_contact_required = db.Column(db.Boolean, nullable=False, default=False)
+    emergency_contact_not_required = db.Column(db.Boolean, nullable=False, default=False)
+    emergency_contact_member_id = db.Column(db.Integer, db.ForeignKey("academic_staff.id"), nullable=True, index=True)
     created_on = db.Column(db.DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))
     updated_on = db.Column(
         db.DateTime(timezone=True),
@@ -701,6 +704,8 @@ class ExamSession(db.Model):
             elif text.startswith("staff:") or text.startswith("potential:"):
                 refs.append(text)
         return refs
+
+    emergency_contact_member = db.relationship("AcademicStaff", foreign_keys=[emergency_contact_member_id])
 
 
 class ExamSessionJourneyShare(db.Model):
@@ -1330,6 +1335,7 @@ class ExamSessionSupervisorAssignment(db.Model):
     participation_status = db.Column(db.String(40), nullable=False, default="Pending", index=True)
     logistics_enabled = db.Column(db.Boolean, nullable=False, default=False)
     logistics_type = db.Column(db.String(40), nullable=False, default="Does not apply", index=True)
+    is_shipment_recipient = db.Column(db.Boolean, nullable=False, default=False, index=True)
     manual_fee_override = db.Column(db.Boolean, nullable=False, default=False)
     km = db.Column(db.Integer, nullable=True)
     start_time = db.Column(db.String(5), nullable=True)
@@ -1439,6 +1445,7 @@ class ExamSessionExaminerAssignment(db.Model):
     participation_status = db.Column(db.String(40), nullable=False, default="Pending", index=True)
     logistics_enabled = db.Column(db.Boolean, nullable=False, default=False)
     logistics_type = db.Column(db.String(40), nullable=False, default="Does not apply", index=True)
+    is_shipment_recipient = db.Column(db.Boolean, nullable=False, default=False, index=True)
     manual_fee_override = db.Column(db.Boolean, nullable=False, default=False)
     km = db.Column(db.Integer, nullable=True)
     start_time = db.Column(db.String(5), nullable=True)
@@ -1548,6 +1555,7 @@ class ExamSessionInternAssignment(db.Model):
     participation_status = db.Column(db.String(40), nullable=False, default="Pending", index=True)
     logistics_enabled = db.Column(db.Boolean, nullable=False, default=False)
     logistics_type = db.Column(db.String(40), nullable=False, default="Does not apply", index=True)
+    is_shipment_recipient = db.Column(db.Boolean, nullable=False, default=False, index=True)
     manual_fee_override = db.Column(db.Boolean, nullable=False, default=False)
     km = db.Column(db.Integer, nullable=True)
     start_time = db.Column(db.String(5), nullable=True)

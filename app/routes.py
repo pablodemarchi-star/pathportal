@@ -1492,7 +1492,19 @@ def pluralize_count(count, singular, plural=None):
     return f"{count} {label}"
 
 
-def exam_session_pending_status_tooltip(staffing_contract, logistics_contract):
+def exam_session_emergency_contact_decision_ready(session_record):
+    if not session_record:
+        return False
+    return bool(session_record.emergency_contact_required or session_record.emergency_contact_not_required)
+
+
+def exam_session_shipment_recipient_ready(session_record, assignments):
+    if not session_record or session_record.format != "Onsite":
+        return True
+    return any(assignment.team_member_id and assignment.is_shipment_recipient for assignment in assignments or [])
+
+
+def exam_session_pending_status_tooltip(staffing_contract, logistics_contract, session_record=None, assignments=None):
     missing_items = []
     staffing_status = staffing_contract.get("status")
     staffing_totals = staffing_contract.get("totals", {})
@@ -1533,6 +1545,11 @@ def exam_session_pending_status_tooltip(staffing_contract, logistics_contract):
         blocker_codes = {blocker["code"] for blocker in logistics_contract.get("blockers", [])}
         if "LOGISTICS_FILES_URL_MISSING" in blocker_codes:
             missing_items.append("Add the Check logistics files link.")
+
+    if session_record and not exam_session_emergency_contact_decision_ready(session_record):
+        missing_items.append("Select Emergency contact required or Emergency contact NOT required.")
+    if session_record and not exam_session_shipment_recipient_ready(session_record, assignments or []):
+        missing_items.append("Assign Receives shipment for onsite sessions.")
 
     if not missing_items:
         missing_items.append("Confirm every staff assignment and logistics concept.")
@@ -7405,7 +7422,10 @@ def shipment_event_once(bundle, event_type, previous_status=None, new_status=Non
 
 
 def shipment_recipient_supervisor_assignment(assignments):
-    assigned = [assignment for assignment in assignments or [] if assignment.team_member_id]
+    assigned = [
+        assignment for assignment in assignments or []
+        if assignment.team_member_id and assignment.is_shipment_recipient
+    ]
     if not assigned:
         return None
     return sorted(assigned, key=lambda item: (item.created_on or datetime.min, item.id or 0))[0]
@@ -7539,8 +7559,24 @@ def reconcile_auto_shipment_bundles(year_or_sessions, today=None):
         .all()
         if session_ids else []
     )
+    examiner_records = (
+        ExamSessionExaminerAssignment.query.filter(ExamSessionExaminerAssignment.exam_session_id.in_(session_ids))
+        .options(joinedload(ExamSessionExaminerAssignment.team_member))
+        .order_by(ExamSessionExaminerAssignment.created_on.asc(), ExamSessionExaminerAssignment.id.asc())
+        .all()
+        if session_ids else []
+    )
+    intern_records = (
+        ExamSessionInternAssignment.query.filter(ExamSessionInternAssignment.exam_session_id.in_(session_ids))
+        .options(joinedload(ExamSessionInternAssignment.team_member))
+        .order_by(ExamSessionInternAssignment.created_on.asc(), ExamSessionInternAssignment.id.asc())
+        .all()
+        if session_ids else []
+    )
     supervisor_assignments_by_session = {}
     for assignment in supervisor_records:
+        supervisor_assignments_by_session.setdefault(assignment.exam_session_id, []).append(assignment)
+    for assignment in examiner_records + intern_records:
         supervisor_assignments_by_session.setdefault(assignment.exam_session_id, []).append(assignment)
     shipment_links = (
         ExamSessionShipmentBundleSession.query.filter(ExamSessionShipmentBundleSession.exam_session_id.in_(session_ids))
@@ -7651,19 +7687,21 @@ def shipment_planning_contract(
     session_record,
     all_year_sessions=None,
     supervisor_assignments_by_session=None,
+    shipment_recipient_assignments_by_session=None,
     shipment_links_by_session=None,
     packages_contracts_by_session=None,
     today=None,
 ):
     all_year_sessions = list(all_year_sessions or [])
     supervisor_assignments_by_session = supervisor_assignments_by_session or {}
+    shipment_recipient_assignments_by_session = shipment_recipient_assignments_by_session or supervisor_assignments_by_session
     shipment_links_by_session = shipment_links_by_session or {}
     packages_contracts_by_session = packages_contracts_by_session or {}
     today = today or datetime.now(LOCAL_TZ).date()
     current_link = shipment_links_by_session.get(session_record.id)
     current_bundle = current_link.bundle if current_link and current_link.bundle else None
     supervisor = get_exam_session_shipment_recipient_supervisor(
-        supervisor_assignments_by_session.get(session_record.id, [])
+        shipment_recipient_assignments_by_session.get(session_record.id, [])
     )
 
     def base(status, reason, supervisor=None, delivery_address="", earliest_session_date=None, candidate_sessions=None, suggested_action="", current_bundle=None):
@@ -7798,7 +7836,7 @@ def shipment_planning_contract(
         if candidate_link and candidate_link.bundle:
             continue
         candidate_supervisor = get_exam_session_shipment_recipient_supervisor(
-            supervisor_assignments_by_session.get(candidate.id, [])
+            shipment_recipient_assignments_by_session.get(candidate.id, [])
         )
         if not candidate_supervisor or candidate_supervisor.id != supervisor.id:
             continue
@@ -10691,6 +10729,12 @@ def intern_session_member_options():
     ]
 
 
+def active_staff_member_options():
+    return AcademicStaff.query.filter(
+        AcademicStaff.status == "Active",
+    ).order_by(AcademicStaff.full_name.asc()).all()
+
+
 def normalized_location_value(value):
     return (value or "").strip().casefold()
 
@@ -12698,6 +12742,14 @@ def pre_session_control_tower():
     intern_assignments_by_session = {}
     for assignment in intern_assignment_records:
         intern_assignments_by_session.setdefault(assignment.exam_session_id, []).append(assignment)
+    shipment_recipient_assignments_by_session = {
+        session_record.id: (
+            supervisor_assignments_by_session.get(session_record.id, [])
+            + examiner_assignments_by_session.get(session_record.id, [])
+            + intern_assignments_by_session.get(session_record.id, [])
+        )
+        for session_record in sessions
+    }
 
     today = datetime.now(LOCAL_TZ).date()
     staffing_contracts_by_session = {}
@@ -12788,6 +12840,7 @@ def pre_session_control_tower():
             session_record,
             all_year_sessions=sessions,
             supervisor_assignments_by_session=supervisor_assignments_by_session,
+            shipment_recipient_assignments_by_session=shipment_recipient_assignments_by_session,
             shipment_links_by_session=shipment_links_by_session,
             packages_contracts_by_session=packages_contracts_by_session,
             today=today,
@@ -14174,11 +14227,17 @@ def parse_form_int_ids(name):
 
 
 def confirmed_supervisor_ids_for_session(session_id):
-    assignments = (
-        ExamSessionSupervisorAssignment.query.filter_by(exam_session_id=session_id)
-        .order_by(ExamSessionSupervisorAssignment.created_on.asc(), ExamSessionSupervisorAssignment.id.asc())
-        .all()
-    )
+    assignments = []
+    for assignment_model in (
+        ExamSessionSupervisorAssignment,
+        ExamSessionExaminerAssignment,
+        ExamSessionInternAssignment,
+    ):
+        assignments.extend(
+            assignment_model.query.filter_by(exam_session_id=session_id)
+            .order_by(assignment_model.created_on.asc(), assignment_model.id.asc())
+            .all()
+        )
     supervisor = get_exam_session_shipment_recipient_supervisor(assignments)
     return {supervisor.id} if supervisor else set()
 
@@ -14268,6 +14327,14 @@ def shipment_planning_contract_for_submit(session_record):
     supervisor_assignments_by_session = group_by_session(supervisor_records)
     examiner_assignments_by_session = group_by_session(examiner_records)
     intern_assignments_by_session = group_by_session(intern_records)
+    shipment_recipient_assignments_by_session = {
+        item.id: (
+            supervisor_assignments_by_session.get(item.id, [])
+            + examiner_assignments_by_session.get(item.id, [])
+            + intern_assignments_by_session.get(item.id, [])
+        )
+        for item in year_sessions
+    }
     package_units_by_session = group_by_session(package_units)
     package_session_items_by_session = group_by_session(package_session_items)
     shipment_links_by_session = {link.exam_session_id: link for link in shipment_links}
@@ -14289,6 +14356,7 @@ def shipment_planning_contract_for_submit(session_record):
         session_record,
         all_year_sessions=year_sessions,
         supervisor_assignments_by_session=supervisor_assignments_by_session,
+        shipment_recipient_assignments_by_session=shipment_recipient_assignments_by_session,
         shipment_links_by_session=shipment_links_by_session,
         packages_contracts_by_session=packages_contracts_by_session,
         today=datetime.now(LOCAL_TZ).date(),
@@ -14982,16 +15050,20 @@ def exam_session_planner():
     supervisor_assignments = {}
     for assignment in assignment_records:
         supervisor_assignments.setdefault(assignment.exam_session_id, []).append(assignment)
-    shipment_recipient_supervisors = {
-        session_id: get_exam_session_shipment_recipient_supervisor(assignments)
-        for session_id, assignments in supervisor_assignments.items()
-    }
     examiner_assignments = {}
     for assignment in examiner_assignment_records:
         examiner_assignments.setdefault(assignment.exam_session_id, []).append(assignment)
     intern_assignments = {}
     for assignment in intern_assignment_records:
         intern_assignments.setdefault(assignment.exam_session_id, []).append(assignment)
+    shipment_recipient_supervisors = {
+        session_id: get_exam_session_shipment_recipient_supervisor(
+            supervisor_assignments.get(session_id, [])
+            + examiner_assignments.get(session_id, [])
+            + intern_assignments.get(session_id, [])
+        )
+        for session_id in session_ids
+    }
     logistics_by_session = {record.exam_session_id: record for record in logistics_records}
     logistics_concepts = {}
     for concept in logistics_concept_records:
@@ -15032,6 +15104,8 @@ def exam_session_planner():
         pending_status_tooltips_by_session[session_id] = exam_session_pending_status_tooltip(
             staffing_contract,
             logistics_contract,
+            next((session_record for session_record in sessions if session_record.id == session_id), None),
+            session_assignments,
         )
         persisted_staff_confirmed_by_session[session_id] = persisted_staff_confirmed(
             session_supervisor_assignments,
@@ -15091,6 +15165,7 @@ def exam_session_planner():
     session_intern_members = {}
     session_non_available_staff_members = {}
     session_non_available_member_ids = {}
+    emergency_contact_members = active_staff_member_options()
     for session_record in sessions:
         supervisor_states[session_record.id] = {
             str(member.id): supervisor_certification_state(member.id, supervisor_certification_year)
@@ -15149,6 +15224,7 @@ def exam_session_planner():
         session_intern_members=session_intern_members,
         session_non_available_staff_members=session_non_available_staff_members,
         session_non_available_member_ids=session_non_available_member_ids,
+        emergency_contact_members=emergency_contact_members,
         supervisor_member_map=supervisor_member_map,
         examiner_member_map=examiner_member_map,
         intern_member_map=intern_member_map,
@@ -15459,6 +15535,7 @@ def save_exam_session_assignment_section(
     assignment_model,
     member_options,
     section_label,
+    selected_shipment_recipient_value="",
 ):
     member_map = {member.id: member for member in member_options}
     valid_member_ids = set(member_map)
@@ -15713,6 +15790,7 @@ def save_exam_session_assignment_section(
         if selected_person_token:
             row_member_ids.append(selected_person_token)
         used_member_ids.extend(row_member_ids)
+        shipment_recipient_value = f"{section_key}:{row_key}"
         prepared_rows.append(
             {
                 "assignment": assignment,
@@ -15722,6 +15800,11 @@ def save_exam_session_assignment_section(
                 "participation_status": participation_status,
                 "logistics_enabled": logistics_enabled,
                 "logistics_type": logistics_type,
+                "is_shipment_recipient": (
+                    session_record.format == "Onsite"
+                    and bool(selected_person_token)
+                    and selected_shipment_recipient_value == shipment_recipient_value
+                ),
                 "manual_fee_override": manual_fee_override,
                 "km": km,
                 "time_ranges": time_ranges,
@@ -15772,6 +15855,7 @@ def save_exam_session_assignment_section(
         assignment.participation_status = row_data["participation_status"]
         assignment.logistics_enabled = row_data["logistics_enabled"]
         assignment.logistics_type = row_data["logistics_type"]
+        assignment.is_shipment_recipient = row_data["is_shipment_recipient"]
         assignment.manual_fee_override = row_data["manual_fee_override"]
         if row_data["participation_status"] == "Pending":
             assignment.fee_frozen_on = None
@@ -15950,6 +16034,10 @@ def exam_session_overall_statuses_by_session_ids(session_ids):
     if not session_ids:
         return statuses_by_session
 
+    sessions_by_id = {
+        session_record.id: session_record
+        for session_record in ExamSession.query.filter(ExamSession.id.in_(session_ids)).all()
+    }
     supervisor_assignments_by_session = {session_id: [] for session_id in session_ids}
     examiner_assignments_by_session = {session_id: [] for session_id in session_ids}
     intern_assignments_by_session = {session_id: [] for session_id in session_ids}
@@ -15979,6 +16067,7 @@ def exam_session_overall_statuses_by_session_ids(session_ids):
         logistics_concepts_by_session.setdefault(concept.exam_session_id, []).append(concept)
 
     for session_id in session_ids:
+        session_record = sessions_by_id.get(session_id)
         supervisor_assignments = supervisor_assignments_by_session.get(session_id, [])
         examiner_assignments = examiner_assignments_by_session.get(session_id, [])
         intern_assignments = intern_assignments_by_session.get(session_id, [])
@@ -15993,8 +16082,16 @@ def exam_session_overall_statuses_by_session_ids(session_ids):
             logistics_concepts_by_session.get(session_id, []),
             logistics_by_session.get(session_id),
         )
+        emergency_contact_ready = exam_session_emergency_contact_decision_ready(session_record)
+        shipment_recipient_ready = exam_session_shipment_recipient_ready(session_record, all_assignments)
         statuses_by_session[session_id] = (
-            "Confirmed" if final_email_ready(staffing_contract, logistics_contract) else "Pending"
+            "Confirmed"
+            if (
+                final_email_ready(staffing_contract, logistics_contract)
+                and emergency_contact_ready
+                and shipment_recipient_ready
+            )
+            else "Pending"
         )
     return statuses_by_session
 
@@ -16047,6 +16144,16 @@ def update_exam_session_members(session_id):
     selected_year = request.form.get("session_year", str(session_record.session_date.year)).strip()
     modal_action = request.form.get("modal_action", "save_close").strip()
     return_to_fullscreen = request.form.get("session_fullscreen") == "1"
+
+    def session_members_redirect(*, keep_open=False):
+        args = {"session_year": selected_year}
+        if return_to_fullscreen and keep_open:
+            args["session_fullscreen"] = 1
+            args["open_session_modal"] = session_record.id
+        elif keep_open:
+            args["open_session_modal"] = session_record.id
+        return redirect(url_for("staff.exam_session_planner", **args))
+
     if "session_non_available_member_ids" in request.form:
         valid_non_available_ids = {
             member.id
@@ -16077,16 +16184,24 @@ def update_exam_session_members(session_id):
         })
         session_record.non_available_member_ids = json.dumps(selected_non_available_ids)
 
-    def session_members_redirect(*, keep_open=False):
-        args = {"session_year": selected_year}
-        if return_to_fullscreen and keep_open:
-            args["session_fullscreen"] = 1
-            args["open_session_modal"] = session_record.id
-        elif keep_open:
-            args["open_session_modal"] = session_record.id
-        return redirect(url_for("staff.exam_session_planner", **args))
+    emergency_contact_not_required = request.form.get("emergency_contact_not_required") == "1"
+    emergency_contact_required = request.form.get("emergency_contact_required") == "1" and not emergency_contact_not_required
+    emergency_contact_member_id = None
+    if emergency_contact_required:
+        emergency_contact_member_id_value = request.form.get("emergency_contact_member_id", "").strip()
+        if not emergency_contact_member_id_value.isdigit():
+            flash("Please select an active emergency contact.", "error")
+            return session_members_redirect(keep_open=True)
+        emergency_contact_member_id = int(emergency_contact_member_id_value)
+        if not AcademicStaff.query.filter_by(id=emergency_contact_member_id, status="Active").first():
+            flash("Please select an active emergency contact.", "error")
+            return session_members_redirect(keep_open=True)
+    session_record.emergency_contact_required = emergency_contact_required
+    session_record.emergency_contact_not_required = emergency_contact_not_required
+    session_record.emergency_contact_member_id = emergency_contact_member_id
 
     keep_modal_open_on_success = modal_action == "save"
+    selected_shipment_recipient_value = request.form.get("shipment_recipient_assignment", "").strip()
     supervisor_saved = save_exam_session_assignment_section(
         session_record=session_record,
         selected_year=selected_year,
@@ -16094,6 +16209,7 @@ def update_exam_session_members(session_id):
         assignment_model=ExamSessionSupervisorAssignment,
         member_options=supervisor_member_options(),
         section_label="supervisor",
+        selected_shipment_recipient_value=selected_shipment_recipient_value,
     )
     if supervisor_saved is None:
         return session_members_redirect(keep_open=True)
@@ -16105,6 +16221,7 @@ def update_exam_session_members(session_id):
         assignment_model=ExamSessionExaminerAssignment,
         member_options=examiner_session_member_options(),
         section_label="examiner",
+        selected_shipment_recipient_value=selected_shipment_recipient_value,
     )
     if examiner_saved is None:
         return session_members_redirect(keep_open=True)
@@ -16116,6 +16233,7 @@ def update_exam_session_members(session_id):
         assignment_model=ExamSessionInternAssignment,
         member_options=intern_session_member_options(),
         section_label="intern",
+        selected_shipment_recipient_value=selected_shipment_recipient_value,
     )
     if intern_saved is None:
         return session_members_redirect(keep_open=True)

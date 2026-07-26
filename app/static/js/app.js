@@ -4008,6 +4008,42 @@ const initMemberMultiselects = (root = document) => {
   });
 };
 
+const syncEmergencyContactControl = (control) => {
+  const requiredCheckbox = control?.querySelector("[data-emergency-contact-required]");
+  const notRequiredCheckbox = control?.querySelector("[data-emergency-contact-not-required]");
+  const selectWrap = control?.querySelector("[data-emergency-contact-select-wrap]");
+  const select = control?.querySelector("[data-emergency-contact-select]");
+  if (!requiredCheckbox || !notRequiredCheckbox || !selectWrap || !select) return;
+  const required = requiredCheckbox.checked && !notRequiredCheckbox.checked;
+  selectWrap.hidden = !required;
+  select.disabled = !required;
+  if (!required) select.value = "";
+};
+
+const initEmergencyContactControls = (root = document) => {
+  root.querySelectorAll("[data-emergency-contact-control]").forEach((control) => {
+    if (control.dataset.initialized === "true") return;
+    control.dataset.initialized = "true";
+    const requiredCheckbox = control.querySelector("[data-emergency-contact-required]");
+    const notRequiredCheckbox = control.querySelector("[data-emergency-contact-not-required]");
+    const select = control.querySelector("[data-emergency-contact-select]");
+    requiredCheckbox?.addEventListener("change", () => {
+      if (requiredCheckbox.checked && notRequiredCheckbox) notRequiredCheckbox.checked = false;
+      syncEmergencyContactControl(control);
+      markStaffChangesUnsaved(sessionMembersFormForElement(control));
+    });
+    notRequiredCheckbox?.addEventListener("change", () => {
+      if (notRequiredCheckbox.checked && requiredCheckbox) requiredCheckbox.checked = false;
+      syncEmergencyContactControl(control);
+      markStaffChangesUnsaved(sessionMembersFormForElement(control));
+    });
+    select?.addEventListener("change", () => {
+      markStaffChangesUnsaved(sessionMembersFormForElement(control));
+    });
+    syncEmergencyContactControl(control);
+  });
+};
+
 const initPotentialSessionMultiselects = (root = document) => {
   root.querySelectorAll("[data-potential-session-multiselect]").forEach((picker) => {
     if (picker.dataset.initialized === "true") return;
@@ -8151,6 +8187,7 @@ const initLogisticsControls = (root = document) => {
 
 const initSessionMemberRows = (root = document) => {
   initMemberMultiselects(root);
+  initEmergencyContactControls(root);
   initPotentialSessionMultiselects(root);
   initNoteRecipientSelects(root);
   initTeamMemberSelects(root);
@@ -8158,6 +8195,7 @@ const initSessionMemberRows = (root = document) => {
   initParticipationSelects(root);
   initStaffCollapsibleSections(root);
   initLogisticsControls(root);
+  initShipmentRecipientControls(root);
   initIntegerInputs(root);
   initTimeInputs(root);
   root.querySelectorAll("[data-km-input]").forEach(syncKmDisableButton);
@@ -8194,6 +8232,60 @@ const initSessionMemberRows = (root = document) => {
     syncAssignmentTotalFee(row);
   });
   syncInvitationEmailCopyButtons(root);
+};
+
+const syncShipmentRecipientControls = (form) => {
+  if (!form) return;
+  const selectedInput = Array.from(form.querySelectorAll("[data-shipment-recipient-input]"))
+    .find((input) => !input.disabled && input.value);
+  const selectedValue = selectedInput?.value || "";
+  form.querySelectorAll("[data-supervisor-row]").forEach((row) => {
+    const input = row.querySelector("[data-shipment-recipient-input]");
+    const chip = row.querySelector("[data-shipment-recipient-chip]");
+    const picker = row.querySelector("[data-shipment-recipient-picker]");
+    const checkbox = row.querySelector("[data-shipment-recipient-checkbox]");
+    const isSelected = Boolean(selectedValue && input?.value === selectedValue);
+    if (input) input.disabled = !isSelected;
+    if (chip) chip.hidden = !isSelected;
+    if (picker) picker.hidden = Boolean(selectedValue);
+    if (checkbox) checkbox.checked = false;
+  });
+};
+
+const initShipmentRecipientControls = (root = document) => {
+  const forms = new Set();
+  root.querySelectorAll("[data-shipment-recipient-checkbox]").forEach((checkbox) => {
+    if (checkbox.dataset.initialized === "true") return;
+    checkbox.dataset.initialized = "true";
+    checkbox.addEventListener("change", () => {
+      const row = checkbox.closest("[data-supervisor-row]");
+      const form = checkbox.closest("[data-session-members-form]");
+      if (!row || !form || !checkbox.checked) return;
+      form.querySelectorAll("[data-shipment-recipient-input]").forEach((input) => {
+        input.disabled = true;
+      });
+      const input = row.querySelector("[data-shipment-recipient-input]");
+      if (input) input.disabled = false;
+      syncShipmentRecipientControls(form);
+      markStaffChangesUnsaved(form);
+    });
+  });
+  root.querySelectorAll("[data-clear-shipment-recipient]").forEach((button) => {
+    if (button.dataset.initialized === "true") return;
+    button.dataset.initialized = "true";
+    button.addEventListener("click", () => {
+      const form = button.closest("[data-session-members-form]");
+      if (!form) return;
+      form.querySelectorAll("[data-shipment-recipient-input]").forEach((input) => {
+        input.disabled = true;
+      });
+      syncShipmentRecipientControls(form);
+      markStaffChangesUnsaved(form);
+    });
+  });
+  root.querySelectorAll("[data-session-members-form]").forEach((form) => forms.add(form));
+  root.closest?.("[data-session-members-form]") && forms.add(root.closest("[data-session-members-form]"));
+  forms.forEach(syncShipmentRecipientControls);
 };
 
 const initUnsavedStaffChangeTracking = (root = document) => {
@@ -8338,6 +8430,7 @@ document.addEventListener("click", (event) => {
   syncLogisticsSection(form);
   refreshTeamMemberSessionCounts();
   syncSupervisorMemberAvailability(form);
+  syncShipmentRecipientControls(form);
   syncSameDateAssignmentConflictAlerts();
 });
 
