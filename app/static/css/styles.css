@@ -670,8 +670,55 @@ textarea {
 }
 
 .staff-induction-options-list {
+  position: relative;
   display: grid;
   gap: 8px;
+  max-height: calc((43px * 2) + 8px);
+  overflow-y: auto;
+  padding-right: 6px;
+  scrollbar-gutter: stable;
+  scrollbar-color: rgba(0, 76, 101, 0.38) transparent;
+  scrollbar-width: thin;
+}
+
+.staff-induction-options-list.is-scrollable {
+  overflow-y: scroll;
+}
+
+.staff-induction-options-list.is-scrollable::-webkit-scrollbar {
+  width: 6px;
+}
+
+.staff-induction-options-list.is-scrollable::-webkit-scrollbar-track {
+  background: transparent;
+  border-radius: 999px;
+}
+
+.staff-induction-options-list.is-scrollable::-webkit-scrollbar-thumb {
+  border-radius: 999px;
+  background: rgba(0, 76, 101, 0.38);
+}
+
+.staff-induction-options-more {
+  display: inline-flex;
+  align-items: center;
+  width: fit-content;
+  border-top: 1px solid rgba(0, 76, 101, 0.18);
+  padding-top: 6px;
+  color: var(--color-primary);
+  font-size: 11px;
+  font-weight: 850;
+}
+
+.staff-induction-options-more::before {
+  content: "↓";
+  margin-right: 5px;
+  font-size: 12px;
+  line-height: 1;
+}
+
+.staff-induction-options-more[hidden] {
+  display: none;
 }
 
 .staff-induction-option-row {
@@ -2268,6 +2315,49 @@ td .centered-dash {
   white-space: nowrap;
 }
 
+.session-staffing-summary-cell {
+  min-width: 190px;
+  color: var(--color-primary-dark);
+  font-size: 12px;
+  line-height: 1.25;
+  vertical-align: top;
+}
+
+.session-staffing-summary {
+  display: grid;
+  gap: 5px;
+}
+
+.session-staffing-summary strong {
+  color: var(--color-primary);
+  font-size: 11px;
+  font-weight: 950;
+  text-transform: uppercase;
+}
+
+.session-staffing-summary ul {
+  display: grid;
+  gap: 4px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.session-staffing-summary li {
+  white-space: nowrap;
+}
+
+.session-staffing-summary em {
+  color: var(--color-muted);
+  font-style: normal;
+  font-weight: 750;
+}
+
+.session-staffing-role-to-cover {
+  color: var(--path-red);
+  font-weight: 900;
+}
+
 .total-cost-cell {
   background: rgba(0, 76, 101, 0.04);
   color: var(--color-primary);
@@ -3219,6 +3309,11 @@ span.session-marker-chip {
   padding-right: 24px;
 }
 
+.modal-non-available-picker .staff-picker-search,
+.modal-non-available-picker .staff-picker-empty {
+  min-width: 700px;
+}
+
 .modal-non-available-picker .session-member-option span[data-base-label] {
   min-width: 0;
   overflow: visible;
@@ -3929,6 +4024,53 @@ span.session-marker-chip {
   line-height: 1.15;
   text-align: left;
   white-space: nowrap;
+}
+
+.staff-picker-search {
+  position: sticky;
+  top: -8px;
+  z-index: 1;
+  display: grid;
+  gap: 4px;
+  padding: 8px 16px 10px;
+  background: #67645f;
+  color: #f4f3ef;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  font-size: 10px;
+  font-weight: 800;
+  line-height: 1.2;
+  text-transform: uppercase;
+}
+
+.staff-picker-search input {
+  min-height: 32px;
+  width: 100%;
+  border: 1px solid rgba(244, 243, 239, 0.42);
+  border-radius: 6px;
+  padding: 6px 9px;
+  background: rgba(255, 255, 255, 0.94);
+  color: var(--color-primary-dark);
+  font: 600 12px/1.2 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  outline: none;
+  box-sizing: border-box;
+}
+
+.staff-picker-search input:focus {
+  border-color: var(--path-cyan);
+  box-shadow: 0 0 0 2px rgba(1, 169, 206, 0.22);
+}
+
+.staff-picker-empty {
+  display: block;
+  padding: 8px 16px;
+  color: rgba(244, 243, 239, 0.72);
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.staff-picker-empty[hidden] {
+  display: none;
 }
 
 .session-member-summary-tags {

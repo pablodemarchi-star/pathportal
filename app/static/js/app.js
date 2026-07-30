@@ -3583,6 +3583,65 @@ const syncMemberMultiselect = (picker) => {
   }
 };
 
+const normalizeStaffPickerSearch = (value) => String(value || "")
+  .normalize("NFD")
+  .replace(/[\u0300-\u036f]/g, "")
+  .toLowerCase()
+  .trim();
+
+const staffPickerOptionText = (option) => normalizeStaffPickerSearch([
+  option.dataset.name,
+  option.dataset.title,
+  option.dataset.baseLabel,
+  option.textContent,
+].filter(Boolean).join(" "));
+
+const filterStaffPickerOptions = (input, optionsSelector, emptySelector) => {
+  const panel = input.closest(".session-member-picker-panel, .team-member-picker-panel");
+  if (!panel) return;
+  const query = normalizeStaffPickerSearch(input.value);
+  let visibleCount = 0;
+  panel.querySelectorAll(optionsSelector).forEach((option) => {
+    const isBlankOption = option.matches("[data-team-member-option]") && !(option.dataset.value || "");
+    const matches = !query || isBlankOption || staffPickerOptionText(option).includes(query);
+    option.hidden = !matches;
+    if (matches && !isBlankOption) visibleCount += 1;
+  });
+  const empty = panel.querySelector(emptySelector);
+  if (empty) empty.hidden = visibleCount > 0 || !query;
+};
+
+const initStaffPickerSearch = (picker, inputSelector, optionsSelector, emptySelector, positionPanel) => {
+  const input = picker?.querySelector(inputSelector);
+  if (!input || input.dataset.initialized === "true") return;
+  input.dataset.initialized = "true";
+  const applyFilter = () => {
+    filterStaffPickerOptions(input, optionsSelector, emptySelector);
+    positionPanel?.(picker);
+  };
+  input.addEventListener("input", (event) => {
+    event.stopPropagation();
+    applyFilter();
+  });
+  input.addEventListener("change", (event) => event.stopPropagation());
+  input.addEventListener("keydown", (event) => {
+    event.stopPropagation();
+    if (event.key === "Enter") event.preventDefault();
+    if (event.key === "Escape") {
+      input.value = "";
+      applyFilter();
+      picker.open = false;
+    }
+  });
+};
+
+const resetStaffPickerSearch = (picker, inputSelector, optionsSelector, emptySelector) => {
+  const input = picker?.querySelector(inputSelector);
+  if (!input) return;
+  input.value = "";
+  filterStaffPickerOptions(input, optionsSelector, emptySelector);
+};
+
 const positionMemberMultiselectPanel = (picker) => {
   const panel = picker.querySelector(".session-member-picker-panel");
   const summary = picker.querySelector("summary");
@@ -3987,10 +4046,19 @@ const initMemberMultiselects = (root = document) => {
   root.querySelectorAll("[data-member-multiselect]").forEach((picker) => {
     if (picker.dataset.initialized === "true") return;
     picker.dataset.initialized = "true";
+    initStaffPickerSearch(
+      picker,
+      "[data-member-search]",
+      ".session-member-option",
+      "[data-member-search-empty]",
+      positionMemberMultiselectPanel
+    );
     picker.addEventListener("toggle", () => {
       if (picker.open) {
         closeOtherMemberMultiselects(picker);
+        resetStaffPickerSearch(picker, "[data-member-search]", ".session-member-option", "[data-member-search-empty]");
         positionMemberMultiselectPanel(picker);
+        window.requestAnimationFrame(() => picker.querySelector("[data-member-search]")?.focus({ preventScroll: true }));
       }
     });
     picker.querySelectorAll("input[type='checkbox']").forEach((checkbox) => {
@@ -7418,24 +7486,35 @@ const initTeamMemberSelects = (root = document) => {
     if (select.dataset.initialized === "true") return;
     select.dataset.initialized = "true";
     const row = select.closest(".staff-member-select-row");
+    const picker = row?.querySelector("[data-team-member-picker]");
+    initStaffPickerSearch(
+      picker,
+      "[data-team-member-search]",
+      "[data-team-member-option]",
+      "[data-team-member-search-empty]",
+      positionTeamMemberPickerPanel
+    );
     row?.querySelectorAll("[data-team-member-option]").forEach((option) => {
       option.addEventListener("click", () => {
         if (option.disabled) return;
         select.value = option.dataset.value || "";
-            row.querySelector("[data-team-member-picker]").open = false;
-            refreshTeamMemberSessionCounts();
-            syncTeamMemberSelect(select);
-            markStaffChangesUnsaved(select.closest("[data-session-members-form]"));
-            syncSupervisorMemberAvailability(select.closest("[data-session-members-form]"));
-            syncSameDateAssignmentConflictAlerts();
-          });
+        row.querySelector("[data-team-member-picker]").open = false;
+        resetStaffPickerSearch(picker, "[data-team-member-search]", "[data-team-member-option]", "[data-team-member-search-empty]");
+        refreshTeamMemberSessionCounts();
+        syncTeamMemberSelect(select);
+        markStaffChangesUnsaved(select.closest("[data-session-members-form]"));
+        syncSupervisorMemberAvailability(select.closest("[data-session-members-form]"));
+        syncSameDateAssignmentConflictAlerts();
+      });
     });
     row?.querySelector("[data-team-member-picker]")?.addEventListener("toggle", (event) => {
       if (event.currentTarget.open) {
         document.querySelectorAll("[data-team-member-picker][open]").forEach((picker) => {
           if (picker !== event.currentTarget) picker.open = false;
         });
+        resetStaffPickerSearch(event.currentTarget, "[data-team-member-search]", "[data-team-member-option]", "[data-team-member-search-empty]");
         positionTeamMemberPickerPanel(event.currentTarget);
+        window.requestAnimationFrame(() => event.currentTarget.querySelector("[data-team-member-search]")?.focus({ preventScroll: true }));
       }
     });
     syncTeamMemberSelect(select);
@@ -8325,7 +8404,7 @@ document.querySelectorAll("[data-add-member-row]").forEach((button) => {
     wrapper.innerHTML = template.innerHTML.replaceAll("__KEY__", rowKey).trim();
     const row = wrapper.firstElementChild;
     if (!row) return;
-    target.appendChild(row);
+    target.prepend(row);
     initSessionMemberRows(row);
     expandStaffCardCollapsibleSections(row);
     syncSessionNonAvailableFields(form);
@@ -9105,6 +9184,15 @@ document.querySelectorAll("[data-provider-history-form]").forEach(initProviderHi
 const updateInductionOptionRows = (root) => {
   const maxOptions = Number.parseInt(root.dataset.maxOptions || "10", 10);
   const rows = [...root.querySelectorAll("[data-induction-option-row]")];
+  root.querySelector("[data-induction-options-list]")?.classList.toggle("is-scrollable", rows.length > 2);
+  const moreIndicator = root.querySelector("[data-induction-options-more]");
+  if (moreIndicator) {
+    const hiddenCount = Math.max(0, rows.length - 2);
+    moreIndicator.hidden = hiddenCount === 0;
+    moreIndicator.textContent = hiddenCount === 1
+      ? "1 more option below"
+      : `${hiddenCount} more options below`;
+  }
   rows.forEach((row, index) => {
     row.querySelectorAll("input").forEach((input) => {
       const field = input.name.includes("start_time") ? "start time" : input.name.includes("end_time") ? "end time" : "date";

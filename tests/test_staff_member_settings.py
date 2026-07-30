@@ -51,6 +51,7 @@ class StaffMemberSettingsTest(unittest.TestCase):
         self.assertIn('data-induction-option-end-time', html)
         self.assertIn('data-add-induction-option', html)
         self.assertIn('data-remove-induction-option', html)
+        self.assertIn('data-induction-options-more', html)
         self.assertIn('data-max-options="10"', html)
         self.assertEqual(html.count('data-induction-option-row'), 1)
         self.assertLess(html.index("<span>Potential entries</span>"), html.index("<span>Staff members</span>"))

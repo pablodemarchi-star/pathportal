@@ -24,6 +24,36 @@
   {% endif %}
 {%- endmacro %}
 
+{% macro staffing_summary(assignments, role_label) -%}
+  {% set total = assignments|length %}
+  {% set covered = namespace(count=0) %}
+  {% for assignment in assignments %}
+    {% if assignment.team_member or assignment.potential_entry %}
+      {% set covered.count = covered.count + 1 %}
+    {% endif %}
+  {% endfor %}
+  {% set uncovered = total - covered.count %}
+  {% if total %}
+    <div class="session-staffing-summary">
+      <strong>{{ total }} {{ role_label }}{{ '' if total == 1 else 's' }} required</strong>
+      <ul>
+        {% for assignment in assignments %}
+          {% if assignment.team_member or assignment.potential_entry %}
+            <li>
+              <span>{{ assignment.team_member.full_name if assignment.team_member else assignment.potential_entry.full_name }} <em>({{ assignment.participation_status|lower }})</em></span>
+            </li>
+          {% endif %}
+        {% endfor %}
+        {% if uncovered %}
+          <li class="session-staffing-role-to-cover">{{ uncovered }} role{{ '' if uncovered == 1 else 's' }} to cover</li>
+        {% endif %}
+      </ul>
+    </div>
+  {% else %}
+    <span class="centered-dash muted">-</span>
+  {% endif %}
+{%- endmacro %}
+
 {% macro centre_type_badge(centre_type) -%}
   {% if centre_type %}
     <span class="centre-type-chip centre-type-{{ centre_type|lower|replace(' ', '-') }}">{{ centre_type }}</span>
@@ -248,6 +278,10 @@
             <span class="team-member-caret">▼</span>
           </summary>
           <div class="team-member-picker-panel">
+            <label class="staff-picker-search">
+              <span>Search staff member</span>
+              <input type="search" placeholder="Search by name..." autocomplete="off" data-team-member-search>
+            </label>
             <button class="team-member-option" type="button" data-team-member-option data-value="" data-name="" data-title="" data-state="" data-full-address="" data-email="" data-phone="" data-dietary-requirements="" data-entry-type="staff" data-base-label="Select staff member">
               <span class="team-member-placeholder">Role to cover</span>
             </button>
@@ -261,6 +295,7 @@
                 <span class="team-member-assigned-note">Already assigned</span>
               </button>
             {% endfor %}
+            <span class="staff-picker-empty" data-team-member-search-empty hidden>No staff members found</span>
           </div>
         </details>
         {% if session.format == 'Onsite' %}
@@ -637,15 +672,18 @@
         <th>Shifts</th>
         <th>Modules</th>
         <th>Format</th>
+        <th>Supervisors</th>
+        <th>Examiners</th>
+        <th>Interns</th>
         <th>Logistics</th>
         <th>Full address</th>
         <th class="centered-table-column">City</th>
         <th class="centered-table-column">Province</th>
         <th class="all-session-details-column">All session details</th>
-        <th>Supervisors</th>
-        <th>Examiners</th>
-        <th>Interns</th>
-        <th>Logistics</th>
+        <th>Supervisors cost</th>
+        <th>Examiners cost</th>
+        <th>Interns cost</th>
+        <th>Logistics cost</th>
         <th>TOTAL COST</th>
         <th>Created on</th>
         <th>Updated on</th>
@@ -725,6 +763,9 @@
             </div>
           </td>
           <td>{{ format_badge(session.format) }}</td>
+          <td class="session-staffing-summary-cell">{{ staffing_summary(supervisor_assignments.get(session.id, []), 'supervisor') }}</td>
+          <td class="session-staffing-summary-cell">{{ staffing_summary(examiner_assignments.get(session.id, []), 'examiner') }}</td>
+          <td class="session-staffing-summary-cell">{{ staffing_summary(intern_assignments.get(session.id, []), 'intern') }}</td>
           <td class="centered-table-cell" data-session-logistics-status-cell data-session-id="{{ session.id }}">{{ logistics_activity_badge(logistics_activity_by_session.get(session.id, false)) }}</td>
           <td>
             {% if session.full_address_google_maps %}
@@ -788,13 +829,13 @@
         </tr>
       {% else %}
         <tr>
-          <td colspan="21" class="empty-state">No exam sessions found.</td>
+          <td colspan="24" class="empty-state">No exam sessions found.</td>
         </tr>
       {% endfor %}
     </tbody>
     <tfoot class="exam-session-cost-footer">
       <tr>
-        <td colspan="12">Visible total</td>
+        <td colspan="15">Visible total</td>
         <td class="session-cost-cell">{{ session_page_cost_totals.get('supervisors', '-') }}</td>
         <td class="session-cost-cell">{{ session_page_cost_totals.get('examiners', '-') }}</td>
         <td class="session-cost-cell">{{ session_page_cost_totals.get('interns', '-') }}</td>
@@ -903,6 +944,10 @@
               </summary>
               <div class="session-member-picker-panel">
                 <div class="session-member-picker-panel-title">Non-available staff members</div>
+                <label class="staff-picker-search">
+                  <span>Search staff member</span>
+                  <input type="search" placeholder="Search by name..." autocomplete="off" data-member-search>
+                </label>
                 {% for member in session_non_available_options %}
                   {% set option_value = member_option_value(member)|trim %}
                   <label class="session-member-option">
@@ -911,6 +956,7 @@
                     <span class="session-member-assigned-note">Already assigned</span>
                   </label>
                 {% endfor %}
+                <span class="staff-picker-empty" data-member-search-empty hidden>No staff members found</span>
               </div>
             </details>
           </div>

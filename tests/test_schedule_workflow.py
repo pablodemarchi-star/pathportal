@@ -1920,6 +1920,11 @@ class ScheduleWorkflowTest(unittest.TestCase):
             team_member_id=4,
             participation_status="Confirmed",
         ))
+        db.session.add(ExamSessionSupervisorAssignment(
+            exam_session_id=self.session_record.id,
+            team_member_id=None,
+            participation_status="Pending",
+        ))
         db.session.commit()
         client = self.login_client()
 
@@ -1977,6 +1982,23 @@ class ScheduleWorkflowTest(unittest.TestCase):
         self.assertIn("Non-available staff members", html)
         self.assertIn("data-session-non-available-picker", html)
         self.assertIn("data-row-non-available-fields", html)
+        format_column_index = html.index("<th>Format</th>")
+        supervisors_column_index = html.index("<th>Supervisors</th>", format_column_index)
+        examiners_column_index = html.index("<th>Examiners</th>", supervisors_column_index)
+        interns_column_index = html.index("<th>Interns</th>", examiners_column_index)
+        logistics_column_index = html.index("<th>Logistics</th>", interns_column_index)
+        self.assertLess(format_column_index, supervisors_column_index)
+        self.assertLess(supervisors_column_index, examiners_column_index)
+        self.assertLess(examiners_column_index, interns_column_index)
+        self.assertLess(interns_column_index, logistics_column_index)
+        self.assertIn("3 supervisors required", html)
+        self.assertIn("Laura Mendez", html)
+        self.assertIn("Mateo Silva", html)
+        self.assertIn("(confirmed)", html)
+        self.assertIn("1 role to cover", html)
+        self.assertIn("Supervisors cost", html)
+        self.assertIn("Examiners cost", html)
+        self.assertIn("Interns cost", html)
 
     def test_exam_session_planner_hides_shipment_recipient_control_for_online_sessions(self):
         supervisor = self.create_supervisor(staff_id=1, name="Laura Mendez")
