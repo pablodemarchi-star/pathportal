@@ -70,6 +70,7 @@ from app.routes import (
     available_schedule_transitions,
     communications_readiness_contract,
     core_readiness_contract,
+    exam_session_pending_status_tooltip,
     exam_session_overall_statuses_by_session_ids,
     ensure_incident_review_flags_for_high_priority_incident,
     finance_readiness_contract,
@@ -82,6 +83,8 @@ from app.routes import (
     incidents_readiness_contract,
     journey_countdown,
     logistics_control_contract,
+    logistics_readiness_contract,
+    monthly_candidate_requirement_contracts,
     my_action_row_from_schedule_view,
     operational_readiness_contract,
     packages_action_contract,
@@ -103,6 +106,7 @@ from app.routes import (
     schedule_gate_status,
     schedule_workflow_health,
     schedule_workflow_view,
+    staffing_readiness_contract,
     staffing_control_contract,
 )
 
@@ -306,6 +310,88 @@ class ScheduleWorkflowTest(unittest.TestCase):
         self.assertIn(f'/exam-session-planner/sessions/{self.session_record.id}/delete', html)
         self.assertIn('data-confirm-password-value="Path1234"', html)
         self.assertIn('name="deletion_password"', html)
+
+    def test_exam_session_form_shows_minimum_candidates_without_table_column(self):
+        client = self.login_client()
+        response = client.get("/exam-session-planner?session_year=2026")
+        html = response.get_data(as_text=True)
+        table_head = html.split("<thead>", 1)[1].split("</thead>", 1)[0]
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("Minimum number of candidates required", html)
+        self.assertIn('name="minimum_candidates_required" value="30" min="0" step="1"', html)
+        self.assertNotIn("Minimum number of candidates required", table_head)
+
+    def test_exam_session_create_and_update_persist_minimum_candidates_required(self):
+        client = self.login_client()
+        response = client.post(
+            "/exam-session-planner/sessions",
+            data={
+                "csrf_token": "token",
+                "session_year": "2026",
+                "exam_session_name": "July exam session",
+                "category": "Path School",
+                "status": "Pending",
+                "session_date": "20/07/2026",
+                "minimum_candidates_required": "45",
+                "shifts": "Morning",
+                "modules": "Speaking",
+                "format": "Online",
+                "details_url": "https://example.com/details",
+            },
+            follow_redirects=True,
+        )
+        created_session = ExamSession.query.filter_by(exam_session_name="July exam session").one()
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(created_session.minimum_candidates_required, 45)
+
+        response = client.post(
+            f"/exam-session-planner/sessions/{created_session.id}",
+            data={
+                "csrf_token": "token",
+                "session_year": "2026",
+                "exam_session_name": "July exam session",
+                "category": "Path School",
+                "status": "Pending",
+                "session_date": "20/07/2026",
+                "minimum_candidates_required": "0",
+                "shifts": "Morning",
+                "modules": "Speaking",
+                "format": "Online",
+                "details_url": "https://example.com/details",
+            },
+            follow_redirects=True,
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(db.session.get(ExamSession, created_session.id).minimum_candidates_required, 0)
+
+    def test_exam_session_rejects_invalid_minimum_candidates_required(self):
+        client = self.login_client()
+        response = client.post(
+            "/exam-session-planner/sessions",
+            data={
+                "csrf_token": "token",
+                "session_year": "2026",
+                "exam_session_name": "Invalid candidates session",
+                "category": "Path School",
+                "status": "Pending",
+                "session_date": "20/07/2026",
+                "minimum_candidates_required": "-1",
+                "shifts": "Morning",
+                "modules": "Speaking",
+                "format": "Online",
+            },
+            follow_redirects=True,
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn(
+            "Minimum number of candidates required must be a whole number of 0 or more.",
+            response.get_data(as_text=True),
+        )
+        self.assertIsNone(ExamSession.query.filter_by(exam_session_name="Invalid candidates session").first())
 
     def test_exam_session_delete_requires_path_password(self):
         client = self.login_client()
@@ -1289,6 +1375,11 @@ class ScheduleWorkflowTest(unittest.TestCase):
                 exam_session_id=session_record.id,
                 logistics_files_url="https://example.com/logistics",
             ),
+            ExamSessionMonthlyCandidateTotal(
+                exam_session_id=session_record.id,
+                month=6,
+                total_candidates=30,
+            ),
         ])
         db.session.commit()
 
@@ -1325,6 +1416,11 @@ class ScheduleWorkflowTest(unittest.TestCase):
                 exam_session_id=session_record.id,
                 logistics_files_url="https://example.com/logistics",
             ),
+            ExamSessionMonthlyCandidateTotal(
+                exam_session_id=session_record.id,
+                month=6,
+                total_candidates=30,
+            ),
         ])
         db.session.commit()
 
@@ -1344,11 +1440,18 @@ class ScheduleWorkflowTest(unittest.TestCase):
         )
         db.session.add(session_record)
         db.session.flush()
-        db.session.add(ExamSessionSupervisorAssignment(
-            exam_session_id=session_record.id,
-            team_member_id=1,
-            participation_status="Confirmed",
-        ))
+        db.session.add_all([
+            ExamSessionSupervisorAssignment(
+                exam_session_id=session_record.id,
+                team_member_id=1,
+                participation_status="Confirmed",
+            ),
+            ExamSessionMonthlyCandidateTotal(
+                exam_session_id=session_record.id,
+                month=6,
+                total_candidates=30,
+            ),
+        ])
         db.session.commit()
 
         statuses = exam_session_overall_statuses_by_session_ids([session_record.id])
@@ -1377,7 +1480,14 @@ class ScheduleWorkflowTest(unittest.TestCase):
             team_member_id=1,
             participation_status="Confirmed",
         )
-        db.session.add(assignment)
+        db.session.add_all([
+            assignment,
+            ExamSessionMonthlyCandidateTotal(
+                exam_session_id=session_record.id,
+                month=6,
+                total_candidates=30,
+            ),
+        ])
         db.session.commit()
 
         statuses = exam_session_overall_statuses_by_session_ids([session_record.id])
@@ -1387,6 +1497,130 @@ class ScheduleWorkflowTest(unittest.TestCase):
         db.session.commit()
         statuses = exam_session_overall_statuses_by_session_ids([session_record.id])
         self.assertEqual(statuses[session_record.id], "Confirmed")
+
+    def test_exam_session_overall_status_requires_minimum_candidates_from_latest_active_month(self):
+        session_record = ExamSession(
+            exam_session_name="Candidates required",
+            category="Path School",
+            status="Pending",
+            session_date=date(2026, 7, 1),
+            minimum_candidates_required=30,
+            shifts="Morning",
+            modules="Speaking",
+            format="Online",
+            emergency_contact_not_required=True,
+        )
+        db.session.add(session_record)
+        db.session.flush()
+        db.session.add_all([
+            ExamSessionSupervisorAssignment(
+                exam_session_id=session_record.id,
+                team_member_id=1,
+                participation_status="Confirmed",
+            ),
+            ExamSessionMonthlyCandidateTotal(
+                exam_session_id=session_record.id,
+                month=6,
+                total_candidates=28,
+            ),
+        ])
+        db.session.commit()
+
+        statuses = exam_session_overall_statuses_by_session_ids([session_record.id])
+
+        self.assertEqual(statuses[session_record.id], "Pending")
+
+        session_record.minimum_candidates_required = 28
+        db.session.commit()
+        statuses = exam_session_overall_statuses_by_session_ids([session_record.id])
+        self.assertEqual(statuses[session_record.id], "Confirmed")
+
+    def test_exam_session_pending_tooltip_lists_minimum_candidates_gap(self):
+        session_record = ExamSession(
+            exam_session_name="Candidates tooltip",
+            category="Path School",
+            status="Pending",
+            session_date=date(2026, 7, 2),
+            minimum_candidates_required=30,
+            shifts="Morning",
+            modules="Speaking",
+            format="Online",
+            emergency_contact_not_required=True,
+        )
+        db.session.add(session_record)
+        db.session.flush()
+        assignment = ExamSessionSupervisorAssignment(
+            exam_session_id=session_record.id,
+            team_member_id=1,
+            participation_status="Confirmed",
+        )
+        db.session.add_all([
+            assignment,
+            ExamSessionMonthlyCandidateTotal(
+                exam_session_id=session_record.id,
+                month=6,
+                total_candidates=28,
+            ),
+        ])
+        db.session.commit()
+        candidate_contract = monthly_candidate_requirement_contracts([session_record.id])[session_record.id]
+        tooltip = exam_session_pending_status_tooltip(
+            staffing_readiness_contract([assignment], [], []),
+            logistics_readiness_contract([assignment], [], None),
+            session_record,
+            [assignment],
+            candidate_contract,
+        )
+
+        self.assertIn("Minimum number of candidates not met: 28/30", tooltip)
+
+    def test_monthly_registration_update_recalculates_exam_session_status(self):
+        session_record = ExamSession(
+            exam_session_name="Candidates route status",
+            category="Path School",
+            status="Pending",
+            session_date=date(2026, 7, 3),
+            minimum_candidates_required=30,
+            shifts="Morning",
+            modules="Speaking",
+            format="Online",
+            emergency_contact_not_required=True,
+        )
+        db.session.add(session_record)
+        db.session.flush()
+        db.session.add(ExamSessionSupervisorAssignment(
+            exam_session_id=session_record.id,
+            team_member_id=1,
+            participation_status="Confirmed",
+        ))
+        db.session.commit()
+
+        client = self.login_client()
+        response = client.post(
+            f"/monthly-exam-session-registrations/{session_record.id}/7",
+            data={
+                "csrf_token": "token",
+                "total_candidates": "30",
+                "registration_Speaking": "30",
+            },
+            follow_redirects=True,
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(db.session.get(ExamSession, session_record.id).status, "Confirmed")
+
+        response = client.post(
+            f"/monthly-exam-session-registrations/{session_record.id}/7",
+            data={
+                "csrf_token": "token",
+                "total_candidates": "29",
+                "registration_Speaking": "29",
+            },
+            follow_redirects=True,
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(db.session.get(ExamSession, session_record.id).status, "Pending")
 
     def test_deadline_error_redirect_reopens_attempted_action_form(self):
         client = self.login_client()

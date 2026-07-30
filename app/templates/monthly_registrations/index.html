@@ -89,8 +89,10 @@
         {% set session_registrations = registrations.get(session.id, {}) %}
         {% set session_candidate_totals = candidate_totals.get(session.id, {}) %}
         {% set session_candidate_trends = candidate_total_trends.get(session.id, {}) %}
-        <tr>
-          <td class="sticky-registration-col status-col">{{ session_status_badge(session.status) }}</td>
+        <tr data-monthly-session-row data-session-id="{{ session.id }}">
+          <td class="sticky-registration-col status-col">
+            <span class="badge exam-status-{{ session.status|lower }}" data-monthly-session-status>{{ session.status }}</span>
+          </td>
           <td class="sticky-registration-col name-col">
             <div class="session-name-cell">
               <span>{{ session.exam_session_name }}</span>

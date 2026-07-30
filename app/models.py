@@ -655,6 +655,7 @@ class ExamSession(db.Model):
     pst_enabled = db.Column(db.Boolean, nullable=False, default=False)
     status = db.Column(db.String(20), nullable=False, index=True)
     session_date = db.Column(db.Date, nullable=False, index=True)
+    minimum_candidates_required = db.Column(db.Integer, nullable=False, default=30)
     shifts = db.Column(db.String(80), nullable=False, default="")
     modules = db.Column(db.String(120), nullable=False, default="")
     full_address_google_maps = db.Column(db.String(500), nullable=True)

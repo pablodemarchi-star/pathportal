@@ -1504,7 +1504,55 @@ def exam_session_shipment_recipient_ready(session_record, assignments):
     return any(assignment.team_member_id and assignment.is_shipment_recipient for assignment in assignments or [])
 
 
-def exam_session_pending_status_tooltip(staffing_contract, logistics_contract, session_record=None, assignments=None):
+def monthly_candidate_requirement_contracts(session_ids):
+    session_ids = [session_id for session_id in session_ids if session_id is not None]
+    if not session_ids:
+        return {}
+    sessions_by_id = {
+        session_record.id: session_record
+        for session_record in ExamSession.query.filter(ExamSession.id.in_(session_ids)).all()
+    }
+    active_months_by_session = {session_id: set() for session_id in session_ids}
+    totals_by_session_month = {}
+    for session_id, month, total_candidates in (
+        db.session.query(
+            ExamSessionMonthlyCandidateTotal.exam_session_id,
+            ExamSessionMonthlyCandidateTotal.month,
+            ExamSessionMonthlyCandidateTotal.total_candidates,
+        )
+        .filter(ExamSessionMonthlyCandidateTotal.exam_session_id.in_(session_ids))
+        .all()
+    ):
+        active_months_by_session.setdefault(session_id, set()).add(month)
+        totals_by_session_month[(session_id, month)] = total_candidates or 0
+    for session_id, month in (
+        db.session.query(
+            ExamSessionMonthlyRegistration.exam_session_id,
+            ExamSessionMonthlyRegistration.month,
+        )
+        .filter(ExamSessionMonthlyRegistration.exam_session_id.in_(session_ids))
+        .distinct()
+        .all()
+    ):
+        active_months_by_session.setdefault(session_id, set()).add(month)
+
+    contracts = {}
+    for session_id in session_ids:
+        session_record = sessions_by_id.get(session_id)
+        required = session_record.minimum_candidates_required if session_record else 30
+        required = required if required is not None else 30
+        latest_month = max(active_months_by_session.get(session_id, set()) or [0])
+        current = totals_by_session_month.get((session_id, latest_month), 0) if latest_month else 0
+        contracts[session_id] = {
+            "ready": current >= required,
+            "current": current,
+            "required": required,
+            "latest_month": latest_month or None,
+        }
+    return contracts
+
+
+def exam_session_pending_status_tooltip(staffing_contract, logistics_contract, session_record=None, assignments=None, candidate_contract=None):
     missing_items = []
     staffing_status = staffing_contract.get("status")
     staffing_totals = staffing_contract.get("totals", {})
@@ -1550,6 +1598,11 @@ def exam_session_pending_status_tooltip(staffing_contract, logistics_contract, s
         missing_items.append("Select Emergency contact required or Emergency contact NOT required.")
     if session_record and not exam_session_shipment_recipient_ready(session_record, assignments or []):
         missing_items.append("Assign Receives shipment for onsite sessions.")
+    if candidate_contract and not candidate_contract.get("ready"):
+        missing_items.append(
+            "Minimum number of candidates not met: "
+            f"{candidate_contract.get('current', 0)}/{candidate_contract.get('required', 30)}"
+        )
 
     if not missing_items:
         missing_items.append("Confirm every staff assignment and logistics concept.")
@@ -1831,6 +1884,8 @@ def validate_exam_session_form(form):
     status = form.get("status", "").strip()
     session_date_value = form.get("session_date", "")
     session_date = parse_exam_session_date(session_date_value)
+    minimum_candidates_value = form.get("minimum_candidates_required", "30").strip()
+    minimum_candidates_required = None
     shifts = normalize_exam_session_shifts(form.getlist("shifts"))
     modules = [module for module in form.getlist("modules") if module in EXAM_SESSION_MODULE_OPTIONS]
     session_format = form.get("format", "").strip()
@@ -1851,6 +1906,12 @@ def validate_exam_session_form(form):
         errors.append(date_error)
     elif not session_date:
         errors.append("Date is required.")
+    if not minimum_candidates_value:
+        errors.append("Minimum number of candidates required is required.")
+    elif not minimum_candidates_value.isdigit():
+        errors.append("Minimum number of candidates required must be a whole number of 0 or more.")
+    else:
+        minimum_candidates_required = int(minimum_candidates_value)
     if not modules:
         errors.append("At least one module is required.")
     if session_format not in EXAM_SESSION_FORMAT_OPTIONS:
@@ -1868,6 +1929,7 @@ def validate_exam_session_form(form):
         "category": category,
         "status": status,
         "session_date": session_date,
+        "minimum_candidates_required": minimum_candidates_required,
         "shifts": shifts,
         "modules": modules,
         "full_address_google_maps": full_address_google_maps,
@@ -1884,6 +1946,7 @@ def apply_exam_session_form(session_record, data):
     session_record.category = data["category"]
     session_record.status = data["status"]
     session_record.session_date = data["session_date"]
+    session_record.minimum_candidates_required = data["minimum_candidates_required"]
     session_record.shifts = ", ".join(data["shifts"])
     session_record.modules = ", ".join(data["modules"])
     session_record.full_address_google_maps = data["full_address_google_maps"]
@@ -15078,6 +15141,7 @@ def exam_session_planner():
     logistics_readiness_by_session = {}
     pending_status_tooltips_by_session = {}
     persisted_staff_confirmed_by_session = {}
+    candidate_requirement_contracts = monthly_candidate_requirement_contracts(session_ids)
     for session_id in session_ids:
         session_supervisor_assignments = supervisor_assignments.get(session_id, [])
         session_examiner_assignments = examiner_assignments.get(session_id, [])
@@ -15106,6 +15170,7 @@ def exam_session_planner():
             logistics_contract,
             next((session_record for session_record in sessions if session_record.id == session_id), None),
             session_assignments,
+            candidate_requirement_contracts.get(session_id),
         )
         persisted_staff_confirmed_by_session[session_id] = persisted_staff_confirmed(
             session_supervisor_assignments,
@@ -15408,6 +15473,7 @@ def update_monthly_exam_session_registration(session_id, month):
         if is_async:
             return Response("Monthly registrations contain invalid values.", status=400)
     else:
+        update_exam_session_overall_status(session_record)
         db.session.commit()
         if is_async:
             target_year = session_record.session_date.year
@@ -15417,7 +15483,10 @@ def update_monthly_exam_session_registration(session_id, month):
                 .filter(db.extract("year", ExamSession.session_date) == target_year)
                 .all()
             ]
-            return jsonify({"monthly_totals": monthly_candidate_total_sums(filtered_session_ids)})
+            return jsonify({
+                "monthly_totals": monthly_candidate_total_sums(filtered_session_ids),
+                "session_status": session_record.status,
+            })
         if saved_modules or total_value:
             flash("Monthly registrations saved successfully.", "success")
         else:
@@ -15435,6 +15504,7 @@ def reset_monthly_exam_session_registration(session_id):
     session_record = ExamSession.query.get_or_404(session_id)
     ExamSessionMonthlyRegistration.query.filter_by(exam_session_id=session_record.id).delete(synchronize_session=False)
     ExamSessionMonthlyCandidateTotal.query.filter_by(exam_session_id=session_record.id).delete(synchronize_session=False)
+    update_exam_session_overall_status(session_record)
     db.session.commit()
     flash("Monthly registration data has been successfully reset.", "success")
     return redirect(url_for("staff.monthly_exam_session_registrations"))
@@ -16065,6 +16135,7 @@ def exam_session_overall_statuses_by_session_ids(session_ids):
         ExamSessionLogisticsConcept.exam_session_id.in_(session_ids)
     ).all():
         logistics_concepts_by_session.setdefault(concept.exam_session_id, []).append(concept)
+    candidate_requirement_contracts = monthly_candidate_requirement_contracts(session_ids)
 
     for session_id in session_ids:
         session_record = sessions_by_id.get(session_id)
@@ -16084,12 +16155,14 @@ def exam_session_overall_statuses_by_session_ids(session_ids):
         )
         emergency_contact_ready = exam_session_emergency_contact_decision_ready(session_record)
         shipment_recipient_ready = exam_session_shipment_recipient_ready(session_record, all_assignments)
+        candidate_requirement_ready = candidate_requirement_contracts.get(session_id, {}).get("ready", False)
         statuses_by_session[session_id] = (
             "Confirmed"
             if (
                 final_email_ready(staffing_contract, logistics_contract)
                 and emergency_contact_ready
                 and shipment_recipient_ready
+                and candidate_requirement_ready
             )
             else "Pending"
         )

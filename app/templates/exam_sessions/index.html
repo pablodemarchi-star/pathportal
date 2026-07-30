@@ -543,6 +543,10 @@
       <input name="session_date" value="{{ session.session_date|session_date if session else '' }}" placeholder="DD/MM/YYYY" inputmode="numeric" maxlength="10" pattern="\d{2}/\d{2}/\d{4}" required>
       <span class="field-error" data-date-error></span>
     </label>
+    <label class="exam-session-field">
+      Minimum number of candidates required
+      <input type="number" name="minimum_candidates_required" value="{{ session.minimum_candidates_required if session else 30 }}" min="0" step="1" inputmode="numeric" required>
+    </label>
     <fieldset class="full-span role-filter form-role-picker exam-shift-picker" data-exam-shift-picker>
       <legend>Shifts</legend>
       {% for shift in shift_options %}

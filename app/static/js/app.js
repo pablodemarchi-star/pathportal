@@ -3500,6 +3500,15 @@ const saveMonthlyRegistrationForm = async (form) => {
         totalElement.title = total.tooltip || "";
       });
     }
+    if (data.session_status) {
+      const row = form.closest("[data-monthly-session-row]");
+      const statusElement = row?.querySelector("[data-monthly-session-status]");
+      if (statusElement) {
+        statusElement.classList.remove("exam-status-pending", "exam-status-confirmed");
+        statusElement.classList.add(`exam-status-${String(data.session_status).toLowerCase()}`);
+        statusElement.textContent = data.session_status;
+      }
+    }
     form.classList.remove("is-saving");
     if (monthlyFormIsEmpty(form)) setMonthlyCellInactive(form);
   } catch (error) {

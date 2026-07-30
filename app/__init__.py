@@ -571,6 +571,9 @@ def create_app():
         if exam_session_columns and "pst_enabled" not in exam_session_columns:
             db.session.execute(text("ALTER TABLE exam_session ADD COLUMN pst_enabled BOOLEAN NOT NULL DEFAULT 0"))
             db.session.commit()
+        if exam_session_columns and "minimum_candidates_required" not in exam_session_columns:
+            db.session.execute(text("ALTER TABLE exam_session ADD COLUMN minimum_candidates_required INTEGER NOT NULL DEFAULT 30"))
+            db.session.commit()
         if exam_session_columns and "rsg_enabled" in exam_session_columns:
             db.session.execute(text("UPDATE exam_session SET rsg_enabled = 0 WHERE format = 'Online' AND rsg_enabled = 1"))
             db.session.commit()
