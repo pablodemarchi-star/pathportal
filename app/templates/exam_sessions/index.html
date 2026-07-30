@@ -729,6 +729,10 @@
             <div class="session-name-cell">
               <span>{{ session.exam_session_name }}</span>
               {{ centre_type_badge(session.category) }}
+              {% set date_dietary_requirements = session_dietary_requirement_alerts.get(session.id, []) %}
+              {% if date_dietary_requirements %}
+                <span class="session-dietary-requirements-tag" title="{% for dietary_requirement in date_dietary_requirements %}Dietary requirements for {{ dietary_requirement.name }}: {{ dietary_requirement.description }}{% if not loop.last %}&#10;{% endif %}{% endfor %}">Dietary requirements</span>
+              {% endif %}
             </div>
           </td>
           <td>
@@ -737,10 +741,6 @@
               {% for duplicate_tag in same_date_duplicate_tags.get(session.id, []) %}
                 <span class="member-duplication-tag {{ duplicate_tag.class }}" title="{{ duplicate_tag.title }}">{{ duplicate_tag.label }}</span>
               {% endfor %}
-              {% set date_dietary_requirements = session_dietary_requirement_alerts.get(session.id, []) %}
-              {% if date_dietary_requirements %}
-                <span class="session-dietary-requirements-tag" title="{% for dietary_requirement in date_dietary_requirements %}Dietary requirements for {{ dietary_requirement.name }}: {{ dietary_requirement.description }}{% if not loop.last %}&#10;{% endif %}{% endfor %}">Dietary requirements</span>
-              {% endif %}
             </div>
           </td>
           <td class="badge-list">
