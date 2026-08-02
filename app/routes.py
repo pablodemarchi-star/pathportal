@@ -7678,6 +7678,28 @@ def reconcile_auto_shipment_bundles(year_or_sessions, today=None):
             if session_ids else []
         )
         links_by_session = {link.exam_session_id: link for link in shipment_links}
+        auto_bundles = {
+            link.bundle for link in shipment_links
+            if link.bundle and link.bundle.auto_managed and link.bundle.status in SHIPMENT_AUTO_MANAGED_STATUSES
+        }
+    for session_record in sessions:
+        supervisor, reason = auto_bundle_supervisor_for_session(session_record, supervisor_assignments_by_session)
+        if not reason and supervisor:
+            continue
+        current_link = links_by_session.get(session_record.id)
+        bundle = current_link.bundle if current_link else None
+        if not bundle or not bundle.auto_managed or bundle.status not in SHIPMENT_AUTO_MANAGED_STATUSES:
+            continue
+        links_by_session.pop(session_record.id, None)
+        changed = True
+        remaining_links = [link for link in list(bundle.session_links) if link.id != current_link.id]
+        if remaining_links:
+            db.session.delete(current_link)
+            shipment_event(bundle, "SESSION_REMOVED_FROM_AUTO_BUNDLE", bundle.status, bundle.status, session_record.exam_session_name)
+            update_auto_bundle_deadline(bundle)
+        else:
+            db.session.delete(bundle)
+            auto_bundles.discard(bundle)
     eligible_by_supervisor = {}
     for session_record in sessions:
         supervisor, reason = auto_bundle_supervisor_for_session(session_record, supervisor_assignments_by_session)

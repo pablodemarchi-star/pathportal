@@ -4229,6 +4229,25 @@ class ScheduleWorkflowTest(unittest.TestCase):
         self.assertEqual(ExamSessionShipmentBundleSession.query.filter_by(exam_session_id=session_record.id).count(), 1)
         self.assertEqual(ExamSessionShipmentEvent.query.filter_by(bundle_id=original_bundle.id, event_type="SESSION_REMOVED_FROM_AUTO_BUNDLE").count(), 1)
 
+    def test_auto_reconciliation_removes_session_when_shipment_recipient_is_cleared(self):
+        self.create_supervisor(staff_id=1, name="Laura Mendez")
+        session_record = self.create_planning_ready_session("Shipment cleared", date(2026, 7, 9), supervisor_id=1, packages_ready=False)
+        reconcile_auto_shipment_bundles([session_record], today=date(2026, 6, 20))
+        self.assertEqual(ExamSessionShipmentBundleSession.query.filter_by(exam_session_id=session_record.id).count(), 1)
+
+        assignment = ExamSessionSupervisorAssignment.query.filter_by(
+            exam_session_id=session_record.id,
+            team_member_id=1,
+        ).one()
+        assignment.is_shipment_recipient = False
+        db.session.commit()
+
+        reconcile_auto_shipment_bundles([session_record], today=date(2026, 6, 20))
+
+        self.assertEqual(ExamSessionShipmentBundleSession.query.filter_by(exam_session_id=session_record.id).count(), 0)
+        self.assertEqual(ExamSessionShipmentBundle.query.count(), 0)
+        self.assertEqual(session_shipment_contract(session_record)["status"], "not_bundled")
+
     def test_auto_reconciliation_does_not_move_when_first_supervisor_changes_on_protected_bundle(self):
         self.create_supervisor(staff_id=1, name="Laura Mendez")
         self.create_supervisor(staff_id=4, name="Mateo Silva")
