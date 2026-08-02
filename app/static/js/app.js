@@ -8197,7 +8197,7 @@ const ensureDraftLogisticsHistoryModal = (row) => {
 };
 
 const initLogisticsControls = (root = document) => {
-  root.querySelectorAll("[data-logistics-status]").forEach((select) => {
+  root.querySelectorAll("select[data-logistics-status]").forEach((select) => {
     if (select.dataset.logisticsStatusInitialized === "true") return;
     select.dataset.logisticsStatusInitialized = "true";
     select.dataset.previousLogisticsStatus = select.value || "Pending";

@@ -84,7 +84,7 @@
         {% for assignment in assignments %}
           {% if assignment.team_member or assignment.potential_entry %}
             <li>
-              <span>{{ assignment.team_member.full_name if assignment.team_member else assignment.potential_entry.full_name }} <em>({{ assignment.participation_status|lower }})</em></span>
+              <span>{{ assignment.team_member.full_name if assignment.team_member else assignment.potential_entry.full_name }} <em>({% if role_label == 'supervisor' and assignment.is_remote %}remote, {% endif %}{{ assignment.participation_status|lower }})</em></span>
             </li>
           {% endif %}
         {% endfor %}

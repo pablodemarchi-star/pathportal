@@ -448,6 +448,11 @@ class ScheduleWorkflowTest(unittest.TestCase):
             ExamSessionSupervisorAssignment(
                 exam_session_id=self.session_record.id,
                 team_member_id=supervisor.id,
+                is_remote=True,
+                participation_status="Pending",
+            ),
+            ExamSessionSupervisorAssignment(
+                exam_session_id=self.session_record.id,
                 participation_status="Pending",
             ),
             ExamSessionSupervisorAssignment(
@@ -463,7 +468,8 @@ class ScheduleWorkflowTest(unittest.TestCase):
         html = " ".join(response.get_data(as_text=True).split())
 
         self.assertEqual(response.status_code, 200)
-        self.assertIn("2 supervisors required (1 remote)", html)
+        self.assertIn("3 supervisors required (2 remote)", html)
+        self.assertIn("Dana Montalvo <em>(remote, pending)</em>", html)
         self.assertIn("1 remote role to cover", html)
 
     def test_exam_session_name_shows_path_organiser_note_when_selected(self):
