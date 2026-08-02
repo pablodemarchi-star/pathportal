@@ -2685,12 +2685,12 @@ document.querySelectorAll("[data-exam-session-form]").forEach((form) => {
     const modules = form.querySelectorAll("[name='modules']:checked");
     const selectedFormat = form.querySelector("[name='format']:checked")?.value || "";
     const detailsValue = form.querySelector("[name='details_url']")?.value || "";
-    const isOnsite = selectedFormat === "Onsite";
+    const hasExamCentreFields = selectedFormat === "Onsite" || selectedFormat === "Online at exam centre";
 
     onsiteFields.forEach((field) => {
-      field.hidden = !isOnsite;
+      field.hidden = !hasExamCentreFields;
     });
-    if (!isOnsite) {
+    if (!hasExamCentreFields) {
       if (locationInput) locationInput.value = "";
       if (fullAddressInput) fullAddressInput.value = "";
       if (cityInput) cityInput.value = "";
@@ -6275,7 +6275,7 @@ const arrivalMinutesForRole = (role) => (role === "Examiner" ? "40" : "50");
 
 const formatEmojiForSession = (sessionFormat) => {
   if (sessionFormat === "Onsite") return "🏫";
-  if (sessionFormat === "Online") return "💻";
+  if (sessionFormat === "Online" || sessionFormat === "Online at exam centre") return "💻";
   return "";
 };
 

@@ -31,7 +31,7 @@
 {%- endmacro %}
 
 {% macro format_badge(format) -%}
-  <span class="badge exam-format-{{ format|lower }}">{{ format }}</span>
+  <span class="badge exam-format-{{ format|lower|replace(' ', '-') }}">{{ format }}</span>
 {%- endmacro %}
 
 {% macro logistics_activity_badge(active) -%}
@@ -50,16 +50,35 @@
 
 {% macro staffing_summary(assignments, role_label, duplicate_tags=[]) -%}
   {% set total = assignments|length %}
-  {% set covered = namespace(count=0) %}
+  {% set counts = namespace(covered=0, remote_total=0, regular_total=0, remote_uncovered=0, regular_uncovered=0) %}
   {% for assignment in assignments %}
+    {% set is_covered = assignment.team_member or assignment.potential_entry %}
+    {% set is_remote_supervisor = role_label == 'supervisor' and assignment.is_remote %}
     {% if assignment.team_member or assignment.potential_entry %}
-      {% set covered.count = covered.count + 1 %}
+      {% set counts.covered = counts.covered + 1 %}
+    {% endif %}
+    {% if is_remote_supervisor %}
+      {% set counts.remote_total = counts.remote_total + 1 %}
+      {% if not is_covered %}
+        {% set counts.remote_uncovered = counts.remote_uncovered + 1 %}
+      {% endif %}
+    {% else %}
+      {% set counts.regular_total = counts.regular_total + 1 %}
+      {% if not is_covered %}
+        {% set counts.regular_uncovered = counts.regular_uncovered + 1 %}
+      {% endif %}
     {% endif %}
   {% endfor %}
-  {% set uncovered = total - covered.count %}
+  {% set uncovered = total - counts.covered %}
   {% if total %}
     <div class="session-staffing-summary">
-      <strong>{{ total }} {{ role_label }}{{ '' if total == 1 else 's' }} required</strong>
+      <strong>
+        {% if role_label == 'supervisor' %}
+          {{ total }} supervisor{{ '' if total == 1 else 's' }} required{% if counts.remote_total %} ({{ counts.remote_total }} remote){% endif %}
+        {% else %}
+          {{ total }} {{ role_label }}{{ '' if total == 1 else 's' }} required
+        {% endif %}
+      </strong>
       {{ member_duplication_tags(duplicate_tags) }}
       <ul>
         {% for assignment in assignments %}
@@ -70,7 +89,12 @@
           {% endif %}
         {% endfor %}
         {% if uncovered %}
-          <li class="session-staffing-role-to-cover">{{ uncovered }} role{{ '' if uncovered == 1 else 's' }} to cover</li>
+          {% if role_label == 'supervisor' and counts.remote_uncovered %}
+            <li class="session-staffing-role-to-cover">{{ counts.remote_uncovered }} remote role{{ '' if counts.remote_uncovered == 1 else 's' }} to cover</li>
+          {% endif %}
+          {% if counts.regular_uncovered %}
+            <li class="session-staffing-role-to-cover">{{ counts.regular_uncovered }} role{{ '' if counts.regular_uncovered == 1 else 's' }} to cover</li>
+          {% endif %}
         {% endif %}
       </ul>
     </div>
@@ -327,6 +351,12 @@
             <span class="staff-picker-empty" data-team-member-search-empty hidden>No staff members found</span>
           </div>
         </details>
+        {% if section_key == 'supervisor' %}
+          <label class="supervisor-remote-checkbox">
+            <input type="checkbox" name="{{ section_key }}_remote_{{ row_key }}" value="1" {% if assignment and assignment.is_remote %}checked{% endif %}>
+            <span>Remote</span>
+          </label>
+        {% endif %}
         {% if session.format == 'Onsite' %}
           <button class="copy-icon-button copy-inline-action" type="button" data-staff-address-copy disabled aria-label="Copy staff full address" title="Copy staff full address">
             <svg viewBox="0 0 24 24" aria-hidden="true">
@@ -543,6 +573,7 @@
   {% set selected_shifts = session.shifts_list() if session else [] %}
   {% set selected_format = session.format if session else '' %}
   {% set selected_exam_session_organised_by = session.exam_session_organised_by if session else 'the exam centre' %}
+  {% set selected_has_exam_centre_fields = selected_format in ['Onsite', 'Online at exam centre'] %}
   <form method="post" action="{{ action }}" class="form-grid exam-session-form" data-exam-session-form {% if session %}data-original-session-year="{{ session.session_date.year }}"{% endif %}>
     <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
     <input type="hidden" name="session_year" value="{{ selected_session_year }}">
@@ -613,15 +644,15 @@
         </label>
       {% endfor %}
     </fieldset>
-    <label class="full-span" data-onsite-field {% if selected_format != 'Onsite' %}hidden{% endif %}>
+    <label class="full-span" data-onsite-field {% if not selected_has_exam_centre_fields %}hidden{% endif %}>
       Full address copied from Google Maps
       <input name="full_address_google_maps" value="{{ session.full_address_google_maps if session else '' }}" maxlength="500">
     </label>
-    <label data-onsite-field {% if selected_format != 'Onsite' %}hidden{% endif %}>
+    <label data-onsite-field {% if not selected_has_exam_centre_fields %}hidden{% endif %}>
       City
       <input name="city" value="{{ session.city if session else '' }}">
     </label>
-    <label data-onsite-field {% if selected_format != 'Onsite' %}hidden{% endif %}>
+    <label data-onsite-field {% if not selected_has_exam_centre_fields %}hidden{% endif %}>
       Province
       <input name="province" value="{{ session.province if session else '' }}">
     </label>

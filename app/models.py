@@ -1338,6 +1338,7 @@ class ExamSessionSupervisorAssignment(db.Model):
     participation_status = db.Column(db.String(40), nullable=False, default="Pending", index=True)
     logistics_enabled = db.Column(db.Boolean, nullable=False, default=False)
     logistics_type = db.Column(db.String(40), nullable=False, default="Does not apply", index=True)
+    is_remote = db.Column(db.Boolean, nullable=False, default=False, index=True)
     is_shipment_recipient = db.Column(db.Boolean, nullable=False, default=False, index=True)
     manual_fee_override = db.Column(db.Boolean, nullable=False, default=False)
     km = db.Column(db.Integer, nullable=True)

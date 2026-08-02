@@ -2175,7 +2175,8 @@ td .status-inactive {
   color: var(--badge-purple-text);
 }
 
-.exam-module-speaking {
+.exam-module-speaking,
+.exam-format-online-at-exam-centre {
   background: var(--path-ochre-50);
   color: var(--badge-yellow-text);
 }
@@ -4250,6 +4251,21 @@ span.session-marker-chip {
 .staff-member-select-row .team-member-picker {
   flex: 1;
   min-width: 0;
+}
+
+.supervisor-remote-checkbox {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex: 0 0 auto;
+  color: var(--color-primary-dark);
+  font-size: 12px;
+  font-weight: 850;
+  white-space: nowrap;
+}
+
+.supervisor-remote-checkbox input {
+  margin: 0;
 }
 
 .team-member-picker {

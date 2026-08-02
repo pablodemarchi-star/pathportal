@@ -633,6 +633,9 @@ def create_app():
         if supervisor_assignment_columns and "potential_entry_id" not in supervisor_assignment_columns:
             db.session.execute(text("ALTER TABLE exam_session_supervisor_assignment ADD COLUMN potential_entry_id INTEGER"))
             db.session.commit()
+        if supervisor_assignment_columns and "is_remote" not in supervisor_assignment_columns:
+            db.session.execute(text("ALTER TABLE exam_session_supervisor_assignment ADD COLUMN is_remote BOOLEAN NOT NULL DEFAULT 0"))
+            db.session.commit()
         for column_name in ("role_fee", "device_dep", "commuting", "fuel", "vehicle_dep", "seniority_fee"):
             if supervisor_assignment_columns and column_name not in supervisor_assignment_columns:
                 db.session.execute(text(f"ALTER TABLE exam_session_supervisor_assignment ADD COLUMN {column_name} VARCHAR(80)"))

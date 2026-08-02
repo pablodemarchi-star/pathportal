@@ -236,7 +236,8 @@ EXAM_SESSION_CATEGORY_OPTIONS = [
 ]
 EXAM_SESSION_MODULE_OPTIONS = ["Reading and writing", "Listening and speaking", "Speaking"]
 EXAM_SESSION_SHIFT_OPTIONS = ["Morning", "Afternoon", "Night", "All day"]
-EXAM_SESSION_FORMAT_OPTIONS = ["Online", "Onsite"]
+EXAM_SESSION_FORMAT_OPTIONS = ["Onsite", "Online", "Online at exam centre"]
+EXAM_SESSION_EXAM_CENTRE_FORMATS = {"Onsite", "Online at exam centre"}
 EXAM_SESSION_PARTICIPATION_OPTIONS = [
     "Pending",
     "Pre-confirmation sent",
@@ -1921,7 +1922,7 @@ def validate_exam_session_form(form):
         errors.append("At least one module is required.")
     if session_format not in EXAM_SESSION_FORMAT_OPTIONS:
         errors.append("Format is required.")
-    if session_format == "Online":
+    if session_format not in EXAM_SESSION_EXAM_CENTRE_FORMATS:
         location_url = ""
         full_address_google_maps = ""
         city = ""
@@ -15733,6 +15734,7 @@ def save_exam_session_assignment_section(
         if team_member_id is None:
             logistics_enabled = False
             logistics_type = "Does not apply"
+        is_remote = section_key == "supervisor" and request.form.get(f"{section_key}_remote_{row_key}") == "1"
         manual_fee_override = (
             participation_status == "Pending"
             and request.form.get(f"{section_key}_manual_fee_override_{row_key}", "").strip() == "1"
@@ -15900,6 +15902,7 @@ def save_exam_session_assignment_section(
                 "participation_status": participation_status,
                 "logistics_enabled": logistics_enabled,
                 "logistics_type": logistics_type,
+                "is_remote": is_remote,
                 "is_shipment_recipient": (
                     session_record.format == "Onsite"
                     and bool(selected_person_token)
@@ -15955,6 +15958,8 @@ def save_exam_session_assignment_section(
         assignment.participation_status = row_data["participation_status"]
         assignment.logistics_enabled = row_data["logistics_enabled"]
         assignment.logistics_type = row_data["logistics_type"]
+        if section_key == "supervisor":
+            assignment.is_remote = row_data["is_remote"]
         assignment.is_shipment_recipient = row_data["is_shipment_recipient"]
         assignment.manual_fee_override = row_data["manual_fee_override"]
         if row_data["participation_status"] == "Pending":
@@ -16471,6 +16476,7 @@ def duplicate_exam_session_year():
                         getattr(assignment, "logistics_type", ""),
                         assignment.logistics_enabled,
                     ),
+                    is_remote=assignment.is_remote,
                     manual_fee_override=assignment.manual_fee_override,
                     km=assignment.km,
                     start_time=assignment.start_time,

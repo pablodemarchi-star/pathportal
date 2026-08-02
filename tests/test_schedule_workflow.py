@@ -323,6 +323,9 @@ class ScheduleWorkflowTest(unittest.TestCase):
         self.assertIn("Exam session organised by", html)
         self.assertIn('name="exam_session_organised_by" value="the exam centre" checked', html)
         self.assertIn('name="exam_session_organised_by" value="Path Examinations"', html)
+        self.assertIn('name="format" value="Online at exam centre"', html)
+        self.assertLess(html.index('name="format" value="Onsite"'), html.index('name="format" value="Online"'))
+        self.assertLess(html.index('name="format" value="Online"'), html.index('name="format" value="Online at exam centre"'))
         self.assertNotIn("Minimum number of candidates required", table_head)
 
     def test_exam_session_planner_shows_pending_date_confirmation_chip_by_default(self):
@@ -405,6 +408,64 @@ class ScheduleWorkflowTest(unittest.TestCase):
         self.assertNotIn("Member duplication", cells[9])
         self.assertNotIn("Member duplication", cells[10])
 
+    def test_exam_session_supervisor_assignment_supports_remote_checkbox(self):
+        supervisor = self.create_supervisor()
+        client = self.login_client()
+
+        response = client.get(f"/exam-session-planner?session_year=2026&open_session_modal={self.session_record.id}")
+        html = response.get_data(as_text=True)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("Remote", html)
+        self.assertIn('name="supervisor_remote_', html)
+        self.assertNotIn('name="examiner_remote_', html)
+        self.assertNotIn('name="intern_remote_', html)
+
+        response = client.post(
+            f"/exam-session-planner/sessions/{self.session_record.id}/members",
+            data={
+                "csrf_token": "token",
+                "session_year": "2026",
+                "supervisor_row_keys": "new-1",
+                "supervisor_assignment_id_new-1": "",
+                "supervisor_team_member_id_new-1": str(supervisor.id),
+                "supervisor_remote_new-1": "1",
+                "supervisor_participation_status_new-1": "Pending",
+            },
+            follow_redirects=True,
+        )
+        assignment = ExamSessionSupervisorAssignment.query.filter_by(
+            exam_session_id=self.session_record.id,
+            team_member_id=supervisor.id,
+        ).one()
+
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(assignment.is_remote)
+
+    def test_exam_session_supervisor_summary_identifies_remote_roles(self):
+        supervisor = self.create_supervisor()
+        db.session.add_all([
+            ExamSessionSupervisorAssignment(
+                exam_session_id=self.session_record.id,
+                team_member_id=supervisor.id,
+                participation_status="Pending",
+            ),
+            ExamSessionSupervisorAssignment(
+                exam_session_id=self.session_record.id,
+                is_remote=True,
+                participation_status="Pending",
+            ),
+        ])
+        db.session.commit()
+
+        client = self.login_client()
+        response = client.get("/exam-session-planner?session_year=2026")
+        html = " ".join(response.get_data(as_text=True).split())
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("2 supervisors required (1 remote)", html)
+        self.assertIn("1 remote role to cover", html)
+
     def test_exam_session_name_shows_path_organiser_note_when_selected(self):
         self.session_record.exam_session_organised_by = "Path Examinations"
         db.session.commit()
@@ -432,7 +493,10 @@ class ScheduleWorkflowTest(unittest.TestCase):
                 "exam_session_organised_by": "Path Examinations",
                 "shifts": "Morning",
                 "modules": "Speaking",
-                "format": "Online",
+                "format": "Online at exam centre",
+                "full_address_google_maps": "Av. Example 123",
+                "city": "Buenos Aires",
+                "province": "Buenos Aires",
                 "details_url": "https://example.com/details",
             },
             follow_redirects=True,
@@ -442,6 +506,10 @@ class ScheduleWorkflowTest(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(created_session.minimum_candidates_required, 45)
         self.assertEqual(created_session.exam_session_organised_by, "Path Examinations")
+        self.assertEqual(created_session.format, "Online at exam centre")
+        self.assertEqual(created_session.full_address_google_maps, "Av. Example 123")
+        self.assertEqual(created_session.city, "Buenos Aires")
+        self.assertEqual(created_session.province, "Buenos Aires")
         self.assertEqual(created_session.date_confirmation_status, "Pending")
 
         response = client.post(
@@ -466,6 +534,7 @@ class ScheduleWorkflowTest(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(db.session.get(ExamSession, created_session.id).minimum_candidates_required, 0)
         self.assertEqual(db.session.get(ExamSession, created_session.id).exam_session_organised_by, "the exam centre")
+        self.assertEqual(db.session.get(ExamSession, created_session.id).full_address_google_maps, "")
 
     def test_exam_session_rejects_invalid_minimum_candidates_required(self):
         client = self.login_client()
