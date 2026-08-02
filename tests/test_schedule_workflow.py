@@ -472,6 +472,26 @@ class ScheduleWorkflowTest(unittest.TestCase):
         self.assertIn("Dana Montalvo <em>(remote, pending)</em>", html)
         self.assertIn("1 remote role to cover", html)
 
+    def test_exam_session_supervisor_summary_omits_remote_count_when_all_remote(self):
+        supervisor = self.create_supervisor()
+        db.session.add(
+            ExamSessionSupervisorAssignment(
+                exam_session_id=self.session_record.id,
+                team_member_id=supervisor.id,
+                is_remote=True,
+                participation_status="Pending",
+            )
+        )
+        db.session.commit()
+
+        client = self.login_client()
+        response = client.get("/exam-session-planner?session_year=2026")
+        html = " ".join(response.get_data(as_text=True).split())
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("1 supervisor required (remote)", html)
+        self.assertNotIn("1 supervisor required (1 remote)", html)
+
     def test_exam_session_name_shows_path_organiser_note_when_selected(self):
         self.session_record.exam_session_organised_by = "Path Examinations"
         db.session.commit()

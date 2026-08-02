@@ -74,7 +74,7 @@
     <div class="session-staffing-summary">
       <strong>
         {% if role_label == 'supervisor' %}
-          {{ total }} supervisor{{ '' if total == 1 else 's' }} required{% if counts.remote_total %} ({{ counts.remote_total }} remote){% endif %}
+          {{ total }} supervisor{{ '' if total == 1 else 's' }} required{% if counts.remote_total and counts.regular_total %} ({{ counts.remote_total }} remote){% elif counts.remote_total %} (remote){% endif %}
         {% else %}
           {{ total }} {{ role_label }}{{ '' if total == 1 else 's' }} required
         {% endif %}
