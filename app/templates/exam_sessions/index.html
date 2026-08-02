@@ -4,6 +4,24 @@
   <span class="badge exam-status-{{ status|lower }}" {% if tooltip %}title="{{ tooltip }}" aria-label="{{ status }}: {{ tooltip }}"{% endif %}>{{ status }}</span>
 {%- endmacro %}
 
+{% macro date_confirmation_status_chip(session, csrf_token) -%}
+  {% set status = session.date_confirmation_status|default('Pending', true) %}
+  <button
+    class="date-confirmation-chip date-confirmation-{{ status|lower|replace(' ', '-') }}"
+    type="button"
+    data-date-confirmation-chip
+    data-status="{{ status }}"
+    data-action="{{ url_for('staff.update_exam_session_date_confirmation_status', session_id=session.id) }}"
+    data-csrf-token="{{ csrf_token }}"
+    title="Update date confirmation status"
+  >
+    <span data-date-confirmation-label>{{ status }}</span>
+    {% if status != 'Pending' %}
+      <span class="date-confirmation-back-arrow" aria-hidden="true">&lt;--</span>
+    {% endif %}
+  </button>
+{%- endmacro %}
+
 {% macro module_badge(module, registration_count=none) -%}
   <span class="badge exam-module-{{ module|lower|replace(' ', '-') }}">{{ module }}{% if registration_count is not none %} ({{ registration_count }}){% endif %}</span>
 {%- endmacro %}
@@ -24,7 +42,13 @@
   {% endif %}
 {%- endmacro %}
 
-{% macro staffing_summary(assignments, role_label) -%}
+{% macro member_duplication_tags(duplicate_tags) -%}
+  {% for duplicate_tag in duplicate_tags %}
+    <span class="member-duplication-tag {{ duplicate_tag.class }}" title="{{ duplicate_tag.title }}">{{ duplicate_tag.label }}</span>
+  {% endfor %}
+{%- endmacro %}
+
+{% macro staffing_summary(assignments, role_label, duplicate_tags=[]) -%}
   {% set total = assignments|length %}
   {% set covered = namespace(count=0) %}
   {% for assignment in assignments %}
@@ -36,6 +60,7 @@
   {% if total %}
     <div class="session-staffing-summary">
       <strong>{{ total }} {{ role_label }}{{ '' if total == 1 else 's' }} required</strong>
+      {{ member_duplication_tags(duplicate_tags) }}
       <ul>
         {% for assignment in assignments %}
           {% if assignment.team_member or assignment.potential_entry %}
@@ -48,6 +73,10 @@
           <li class="session-staffing-role-to-cover">{{ uncovered }} role{{ '' if uncovered == 1 else 's' }} to cover</li>
         {% endif %}
       </ul>
+    </div>
+  {% elif duplicate_tags %}
+    <div class="session-staffing-summary">
+      {{ member_duplication_tags(duplicate_tags) }}
     </div>
   {% else %}
     <span class="centered-dash muted">-</span>
@@ -738,9 +767,7 @@
           <td>
             <div class="session-date-cell">
               <span>{{ session.session_date|long_session_date }}</span>
-              {% for duplicate_tag in same_date_duplicate_tags.get(session.id, []) %}
-                <span class="member-duplication-tag {{ duplicate_tag.class }}" title="{{ duplicate_tag.title }}">{{ duplicate_tag.label }}</span>
-              {% endfor %}
+              {{ date_confirmation_status_chip(session, csrf_token) }}
             </div>
           </td>
           <td class="badge-list">
@@ -767,9 +794,10 @@
             </div>
           </td>
           <td>{{ format_badge(session.format) }}</td>
-          <td class="session-staffing-summary-cell">{{ staffing_summary(supervisor_assignments.get(session.id, []), 'supervisor') }}</td>
-          <td class="session-staffing-summary-cell">{{ staffing_summary(examiner_assignments.get(session.id, []), 'examiner') }}</td>
-          <td class="session-staffing-summary-cell">{{ staffing_summary(intern_assignments.get(session.id, []), 'intern') }}</td>
+          {% set duplicate_tags_by_role = same_date_duplicate_tags.get(session.id, {}) %}
+          <td class="session-staffing-summary-cell">{{ staffing_summary(supervisor_assignments.get(session.id, []), 'supervisor', duplicate_tags_by_role.get('supervisor', [])) }}</td>
+          <td class="session-staffing-summary-cell">{{ staffing_summary(examiner_assignments.get(session.id, []), 'examiner', duplicate_tags_by_role.get('examiner', [])) }}</td>
+          <td class="session-staffing-summary-cell">{{ staffing_summary(intern_assignments.get(session.id, []), 'intern', duplicate_tags_by_role.get('intern', [])) }}</td>
           <td class="centered-table-cell" data-session-logistics-status-cell data-session-id="{{ session.id }}">{{ logistics_activity_badge(logistics_activity_by_session.get(session.id, false)) }}</td>
           <td>
             {% if session.full_address_google_maps %}

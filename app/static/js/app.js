@@ -1,6 +1,50 @@
 const modalOpeners = new WeakMap();
 
 (() => {
+  const statuses = ["Pending", "Waiting for confirmation", "Confirmed"];
+  const classPrefix = "date-confirmation-";
+  const classForStatus = (status) => `${classPrefix}${status.toLowerCase().replace(/\s+/g, "-")}`;
+  const nextStatus = (status) => statuses[Math.min(statuses.indexOf(status) + 1, statuses.length - 1)] || statuses[0];
+  const previousStatus = (status) => statuses[Math.max(statuses.indexOf(status) - 1, 0)] || statuses[0];
+
+  const renderChip = (chip, status) => {
+    const previous = chip.dataset.status || statuses[0];
+    chip.classList.remove(classForStatus(previous));
+    chip.classList.add(classForStatus(status));
+    chip.dataset.status = status;
+    chip.innerHTML = `<span data-date-confirmation-label>${status}</span>${status === "Pending" ? "" : '<span class="date-confirmation-back-arrow" aria-hidden="true">&lt;--</span>'}`;
+  };
+
+  document.addEventListener("click", async (event) => {
+    const chip = event.target.closest("[data-date-confirmation-chip]");
+    if (!chip || chip.disabled) return;
+
+    const currentStatus = chip.dataset.status || statuses[0];
+    const clickedBack = Boolean(event.target.closest(".date-confirmation-back-arrow"));
+    const status = clickedBack ? previousStatus(currentStatus) : nextStatus(currentStatus);
+    if (status === currentStatus) return;
+
+    const formData = new FormData();
+    formData.set("csrf_token", chip.dataset.csrfToken || document.querySelector("input[name='csrf_token']")?.value || "");
+    formData.set("date_confirmation_status", status);
+    renderChip(chip, status);
+    chip.disabled = true;
+
+    try {
+      const response = await fetch(chip.dataset.action || "", { method: "POST", body: formData });
+      if (!response.ok) throw new Error(await response.text());
+      const payload = await response.json();
+      renderChip(chip, payload.date_confirmation_status || status);
+    } catch (error) {
+      renderChip(chip, currentStatus);
+      window.alert("The date confirmation status could not be updated. Please try again.");
+    } finally {
+      chip.disabled = false;
+    }
+  });
+})();
+
+(() => {
   const proceedButtonSelector = "[data-proceed-interview-button]";
   const cleanDigits = (value) => String(value || "").replace(/\D/g, "");
   const normalizeDate = (value) => {

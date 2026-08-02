@@ -322,6 +322,86 @@ class ScheduleWorkflowTest(unittest.TestCase):
         self.assertIn('name="minimum_candidates_required" value="30" min="0" step="1"', html)
         self.assertNotIn("Minimum number of candidates required", table_head)
 
+    def test_exam_session_planner_shows_pending_date_confirmation_chip_by_default(self):
+        client = self.login_client()
+        response = client.get("/exam-session-planner?session_year=2026")
+        html = response.get_data(as_text=True)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(self.session_record.date_confirmation_status, "Pending")
+        self.assertIn('data-date-confirmation-chip', html)
+        self.assertIn('data-status="Pending"', html)
+        self.assertIn('date-confirmation-pending', html)
+
+    def test_exam_session_date_confirmation_status_updates(self):
+        client = self.login_client()
+        response = client.post(
+            f"/exam-session-planner/sessions/{self.session_record.id}/date-confirmation-status",
+            data={"csrf_token": "token", "date_confirmation_status": "Waiting for confirmation"},
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json["date_confirmation_status"], "Waiting for confirmation")
+        self.assertEqual(db.session.get(ExamSession, self.session_record.id).date_confirmation_status, "Waiting for confirmation")
+
+        response = client.post(
+            f"/exam-session-planner/sessions/{self.session_record.id}/date-confirmation-status",
+            data={"csrf_token": "token", "date_confirmation_status": "Confirmed"},
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(db.session.get(ExamSession, self.session_record.id).date_confirmation_status, "Confirmed")
+
+    def test_exam_session_date_confirmation_status_rejects_invalid_status(self):
+        client = self.login_client()
+        response = client.post(
+            f"/exam-session-planner/sessions/{self.session_record.id}/date-confirmation-status",
+            data={"csrf_token": "token", "date_confirmation_status": "Done"},
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(db.session.get(ExamSession, self.session_record.id).date_confirmation_status, "Pending")
+
+    def test_exam_session_member_duplication_tag_renders_in_matching_role_column(self):
+        supervisor = self.create_supervisor()
+        other_session = ExamSession(
+            exam_session_name="Same day session",
+            category="Path School",
+            status="Pending",
+            session_date=self.session_record.session_date,
+            shifts="Afternoon",
+            modules="Speaking",
+            format="Online",
+            details_url="https://example.com/other",
+        )
+        db.session.add(other_session)
+        db.session.flush()
+        db.session.add_all([
+            ExamSessionSupervisorAssignment(
+                exam_session_id=self.session_record.id,
+                team_member_id=supervisor.id,
+                participation_status="Confirmed",
+            ),
+            ExamSessionSupervisorAssignment(
+                exam_session_id=other_session.id,
+                team_member_id=supervisor.id,
+                participation_status="Confirmed",
+            ),
+        ])
+        db.session.commit()
+
+        client = self.login_client()
+        response = client.get("/exam-session-planner?session_year=2026")
+        html = response.get_data(as_text=True)
+        first_row = html.split("<tbody>", 1)[1].split("<tr data-session-row", 1)[1].split("</tr>", 1)[0]
+        cells = first_row.split("<td")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertNotIn("Member duplication", cells[4])
+        self.assertIn("Member duplication", cells[8])
+        self.assertNotIn("Member duplication", cells[9])
+        self.assertNotIn("Member duplication", cells[10])
+
     def test_exam_session_create_and_update_persist_minimum_candidates_required(self):
         client = self.login_client()
         response = client.post(
@@ -345,6 +425,7 @@ class ScheduleWorkflowTest(unittest.TestCase):
 
         self.assertEqual(response.status_code, 200)
         self.assertEqual(created_session.minimum_candidates_required, 45)
+        self.assertEqual(created_session.date_confirmation_status, "Pending")
 
         response = client.post(
             f"/exam-session-planner/sessions/{created_session.id}",

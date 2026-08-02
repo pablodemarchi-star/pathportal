@@ -2394,6 +2394,47 @@ td .centered-dash {
   justify-items: start;
 }
 
+.date-confirmation-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  width: fit-content;
+  border: 0;
+  border-radius: 999px;
+  padding: 4px 8px;
+  font: inherit;
+  font-size: 10px;
+  font-weight: 950;
+  line-height: 1.1;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.date-confirmation-chip:disabled {
+  cursor: wait;
+  opacity: 0.7;
+}
+
+.date-confirmation-pending {
+  background: var(--badge-red-bg);
+  color: var(--badge-red-text);
+}
+
+.date-confirmation-waiting-for-confirmation {
+  background: var(--badge-blue-bg);
+  color: var(--badge-blue-text);
+}
+
+.date-confirmation-confirmed {
+  background: var(--badge-green-bg);
+  color: var(--badge-green-text);
+}
+
+.date-confirmation-back-arrow {
+  font-size: 12px;
+  font-weight: 950;
+}
+
 .member-duplication-tag {
   display: inline-flex;
   align-items: center;

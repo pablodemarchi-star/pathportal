@@ -226,6 +226,7 @@ MENU_PERMISSION_PATHS = (
     ("users", ("/users",)),
 )
 EXAM_SESSION_STATUS_OPTIONS = ["Pending", "Confirmed"]
+EXAM_SESSION_DATE_CONFIRMATION_STATUSES = ["Pending", "Waiting for confirmation", "Confirmed"]
 EXAM_SESSION_CATEGORY_OPTIONS = [
     "Approved Exam Centre",
     "Premium Exam Centre",
@@ -4031,28 +4032,29 @@ def same_date_assignment_groups():
     session_map = {session_record.id: session_record for session_record in session_records}
     member_ids = set()
     assignment_models = (
-        ExamSessionSupervisorAssignment,
-        ExamSessionExaminerAssignment,
-        ExamSessionInternAssignment,
+        (ExamSessionSupervisorAssignment, "supervisor"),
+        (ExamSessionExaminerAssignment, "examiner"),
+        (ExamSessionInternAssignment, "intern"),
     )
     assignment_rows = []
-    for assignment_model in assignment_models:
+    for assignment_model, role_key in assignment_models:
         for assignment in assignment_model.query.filter(assignment_model.team_member_id.isnot(None)).all():
             session_record = session_map.get(assignment.exam_session_id)
             if not session_record:
                 continue
             member_ids.add(assignment.team_member_id)
-            assignment_rows.append(assignment)
+            assignment_rows.append((assignment, role_key))
     member_names = {
         member.id: member.full_name
         for member in AcademicStaff.query.filter(AcademicStaff.id.in_(member_ids)).all()
     } if member_ids else {}
     grouped = {}
-    for assignment in assignment_rows:
+    for assignment, role_key in assignment_rows:
         session_record = session_map.get(assignment.exam_session_id)
         key = (assignment.team_member_id, session_record.session_date)
         grouped.setdefault(key, {})
-        grouped[key][session_record.id] = session_record
+        grouped[key].setdefault(session_record.id, {"session": session_record, "roles": set()})
+        grouped[key][session_record.id]["roles"].add(role_key)
     return grouped, member_names
 
 
@@ -4064,12 +4066,12 @@ def build_exam_session_same_date_conflicts(visible_session_ids):
             continue
         member_name = member_names.get(member_id, "Staff member")
         date_label = long_session_date_filter(session_date)
-        for session_id, session_record in sessions_for_member.items():
+        for session_id, session_payload in sessions_for_member.items():
             if session_id not in conflicts:
                 continue
             other_sessions = [
-                other_session.exam_session_name
-                for other_session_id, other_session in sessions_for_member.items()
+                other_payload["session"].exam_session_name
+                for other_session_id, other_payload in sessions_for_member.items()
                 if other_session_id != session_id
             ]
             if not other_sessions:
@@ -4084,7 +4086,8 @@ def build_exam_session_same_date_conflicts(visible_session_ids):
 def build_exam_session_same_date_duplicate_tags(visible_session_ids):
     grouped, member_names = same_date_assignment_groups()
     visible_session_ids = set(visible_session_ids)
-    tags = {session_id: [] for session_id in visible_session_ids}
+    role_keys = ("supervisor", "examiner", "intern")
+    tags = {session_id: {role_key: [] for role_key in role_keys} for session_id in visible_session_ids}
     duplicate_groups = [
         (member_id, session_date, sessions_for_member)
         for (member_id, session_date), sessions_for_member in grouped.items()
@@ -4093,16 +4096,20 @@ def build_exam_session_same_date_duplicate_tags(visible_session_ids):
     duplicate_groups.sort(key=lambda item: (item[1], member_names.get(item[0], ""), item[0]))
     for group_index, (member_id, session_date, sessions_for_member) in enumerate(duplicate_groups):
         member_name = member_names.get(member_id, "Staff member")
-        session_names = ", ".join(session_record.exam_session_name for session_record in sessions_for_member.values())
+        session_names = ", ".join(
+            session_payload["session"].exam_session_name
+            for session_payload in sessions_for_member.values()
+        )
         title = f"{member_name} is assigned on {long_session_date_filter(session_date)} in: {session_names}."
         tag = {
             "label": "Member duplication",
             "class": f"duplication-color-{group_index % 8}",
             "title": title,
         }
-        for session_id in sessions_for_member:
+        for session_id, session_payload in sessions_for_member.items():
             if session_id in visible_session_ids:
-                tags[session_id].append(tag)
+                for role_key in session_payload["roles"]:
+                    tags[session_id][role_key].append(tag)
     return tags
 
 
@@ -15576,6 +15583,22 @@ def update_exam_session(session_id):
     db.session.commit()
     flash("Exam session updated successfully.", "success")
     return redirect(url_for("staff.exam_session_planner", session_year=data["session_date"].year))
+
+
+@staff_bp.route("/exam-session-planner/sessions/<int:session_id>/date-confirmation-status", methods=["POST"])
+@login_required
+def update_exam_session_date_confirmation_status(session_id):
+    if not validate_csrf():
+        return jsonify({"error": "Security token expired. Please try again."}), 400
+
+    session_record = ExamSession.query.get_or_404(session_id)
+    requested_status = request.form.get("date_confirmation_status", "").strip()
+    if requested_status not in EXAM_SESSION_DATE_CONFIRMATION_STATUSES:
+        return jsonify({"error": "Invalid date confirmation status."}), 400
+
+    session_record.date_confirmation_status = requested_status
+    db.session.commit()
+    return jsonify({"date_confirmation_status": session_record.date_confirmation_status})
 
 
 @staff_bp.route("/exam-session-planner/sessions/<int:session_id>/delete", methods=["POST"])
