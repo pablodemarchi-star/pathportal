@@ -320,6 +320,9 @@ class ScheduleWorkflowTest(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertIn("Minimum number of candidates required", html)
         self.assertIn('name="minimum_candidates_required" value="30" min="0" step="1"', html)
+        self.assertIn("Exam session organised by", html)
+        self.assertIn('name="exam_session_organised_by" value="the exam centre" checked', html)
+        self.assertIn('name="exam_session_organised_by" value="Path Examinations"', html)
         self.assertNotIn("Minimum number of candidates required", table_head)
 
     def test_exam_session_planner_shows_pending_date_confirmation_chip_by_default(self):
@@ -402,6 +405,18 @@ class ScheduleWorkflowTest(unittest.TestCase):
         self.assertNotIn("Member duplication", cells[9])
         self.assertNotIn("Member duplication", cells[10])
 
+    def test_exam_session_name_shows_path_organiser_note_when_selected(self):
+        self.session_record.exam_session_organised_by = "Path Examinations"
+        db.session.commit()
+
+        client = self.login_client()
+        response = client.get("/exam-session-planner?session_year=2026")
+        html = response.get_data(as_text=True)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("June exam session", html)
+        self.assertIn("Organised by Path Examinations", html)
+
     def test_exam_session_create_and_update_persist_minimum_candidates_required(self):
         client = self.login_client()
         response = client.post(
@@ -414,6 +429,7 @@ class ScheduleWorkflowTest(unittest.TestCase):
                 "status": "Pending",
                 "session_date": "20/07/2026",
                 "minimum_candidates_required": "45",
+                "exam_session_organised_by": "Path Examinations",
                 "shifts": "Morning",
                 "modules": "Speaking",
                 "format": "Online",
@@ -425,6 +441,7 @@ class ScheduleWorkflowTest(unittest.TestCase):
 
         self.assertEqual(response.status_code, 200)
         self.assertEqual(created_session.minimum_candidates_required, 45)
+        self.assertEqual(created_session.exam_session_organised_by, "Path Examinations")
         self.assertEqual(created_session.date_confirmation_status, "Pending")
 
         response = client.post(
@@ -437,6 +454,7 @@ class ScheduleWorkflowTest(unittest.TestCase):
                 "status": "Pending",
                 "session_date": "20/07/2026",
                 "minimum_candidates_required": "0",
+                "exam_session_organised_by": "the exam centre",
                 "shifts": "Morning",
                 "modules": "Speaking",
                 "format": "Online",
@@ -447,6 +465,7 @@ class ScheduleWorkflowTest(unittest.TestCase):
 
         self.assertEqual(response.status_code, 200)
         self.assertEqual(db.session.get(ExamSession, created_session.id).minimum_candidates_required, 0)
+        self.assertEqual(db.session.get(ExamSession, created_session.id).exam_session_organised_by, "the exam centre")
 
     def test_exam_session_rejects_invalid_minimum_candidates_required(self):
         client = self.login_client()

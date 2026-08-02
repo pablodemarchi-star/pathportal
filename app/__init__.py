@@ -577,6 +577,9 @@ def create_app():
         if exam_session_columns and "date_confirmation_status" not in exam_session_columns:
             db.session.execute(text("ALTER TABLE exam_session ADD COLUMN date_confirmation_status VARCHAR(40) NOT NULL DEFAULT 'Pending'"))
             db.session.commit()
+        if exam_session_columns and "exam_session_organised_by" not in exam_session_columns:
+            db.session.execute(text("ALTER TABLE exam_session ADD COLUMN exam_session_organised_by VARCHAR(40) NOT NULL DEFAULT 'the exam centre'"))
+            db.session.commit()
         if exam_session_columns and "rsg_enabled" in exam_session_columns:
             db.session.execute(text("UPDATE exam_session SET rsg_enabled = 0 WHERE format = 'Online' AND rsg_enabled = 1"))
             db.session.commit()

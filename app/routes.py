@@ -227,6 +227,7 @@ MENU_PERMISSION_PATHS = (
 )
 EXAM_SESSION_STATUS_OPTIONS = ["Pending", "Confirmed"]
 EXAM_SESSION_DATE_CONFIRMATION_STATUSES = ["Pending", "Waiting for confirmation", "Confirmed"]
+EXAM_SESSION_ORGANISED_BY_OPTIONS = ["the exam centre", "Path Examinations"]
 EXAM_SESSION_CATEGORY_OPTIONS = [
     "Approved Exam Centre",
     "Premium Exam Centre",
@@ -1887,6 +1888,7 @@ def validate_exam_session_form(form):
     session_date = parse_exam_session_date(session_date_value)
     minimum_candidates_value = form.get("minimum_candidates_required", "30").strip()
     minimum_candidates_required = None
+    exam_session_organised_by = form.get("exam_session_organised_by", "the exam centre").strip()
     shifts = normalize_exam_session_shifts(form.getlist("shifts"))
     modules = [module for module in form.getlist("modules") if module in EXAM_SESSION_MODULE_OPTIONS]
     session_format = form.get("format", "").strip()
@@ -1913,6 +1915,8 @@ def validate_exam_session_form(form):
         errors.append("Minimum number of candidates required must be a whole number of 0 or more.")
     else:
         minimum_candidates_required = int(minimum_candidates_value)
+    if exam_session_organised_by not in EXAM_SESSION_ORGANISED_BY_OPTIONS:
+        errors.append("Exam session organised by is required.")
     if not modules:
         errors.append("At least one module is required.")
     if session_format not in EXAM_SESSION_FORMAT_OPTIONS:
@@ -1931,6 +1935,7 @@ def validate_exam_session_form(form):
         "status": status,
         "session_date": session_date,
         "minimum_candidates_required": minimum_candidates_required,
+        "exam_session_organised_by": exam_session_organised_by,
         "shifts": shifts,
         "modules": modules,
         "full_address_google_maps": full_address_google_maps,
@@ -1948,6 +1953,7 @@ def apply_exam_session_form(session_record, data):
     session_record.status = data["status"]
     session_record.session_date = data["session_date"]
     session_record.minimum_candidates_required = data["minimum_candidates_required"]
+    session_record.exam_session_organised_by = data["exam_session_organised_by"]
     session_record.shifts = ", ".join(data["shifts"])
     session_record.modules = ", ".join(data["modules"])
     session_record.full_address_google_maps = data["full_address_google_maps"]
@@ -15347,6 +15353,7 @@ def exam_session_planner():
         shift_options=EXAM_SESSION_SHIFT_OPTIONS,
         format_options=EXAM_SESSION_FORMAT_OPTIONS,
         category_options=EXAM_SESSION_CATEGORY_OPTIONS,
+        exam_session_organised_by_options=EXAM_SESSION_ORGANISED_BY_OPTIONS,
         csrf_token=session.get("csrf_token"),
     )
 

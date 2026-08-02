@@ -657,6 +657,7 @@ class ExamSession(db.Model):
     session_date = db.Column(db.Date, nullable=False, index=True)
     date_confirmation_status = db.Column(db.String(40), nullable=False, default="Pending", index=True)
     minimum_candidates_required = db.Column(db.Integer, nullable=False, default=30)
+    exam_session_organised_by = db.Column(db.String(40), nullable=False, default="the exam centre", index=True)
     shifts = db.Column(db.String(80), nullable=False, default="")
     modules = db.Column(db.String(120), nullable=False, default="")
     full_address_google_maps = db.Column(db.String(500), nullable=True)
