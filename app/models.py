@@ -777,6 +777,96 @@ class ExamSessionScheduleWorkflow(db.Model):
     exam_session = db.relationship("ExamSession", backref=db.backref("schedule_workflow", uselist=False))
 
 
+class ExamSessionScheduleNote(db.Model):
+    __tablename__ = "exam_session_schedule_note"
+
+    id = db.Column(db.Integer, primary_key=True)
+    workflow_id = db.Column(db.Integer, db.ForeignKey("exam_session_schedule_workflow.id"), nullable=False, index=True)
+    note_id = db.Column(db.String(64), nullable=False, unique=True, index=True)
+    note_text = db.Column(db.Text, nullable=False)
+    from_user_id = db.Column(db.Integer, db.ForeignKey("app_user.id"), nullable=True, index=True)
+    from_full_name = db.Column(db.String(160), nullable=True)
+    from_department = db.Column(db.String(40), nullable=True)
+    created_at = db.Column(db.DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc), index=True)
+
+    workflow = db.relationship("ExamSessionScheduleWorkflow", backref=db.backref("notes", lazy=True, cascade="all, delete-orphan"))
+
+
+class ExamSessionScheduleNoteMention(db.Model):
+    __tablename__ = "exam_session_schedule_note_mention"
+    __table_args__ = (
+        db.UniqueConstraint("note_id", "to_user_id", name="uq_schedule_note_recipient"),
+    )
+
+    id = db.Column(db.Integer, primary_key=True)
+    note_id = db.Column(db.String(64), nullable=False, index=True)
+    workflow_id = db.Column(db.Integer, db.ForeignKey("exam_session_schedule_workflow.id"), nullable=False, index=True)
+    from_user_id = db.Column(db.Integer, db.ForeignKey("app_user.id"), nullable=True, index=True)
+    from_full_name = db.Column(db.String(160), nullable=True)
+    from_department = db.Column(db.String(40), nullable=True)
+    to_user_id = db.Column(db.Integer, db.ForeignKey("app_user.id"), nullable=True, index=True)
+    to_full_name = db.Column(db.String(160), nullable=True)
+    to_department = db.Column(db.String(40), nullable=True)
+    comment_text = db.Column(db.Text, nullable=False)
+    is_read = db.Column(db.Boolean, nullable=False, default=False, index=True)
+    read_by_user_id = db.Column(db.Integer, db.ForeignKey("app_user.id"), nullable=True, index=True)
+    read_on = db.Column(db.DateTime(timezone=True), nullable=True)
+    created_on = db.Column(db.DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))
+    updated_on = db.Column(
+        db.DateTime(timezone=True),
+        nullable=False,
+        default=lambda: datetime.now(timezone.utc),
+        onupdate=lambda: datetime.now(timezone.utc),
+    )
+
+    workflow = db.relationship("ExamSessionScheduleWorkflow", backref=db.backref("note_mentions", lazy=True, cascade="all, delete-orphan"))
+
+
+class ExamSessionStaffingNote(db.Model):
+    __tablename__ = "exam_session_staffing_note"
+
+    id = db.Column(db.Integer, primary_key=True)
+    exam_session_id = db.Column(db.Integer, db.ForeignKey("exam_session.id"), nullable=False, index=True)
+    note_id = db.Column(db.String(64), nullable=False, unique=True, index=True)
+    note_text = db.Column(db.Text, nullable=False)
+    from_user_id = db.Column(db.Integer, db.ForeignKey("app_user.id"), nullable=True, index=True)
+    from_full_name = db.Column(db.String(160), nullable=True)
+    from_department = db.Column(db.String(40), nullable=True)
+    created_at = db.Column(db.DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc), index=True)
+
+    exam_session = db.relationship("ExamSession", backref=db.backref("staffing_notes", lazy=True, cascade="all, delete-orphan"))
+
+
+class ExamSessionStaffingNoteMention(db.Model):
+    __tablename__ = "exam_session_staffing_note_mention"
+    __table_args__ = (
+        db.UniqueConstraint("note_id", "to_user_id", name="uq_staffing_note_recipient"),
+    )
+
+    id = db.Column(db.Integer, primary_key=True)
+    note_id = db.Column(db.String(64), nullable=False, index=True)
+    exam_session_id = db.Column(db.Integer, db.ForeignKey("exam_session.id"), nullable=False, index=True)
+    from_user_id = db.Column(db.Integer, db.ForeignKey("app_user.id"), nullable=True, index=True)
+    from_full_name = db.Column(db.String(160), nullable=True)
+    from_department = db.Column(db.String(40), nullable=True)
+    to_user_id = db.Column(db.Integer, db.ForeignKey("app_user.id"), nullable=True, index=True)
+    to_full_name = db.Column(db.String(160), nullable=True)
+    to_department = db.Column(db.String(40), nullable=True)
+    comment_text = db.Column(db.Text, nullable=False)
+    is_read = db.Column(db.Boolean, nullable=False, default=False, index=True)
+    read_by_user_id = db.Column(db.Integer, db.ForeignKey("app_user.id"), nullable=True, index=True)
+    read_on = db.Column(db.DateTime(timezone=True), nullable=True)
+    created_on = db.Column(db.DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))
+    updated_on = db.Column(
+        db.DateTime(timezone=True),
+        nullable=False,
+        default=lambda: datetime.now(timezone.utc),
+        onupdate=lambda: datetime.now(timezone.utc),
+    )
+
+    exam_session = db.relationship("ExamSession", backref=db.backref("staffing_note_mentions", lazy=True, cascade="all, delete-orphan"))
+
+
 class ExamSessionStaffingControl(db.Model):
     __table_args__ = (
         db.UniqueConstraint("exam_session_id", name="uq_exam_session_staffing_control"),
@@ -1307,6 +1397,22 @@ class ExamSessionScheduleEvent(db.Model):
     workflow = db.relationship("ExamSessionScheduleWorkflow", backref=db.backref("events", lazy=True, cascade="all, delete-orphan"))
 
 
+class ExamSessionStaffingEvent(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    exam_session_id = db.Column(db.Integer, db.ForeignKey("exam_session.id"), nullable=False, index=True)
+    assignment_type = db.Column(db.String(40), nullable=False, index=True)
+    assignment_id = db.Column(db.Integer, nullable=False, index=True)
+    role = db.Column(db.String(80), nullable=True)
+    staff_member_name = db.Column(db.String(160), nullable=True)
+    previous_status = db.Column(db.String(40), nullable=False)
+    new_status = db.Column(db.String(40), nullable=False)
+    note = db.Column(db.Text, nullable=True)
+    created_at = db.Column(db.DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))
+    created_by = db.Column(db.String(120), nullable=True)
+
+    exam_session = db.relationship("ExamSession", backref=db.backref("staffing_events", lazy=True, cascade="all, delete-orphan"))
+
+
 class StaffPayment(db.Model):
     __table_args__ = (
         db.UniqueConstraint("member_id", "year", name="uq_staff_payment_member_year"),
@@ -1336,6 +1442,9 @@ class ExamSessionSupervisorAssignment(db.Model):
     team_member_id = db.Column(db.Integer, db.ForeignKey("academic_staff.id"), nullable=True, index=True)
     potential_entry_id = db.Column(db.Integer, db.ForeignKey("potential_entry.id"), nullable=True, index=True)
     participation_status = db.Column(db.String(40), nullable=False, default="Pending", index=True)
+    staffing_status_due_at = db.Column(db.Date, nullable=True, index=True)
+    staffing_status_due_stage = db.Column(db.String(40), nullable=True, index=True)
+    staffing_status_due_started_at = db.Column(db.DateTime(timezone=True), nullable=True)
     logistics_enabled = db.Column(db.Boolean, nullable=False, default=False)
     logistics_type = db.Column(db.String(40), nullable=False, default="Does not apply", index=True)
     is_remote = db.Column(db.Boolean, nullable=False, default=False, index=True)
@@ -1447,6 +1556,9 @@ class ExamSessionExaminerAssignment(db.Model):
     team_member_id = db.Column(db.Integer, db.ForeignKey("academic_staff.id"), nullable=True, index=True)
     potential_entry_id = db.Column(db.Integer, db.ForeignKey("potential_entry.id"), nullable=True, index=True)
     participation_status = db.Column(db.String(40), nullable=False, default="Pending", index=True)
+    staffing_status_due_at = db.Column(db.Date, nullable=True, index=True)
+    staffing_status_due_stage = db.Column(db.String(40), nullable=True, index=True)
+    staffing_status_due_started_at = db.Column(db.DateTime(timezone=True), nullable=True)
     logistics_enabled = db.Column(db.Boolean, nullable=False, default=False)
     logistics_type = db.Column(db.String(40), nullable=False, default="Does not apply", index=True)
     is_shipment_recipient = db.Column(db.Boolean, nullable=False, default=False, index=True)
@@ -1557,6 +1669,9 @@ class ExamSessionInternAssignment(db.Model):
     team_member_id = db.Column(db.Integer, db.ForeignKey("academic_staff.id"), nullable=True, index=True)
     potential_entry_id = db.Column(db.Integer, db.ForeignKey("potential_entry.id"), nullable=True, index=True)
     participation_status = db.Column(db.String(40), nullable=False, default="Pending", index=True)
+    staffing_status_due_at = db.Column(db.Date, nullable=True, index=True)
+    staffing_status_due_stage = db.Column(db.String(40), nullable=True, index=True)
+    staffing_status_due_started_at = db.Column(db.DateTime(timezone=True), nullable=True)
     logistics_enabled = db.Column(db.Boolean, nullable=False, default=False)
     logistics_type = db.Column(db.String(40), nullable=False, default="Does not apply", index=True)
     is_shipment_recipient = db.Column(db.Boolean, nullable=False, default=False, index=True)

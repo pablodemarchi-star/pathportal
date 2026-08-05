@@ -944,6 +944,7 @@ const targetLabels = {
   overview: "Session overview",
   "schedule-actions": "Schedule",
   "schedule-overview": "Schedule",
+  "schedule-notes": "Notes",
   staffing: "Staffing",
   logistics: "Logistics",
   packages: "Packages",
@@ -962,6 +963,7 @@ const targetLabels = {
 
 const relatedFocusedTargets = {
   "schedule-actions": ["schedule-actions", "schedule-overview", "history"],
+  "schedule-notes": ["schedule-notes", "schedule-actions", "schedule-overview", "history"],
   "schedule-overview": ["schedule-overview", "schedule-actions"],
   readiness: ["readiness", "session-readiness"],
   "session-readiness": ["readiness", "session-readiness"],
@@ -1040,6 +1042,8 @@ const resetControlSectionsToDefault = (modal) => {
 const clearFocusedMode = (modal) => {
   if (!modal) return;
   modal.classList.remove("is-focused-mode");
+  modal.classList.remove("is-schedule-only");
+  modal.classList.remove("is-staffing-only");
   delete modal.dataset.focusedTarget;
   const context = modal.querySelector("[data-focused-context]");
   if (context) {
@@ -1126,6 +1130,13 @@ const openRequestedScheduleModal = () => {
   openModal(`schedule-workflow-${sessionId}`, { focus: false });
   const modalTarget = params.get("open_modal_target");
   const actionKey = params.get("open_schedule_action");
+  const scheduleOnly = params.get("schedule_only") === "1";
+  const staffingOnly = params.get("staffing_only") === "1";
+  const modal = document.getElementById(`schedule-workflow-${sessionId}`);
+  if (modal) {
+    modal.classList.toggle("is-schedule-only", scheduleOnly);
+    modal.classList.toggle("is-staffing-only", staffingOnly);
+  }
   if (actionKey) {
     const form = document.querySelector(`#schedule-workflow-${sessionId} [data-schedule-action-panel][data-schedule-action-key="${CSS.escape(actionKey)}"]`);
     const trigger = document.querySelector(`#schedule-workflow-${sessionId} [data-schedule-action-toggle][aria-controls="${form?.id || ""}"]`);
@@ -1207,6 +1218,8 @@ const openRequestedScheduleModal = () => {
   params.delete("open_schedule_modal");
   params.delete("open_modal_target");
   params.delete("open_schedule_action");
+  params.delete("schedule_only");
+  params.delete("staffing_only");
   params.delete("open_staffing_control");
   params.delete("open_logistics_control");
   params.delete("open_finance_control");
@@ -1217,9 +1230,12 @@ const openRequestedScheduleModal = () => {
   window.history.replaceState({}, "", nextUrl);
   if (modalTarget) {
     window.requestAnimationFrame(() => {
-      const modal = document.getElementById(`schedule-workflow-${sessionId}`);
       const targetId = `${modalTarget}-${sessionId}`;
       setFocusedMode(modal, targetId);
+      if (modal) {
+        modal.classList.toggle("is-schedule-only", scheduleOnly);
+        modal.classList.toggle("is-staffing-only", staffingOnly);
+      }
       if (!focusModalTarget(targetId)) {
         focusModalHeading(modal);
       }
@@ -1274,6 +1290,14 @@ const closeScheduleActionPanel = (form, { restoreFocus = true } = {}) => {
   if (restoreFocus) trigger?.focus();
 };
 
+const syncScheduleLinkRequirement = (form) => {
+  if (!form) return;
+  const input = form.querySelector("[data-schedule-link-input]");
+  const submit = form.querySelector("[data-schedule-link-submit]");
+  if (!input || !submit) return;
+  submit.disabled = !input.value.trim();
+};
+
 const openScheduleActionPanel = (form, trigger, { focus = true } = {}) => {
   if (!form) return;
   const modal = form.closest(".modal");
@@ -1296,6 +1320,7 @@ const openScheduleActionPanel = (form, trigger, { focus = true } = {}) => {
     closeCommunicationsControlForm(panel, { restoreFocus: false });
   });
   form.hidden = false;
+  syncScheduleLinkRequirement(form);
   trigger?.setAttribute("aria-expanded", "true");
   if (focus) {
     window.requestAnimationFrame(() => {
@@ -1631,7 +1656,11 @@ document.addEventListener("click", (event) => {
     event.stopPropagation();
     const modal = document.getElementById(opener.dataset.openModal);
     const isOverviewMode = opener.dataset.modalMode === "overview";
+    const isScheduleOnlyMode = opener.dataset.modalScheduleOnly === "true";
+    const isStaffingOnlyMode = opener.dataset.modalStaffingOnly === "true";
     clearFocusedMode(modal);
+    if (modal) modal.classList.toggle("is-schedule-only", isScheduleOnlyMode);
+    if (modal) modal.classList.toggle("is-staffing-only", isStaffingOnlyMode);
     resetControlSectionsToDefault(modal);
     openModal(opener.dataset.openModal, { opener, focus: !opener.dataset.modalScrollTarget });
     window.requestAnimationFrame(() => {
@@ -2121,6 +2150,13 @@ document.addEventListener("click", (event) => {
   if (!form || !saveAction) return;
   form.action = saveAction;
   form.submit();
+});
+
+document.addEventListener("input", (event) => {
+  const scheduleLinkInput = event.target.closest("[data-schedule-link-input]");
+  if (scheduleLinkInput) {
+    syncScheduleLinkRequirement(scheduleLinkInput.closest("[data-schedule-action-panel]"));
+  }
 });
 
 document.addEventListener("submit", (event) => {

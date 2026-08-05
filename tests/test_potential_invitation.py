@@ -298,7 +298,7 @@ class PotentialInvitationTest(unittest.TestCase):
             ("Interview confirmed", "MANAGEMENT", "Hold meeting with potential entry"),
             ("Entry accepted", "ADMIN", "Check notes and send successful application email to potential entry"),
             ("Entry accepted (on hold)", "MANAGEMENT", "Entry accepted and placed on hold until reativation date"),
-            ("Onboarding email sent", "ADMIN", "Follow up onboarding email to confirm or turn down application"),
+            ("Onboarding email sent", "ADMIN", "Follow up onboarding email to confirm, reschedule or cancel induction session"),
             ("Induction confirmed", "ADMIN", "Follow up on induction session status to finalise onboarding process"),
             ("Onboarding finalised", "-", "Onboarding process finalised"),
         ]
@@ -630,7 +630,7 @@ class PotentialInvitationTest(unittest.TestCase):
         self.assertIsNotNone(entry)
         self.assertEqual(entry.status, "Onboarding email sent")
         self.assertIn("Onboarding email sent", html)
-        self.assertIn("Follow up onboarding email to confirm or turn down application", html)
+        self.assertIn("Follow up onboarding email to confirm, reschedule or cancel induction session", html)
 
     def test_onboarding_email_sent_perform_action_shows_follow_up_modal(self):
         entry = self.add_entry(status="Onboarding email sent")
@@ -2674,7 +2674,7 @@ console.log(JSON.stringify({ confirmState, turnDownState }));
         self.assertEqual(response.status_code, 200)
         self.assertIn("Onboarding email sent.", html)
         self.assertEqual(updated_entry.status, "Onboarding email sent")
-        self.assertIn("Follow up onboarding email to confirm or turn down application", html)
+        self.assertIn("Follow up onboarding email to confirm, reschedule or cancel induction session", html)
 
     def test_entry_accepted_onboarding_email_sent_uses_submitted_checks_before_validation(self):
         entry = self.add_entry(

@@ -285,7 +285,7 @@
           {% endif %}
         {% elif workflow_status == 'Onboarding email sent' %}
           {% set workflow_department = 'ADMIN' %}
-          {% set workflow_action = 'Follow up onboarding email to confirm or turn down application' %}
+          {% set workflow_action = 'Follow up onboarding email to confirm, reschedule or cancel induction session' %}
         {% elif workflow_status == 'Induction confirmed' %}
           {% set workflow_department = 'ADMIN' %}
           {% set workflow_action = 'Follow up on induction session status to finalise onboarding process' %}

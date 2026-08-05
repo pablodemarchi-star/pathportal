@@ -60,6 +60,8 @@ def create_app():
         ExamSessionPackageEvent,
         ExamSessionPackageUnit,
         ExamSessionScheduleEvent,
+        ExamSessionScheduleNote,
+        ExamSessionScheduleNoteMention,
         ExamSessionScheduleWorkflow,
         ExamSessionShipmentBundle,
         ExamSessionShipmentBundleSession,
@@ -729,6 +731,18 @@ def create_app():
                     db.session.execute(text(f"ALTER TABLE {table_name} ADD COLUMN {column_name} {column_type}"))
                     db.session.commit()
                     table_columns.add(column_name)
+            if table_columns and "staffing_status_due_at" not in table_columns:
+                db.session.execute(text(f"ALTER TABLE {table_name} ADD COLUMN staffing_status_due_at DATE"))
+                db.session.commit()
+                table_columns.add("staffing_status_due_at")
+            if table_columns and "staffing_status_due_stage" not in table_columns:
+                db.session.execute(text(f"ALTER TABLE {table_name} ADD COLUMN staffing_status_due_stage VARCHAR(40)"))
+                db.session.commit()
+                table_columns.add("staffing_status_due_stage")
+            if table_columns and "staffing_status_due_started_at" not in table_columns:
+                db.session.execute(text(f"ALTER TABLE {table_name} ADD COLUMN staffing_status_due_started_at DATETIME"))
+                db.session.commit()
+                table_columns.add("staffing_status_due_started_at")
             if table_columns and "logistics_type" in table_columns and "logistics_enabled" in table_columns:
                 db.session.execute(
                     text(

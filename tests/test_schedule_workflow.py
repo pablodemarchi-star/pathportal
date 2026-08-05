@@ -40,6 +40,8 @@ from app.models import (
     ExamSessionPackageEvent,
     ExamSessionPackageUnit,
     ExamSessionScheduleEvent,
+    ExamSessionScheduleNote,
+    ExamSessionScheduleNoteMention,
     ExamSessionScheduleWorkflow,
     ExamSessionShipmentBundle,
     ExamSessionShipmentBundleSession,
@@ -49,6 +51,9 @@ from app.models import (
     ExamSessionSinapsisControl,
     ExamSessionSinapsisEvent,
     ExamSessionStaffingControl,
+    ExamSessionStaffingEvent,
+    ExamSessionStaffingNote,
+    ExamSessionStaffingNoteMention,
     ExamSessionSupervisorAssignment,
     ExamSessionYear,
     PotentialEntry,
@@ -64,9 +69,13 @@ from app.models import (
     SupervisorCertificationFutSelection,
     SupervisorCertificationRemoteTrainingSelection,
     SupervisorCertificationYear,
+    User,
+    UserMenuPermission,
 )
 from app.routes import (
     apply_schedule_workflow_transition,
+    argentina_add_business_days,
+    argentina_next_business_day,
     available_schedule_transitions,
     communications_readiness_contract,
     core_readiness_contract,
@@ -108,6 +117,7 @@ from app.routes import (
     schedule_workflow_view,
     staffing_readiness_contract,
     staffing_control_contract,
+    LOCAL_TZ,
 )
 
 
@@ -136,6 +146,17 @@ class ScheduleWorkflowTest(unittest.TestCase):
         client = self.app.test_client()
         with client.session_transaction() as user_session:
             user_session["user"] = "admin"
+            user_session["csrf_token"] = "token"
+        return client
+
+    def login_client_for_user(self, user):
+        client = self.app.test_client()
+        with client.session_transaction() as user_session:
+            user_session["user"] = user.full_name
+            user_session["user_id"] = user.id
+            user_session["user_full_name"] = user.full_name
+            user_session["user_email"] = user.email
+            user_session["user_department"] = user.department
             user_session["csrf_token"] = "token"
         return client
 
@@ -357,6 +378,44 @@ class ScheduleWorkflowTest(unittest.TestCase):
 
         self.assertEqual(response.status_code, 200)
         self.assertEqual(db.session.get(ExamSession, self.session_record.id).date_confirmation_status, "Confirmed")
+
+    def test_exam_session_date_confirmation_status_update_recalculates_overall_status(self):
+        session_record = ExamSession(
+            exam_session_name="Date confirmation gate",
+            category="Path School",
+            status="Pending",
+            session_date=date(2026, 7, 4),
+            minimum_candidates_required=30,
+            shifts="Morning",
+            modules="Speaking",
+            format="Online",
+            emergency_contact_not_required=True,
+        )
+        db.session.add(session_record)
+        db.session.flush()
+        db.session.add_all([
+            ExamSessionSupervisorAssignment(
+                exam_session_id=session_record.id,
+                team_member_id=1,
+                participation_status="Confirmed",
+            ),
+            ExamSessionMonthlyCandidateTotal(
+                exam_session_id=session_record.id,
+                month=7,
+                total_candidates=30,
+            ),
+        ])
+        db.session.commit()
+
+        client = self.login_client()
+        response = client.post(
+            f"/exam-session-planner/sessions/{session_record.id}/date-confirmation-status",
+            data={"csrf_token": "token", "date_confirmation_status": "Confirmed"},
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json["session_status"], "Confirmed")
+        self.assertEqual(db.session.get(ExamSession, session_record.id).status, "Confirmed")
 
     def test_exam_session_date_confirmation_status_rejects_invalid_status(self):
         client = self.login_client()
@@ -1621,6 +1680,11 @@ class ScheduleWorkflowTest(unittest.TestCase):
 
         statuses = exam_session_overall_statuses_by_session_ids([session_record.id])
 
+        self.assertEqual(statuses[session_record.id], "Pending")
+
+        session_record.date_confirmation_status = "Confirmed"
+        db.session.commit()
+        statuses = exam_session_overall_statuses_by_session_ids([session_record.id])
         self.assertEqual(statuses[session_record.id], "Confirmed")
 
     def test_exam_session_overall_status_requires_emergency_contact_decision(self):
@@ -1653,6 +1717,11 @@ class ScheduleWorkflowTest(unittest.TestCase):
         self.assertEqual(statuses[session_record.id], "Pending")
 
         session_record.emergency_contact_not_required = True
+        db.session.commit()
+        statuses = exam_session_overall_statuses_by_session_ids([session_record.id])
+        self.assertEqual(statuses[session_record.id], "Pending")
+
+        session_record.date_confirmation_status = "Confirmed"
         db.session.commit()
         statuses = exam_session_overall_statuses_by_session_ids([session_record.id])
         self.assertEqual(statuses[session_record.id], "Confirmed")
@@ -1691,6 +1760,11 @@ class ScheduleWorkflowTest(unittest.TestCase):
         assignment.is_shipment_recipient = True
         db.session.commit()
         statuses = exam_session_overall_statuses_by_session_ids([session_record.id])
+        self.assertEqual(statuses[session_record.id], "Pending")
+
+        session_record.date_confirmation_status = "Confirmed"
+        db.session.commit()
+        statuses = exam_session_overall_statuses_by_session_ids([session_record.id])
         self.assertEqual(statuses[session_record.id], "Confirmed")
 
     def test_exam_session_overall_status_requires_minimum_candidates_from_latest_active_month(self):
@@ -1726,6 +1800,11 @@ class ScheduleWorkflowTest(unittest.TestCase):
         self.assertEqual(statuses[session_record.id], "Pending")
 
         session_record.minimum_candidates_required = 28
+        db.session.commit()
+        statuses = exam_session_overall_statuses_by_session_ids([session_record.id])
+        self.assertEqual(statuses[session_record.id], "Pending")
+
+        session_record.date_confirmation_status = "Confirmed"
         db.session.commit()
         statuses = exam_session_overall_statuses_by_session_ids([session_record.id])
         self.assertEqual(statuses[session_record.id], "Confirmed")
@@ -1768,6 +1847,7 @@ class ScheduleWorkflowTest(unittest.TestCase):
         )
 
         self.assertIn("Minimum number of candidates not met: 28/30", tooltip)
+        self.assertIn("Confirm the session date.", tooltip)
 
     def test_monthly_registration_update_recalculates_exam_session_status(self):
         session_record = ExamSession(
@@ -1780,6 +1860,7 @@ class ScheduleWorkflowTest(unittest.TestCase):
             modules="Speaking",
             format="Online",
             emergency_contact_not_required=True,
+            date_confirmation_status="Confirmed",
         )
         db.session.add(session_record)
         db.session.flush()
@@ -1818,13 +1899,18 @@ class ScheduleWorkflowTest(unittest.TestCase):
         self.assertEqual(db.session.get(ExamSession, session_record.id).status, "Pending")
 
     def test_deadline_error_redirect_reopens_attempted_action_form(self):
+        db.session.add(ExamSessionScheduleWorkflow(
+            exam_session_id=self.session_record.id,
+            status="In progress",
+        ))
+        db.session.commit()
         client = self.login_client()
 
         response = client.post(
             f"/pre-session-control-tower/sessions/{self.session_record.id}/schedule",
             data={
                 "csrf_token": "token",
-                "action_key": "start_preparation",
+                "action_key": "update_deadline",
                 "next_action_due_at": "",
             },
             follow_redirects=False,
@@ -1832,7 +1918,689 @@ class ScheduleWorkflowTest(unittest.TestCase):
 
         self.assertEqual(response.status_code, 302)
         self.assertIn("open_schedule_modal", response.headers["Location"])
-        self.assertIn("open_schedule_action=start_preparation", response.headers["Location"])
+        self.assertIn("open_schedule_action=update_deadline", response.headers["Location"])
+
+    def test_start_schedule_preparation_form_does_not_show_manual_deadline(self):
+        client = self.login_client()
+
+        response = client.get("/pre-session-control-tower?session_year=2026&view=sessions")
+        html = response.data.decode()
+        form_start = html.index(f'id="schedule-action-form-{self.session_record.id}-start_preparation"')
+        form_end = html.index("</form>", form_start)
+        form = html[form_start:form_end]
+
+        self.assertNotIn("Schedule preparation deadline", form)
+        self.assertNotIn("Set the date by which schedule preparation should be completed.", form)
+        self.assertNotIn('name="next_action_due_at"', form)
+
+    def test_start_schedule_preparation_redirects_to_schedule_only_modal(self):
+        client = self.login_client()
+
+        response = client.post(
+            f"/pre-session-control-tower/sessions/{self.session_record.id}/schedule",
+            data={
+                "csrf_token": "token",
+                "action_key": "start_preparation",
+            },
+            follow_redirects=False,
+        )
+
+        self.assertEqual(response.status_code, 302)
+        self.assertIn("open_schedule_modal", response.headers["Location"])
+        self.assertIn("open_modal_target=schedule-actions", response.headers["Location"])
+        self.assertIn("schedule_only=1", response.headers["Location"])
+
+    def test_schedule_actions_do_not_show_edit_deadline_button(self):
+        db.session.add(ExamSessionScheduleWorkflow(
+            exam_session_id=self.session_record.id,
+            status="In progress",
+            next_action_due_at=date(2026, 6, 30),
+        ))
+        db.session.commit()
+        client = self.login_client()
+
+        response = client.get("/pre-session-control-tower?session_year=2026&view=sessions")
+        html = response.data.decode()
+        actions_start = html.index(f'id="schedule-actions-{self.session_record.id}"')
+        actions_end = html.index(f'id="history-{self.session_record.id}"', actions_start)
+        actions = html[actions_start:actions_end]
+
+        self.assertIn("Current deadline", actions)
+        self.assertNotIn("Edit deadline", actions)
+        self.assertNotIn("schedule-edit-deadline-button", actions)
+
+    def test_reopen_schedule_requires_password_when_staffing_blocks_schedule(self):
+        staff_member = AcademicStaff(id=32, status="Active", full_name="Sofia Sent", roles="Supervisor", email="sofia@example.com")
+        db.session.add(staff_member)
+        db.session.add(ExamSessionScheduleWorkflow(
+            exam_session_id=self.session_record.id,
+            status="Approved",
+            approved_at=datetime.now(timezone.utc),
+        ))
+        db.session.flush()
+        db.session.add(ExamSessionSupervisorAssignment(
+            exam_session_id=self.session_record.id,
+            team_member_id=staff_member.id,
+            participation_status="Official confirmation sent",
+        ))
+        db.session.commit()
+        client = self.login_client()
+
+        response = client.get("/pre-session-control-tower?session_year=2026&view=sessions")
+        html = response.get_data(as_text=True)
+        form_start = html.index(f'id="schedule-action-form-{self.session_record.id}-reopen"')
+        form_end = html.index("</form>", form_start)
+        form = html[form_start:form_end]
+
+        self.assertIn("Password authorisation required", form)
+        self.assertIn("Editing the schedule may affect the Staffing stage, as official confirmations have already been sent. Password authorisation is required to continue.", form)
+        self.assertIn('name="schedule_reopen_password"', form)
+
+        response = client.post(
+            f"/pre-session-control-tower/sessions/{self.session_record.id}/schedule",
+            data={
+                "csrf_token": "token",
+                "action_key": "reopen",
+                "note": "Need to edit after staffing.",
+                "schedule_reopen_password": "Wrong",
+            },
+            follow_redirects=False,
+        )
+
+        self.assertEqual(response.status_code, 302)
+        self.assertIn("open_schedule_action=reopen", response.headers["Location"])
+        workflow = ExamSessionScheduleWorkflow.query.filter_by(exam_session_id=self.session_record.id).one()
+        self.assertEqual(workflow.status, "Approved")
+
+        response = client.post(
+            f"/pre-session-control-tower/sessions/{self.session_record.id}/schedule",
+            data={
+                "csrf_token": "token",
+                "action_key": "reopen",
+                "note": "Authorised schedule edit.",
+                "schedule_reopen_password": "EditOK",
+            },
+            follow_redirects=False,
+        )
+
+        self.assertEqual(response.status_code, 302)
+        self.assertEqual(workflow.status, "In progress")
+
+        response = client.get("/pre-session-control-tower?session_year=2026&view=sessions")
+        html = response.get_data(as_text=True)
+        table_start = html.index('aria-label="Schedule preparation and approval"')
+        table_end = html.index('<div class="modal"', table_start)
+        sessions_table = html[table_start:table_end]
+        session_row_start = sessions_table.index("June exam session")
+        session_row = sessions_table[sessions_table.rfind("<tr", 0, session_row_start):sessions_table.index("</tr>", session_row_start)]
+        schedule_cell_start = session_row.index('data-modal-target-label="Review schedule"')
+        staffing_cell_start = session_row.index('data-modal-target-label="Manage staffing"')
+        schedule_cell = session_row[schedule_cell_start:staffing_cell_start]
+        self.assertIn("workflow-gate-unblocked", schedule_cell)
+        self.assertIn("UNBLOCKED", schedule_cell)
+        self.assertNotIn("workflow-gate-blocked", schedule_cell)
+
+    def test_schedule_modal_renders_status_track_for_status_changes(self):
+        workflow = ExamSessionScheduleWorkflow(
+            exam_session_id=self.session_record.id,
+            status="Ready to send",
+            next_action_due_at=date(2026, 6, 30),
+        )
+        db.session.add(workflow)
+        db.session.flush()
+        db.session.add_all([
+            ExamSessionScheduleEvent(
+                workflow_id=workflow.id,
+                previous_status="Not started",
+                new_status="In progress",
+                created_at=datetime(2026, 6, 1, 12, 0, tzinfo=timezone.utc),
+                created_by="admin",
+            ),
+            ExamSessionScheduleEvent(
+                workflow_id=workflow.id,
+                previous_status="In progress",
+                new_status="In progress",
+                created_at=datetime(2026, 6, 2, 12, 0, tzinfo=timezone.utc),
+                created_by="admin",
+            ),
+            ExamSessionScheduleEvent(
+                workflow_id=workflow.id,
+                previous_status="In progress",
+                new_status="Ready to send",
+                created_at=datetime(2026, 6, 3, 12, 0, tzinfo=timezone.utc),
+                created_by="operations",
+            ),
+        ])
+        db.session.commit()
+        client = self.login_client()
+
+        response = client.get("/pre-session-control-tower?session_year=2026&view=sessions")
+        html = response.data.decode()
+        modal_start = html.index(f'id="schedule-workflow-{self.session_record.id}"')
+        next_modal = html.find('<div class="modal"', modal_start + 1)
+        modal = html[modal_start:next_modal if next_modal != -1 else len(html)]
+        track_start = modal.index(f'id="schedule-status-track-{self.session_record.id}"')
+        track_end = modal.index("</section>", track_start)
+        track_panel = modal[track_start:track_end]
+
+        self.assertIn("Status track", modal)
+        self.assertIn(f'id="schedule-status-track-{self.session_record.id}"', modal)
+        self.assertIn("Not started → In progress", track_panel)
+        self.assertIn("In progress → Ready to send", track_panel)
+        self.assertIn("operations", track_panel)
+        self.assertNotIn("In progress → In progress", track_panel)
+
+    def test_schedule_action_notes_show_from_and_to_fields(self):
+        actor = User(full_name="Admin User", email="admin-user@example.com", department="Admin", is_active=True)
+        recipient = User(full_name="Schedule Reviewer", email="reviewer@example.com", department="Management", is_active=True)
+        actor.set_password("secret123")
+        recipient.set_password("secret123")
+        db.session.add_all([actor, recipient])
+        db.session.add(ExamSessionScheduleWorkflow(
+            exam_session_id=self.session_record.id,
+            status="Ready to send",
+            next_action_due_at=date(2026, 6, 30),
+        ))
+        db.session.commit()
+        client = self.login_client_for_user(actor)
+
+        response = client.get("/pre-session-control-tower?session_year=2026&view=sessions")
+        html = response.data.decode()
+        form_start = html.index(f'id="schedule-action-form-{self.session_record.id}-send_for_review"')
+        form_end = html.index("</form>", form_start)
+        form = html[form_start:form_end]
+
+        self.assertIn("From", form)
+        self.assertIn("Admin User, Admin", form)
+        self.assertIn("To", form)
+        self.assertIn('name="note_to_user_id"', form)
+        self.assertIn("Schedule Reviewer, Management", form)
+
+    def test_schedule_note_add_renders_mentions_and_can_be_marked_read(self):
+        actor = User(full_name="Admin User", email="admin-note@example.com", department="Admin", is_active=True)
+        recipient = User(full_name="Schedule Reviewer", email="reviewer-note@example.com", department="Management", is_active=True)
+        actor.set_password("secret123")
+        recipient.set_password("secret123")
+        db.session.add_all([actor, recipient])
+        db.session.flush()
+        db.session.add(UserMenuPermission(
+            user_id=recipient.id,
+            menu_key="pre_session_control_tower",
+            can_view=True,
+            can_edit=False,
+        ))
+        db.session.commit()
+        client = self.login_client_for_user(actor)
+
+        response = client.post(
+            f"/pre-session-control-tower/sessions/{self.session_record.id}/schedule-notes",
+            data={
+                "csrf_token": "token",
+                "note": "Please review the updated schedule files.",
+                "note_to_user_id": str(recipient.id),
+            },
+            follow_redirects=False,
+        )
+
+        self.assertEqual(response.status_code, 302)
+        note = ExamSessionScheduleNote.query.one()
+        mention = ExamSessionScheduleNoteMention.query.one()
+        self.assertEqual(note.note_text, "Please review the updated schedule files.")
+        self.assertEqual(mention.to_user_id, recipient.id)
+        self.assertFalse(mention.is_read)
+
+        recipient_client = self.login_client_for_user(recipient)
+        html = recipient_client.get("/pre-session-control-tower?session_year=2026&view=sessions").get_data(as_text=True)
+        notes_start = html.index(f'id="schedule-notes-{self.session_record.id}"')
+        notes_end = html.index("</section>", notes_start)
+        notes_panel = html[notes_start:notes_end]
+        self.assertIn("Please review the updated schedule files.", html)
+        self.assertIn("From: Admin User, Admin", html)
+        self.assertIn("Schedule Reviewer, Management", html)
+        self.assertIn("Not read yet", html)
+        self.assertIn('data-note-read-checkbox', html)
+        self.assertLess(
+            notes_panel.index("Please review the updated schedule files."),
+            notes_panel.index(f'id="schedule-free-note-{self.session_record.id}"'),
+        )
+
+        read_response = recipient_client.post(
+            f"/schedule-note-mentions/{mention.id}/read",
+            data={"csrf_token": "token", "read": "1", "highlight_note": note.note_id},
+            follow_redirects=False,
+        )
+
+        self.assertEqual(read_response.status_code, 302)
+        db.session.refresh(mention)
+        self.assertTrue(mention.is_read)
+        self.assertEqual(mention.read_by_user_id, recipient.id)
+        self.assertIsNotNone(mention.read_on)
+
+    def test_schedule_action_note_creates_visible_note_mention(self):
+        actor = User(full_name="Admin User", email="admin-action-note@example.com", department="Admin", is_active=True)
+        recipient = User(full_name="Schedule Reviewer", email="reviewer-action-note@example.com", department="Management", is_active=True)
+        actor.set_password("secret123")
+        recipient.set_password("secret123")
+        db.session.add_all([actor, recipient])
+        db.session.add(ExamSessionScheduleWorkflow(
+            exam_session_id=self.session_record.id,
+            status="In progress",
+            next_action_due_at=date(2026, 6, 30),
+        ))
+        db.session.commit()
+        client = self.login_client_for_user(actor)
+
+        response = client.post(
+            f"/pre-session-control-tower/sessions/{self.session_record.id}/schedule",
+            data={
+                "csrf_token": "token",
+                "action_key": "mark_ready",
+                "exam_session_schedule_url": "https://example.com/session-schedule",
+                "note": "Schedules are ready for review.",
+                "note_to_user_id": str(recipient.id),
+            },
+            follow_redirects=False,
+        )
+
+        self.assertEqual(response.status_code, 302)
+        note = ExamSessionScheduleNote.query.one()
+        mention = ExamSessionScheduleNoteMention.query.one()
+        self.assertEqual(note.note_text, "Schedules are ready for review.")
+        self.assertEqual(note.from_user_id, actor.id)
+        self.assertEqual(mention.to_user_id, recipient.id)
+
+    def test_staffing_notes_panel_adds_mentions_and_can_be_marked_read(self):
+        actor = User(full_name="Admin User", email="admin-staffing-note@example.com", department="Admin", is_active=True)
+        recipient = User(full_name="Staffing Reviewer", email="staffing-reviewer@example.com", department="Management", is_active=True)
+        actor.set_password("secret123")
+        recipient.set_password("secret123")
+        db.session.add_all([actor, recipient])
+        db.session.flush()
+        db.session.add(UserMenuPermission(
+            user_id=recipient.id,
+            menu_key="pre_session_control_tower",
+            can_view=True,
+            can_edit=False,
+        ))
+        db.session.commit()
+        client = self.login_client_for_user(actor)
+
+        response = client.get("/pre-session-control-tower?session_year=2026&view=sessions")
+        html = response.get_data(as_text=True)
+        overview_index = html.index(f'id="overview-{self.session_record.id}"')
+        staffing_notes_index = html.index(f'id="staffing-notes-{self.session_record.id}"')
+        staffing_index = html.index(f'id="staffing-{self.session_record.id}"')
+        staffing_notes_panel = html[staffing_notes_index:staffing_index]
+
+        self.assertLess(overview_index, staffing_notes_index)
+        self.assertLess(staffing_notes_index, staffing_index)
+        self.assertIn("Notes", staffing_notes_panel)
+        self.assertIn('action="/pre-session-control-tower/sessions/1/staffing-notes"', staffing_notes_panel)
+        self.assertIn("From", staffing_notes_panel)
+        self.assertIn("Admin User, Admin", staffing_notes_panel)
+        self.assertIn("To", staffing_notes_panel)
+        self.assertIn("Staffing Reviewer, Management", staffing_notes_panel)
+
+        response = client.post(
+            f"/pre-session-control-tower/sessions/{self.session_record.id}/staffing-notes",
+            data={
+                "csrf_token": "token",
+                "note": "Please review the staffing confirmations.",
+                "note_to_user_id": str(recipient.id),
+            },
+            follow_redirects=False,
+        )
+
+        self.assertEqual(response.status_code, 302)
+        self.assertIn("open_modal_target=staffing-notes", response.headers["Location"])
+        note = ExamSessionStaffingNote.query.one()
+        mention = ExamSessionStaffingNoteMention.query.one()
+        self.assertEqual(note.note_text, "Please review the staffing confirmations.")
+        self.assertEqual(note.from_user_id, actor.id)
+        self.assertEqual(mention.to_user_id, recipient.id)
+        self.assertFalse(mention.is_read)
+
+        recipient_client = self.login_client_for_user(recipient)
+        html = recipient_client.get("/pre-session-control-tower?session_year=2026&view=sessions").get_data(as_text=True)
+        self.assertIn("Please review the staffing confirmations.", html)
+        self.assertIn("From: Admin User, Admin", html)
+        self.assertIn("Staffing Reviewer, Management", html)
+        self.assertIn("Not read yet", html)
+        self.assertIn(f"/staffing-note-mentions/{mention.id}/read", html)
+
+        read_response = recipient_client.post(
+            f"/staffing-note-mentions/{mention.id}/read",
+            data={"csrf_token": "token", "read": "1", "highlight_note": note.note_id},
+            follow_redirects=False,
+        )
+
+        self.assertEqual(read_response.status_code, 302)
+        db.session.refresh(mention)
+        self.assertTrue(mention.is_read)
+        self.assertEqual(mention.read_by_user_id, recipient.id)
+        self.assertIsNotNone(mention.read_on)
+
+    def test_continue_editing_form_does_not_show_manual_editing_deadline(self):
+        db.session.add(ExamSessionScheduleWorkflow(
+            exam_session_id=self.session_record.id,
+            status="Ready to send",
+            next_action_due_at=date(2026, 6, 30),
+        ))
+        db.session.commit()
+        client = self.login_client()
+
+        response = client.get("/pre-session-control-tower?session_year=2026&view=sessions")
+        html = response.data.decode()
+        form_start = html.index(f'id="schedule-action-form-{self.session_record.id}-continue_editing"')
+        form_end = html.index("</form>", form_start)
+        form = html[form_start:form_end]
+
+        self.assertNotIn("New editing deadline", form)
+        self.assertNotIn('name="next_action_due_at"', form)
+
+    def test_continue_editing_keeps_existing_deadline(self):
+        original_deadline = date(2026, 6, 30)
+        db.session.add(ExamSessionScheduleWorkflow(
+            exam_session_id=self.session_record.id,
+            status="Ready to send",
+            next_action_due_at=original_deadline,
+        ))
+        db.session.commit()
+        client = self.login_client()
+
+        response = client.post(
+            f"/pre-session-control-tower/sessions/{self.session_record.id}/schedule",
+            data={
+                "csrf_token": "token",
+                "action_key": "continue_editing",
+            },
+            follow_redirects=False,
+        )
+
+        self.assertEqual(response.status_code, 302)
+        workflow = ExamSessionScheduleWorkflow.query.filter_by(exam_session_id=self.session_record.id).one()
+        self.assertEqual(workflow.status, "In progress")
+        self.assertEqual(workflow.next_action_due_at, original_deadline)
+
+    def test_send_for_review_form_does_not_show_manual_review_deadline(self):
+        db.session.add(ExamSessionScheduleWorkflow(
+            exam_session_id=self.session_record.id,
+            status="Ready to send",
+            next_action_due_at=date(2026, 6, 30),
+        ))
+        db.session.commit()
+        client = self.login_client()
+
+        response = client.get("/pre-session-control-tower?session_year=2026&view=sessions")
+        html = response.data.decode()
+        form_start = html.index(f'id="schedule-action-form-{self.session_record.id}-send_for_review"')
+        form_end = html.index("</form>", form_start)
+        form = html[form_start:form_end]
+
+        self.assertNotIn("Review deadline", form)
+        self.assertNotIn('name="next_action_due_at"', form)
+
+    def test_ready_to_send_action_shows_schedule_share_buttons_before_review(self):
+        self.session_record.details_url = "https://example.com/schedules"
+        db.session.add(ExamSessionScheduleWorkflow(
+            exam_session_id=self.session_record.id,
+            status="Ready to send",
+            next_action_due_at=date(2026, 6, 30),
+        ))
+        db.session.commit()
+        client = self.login_client()
+
+        response = client.get("/pre-session-control-tower?session_year=2026&view=sessions")
+        html = response.data.decode()
+        action_start = html.index('<article class="schedule-recommended-action">')
+        action_end = html.index("</article>", action_start)
+        action = html[action_start:action_end]
+        other_actions_start = html.index('<section class="schedule-other-actions"', action_end)
+        other_actions_end = html.index("</section>", other_actions_start)
+        other_actions = html[other_actions_start:other_actions_end]
+
+        self.assertNotIn("View schedule", action)
+        self.assertIn("View schedule", other_actions)
+        self.assertIn('href="https://example.com/schedules"', other_actions)
+        self.assertIn("WhatsApp schedule", action)
+        self.assertIn("Email schedule", action)
+        self.assertIn("https://wa.me/?text=", action)
+        self.assertIn("mailto:?subject=", action)
+        review_button_index = action.index('aria-expanded="false">Mark as sent for review</button>')
+        self.assertLess(action.index("WhatsApp schedule"), review_button_index)
+        self.assertLess(action.index("Email schedule"), review_button_index)
+
+    def test_send_for_review_sets_review_deadline_automatically(self):
+        db.session.add(ExamSessionScheduleWorkflow(
+            exam_session_id=self.session_record.id,
+            status="Ready to send",
+            next_action_due_at=date(2026, 6, 30),
+        ))
+        db.session.commit()
+        client = self.login_client()
+
+        response = client.post(
+            f"/pre-session-control-tower/sessions/{self.session_record.id}/schedule",
+            data={
+                "csrf_token": "token",
+                "action_key": "send_for_review",
+            },
+            follow_redirects=False,
+        )
+
+        self.assertEqual(response.status_code, 302)
+        workflow = ExamSessionScheduleWorkflow.query.filter_by(exam_session_id=self.session_record.id).one()
+        self.assertEqual(workflow.status, "Sent for review")
+        self.assertEqual(workflow.next_action_due_at, argentina_add_business_days(datetime.now(LOCAL_TZ).date(), 2))
+
+    def test_record_changes_form_does_not_show_manual_modification_deadline(self):
+        db.session.add(ExamSessionScheduleWorkflow(
+            exam_session_id=self.session_record.id,
+            status="Sent for review",
+            next_action_due_at=date(2026, 6, 30),
+        ))
+        db.session.commit()
+        client = self.login_client()
+
+        response = client.get("/pre-session-control-tower?session_year=2026&view=sessions")
+        html = response.data.decode()
+        form_start = html.index(f'id="schedule-action-form-{self.session_record.id}-record_changes"')
+        form_end = html.index("</form>", form_start)
+        form = html[form_start:form_end]
+
+        self.assertNotIn("Modification deadline", form)
+        self.assertNotIn('name="next_action_due_at"', form)
+        self.assertIn("Requested changes note", form)
+
+    def test_record_changes_sets_modification_deadline_automatically(self):
+        db.session.add(ExamSessionScheduleWorkflow(
+            exam_session_id=self.session_record.id,
+            status="Sent for review",
+            next_action_due_at=date(2026, 6, 30),
+        ))
+        db.session.commit()
+        client = self.login_client()
+
+        response = client.post(
+            f"/pre-session-control-tower/sessions/{self.session_record.id}/schedule",
+            data={
+                "csrf_token": "token",
+                "action_key": "record_changes",
+                "note": "Needs room changes",
+            },
+            follow_redirects=False,
+        )
+
+        self.assertEqual(response.status_code, 302)
+        workflow = ExamSessionScheduleWorkflow.query.filter_by(exam_session_id=self.session_record.id).one()
+        self.assertEqual(workflow.status, "Changes requested")
+        self.assertEqual(workflow.next_action_due_at, argentina_add_business_days(datetime.now(LOCAL_TZ).date(), 2))
+
+    def test_mark_revised_ready_form_does_not_show_manual_resending_deadline(self):
+        db.session.add(ExamSessionScheduleWorkflow(
+            exam_session_id=self.session_record.id,
+            status="Changes requested",
+            next_action_due_at=date(2026, 6, 30),
+        ))
+        db.session.commit()
+        client = self.login_client()
+
+        response = client.get("/pre-session-control-tower?session_year=2026&view=sessions")
+        html = response.data.decode()
+        form_start = html.index(f'id="schedule-action-form-{self.session_record.id}-mark_revised_ready"')
+        form_end = html.index("</form>", form_start)
+        form = html[form_start:form_end]
+
+        self.assertNotIn("Resending deadline", form)
+        self.assertNotIn('name="next_action_due_at"', form)
+
+    def test_mark_revised_ready_sets_resending_deadline_automatically(self):
+        db.session.add(ExamSessionScheduleWorkflow(
+            exam_session_id=self.session_record.id,
+            status="Changes requested",
+            next_action_due_at=date(2026, 6, 30),
+        ))
+        db.session.commit()
+        client = self.login_client()
+
+        response = client.post(
+            f"/pre-session-control-tower/sessions/{self.session_record.id}/schedule",
+            data={
+                "csrf_token": "token",
+                "action_key": "mark_revised_ready",
+            },
+            follow_redirects=False,
+        )
+
+        self.assertEqual(response.status_code, 302)
+        workflow = ExamSessionScheduleWorkflow.query.filter_by(exam_session_id=self.session_record.id).one()
+        self.assertEqual(workflow.status, "Ready to send")
+        self.assertEqual(workflow.next_action_due_at, argentina_add_business_days(datetime.now(LOCAL_TZ).date(), 2))
+
+    def test_mark_ready_form_requires_exam_session_schedule_link(self):
+        self.session_record.details_url = ""
+        db.session.add(ExamSessionScheduleWorkflow(
+            exam_session_id=self.session_record.id,
+            status="In progress",
+            next_action_due_at=date(2026, 6, 30),
+        ))
+        db.session.commit()
+        client = self.login_client()
+
+        response = client.get("/pre-session-control-tower?session_year=2026&view=sessions")
+        html = response.data.decode()
+        form_start = html.index(f'id="schedule-action-form-{self.session_record.id}-mark_ready"')
+        form_end = html.index("</form>", form_start)
+        form = html[form_start:form_end]
+
+        self.assertIn("Exam session schedule", form)
+        self.assertIn('name="exam_session_schedule_url"', form)
+        self.assertIn("data-schedule-link-input", form)
+        self.assertIn("data-schedule-link-submit disabled", form)
+        self.assertNotIn("Sending deadline", form)
+        self.assertNotIn('name="next_action_due_at"', form)
+
+    def test_mark_ready_form_does_not_preload_existing_exam_session_schedule_link(self):
+        self.session_record.details_url = "https://example.com/existing-schedule"
+        db.session.add(ExamSessionScheduleWorkflow(
+            exam_session_id=self.session_record.id,
+            status="In progress",
+            next_action_due_at=date(2026, 6, 30),
+        ))
+        db.session.commit()
+        client = self.login_client()
+
+        response = client.get("/pre-session-control-tower?session_year=2026&view=sessions")
+        html = response.data.decode()
+        form_start = html.index(f'id="schedule-action-form-{self.session_record.id}-mark_ready"')
+        form_end = html.index("</form>", form_start)
+        form = html[form_start:form_end]
+
+        self.assertIn('name="exam_session_schedule_url" value=""', form)
+        self.assertNotIn("https://example.com/existing-schedule", form)
+        self.assertIn("data-schedule-link-submit disabled", form)
+
+    def test_mark_ready_form_preloads_existing_schedule_link_after_first_review_round(self):
+        self.session_record.details_url = "https://example.com/existing-schedule"
+        db.session.add(ExamSessionScheduleWorkflow(
+            exam_session_id=self.session_record.id,
+            status="In progress",
+            review_round=1,
+            next_action_due_at=date(2026, 6, 30),
+        ))
+        db.session.commit()
+        client = self.login_client()
+
+        response = client.get("/pre-session-control-tower?session_year=2026&view=sessions")
+        html = response.data.decode()
+        form_start = html.index(f'id="schedule-action-form-{self.session_record.id}-mark_ready"')
+        form_end = html.index("</form>", form_start)
+        form = html[form_start:form_end]
+
+        self.assertIn('name="exam_session_schedule_url" value="https://example.com/existing-schedule"', form)
+        self.assertIn("data-schedule-link-input", form)
+        self.assertIn("data-schedule-link-submit", form)
+        self.assertNotIn("data-schedule-link-submit disabled", form)
+
+    def test_mark_ready_saves_exam_session_schedule_link(self):
+        db.session.add(ExamSessionScheduleWorkflow(
+            exam_session_id=self.session_record.id,
+            status="In progress",
+            next_action_due_at=date(2026, 6, 30),
+        ))
+        db.session.commit()
+        client = self.login_client()
+
+        response = client.post(
+            f"/pre-session-control-tower/sessions/{self.session_record.id}/schedule",
+            data={
+                "csrf_token": "token",
+                "action_key": "mark_ready",
+                "next_action_due_at": "2026-07-01",
+                "exam_session_schedule_url": "https://example.com/session-schedule",
+            },
+            follow_redirects=False,
+        )
+
+        self.assertEqual(response.status_code, 302)
+        db.session.refresh(self.session_record)
+        workflow = ExamSessionScheduleWorkflow.query.filter_by(exam_session_id=self.session_record.id).one()
+        self.assertEqual(self.session_record.details_url, "https://example.com/session-schedule")
+        self.assertEqual(workflow.status, "Ready to send")
+        self.assertEqual(workflow.next_action_due_at, argentina_next_business_day(datetime.now(LOCAL_TZ).date()))
+
+    def test_mark_ready_rejects_missing_exam_session_schedule_link(self):
+        db.session.add(ExamSessionScheduleWorkflow(
+            exam_session_id=self.session_record.id,
+            status="In progress",
+            next_action_due_at=date(2026, 6, 30),
+        ))
+        db.session.commit()
+        client = self.login_client()
+
+        response = client.post(
+            f"/pre-session-control-tower/sessions/{self.session_record.id}/schedule",
+            data={
+                "csrf_token": "token",
+                "action_key": "mark_ready",
+                "next_action_due_at": "2026-07-01",
+                "exam_session_schedule_url": "",
+            },
+            follow_redirects=False,
+        )
+
+        self.assertEqual(response.status_code, 302)
+        self.assertIn("open_schedule_action=mark_ready", response.headers["Location"])
+        workflow = ExamSessionScheduleWorkflow.query.filter_by(exam_session_id=self.session_record.id).one()
+        self.assertEqual(workflow.status, "In progress")
+
+    def test_argentina_next_business_day_skips_weekends_and_holidays(self):
+        self.assertEqual(argentina_next_business_day(date(2026, 7, 10)), date(2026, 7, 13))
+        self.assertEqual(argentina_next_business_day(date(2026, 12, 7)), date(2026, 12, 9))
+
+    def test_argentina_add_business_days_skips_weekends_and_holidays(self):
+        self.assertEqual(argentina_add_business_days(date(2026, 7, 10), 2), date(2026, 7, 14))
+        self.assertEqual(argentina_add_business_days(date(2026, 12, 4), 2), date(2026, 12, 9))
 
     def test_staffing_control_view_does_not_create_record(self):
         client = self.login_client()
@@ -4059,6 +4827,46 @@ class ScheduleWorkflowTest(unittest.TestCase):
         self.assertEqual(ExamSessionShipmentBundleSession.query.count(), 2)
         self.assertEqual({link.exam_session_id for link in bundle.session_links}, {first.id, second.id})
 
+    def test_auto_shipment_bundle_sets_schedule_deadline_from_earliest_session(self):
+        self.create_supervisor(staff_id=1, name="Laura Mendez")
+        sessions = []
+        for name, session_date in [
+            ("October session", date(2026, 10, 13)),
+            ("November session", date(2026, 11, 17)),
+            ("December session", date(2026, 12, 20)),
+        ]:
+            session_record = ExamSession(
+                exam_session_name=name,
+                category="Path School",
+                status="Pending",
+                session_date=session_date,
+                shifts="Morning",
+                modules="Speaking",
+                format="Online",
+            )
+            db.session.add(session_record)
+            db.session.flush()
+            self.assign_confirmed_supervisor(session_record, supervisor_id=1)
+            sessions.append(session_record)
+        db.session.add(ExamSessionScheduleWorkflow(
+            exam_session_id=sessions[0].id,
+            status="In progress",
+            next_action_due_at=date(2026, 9, 30),
+        ))
+        db.session.commit()
+
+        reconcile_auto_shipment_bundles(sessions, today=date(2026, 8, 1))
+
+        workflows = {
+            workflow.exam_session_id: workflow
+            for workflow in ExamSessionScheduleWorkflow.query.filter(
+                ExamSessionScheduleWorkflow.exam_session_id.in_([session_record.id for session_record in sessions])
+            ).all()
+        }
+        self.assertEqual(ExamSessionShipmentBundle.query.count(), 1)
+        self.assertEqual({workflow.next_action_due_at for workflow in workflows.values()}, {date(2026, 9, 13)})
+        self.assertEqual(set(workflows), {session_record.id for session_record in sessions})
+
     def test_auto_shipment_bundles_separate_supervisors_and_skip_missing_supervisor(self):
         self.create_supervisor(staff_id=1, name="Laura Mendez")
         self.create_supervisor(staff_id=4, name="Mateo Silva")
@@ -4339,6 +5147,165 @@ class ScheduleWorkflowTest(unittest.TestCase):
         self.assertIn('data-modal-scroll-target="shipments-', table)
         self.assertIn('data-modal-scroll-target="readiness-', table)
 
+    def test_bundle_detail_schedule_modal_only_shows_schedule_context(self):
+        self.create_supervisor(staff_id=1, name="Laura Mendez")
+        first = self.create_planning_ready_session("Selected bundle schedule", date(2026, 7, 9), supervisor_id=1, packages_ready=True)
+        second = self.create_planning_ready_session("Selected bundle companion", date(2026, 7, 10), supervisor_id=1, packages_ready=True)
+        reconcile_auto_shipment_bundles([first, second], today=date(2026, 6, 20))
+        selected_link = ExamSessionShipmentBundleSession.query.filter_by(exam_session_id=first.id).one()
+        client = self.login_client()
+
+        response = client.get(f"/pre-session-control-tower?session_year=2026&view=bundle&bundle_id={selected_link.bundle_id}")
+        html = response.get_data(as_text=True)
+        table = html[html.index('aria-label="Schedule preparation and approval"'):html.index('<div class="modal"', html.index('aria-label="Schedule preparation and approval"'))]
+        modal_start = html.index(f'id="schedule-workflow-{first.id}"')
+        next_modal = html.find('<div class="modal"', modal_start + 1)
+        modal = html[modal_start:next_modal if next_modal != -1 else len(html)]
+        schedule_button_start = table.index(f'data-modal-scroll-target="schedule-notes-{first.id}"')
+        schedule_button = table[table.rfind("<button", 0, schedule_button_start):table.index("</button>", schedule_button_start)]
+        staffing_button_start = table.index(f'data-modal-scroll-target="staffing-{first.id}"')
+        staffing_button = table[table.rfind("<button", 0, staffing_button_start):table.index("</button>", staffing_button_start)]
+
+        self.assertIn('data-modal-schedule-only="true"', schedule_button)
+        self.assertNotIn('data-modal-schedule-only="true"', staffing_button)
+        self.assertIn('data-modal-staffing-only="true"', staffing_button)
+        self.assertIn("Schedule preparation and approval", modal)
+        self.assertIn(f'id="overview-{first.id}"', modal)
+        self.assertIn("Session overview", modal)
+        self.assertIn("A quick operational snapshot for this exam session.", modal)
+        self.assertIn(f'id="schedule-actions-{first.id}"', modal)
+        self.assertIn("Schedule actions", modal)
+        self.assertIn(f'id="schedule-notes-{first.id}"', modal)
+        self.assertIn("Notes", modal)
+        self.assertIn(f'id="staffing-{first.id}"', modal)
+        self.assertIn(f'id="logistics-{first.id}"', modal)
+        self.assertIn(f'id="shipments-{first.id}"', modal)
+
+    def test_schedule_and_staffing_actions_keep_bundle_context(self):
+        self.create_supervisor(staff_id=1, name="Laura Mendez")
+        first = self.create_planning_ready_session("Selected bundle schedule", date(2026, 7, 9), supervisor_id=1, packages_ready=True)
+        second = self.create_planning_ready_session("Selected bundle companion", date(2026, 7, 10), supervisor_id=1, packages_ready=True)
+        reconcile_auto_shipment_bundles([first, second], today=date(2026, 6, 20))
+        selected_link = ExamSessionShipmentBundleSession.query.filter_by(exam_session_id=first.id).one()
+        workflow = ExamSessionScheduleWorkflow.query.filter_by(exam_session_id=first.id).one()
+        workflow.status = "Not started"
+        workflow.next_action_due_at = None
+        staff_member = AcademicStaff(id=31, status="Active", full_name="Ian Intern", roles="Intern", email="ian@example.com")
+        db.session.add(staff_member)
+        db.session.flush()
+        assignment = ExamSessionInternAssignment(
+            exam_session_id=first.id,
+            team_member_id=staff_member.id,
+            participation_status="Pending",
+        )
+        db.session.add(assignment)
+        db.session.commit()
+        client = self.login_client()
+
+        bundle_response = client.get(f"/pre-session-control-tower?session_year=2026&view=bundle&bundle_id={selected_link.bundle_id}")
+        bundle_html = bundle_response.get_data(as_text=True)
+        modal_start = bundle_html.index(f'id="schedule-workflow-{first.id}"')
+        next_modal = bundle_html.find('<div class="modal"', modal_start + 1)
+        modal = bundle_html[modal_start:next_modal if next_modal != -1 else len(bundle_html)]
+        staffing_form_index = modal.index(f"/staffing-assignments/intern/{assignment.id}/status")
+        staffing_form = modal[modal.rfind("<form", 0, staffing_form_index):modal.index("</form>", staffing_form_index)]
+
+        self.assertIn('name="view" value="bundle"', modal)
+        self.assertIn(f'name="bundle_id" value="{selected_link.bundle_id}"', modal)
+        self.assertIn('name="view" value="bundle"', staffing_form)
+        self.assertIn(f'name="bundle_id" value="{selected_link.bundle_id}"', staffing_form)
+
+        schedule_response = client.post(
+            f"/pre-session-control-tower/sessions/{first.id}/schedule",
+            data={
+                "csrf_token": "token",
+                "action_key": "start_preparation",
+                "view": "bundle",
+                "bundle_id": str(selected_link.bundle_id),
+            },
+            follow_redirects=False,
+        )
+        schedule_location = schedule_response.headers["Location"]
+
+        self.assertEqual(schedule_response.status_code, 302)
+        self.assertIn("view=bundle", schedule_location)
+        self.assertIn(f"bundle_id={selected_link.bundle_id}", schedule_location)
+        self.assertIn("open_modal_target=schedule-actions", schedule_location)
+        self.assertIn("schedule_only=1", schedule_location)
+
+        staffing_response = client.post(
+            f"/pre-session-control-tower/sessions/{first.id}/staffing-assignments/intern/{assignment.id}/status",
+            data={
+                "csrf_token": "token",
+                "participation_status": "Official confirmation sent",
+                "view": "bundle",
+                "bundle_id": str(selected_link.bundle_id),
+            },
+            follow_redirects=False,
+        )
+        staffing_location = staffing_response.headers["Location"]
+
+        self.assertEqual(staffing_response.status_code, 302)
+        self.assertIn("view=bundle", staffing_location)
+        self.assertIn(f"bundle_id={selected_link.bundle_id}", staffing_location)
+        self.assertIn("open_modal_target=staffing", staffing_location)
+        self.assertIn("staffing_only=1", staffing_location)
+
+    def test_schedule_only_mode_keeps_schedule_notes_visible(self):
+        with open("app/static/css/styles.css", encoding="utf-8") as css_file:
+            css = css_file.read()
+
+        self.assertIn(
+            ".modal.is-schedule-only .schedule-workflow-panel > :not(.modal-header):not(.control-tower-overview):not(.schedule-workflow-actions):not(.schedule-notes-section)",
+            css,
+        )
+        self.assertIn(".schedule-notes-section {\n  order: 2;", css)
+        self.assertIn(".schedule-workflow-actions {\n  order: 15;", css)
+
+    def test_staffing_column_opens_staffing_only_modal_context(self):
+        client = self.login_client()
+
+        response = client.get("/pre-session-control-tower?session_year=2026&view=sessions")
+        html = response.get_data(as_text=True)
+        session_id = self.session_record.id
+        table = html[html.index('aria-label="Schedule preparation and approval"'):html.index('<div class="modal"', html.index('aria-label="Schedule preparation and approval"'))]
+        staffing_button_start = table.index(f'data-modal-scroll-target="staffing-{session_id}"')
+        staffing_button = table[table.rfind("<button", 0, staffing_button_start):table.index("</button>", staffing_button_start)]
+
+        self.assertIn('data-modal-staffing-only="true"', staffing_button)
+        self.assertIn('data-modal-target-label="Manage staffing"', staffing_button)
+        modal_start = html.index(f'id="schedule-workflow-{session_id}"')
+        next_modal = html.find('<div class="modal"', modal_start + 1)
+        modal = html[modal_start:next_modal if next_modal != -1 else len(html)]
+        self.assertIn("Schedule preparation and approval", modal)
+        self.assertIn("STAFF PARTICIPATION AND CONFIRMATION", modal)
+        with open("app/static/css/styles.css", encoding="utf-8") as css_file:
+            css = css_file.read()
+        self.assertIn(
+            '.modal.is-staffing-only .schedule-workflow-panel > :not(.modal-header):not(.control-tower-overview):not([id^="staffing-"])',
+            css,
+        )
+        self.assertIn(".modal.is-staffing-only .modal-title-schedule", css)
+        self.assertIn(".modal.is-staffing-only .modal-title-staffing", css)
+
+    def test_schedule_notes_are_fixed_below_session_overview(self):
+        client = self.login_client()
+
+        response = client.get("/pre-session-control-tower?session_year=2026&view=sessions")
+        html = response.get_data(as_text=True)
+        modal_start = html.index(f'id="schedule-workflow-{self.session_record.id}"')
+        next_modal = html.find('<div class="modal"', modal_start + 1)
+        modal = html[modal_start:next_modal if next_modal != -1 else len(html)]
+        overview_index = modal.index(f'id="overview-{self.session_record.id}"')
+        notes_index = modal.index(f'id="schedule-notes-{self.session_record.id}"')
+        nav_index = modal.index('<nav class="modal-section-nav"')
+        notes_tag = modal[modal.rfind("<section", 0, notes_index):modal.index(">", notes_index) + 1]
+
+        self.assertLess(overview_index, notes_index)
+        self.assertLess(notes_index, nav_index)
+        self.assertNotIn("data-control-section", notes_tag)
+        self.assertNotIn("data-default-collapsed", notes_tag)
+
     def test_bundles_view_hides_completed_bundles_but_keeps_active_statuses(self):
         self.create_supervisor()
         active_statuses = [
@@ -4381,6 +5348,30 @@ class ScheduleWorkflowTest(unittest.TestCase):
 
         self.assertIn("No pending shipment bundles.", html)
         self.assertIn("All current shipment bundles are either completed or not yet available.", html)
+        self.assertNotIn("Pending bundles", html)
+
+    def test_bundles_view_shows_pending_bundle_for_onsite_sessions_without_shipment(self):
+        pending_session = ExamSession(
+            exam_session_name="Shipment not configured",
+            category="Path School",
+            status="Pending",
+            session_date=date(2026, 8, 20),
+            shifts="Morning",
+            modules="Speaking",
+            format="Onsite",
+        )
+        db.session.add(pending_session)
+        db.session.commit()
+        client = self.login_client()
+
+        response = client.get("/pre-session-control-tower?session_year=2026")
+        html = response.get_data(as_text=True)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("Pending bundles", html)
+        self.assertIn("Shipment not configured", html)
+        self.assertIn("Shipment recipient missing", html)
+        self.assertNotIn("No pending shipment bundles.", html)
 
     def test_completed_bundle_remains_visible_in_sessions_and_detail(self):
         self.create_supervisor()
@@ -6949,11 +7940,53 @@ class ScheduleWorkflowTest(unittest.TestCase):
         self.assertNotIn("<th>Schedule gate</th>", html)
         self.assertIn("Schedule blocked", html)
         self.assertIn("Schedule ready", html)
-        self.assertIn("Gate: Ready", html)
-        self.assertIn("Gate: Blocked", html)
+        self.assertIn("schedule-gate-ready", html)
+        self.assertIn("schedule-gate-blocked", html)
+        self.assertIn("workflow-gate-unblocked", html)
         self.assertIn("This session cannot move to the next pre-session stages until the schedules are approved.", html)
         self.assertIn("Schedules are approved. The session can move to the next pre-session stages.", html)
         self.assertNotIn("Other year session", html)
+
+    def test_schedule_column_locks_when_any_staffing_status_is_not_pending(self):
+        staff_member = AcademicStaff(id=30, status="Active", full_name="Olivia Official", roles="Examiner")
+        db.session.add(staff_member)
+        db.session.add(ExamSessionScheduleWorkflow(
+            exam_session_id=self.session_record.id,
+            status="Approved",
+        ))
+        db.session.flush()
+        assignment = ExamSessionExaminerAssignment(
+            exam_session_id=self.session_record.id,
+            team_member_id=staff_member.id,
+            participation_status="Pending",
+        )
+        db.session.add(assignment)
+        db.session.commit()
+        client = self.login_client()
+
+        def schedule_cell_html():
+            response = client.get("/pre-session-control-tower?session_year=2026&view=sessions")
+            html = response.get_data(as_text=True)
+            table_start = html.index('aria-label="Schedule preparation and approval"')
+            table_end = html.index('<div class="modal"', table_start)
+            sessions_table = html[table_start:table_end]
+            session_row_start = sessions_table.index("June exam session")
+            session_row = sessions_table[sessions_table.rfind("<tr", 0, session_row_start):sessions_table.index("</tr>", session_row_start)]
+            schedule_cell_start = session_row.index('data-modal-target-label="Review schedule"')
+            staffing_cell_start = session_row.index('data-modal-target-label="Manage staffing"')
+            return session_row[schedule_cell_start:staffing_cell_start]
+
+        schedule_cell = schedule_cell_html()
+        self.assertIn("workflow-gate-unblocked", schedule_cell)
+        self.assertIn("UNBLOCKED", schedule_cell)
+        self.assertNotIn("workflow-gate-blocked", schedule_cell)
+
+        assignment.participation_status = "Official confirmation sent"
+        db.session.commit()
+        schedule_cell = schedule_cell_html()
+        self.assertIn("workflow-gate-blocked", schedule_cell)
+        self.assertIn("BLOCKED", schedule_cell)
+        self.assertNotIn("workflow-gate-unblocked", schedule_cell)
 
     def test_control_tower_sessions_table_uses_contextual_modal_targets(self):
         client = self.login_client()
@@ -6975,7 +8008,7 @@ class ScheduleWorkflowTest(unittest.TestCase):
         self.assertNotIn("<th>Review round</th>", sessions_table)
         self.assertNotIn("<th>Responsible</th>", sessions_table)
         self.assertNotIn("<th>Deadline</th>", sessions_table)
-        self.assertIn("Gate:", sessions_table)
+        self.assertNotIn("Gate:", sessions_table)
         self.assertIn(f'data-open-modal="schedule-workflow-{session_id}" data-modal-scroll-target="overview-{session_id}" data-modal-mode="overview"', sessions_table)
         for target, label in [
             ("schedule-actions", "Review schedule"),
@@ -7808,31 +8841,41 @@ class ScheduleWorkflowTest(unittest.TestCase):
         self.assertIn("data-focused-context", modal)
         self.assertIn(f'id="overview-{session_id}"', modal)
         self.assertIn("A quick operational snapshot for this exam session.", modal)
-        self.assertIn("Priority action", modal)
-        self.assertIn("Key blockers", modal)
-        self.assertIn("Quick links", modal)
-        self.assertIn("Readiness summary", modal)
-        self.assertIn("Journey sharing", modal)
-        self.assertIn("Recent activity", modal)
-        for href, label in [
-            (f'#schedule-actions-{session_id}', "Review schedule"),
-            (f'#staffing-{session_id}', "Manage staffing"),
-            (f'#logistics-{session_id}', "Review logistics"),
-            (f'#packages-{session_id}', "Manage packages"),
-            (f'#shipments-{session_id}', "Track shipment"),
-            (f'#finance-{session_id}', "Review finance"),
-            (f'#sinapsis-{session_id}', "Check Sinapsis"),
-            (f'#communications-{session_id}', "Review communications"),
-            (f'#incidents-{session_id}', "Open incidents"),
-            (f'#readiness-{session_id}', "View readiness"),
-            (f'#journey-{session_id}', "Manage journey sharing"),
-        ]:
-            self.assertIn(f'href="{href}"', modal)
-            self.assertIn(label, modal)
+        overview_start = modal.index(f'id="overview-{session_id}"')
+        overview_end = modal.index(f'id="schedule-notes-{session_id}"')
+        overview = modal[overview_start:overview_end]
+        self.assertNotIn("overview-primary-card", overview)
+        self.assertNotIn("overview-priority-card", overview)
+        self.assertNotIn("overview-blockers-card", overview)
+        self.assertNotIn("Key blockers", overview)
+        self.assertNotIn("Quick links", overview)
+        self.assertNotIn("Readiness summary", overview)
+        self.assertNotIn("Journey sharing", overview)
+        self.assertNotIn("Recent activity", overview)
         self.assertIn('aria-label="Manage modal sections"', modal)
         self.assertIn(f'id="schedule-overview-{session_id}"', modal)
         self.assertIn(f'id="schedule-actions-{session_id}"', modal)
         self.assertIn(f'id="schedule-{session_id}"', modal)
+        staffing_id_index = modal.index(f'id="staffing-{session_id}"')
+        staffing_start = modal.rfind("<section", 0, staffing_id_index)
+        staffing_end = modal.index(f'id="logistics-{session_id}"')
+        staffing_section = modal[staffing_start:staffing_end]
+        self.assertIn("staffing-actions-section", staffing_section)
+        self.assertIn("Staffing actions", staffing_section)
+        self.assertIn("staffing-header-actions", staffing_section)
+        self.assertIn('<strong class="responsible-chip">ADMIN</strong>', staffing_section)
+        self.assertIn("Current status", staffing_section)
+        self.assertIn("Recommended next action", staffing_section)
+        self.assertIn("Responsible", staffing_section)
+        self.assertIn("Nearest deadline", staffing_section)
+        self.assertNotIn("Responsible person", staffing_section)
+        self.assertNotIn("Staffing deadline", staffing_section)
+        self.assertNotIn("Operational note", staffing_section)
+        self.assertNotIn("Open in Exam session planner", staffing_section)
+        self.assertNotIn("Edit ownership and deadline", staffing_section)
+        with open("app/static/css/styles.css", encoding="utf-8") as css_file:
+            css = css_file.read()
+        self.assertIn(".schedule-workflow-actions h3,\n.staffing-actions-section h3,", css)
         self.assertIn(f'id="readiness-{session_id}"', modal)
         self.assertIn(f'id="history-{session_id}"', modal)
         for target in [
@@ -7911,15 +8954,22 @@ class ScheduleWorkflowTest(unittest.TestCase):
         self.assertIn("<th>Staffing</th>", html)
         self.assertLess(html.index("<th>Action</th>"), html.index("<th>Session</th>"))
         self.assertLess(html.index("<th>Schedule</th>"), html.index("<th>Staffing</th>"))
+        self.assertIn("BLOCKED", html)
+        self.assertIn("UNBLOCKED", html)
+        self.assertIn('<svg viewBox="0 0 24 24" aria-hidden="true">', html)
+        self.assertIn("staffing-gate-blocked", html)
+        self.assertIn("staffing-gate-unblocked", html)
         self.assertIn("Not configured", html)
         self.assertIn("No staff roles configured", html)
         self.assertNotIn("0 / 0 confirmed", html)
-        self.assertIn("Open positions", html)
+        self.assertIn("Roles to cover", html)
         self.assertIn("0 / 1 confirmed", html)
         self.assertIn("1 role to cover", html)
-        self.assertIn("Awaiting confirmations", html)
-        self.assertIn("2 awaiting confirmations", html)
-        self.assertIn("Ready", html)
+        self.assertIn("Confirmations to be sent", html)
+        self.assertIn("Confirmations to be updated", html)
+        self.assertIn("1 confirmation to be sent", html)
+        self.assertIn("1 confirmation to be updated", html)
+        self.assertIn("Confirmed staff", html)
         self.assertIn("3 / 3 confirmed", html)
         self.assertIn("Supervisor", html)
         self.assertIn("Examiner", html)
@@ -7938,6 +8988,422 @@ class ScheduleWorkflowTest(unittest.TestCase):
             html,
         )
         self.assertNotIn("data-team-member-select", html)
+
+    def test_staffing_actions_table_lists_individual_staff_rows(self):
+        self.session_record.format = "Onsite"
+        emergency_contact = AcademicStaff(id=10, status="Active", full_name="Eva Emergency", roles="Supervisor", email="eva@example.com")
+        remote_supervisor = AcademicStaff(id=11, status="Active", full_name="Rita Remote", roles="Supervisor", email="rita@example.com")
+        examiner = AcademicStaff(id=12, status="Active", full_name="Eli Examiner", roles="Examiner", email="eli@example.com")
+        intern = AcademicStaff(id=13, status="Active", full_name="Ian Intern", roles="Intern", email="ian@example.com")
+        db.session.add_all([emergency_contact, remote_supervisor, examiner, intern])
+        db.session.flush()
+        self.session_record.emergency_contact_required = True
+        self.session_record.emergency_contact_member_id = emergency_contact.id
+        db.session.add_all([
+            ExamSessionSupervisorAssignment(
+                exam_session_id=self.session_record.id,
+                team_member_id=remote_supervisor.id,
+                participation_status="Pending",
+                is_remote=True,
+                is_shipment_recipient=True,
+            ),
+            ExamSessionSupervisorAssignment(exam_session_id=self.session_record.id),
+            ExamSessionExaminerAssignment(
+                exam_session_id=self.session_record.id,
+                team_member_id=examiner.id,
+                participation_status="Official confirmation sent",
+            ),
+            ExamSessionInternAssignment(
+                exam_session_id=self.session_record.id,
+                team_member_id=intern.id,
+                participation_status="Confirmed",
+            ),
+        ])
+        db.session.commit()
+        client = self.login_client()
+
+        response = client.get("/pre-session-control-tower?session_year=2026&view=sessions")
+        html = response.get_data(as_text=True)
+        modal_start = html.index(f'id="staffing-{self.session_record.id}"')
+        modal_end = html.index(f'id="logistics-{self.session_record.id}"')
+        staffing = html[modal_start:modal_end]
+
+        self.assertIn("<th>Role</th>", staffing)
+        self.assertIn("<th>Staff member</th>", staffing)
+        self.assertIn("<th>Status</th>", staffing)
+        self.assertIn("<th>Deadline</th>", staffing)
+        self.assertIn("<th>Official confirmation</th>", staffing)
+        self.assertIn("<th>Update status</th>", staffing)
+        self.assertNotIn("<th>Required</th>", staffing)
+        self.assertIn("Emergency contact", staffing)
+        self.assertIn("Eva Emergency", staffing)
+        self.assertIn("Supervisor (remote)", staffing)
+        self.assertIn("Rita Remote", staffing)
+        self.assertIn("Receives shipment", staffing)
+        self.assertIn("Role to cover", staffing)
+        self.assertIn("Roles to cover", staffing)
+        self.assertIn("Confirmations to be sent", staffing)
+        self.assertIn("Confirmations to be updated", staffing)
+        self.assertIn("Wait for schedule approval", staffing)
+        self.assertIn("Examiner", staffing)
+        self.assertIn("Eli Examiner", staffing)
+        self.assertIn("Intern", staffing)
+        self.assertIn("Ian Intern", staffing)
+        self.assertIn("Send email", staffing)
+        self.assertIn("Schedule approval is required before proceeding with the official staffing stage.", staffing)
+        self.assertIn("staffing-action-chip-grey is-disabled", staffing)
+        role_to_cover_index = staffing.index("Role to cover")
+        role_to_cover_row = staffing[staffing.rfind("<tr", 0, role_to_cover_index):staffing.index("</tr>", role_to_cover_index)]
+        self.assertIn("Mark as sent", role_to_cover_row)
+        self.assertIn("disabled", role_to_cover_row)
+        self.assertIn("is-disabled", role_to_cover_row)
+        self.assertIn("copy-icon-button email-invitation-copy-button", staffing)
+        self.assertIn("copy-icon", staffing)
+        self.assertIn("check-icon", staffing)
+        self.assertIn("Copied!", staffing)
+        self.assertIn("Mark as sent", staffing)
+        self.assertIn("Mark as confirmed", staffing)
+        self.assertIn("Mark as declined", staffing)
+        self.assertIn("Force Pending", staffing)
+        with open("app/static/css/styles.css", encoding="utf-8") as css_file:
+            css = css_file.read()
+        self.assertIn(".staffing-member-name {\n  display: block;\n  color: var(--color-primary-dark);\n  font-size: 12px;", css)
+        self.assertIn(".staffing-role-to-cover {\n  color: var(--badge-red-text);\n  font-size: 12px;", css)
+        self.assertIn(".staffing-role-table th,\n.staffing-role-table td {\n  padding: 6px 8px;", css)
+        self.assertIn(".staffing-role-table th:nth-child(3),\n.staffing-role-table td:nth-child(3) {\n  text-align: left;", css)
+        self.assertIn(".staffing-role-table th:nth-child(4),\n.staffing-role-table td:nth-child(4) {\n  text-align: left;", css)
+        self.assertIn(".staffing-deadline-chip", css)
+        self.assertIn(".staffing-role-table th:nth-child(5),\n.staffing-role-table td:nth-child(5),\n.staffing-role-table th:nth-child(6),\n.staffing-role-table td:nth-child(6) {\n  text-align: left;", css)
+        self.assertIn(".staffing-role-table td:nth-child(5) .staffing-inline-actions,\n.staffing-role-table td:nth-child(6) .staffing-inline-actions {\n  justify-content: flex-start;", css)
+        self.assertIn(".staffing-action-chip {\n  min-height: 24px;\n  padding: 4px 8px;", css)
+        self.assertIn(".staffing-status-roles-to-cover", css)
+        self.assertIn(".staffing-status-confirmations-to-be-sent", css)
+        self.assertIn(".staffing-status-confirmations-to-be-updated", css)
+        self.assertIn(".staffing-status-confirmed-staff", css)
+
+    def test_staffing_recommended_next_action_matches_active_status_priority(self):
+        pending_member = AcademicStaff(id=26, status="Active", full_name="Pablo Pending", roles="Examiner", email="pablo@example.com")
+        sent_member = AcademicStaff(id=27, status="Active", full_name="Sara Sent", roles="Examiner", email="sara@example.com")
+        mixed_pending_member = AcademicStaff(id=28, status="Active", full_name="Mila Mixed", roles="Examiner", email="mila@example.com")
+        mixed_sent_member = AcademicStaff(id=29, status="Active", full_name="Tomas Mixed", roles="Examiner", email="tomas@example.com")
+        open_session = ExamSession(
+            exam_session_name="Open staffing action",
+            category="Path School",
+            status="Pending",
+            session_date=date(2026, 7, 11),
+            shifts="Morning",
+            modules="Speaking",
+            format="Online",
+        )
+        pending_session = ExamSession(
+            exam_session_name="Pending staffing action",
+            category="Path School",
+            status="Pending",
+            session_date=date(2026, 7, 12),
+            shifts="Morning",
+            modules="Speaking",
+            format="Online",
+        )
+        sent_session = ExamSession(
+            exam_session_name="Sent staffing action",
+            category="Path School",
+            status="Pending",
+            session_date=date(2026, 7, 13),
+            shifts="Morning",
+            modules="Speaking",
+            format="Online",
+        )
+        mixed_session = ExamSession(
+            exam_session_name="Mixed staffing action",
+            category="Path School",
+            status="Pending",
+            session_date=date(2026, 7, 14),
+            shifts="Morning",
+            modules="Speaking",
+            format="Online",
+        )
+        db.session.add_all([pending_member, sent_member, mixed_pending_member, mixed_sent_member, open_session, pending_session, sent_session, mixed_session])
+        db.session.flush()
+        db.session.add_all([
+            ExamSessionScheduleWorkflow(exam_session_id=open_session.id, status="Approved"),
+            ExamSessionScheduleWorkflow(exam_session_id=pending_session.id, status="Approved"),
+            ExamSessionScheduleWorkflow(exam_session_id=sent_session.id, status="Approved"),
+            ExamSessionScheduleWorkflow(exam_session_id=mixed_session.id, status="Approved"),
+            ExamSessionSupervisorAssignment(exam_session_id=open_session.id),
+            ExamSessionExaminerAssignment(exam_session_id=pending_session.id, team_member_id=pending_member.id, participation_status="Pending"),
+            ExamSessionExaminerAssignment(exam_session_id=sent_session.id, team_member_id=sent_member.id, participation_status="Official confirmation sent"),
+            ExamSessionSupervisorAssignment(exam_session_id=mixed_session.id),
+            ExamSessionExaminerAssignment(exam_session_id=mixed_session.id, team_member_id=mixed_pending_member.id, participation_status="Pending"),
+            ExamSessionInternAssignment(exam_session_id=mixed_session.id, team_member_id=mixed_sent_member.id, participation_status="Official confirmation sent"),
+        ])
+        db.session.commit()
+        client = self.login_client()
+
+        response = client.get("/pre-session-control-tower?session_year=2026&view=sessions")
+        html = response.get_data(as_text=True)
+        open_start = html.index(f'id="staffing-{open_session.id}"')
+        open_end = html.index(f'id="logistics-{open_session.id}"')
+        pending_start = html.index(f'id="staffing-{pending_session.id}"')
+        pending_end = html.index(f'id="logistics-{pending_session.id}"')
+        sent_start = html.index(f'id="staffing-{sent_session.id}"')
+        sent_end = html.index(f'id="logistics-{sent_session.id}"')
+        mixed_start = html.index(f'id="staffing-{mixed_session.id}"')
+        mixed_end = html.index(f'id="logistics-{mixed_session.id}"')
+
+        self.assertIn("Verify open roles with Management", html[open_start:open_end])
+        self.assertIn("Send official confirmation emails", html[pending_start:pending_end])
+        self.assertIn("Follow up on confirmation email status", html[sent_start:sent_end])
+        self.assertIn(
+            "Verify open roles with Management; Send official confirmation emails; Follow up on confirmation email status",
+            html[mixed_start:mixed_end],
+        )
+
+    def test_staffing_deadline_is_set_per_staff_member_when_schedule_is_approved(self):
+        staff_member = AcademicStaff(id=24, status="Active", full_name="Pia Pending", roles="Examiner", email="pia@example.com")
+        db.session.add(staff_member)
+        db.session.add(ExamSessionScheduleWorkflow(
+            exam_session_id=self.session_record.id,
+            status="Sent for review",
+            next_action_due_at=date(2026, 6, 30),
+        ))
+        db.session.flush()
+        assignment = ExamSessionExaminerAssignment(
+            exam_session_id=self.session_record.id,
+            team_member_id=staff_member.id,
+            participation_status="Pending",
+        )
+        db.session.add(assignment)
+        db.session.commit()
+        client = self.login_client()
+
+        response = client.post(
+            f"/pre-session-control-tower/sessions/{self.session_record.id}/schedule",
+            data={
+                "csrf_token": "token",
+                "action_key": "approve",
+            },
+            follow_redirects=False,
+        )
+
+        self.assertEqual(response.status_code, 302)
+        expected_due_at = argentina_add_business_days(datetime.now(LOCAL_TZ).date(), 2)
+        self.assertEqual(assignment.staffing_status_due_at, expected_due_at)
+
+        response = client.get("/pre-session-control-tower?session_year=2026&view=sessions")
+        html = response.get_data(as_text=True)
+        self.assertIn("<th>Deadline</th>", html)
+        self.assertIn(expected_due_at.strftime("%d/%m/%Y"), html)
+
+    def test_staffing_deadline_changes_to_72_business_hours_after_official_confirmation_sent(self):
+        staff_member = AcademicStaff(id=25, status="Active", full_name="Oli Official", roles="Examiner", email="oli@example.com")
+        db.session.add(staff_member)
+        db.session.add(ExamSessionScheduleWorkflow(
+            exam_session_id=self.session_record.id,
+            status="Approved",
+            approved_at=datetime.now(timezone.utc),
+        ))
+        db.session.flush()
+        assignment = ExamSessionExaminerAssignment(
+            exam_session_id=self.session_record.id,
+            team_member_id=staff_member.id,
+            participation_status="Pending",
+            staffing_status_due_at=argentina_add_business_days(datetime.now(LOCAL_TZ).date(), 2),
+        )
+        db.session.add(assignment)
+        db.session.commit()
+        client = self.login_client()
+
+        response = client.post(
+            f"/pre-session-control-tower/sessions/{self.session_record.id}/staffing-assignments/examiner/{assignment.id}/status",
+            data={
+                "csrf_token": "token",
+                "participation_status": "Official confirmation sent",
+            },
+            follow_redirects=False,
+        )
+
+        self.assertEqual(response.status_code, 302)
+        self.assertEqual(assignment.participation_status, "Official confirmation sent")
+        self.assertEqual(assignment.staffing_status_due_at, argentina_add_business_days(datetime.now(LOCAL_TZ).date(), 3))
+        event = ExamSessionStaffingEvent.query.one()
+        self.assertEqual(event.previous_status, "Pending")
+        self.assertEqual(event.new_status, "Official confirmation sent")
+        self.assertEqual(event.role, "Examiner")
+        self.assertEqual(event.staff_member_name, "Oli Official")
+
+        response = client.get("/pre-session-control-tower?session_year=2026&view=sessions")
+        html = response.get_data(as_text=True)
+        staffing_start = html.index(f'id="staffing-{self.session_record.id}"')
+        staffing_end = html.index(f'id="logistics-{self.session_record.id}"')
+        staffing_html = html[staffing_start:staffing_end]
+        self.assertIn("Status track", staffing_html)
+        self.assertIn(f'id="staffing-status-track-{self.session_record.id}"', staffing_html)
+        self.assertIn("Examiner · Oli Official: Pending → Official confirmation sent", staffing_html)
+
+    def test_staffing_actions_update_status_buttons_change_participation(self):
+        staff_member = AcademicStaff(id=20, status="Active", full_name="Sam Sent", roles="Examiner", email="sam@example.com")
+        db.session.add(staff_member)
+        db.session.flush()
+        assignment = ExamSessionExaminerAssignment(
+            exam_session_id=self.session_record.id,
+            team_member_id=staff_member.id,
+            participation_status="Pending",
+        )
+        db.session.add(assignment)
+        db.session.commit()
+        client = self.login_client()
+
+        response = client.post(
+            f"/pre-session-control-tower/sessions/{self.session_record.id}/staffing-assignments/examiner/{assignment.id}/status",
+            data={
+                "csrf_token": "token",
+                "participation_status": "Official confirmation sent",
+            },
+            follow_redirects=False,
+        )
+
+        self.assertEqual(response.status_code, 302)
+        self.assertEqual(assignment.participation_status, "Official confirmation sent")
+
+        response = client.get("/pre-session-control-tower?session_year=2026&view=sessions")
+        staffing_html = response.get_data(as_text=True)
+        self.assertIn("Mark as confirmed", staffing_html)
+        self.assertIn("Mark as declined", staffing_html)
+        self.assertNotIn('value="Official confirmation sent">\n                          <button class="staffing-action-chip staffing-action-chip-blue" type="submit">Mark as sent</button>', staffing_html)
+
+    def test_staffing_actions_declined_clears_assignment_and_marks_non_available(self):
+        staff_member = AcademicStaff(id=22, status="Active", full_name="Dina Declined", roles="Examiner", email="dina@example.com")
+        db.session.add(staff_member)
+        db.session.flush()
+        assignment = ExamSessionExaminerAssignment(
+            exam_session_id=self.session_record.id,
+            team_member_id=staff_member.id,
+            participation_status="Official confirmation sent",
+            logistics_enabled=True,
+            logistics_type="Simple logistics",
+            is_shipment_recipient=True,
+            km=25,
+        )
+        db.session.add(assignment)
+        db.session.commit()
+        client = self.login_client()
+
+        response = client.post(
+            f"/pre-session-control-tower/sessions/{self.session_record.id}/staffing-assignments/examiner/{assignment.id}/status",
+            data={
+                "csrf_token": "token",
+                "participation_status": "Declined",
+            },
+            follow_redirects=False,
+        )
+
+        self.assertEqual(response.status_code, 302)
+        self.assertIn("staffing_only=1", response.headers["Location"])
+        self.assertIsNone(assignment.team_member_id)
+        self.assertIsNone(assignment.potential_entry_id)
+        self.assertEqual(assignment.participation_status, "Pending")
+        self.assertEqual(assignment.non_available_refs(), [])
+        self.assertFalse(assignment.logistics_enabled)
+        self.assertEqual(assignment.logistics_type, "Does not apply")
+        self.assertFalse(assignment.is_shipment_recipient)
+        self.assertIsNone(assignment.km)
+        self.assertEqual(self.session_record.non_available_refs(), ["22"])
+
+        response = client.get("/pre-session-control-tower?session_year=2026&view=sessions")
+        html = response.get_data(as_text=True)
+        staffing_start = html.index(f'id="staffing-{self.session_record.id}"')
+        staffing_end = html.index(f'id="logistics-{self.session_record.id}"')
+        staffing_html = html[staffing_start:staffing_end]
+        self.assertIn("Role to cover", staffing_html)
+        self.assertIn("Pending", staffing_html)
+        self.assertNotIn("Dina Declined", staffing_html)
+        self.assertNotIn("Declined", staffing_html)
+
+        planner_response = client.get("/exam-session-planner?session_year=2026")
+        planner_html = planner_response.get_data(as_text=True)
+        checkbox_index = planner_html.index('name="session_non_available_member_ids" value="22"')
+        checkbox_html = planner_html[planner_html.rfind("<label", 0, checkbox_index):planner_html.index("</label>", checkbox_index)]
+        self.assertIn("Dina Declined", checkbox_html)
+        self.assertIn("checked", checkbox_html)
+        assignment_id_index = planner_html.index(f'name="examiner_assignment_id_existing-{assignment.id}"')
+        assignment_card = planner_html[planner_html.rfind("<article", 0, assignment_id_index):planner_html.index("</article>", assignment_id_index)]
+        self.assertIn('data-saved-team-member-id=""', assignment_card)
+        self.assertIn('data-saved-participation-status="Pending"', assignment_card)
+        self.assertIn(f'name="examiner_team_member_id_existing-{assignment.id}" value=""', assignment_card)
+        self.assertIn("Role to cover", assignment_card)
+
+    def test_staffing_actions_force_pending_changes_confirmed_status(self):
+        staff_member = AcademicStaff(id=21, status="Active", full_name="Connie Confirmed", roles="Intern", email="connie@example.com")
+        db.session.add(staff_member)
+        db.session.flush()
+        assignment = ExamSessionInternAssignment(
+            exam_session_id=self.session_record.id,
+            team_member_id=staff_member.id,
+            participation_status="Confirmed",
+        )
+        db.session.add(assignment)
+        db.session.commit()
+        client = self.login_client()
+
+        response = client.get("/pre-session-control-tower?session_year=2026&view=sessions")
+        html = response.get_data(as_text=True)
+        staffing_start = html.index(f'id="staffing-{self.session_record.id}"')
+        staffing_end = html.index(f'id="logistics-{self.session_record.id}"')
+        staffing_html = html[staffing_start:staffing_end]
+        force_pending_index = staffing_html.index("Force Pending")
+        cancelled_index = staffing_html.index("Cancelled")
+        update_status_index = staffing_html.index("<th>Update status</th>")
+        self.assertGreater(force_pending_index, update_status_index)
+        self.assertGreater(cancelled_index, update_status_index)
+        self.assertIn("staffing-action-chip-grey", staffing_html)
+
+        response = client.post(
+            f"/pre-session-control-tower/sessions/{self.session_record.id}/staffing-assignments/intern/{assignment.id}/status",
+            data={
+                "csrf_token": "token",
+                "participation_status": "Pending",
+            },
+            follow_redirects=False,
+        )
+
+        self.assertEqual(response.status_code, 302)
+        self.assertIn("open_modal_target=staffing", response.headers["Location"])
+        self.assertIn("staffing_only=1", response.headers["Location"])
+        self.assertEqual(assignment.participation_status, "Pending")
+        with open("app/static/js/app.js", encoding="utf-8") as js_file:
+            js = js_file.read()
+        self.assertIn('const staffingOnly = params.get("staffing_only") === "1";', js)
+        self.assertIn('modal.classList.toggle("is-staffing-only", staffingOnly);', js)
+        self.assertIn('params.delete("staffing_only");', js)
+
+    def test_staffing_actions_cancelled_clears_assignment_and_marks_non_available(self):
+        staff_member = AcademicStaff(id=23, status="Active", full_name="Cami Cancelled", roles="Supervisor", email="cami@example.com")
+        db.session.add(staff_member)
+        db.session.flush()
+        assignment = ExamSessionSupervisorAssignment(
+            exam_session_id=self.session_record.id,
+            team_member_id=staff_member.id,
+            participation_status="Confirmed",
+        )
+        db.session.add(assignment)
+        db.session.commit()
+        client = self.login_client()
+
+        response = client.post(
+            f"/pre-session-control-tower/sessions/{self.session_record.id}/staffing-assignments/supervisor/{assignment.id}/status",
+            data={
+                "csrf_token": "token",
+                "participation_status": "Cancelled",
+            },
+            follow_redirects=False,
+        )
+
+        self.assertEqual(response.status_code, 302)
+        self.assertIn("staffing_only=1", response.headers["Location"])
+        self.assertIsNone(assignment.team_member_id)
+        self.assertIsNone(assignment.potential_entry_id)
+        self.assertEqual(assignment.participation_status, "Pending")
+        self.assertEqual(self.session_record.non_available_refs(), ["23"])
 
     def test_control_tower_logistics_read_only_states_and_column_order(self):
         no_logistics_session = ExamSession(
@@ -8516,7 +9982,7 @@ class ScheduleWorkflowTest(unittest.TestCase):
         missing_link_index = html.index("Missing logistics link core readiness")
         self.assertIn("In progress", html[awaiting_index:missing_link_index])
         self.assertIn("In progress", html[missing_link_index:])
-        self.assertIn("1 staff member is awaiting confirmation.", html)
+        self.assertIn("1 confirmation to be sent.", html)
         self.assertIn("All concepts are confirmed, but the logistics files link is missing.", html)
 
 

@@ -12,18 +12,35 @@
   <span class="badge schedule-gate-{{ gate.status }}" title="{{ gate.message }}" aria-label="Schedule gate {{ gate.label }}: {{ gate.message }}"{% if focusable %} tabindex="0"{% endif %}>{{ gate.label }}</span>
 {%- endmacro %}
 
-{% macro schedule_table_cell(status, gate, review_round) -%}
+{% macro schedule_table_cell(status, gate, review_round, locked_by_staffing=false) -%}
   <span class="schedule-summary-cell">
+    {% if locked_by_staffing %}
+      <span class="workflow-gate-chip workflow-gate-blocked" aria-label="Schedule gate blocked">
+        <svg viewBox="0 0 24 24" aria-hidden="true">
+          <rect x="5" y="10" width="14" height="10" rx="2"></rect>
+          <path d="M8 10V7a4 4 0 0 1 8 0v3"></path>
+        </svg>
+        BLOCKED
+      </span>
+    {% else %}
+      <span class="workflow-gate-chip workflow-gate-unblocked" aria-label="Schedule gate unblocked">
+        <svg viewBox="0 0 24 24" aria-hidden="true">
+          <rect x="5" y="10" width="14" height="10" rx="2"></rect>
+          <path d="M8 10V7a4 4 0 0 1 7.4-2.1"></path>
+        </svg>
+        UNBLOCKED
+      </span>
+    {% endif %}
     {{ schedule_status_badge(status) }}
-    <span>Gate: {{ gate.label }}</span>
     {% if review_round %}
-      <small>Round {{ review_round }}</small>
+      <small>Rounds: {{ review_round }}</small>
     {% endif %}
   </span>
 {%- endmacro %}
 
-{% macro contextual_cell_trigger(session, target, label) -%}
-  <button class="contextual-cell-trigger" type="button" data-open-modal="schedule-workflow-{{ session.id }}" data-modal-scroll-target="{{ target }}-{{ session.id }}" data-modal-target-label="{{ label }}" aria-label="{{ label }} for {{ session.exam_session_name }}">
+{% macro contextual_cell_trigger(session, target, label, schedule_only=false, staffing_only=false) -%}
+  {% set scroll_target = 'schedule-notes' if schedule_only and target == 'schedule-actions' else target %}
+  <button class="contextual-cell-trigger" type="button" data-open-modal="schedule-workflow-{{ session.id }}" data-modal-scroll-target="{{ scroll_target }}-{{ session.id }}" data-modal-target-label="{{ label }}"{% if schedule_only %} data-modal-schedule-only="true"{% endif %}{% if staffing_only %} data-modal-staffing-only="true"{% endif %} aria-label="{{ label }} for {{ session.exam_session_name }}">
     {{ caller() }}
   </button>
 {%- endmacro %}
@@ -35,11 +52,32 @@
 {%- endmacro %}
 
 {% macro staffing_status_badge(staffing, focusable=true) -%}
-  <span class="badge staffing-status-{{ staffing.status|replace('_', '-') }}" title="{{ staffing.tooltip }}" aria-label="Staffing {{ staffing.label }}: {{ staffing.tooltip }}"{% if focusable %} tabindex="0"{% endif %}>{{ staffing.label }}</span>
+  <span class="staffing-status-badge-list" title="{{ staffing.tooltip }}" aria-label="Staffing {{ staffing.label }}: {{ staffing.tooltip }}"{% if focusable %} tabindex="0"{% endif %}>
+    {% for chip in staffing.status_chips %}
+      <span class="badge staffing-status-{{ chip.status }}">{{ chip.label }}</span>
+    {% endfor %}
+  </span>
 {%- endmacro %}
 
-{% macro staffing_table_cell(staffing, focusable=true) -%}
+{% macro staffing_table_cell(staffing, schedule_gate, focusable=true) -%}
   <span class="staffing-summary-cell">
+    {% if schedule_gate.is_ready %}
+      <span class="staffing-gate-chip staffing-gate-unblocked" aria-label="Staffing gate unblocked">
+        <svg viewBox="0 0 24 24" aria-hidden="true">
+          <rect x="5" y="10" width="14" height="10" rx="2"></rect>
+          <path d="M8 10V7a4 4 0 0 1 7.4-2.1"></path>
+        </svg>
+        UNBLOCKED
+      </span>
+    {% else %}
+      <span class="staffing-gate-chip staffing-gate-blocked" aria-label="Staffing gate blocked">
+        <svg viewBox="0 0 24 24" aria-hidden="true">
+          <rect x="5" y="10" width="14" height="10" rx="2"></rect>
+          <path d="M8 10V7a4 4 0 0 1 8 0v3"></path>
+        </svg>
+        BLOCKED
+      </span>
+    {% endif %}
     {{ staffing_status_badge(staffing, focusable) }}
     {% if staffing.required > 0 %}
       <span>{{ staffing.table_summary }}</span>
@@ -411,7 +449,7 @@
 
 {% macro schedule_action_description(action_key) -%}
   {%- if action_key == 'start_preparation' -%}
-    Start schedule preparation and set the deadline for completing the schedules.
+    Start schedule preparation for this exam session.
   {%- elif action_key == 'mark_ready' -%}
     The schedules are complete in Sinapsis and ready to be sent for review.
   {%- elif action_key == 'send_for_review' -%}
@@ -440,7 +478,6 @@
   {%- elif action_key == 'record_changes' -%}Modification deadline
   {%- elif action_key == 'mark_ready' -%}Sending deadline
   {%- elif action_key == 'mark_revised_ready' -%}Resending deadline
-  {%- elif action_key == 'start_preparation' or action_key == 'reopen' -%}Schedule preparation deadline
   {%- else -%}Deadline
   {%- endif %}
 {%- endmacro %}
@@ -458,8 +495,6 @@
     Set the date by which the schedules should be sent for review.
   {%- elif action_key == 'mark_revised_ready' -%}
     Set the date by which the revised schedules should be sent again.
-  {%- elif action_key == 'start_preparation' or action_key == 'reopen' -%}
-    Set the date by which schedule preparation should be completed.
   {%- endif %}
 {%- endmacro %}
 
@@ -486,12 +521,29 @@
   {%- endif %}
 {%- endmacro %}
 
-{% macro schedule_action_form(action, session, selected_schedule_status, csrf_token) -%}
+{% macro pre_session_return_fields(selected_view, selected_bundle) -%}
+  <input type="hidden" name="view" value="{{ selected_view }}">
+  {% if selected_view == 'bundle' and selected_bundle %}
+    <input type="hidden" name="bundle_id" value="{{ selected_bundle.id }}">
+  {% endif %}
+{%- endmacro %}
+
+{% macro schedule_action_form(action, session, selected_schedule_status, csrf_token, view=none, selected_view='sessions', selected_bundle=none) -%}
   <form method="post" action="{{ url_for('staff.update_schedule_workflow', session_id=session.id) }}" id="schedule-action-form-{{ session.id }}-{{ action.key }}" class="schedule-action-form" data-schedule-action-panel data-schedule-action-key="{{ action.key }}" data-disable-on-submit hidden>
     <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
     <input type="hidden" name="action_key" value="{{ action.key }}">
     <input type="hidden" name="schedule_status" value="{{ selected_schedule_status }}">
+    {{ pre_session_return_fields(selected_view, selected_bundle) }}
     <div class="schedule-form-error" data-schedule-action-error hidden></div>
+    {% if action.key == 'mark_ready' %}
+      {% set preload_schedule_link = view and view.review_round and view.review_round > 0 %}
+      {% set schedule_link_value = session.details_url if preload_schedule_link and session.details_url else '' %}
+      <label for="exam-session-schedule-{{ session.id }}-{{ action.key }}">
+        Exam session schedule <span class="required-marker">*</span>
+      </label>
+      <input id="exam-session-schedule-{{ session.id }}-{{ action.key }}" type="url" name="exam_session_schedule_url" value="{{ schedule_link_value }}" placeholder="https://..." required data-schedule-link-input>
+      <p class="field-help">Add the link to the completed schedules before marking them as ready to send.</p>
+    {% endif %}
     {% if action.deadline_required %}
       <label for="schedule-deadline-{{ session.id }}-{{ action.key }}">
         {{ schedule_deadline_label(action.key) }} <span class="required-marker">*</span>
@@ -502,15 +554,226 @@
         <p class="field-help">{{ help_text }}</p>
       {% endif %}
     {% endif %}
+    {% if action.key == 'reopen' and view and view.schedule_locked_by_staffing %}
+      <div class="schedule-authorisation-warning" role="alert">
+        <strong>Password authorisation required</strong>
+        <p>Editing the schedule may affect the Staffing stage, as official confirmations have already been sent. Password authorisation is required to continue.</p>
+      </div>
+      <label for="schedule-reopen-password-{{ session.id }}">
+        Password <span class="required-marker">*</span>
+      </label>
+      <input id="schedule-reopen-password-{{ session.id }}" type="password" name="schedule_reopen_password" autocomplete="off" required>
+    {% endif %}
     <label for="schedule-note-{{ session.id }}-{{ action.key }}">
       {{ schedule_note_label(action.key) }}{% if action.note_required %} <span class="required-marker">*</span>{% endif %}
     </label>
     <textarea id="schedule-note-{{ session.id }}-{{ action.key }}" name="note" rows="3" {% if action.note_required %}required{% endif %} placeholder="Add a schedule workflow note"></textarea>
+    <div class="cv-review-note-actions schedule-note-routing">
+      <div class="note-from-field">
+        <span>From</span>
+        <strong>{{ note_actor_label() }}</strong>
+      </div>
+      <label class="note-recipient-field">
+        To
+        <select name="note_to_user_id" multiple data-note-recipient-select>
+          {% for user_option in note_to_user_options() %}
+            <option value="{{ user_option.id }}">{{ user_option.full_name }}, {{ user_option.department }}</option>
+          {% endfor %}
+        </select>
+        <span class="note-recipient-selected-chips" data-note-recipient-chips></span>
+      </label>
+    </div>
     <div class="form-actions">
       <button class="secondary-button compact-action" type="button" data-schedule-action-cancel>Cancel</button>
-      <button class="primary-button compact-action" type="submit">{{ schedule_confirm_label(action.key) }}</button>
+      <button class="primary-button compact-action" type="submit"{% if action.key == 'mark_ready' %} data-schedule-link-submit{% if not schedule_link_value %} disabled{% endif %}{% endif %}>{{ schedule_confirm_label(action.key) }}</button>
     </div>
   </form>
+{%- endmacro %}
+
+{% macro schedule_status_track_panel(session, events) -%}
+  <section class="status-track-panel" aria-label="Status track">
+    <button
+      class="status-track-toggle"
+      type="button"
+      aria-expanded="false"
+      aria-controls="schedule-status-track-{{ session.id }}"
+      data-status-track-toggle
+    >Status track</button>
+    <div id="schedule-status-track-{{ session.id }}" class="status-track-content" hidden>
+      {% set status_track = namespace(has_changes=false) %}
+      {% for event in events if event.previous_status != event.new_status %}
+        {% if not status_track.has_changes %}
+          {% set status_track.has_changes = true %}
+          <div class="status-track-list">
+        {% endif %}
+          <article class="status-track-item">
+            <strong>{{ event.previous_status }} → {{ event.new_status }}</strong>
+            <span>{{ event.created_at|status_track_dt }} · {{ event.created_by or 'Unknown user' }}</span>
+          </article>
+      {% endfor %}
+      {% if status_track.has_changes %}
+          </div>
+      {% else %}
+        <p class="status-track-empty">No status changes recorded yet.</p>
+      {% endif %}
+    </div>
+  </section>
+{%- endmacro %}
+
+{% macro staffing_status_track_panel(session, events) -%}
+  <section class="status-track-panel staffing-status-track-panel" aria-label="Staffing status track">
+    <button
+      class="status-track-toggle"
+      type="button"
+      aria-expanded="false"
+      aria-controls="staffing-status-track-{{ session.id }}"
+      data-status-track-toggle
+    >Status track</button>
+    <div id="staffing-status-track-{{ session.id }}" class="status-track-content" hidden>
+      {% if events %}
+        <div class="status-track-list">
+          {% for event in events %}
+            <article class="status-track-item">
+              <strong>{{ event.role or 'Staff' }}{% if event.staff_member_name %} · {{ event.staff_member_name }}{% endif %}: {{ event.previous_status }} → {{ event.new_status }}</strong>
+              <span>{{ event.created_at|status_track_dt }} · {{ event.created_by or 'Unknown user' }}</span>
+              {% if event.note %}<p>{{ event.note }}</p>{% endif %}
+            </article>
+          {% endfor %}
+        </div>
+      {% else %}
+        <p class="status-track-empty">No staffing status changes recorded yet.</p>
+      {% endif %}
+    </div>
+  </section>
+{%- endmacro %}
+
+{% macro schedule_notes_panel(session, notes, csrf_token, selected_view='sessions', selected_bundle=none) -%}
+  <section class="schedule-notes-section staffing-control-section" id="schedule-notes-{{ session.id }}" aria-labelledby="schedule-notes-title-{{ session.id }}">
+    <div class="staffing-control-header">
+      <div>
+        <h3 id="schedule-notes-title-{{ session.id }}" tabindex="-1">Notes</h3>
+        <p>Schedule notes and read tracking.</p>
+      </div>
+      <strong class="responsible-chip">{{ notes|length }} notes</strong>
+    </div>
+    {% if notes %}
+      <div class="history-list compact-history">
+        {% for note in notes %}
+          {% set note_status = schedule_note_status(note) %}
+          <article class="history-entry potential-note-entry" id="schedule-note-{{ note.note_id }}" data-note-id="{{ note.note_id }}">
+            <div class="potential-note-header">
+              <time>Created on: {{ note.date }}</time>
+              <span class="responsible-chip potential-note-department-chip">From: {{ history_from_label(note) }}</span>
+              {% set note_to_labels = history_to_labels(note) %}
+              {% if note_to_labels %}
+                <span class="responsible-chip potential-note-department-chip note-recipient-history">To:
+                  {% for to_label in note_to_labels %}
+                    <span class="note-recipient-history-chip">{{ to_label }}</span>
+                  {% endfor %}
+                </span>
+              {% endif %}
+              {% if note_status.has_recipient %}
+                <span class="note-read-chip {% if note_status.is_read %}is-read{% else %}is-unread{% endif %}" {% if note_status.tooltip %}title="{{ note_status.tooltip }}" aria-label="{{ note_status.tooltip }}"{% endif %}>{{ note_status.label }}</span>
+                {% if note_status.can_mark_read %}
+                  <form method="post" action="{{ url_for('staff.mark_schedule_note_read', mention_id=note_status.mention_id) }}" class="note-read-form" data-note-read-form>
+                    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                    <input type="hidden" name="return_session_id" value="{{ session.id }}">
+                    <input type="hidden" name="highlight_note" value="{{ note.note_id }}">
+                    {{ pre_session_return_fields(selected_view, selected_bundle) }}
+                    <label class="note-read-checkbox">
+                      <input type="checkbox" name="read" value="1" data-note-read-checkbox>
+                      <span>Read</span>
+                    </label>
+                  </form>
+                {% endif %}
+              {% endif %}
+            </div>
+            <p>{{ note.note }}</p>
+          </article>
+        {% endfor %}
+      </div>
+    {% else %}
+      <p class="empty-history">No schedule notes yet.</p>
+    {% endif %}
+  </section>
+{%- endmacro %}
+
+{% macro staffing_notes_panel(session, notes, csrf_token, selected_schedule_status, selected_view='sessions', selected_bundle=none) -%}
+  <section class="staffing-notes-section staffing-control-section" id="staffing-notes-{{ session.id }}" aria-labelledby="staffing-notes-title-{{ session.id }}">
+    <div class="staffing-control-header">
+      <div>
+        <h3 id="staffing-notes-title-{{ session.id }}" tabindex="-1">Notes</h3>
+        <p>Staffing notes and read tracking.</p>
+      </div>
+      <strong class="responsible-chip">{{ notes|length }} notes</strong>
+    </div>
+    <form method="post" action="{{ url_for('staff.add_staffing_note', session_id=session.id) }}" class="staffing-control-form schedule-action-form staffing-note-form" data-disable-on-submit>
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+      <input type="hidden" name="schedule_status" value="{{ selected_schedule_status }}">
+      {{ pre_session_return_fields(selected_view, selected_bundle) }}
+      <label for="staffing-note-text-{{ session.id }}">
+        Note <span class="required-marker">*</span>
+      </label>
+      <textarea id="staffing-note-text-{{ session.id }}" name="note" rows="3" required placeholder="Add a staffing note"></textarea>
+      <div class="cv-review-note-actions schedule-note-routing">
+        <div class="note-from-field">
+          <span>From</span>
+          <strong>{{ note_actor_label() }}</strong>
+        </div>
+        <label class="note-recipient-field">
+          To
+          <select name="note_to_user_id" multiple data-note-recipient-select>
+            {% for user_option in note_to_user_options() %}
+              <option value="{{ user_option.id }}">{{ user_option.full_name }}, {{ user_option.department }}</option>
+            {% endfor %}
+          </select>
+          <span class="note-recipient-selected-chips" data-note-recipient-chips></span>
+        </label>
+      </div>
+      <div class="form-actions">
+        <button class="primary-button compact-action" type="submit">Add note</button>
+      </div>
+    </form>
+    {% if notes %}
+      <div class="history-list compact-history">
+        {% for note in notes %}
+          {% set note_status = staffing_note_status(note) %}
+          <article class="history-entry potential-note-entry" id="staffing-note-{{ note.note_id }}" data-note-id="{{ note.note_id }}">
+            <div class="potential-note-header">
+              <time>Created on: {{ note.date }}</time>
+              <span class="responsible-chip potential-note-department-chip">From: {{ history_from_label(note) }}</span>
+              {% set note_to_labels = history_to_labels(note) %}
+              {% if note_to_labels %}
+                <span class="responsible-chip potential-note-department-chip note-recipient-history">To:
+                  {% for to_label in note_to_labels %}
+                    <span class="note-recipient-history-chip">{{ to_label }}</span>
+                  {% endfor %}
+                </span>
+              {% endif %}
+              {% if note_status.has_recipient %}
+                <span class="note-read-chip {% if note_status.is_read %}is-read{% else %}is-unread{% endif %}" {% if note_status.tooltip %}title="{{ note_status.tooltip }}" aria-label="{{ note_status.tooltip }}"{% endif %}>{{ note_status.label }}</span>
+                {% if note_status.can_mark_read %}
+                  <form method="post" action="{{ url_for('staff.mark_staffing_note_read', mention_id=note_status.mention_id) }}" class="note-read-form" data-note-read-form>
+                    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                    <input type="hidden" name="return_session_id" value="{{ session.id }}">
+                    <input type="hidden" name="highlight_note" value="{{ note.note_id }}">
+                    {{ pre_session_return_fields(selected_view, selected_bundle) }}
+                    <label class="note-read-checkbox">
+                      <input type="checkbox" name="read" value="1" data-note-read-checkbox>
+                      <span>Read</span>
+                    </label>
+                  </form>
+                {% endif %}
+              {% endif %}
+            </div>
+            <p>{{ note.note }}</p>
+          </article>
+        {% endfor %}
+      </div>
+    {% else %}
+      <p class="empty-history">No staffing notes yet.</p>
+    {% endif %}
+  </section>
 {%- endmacro %}
 
 {% block title %}Pre-session Control Tower | Path Examinations{% endblock %}
@@ -592,6 +855,33 @@
       </tr>
     </thead>
     <tbody>
+      {% if pending_shipment_bundle %}
+        <tr>
+          <td><strong>Pending bundles</strong></td>
+          <td><span class="muted">Not set</span></td>
+          <td>
+            <div class="bundle-session-chip-list">
+              {% for chip in pending_shipment_bundle.session_chips %}
+                <span class="bundle-session-chip">{{ chip.date|session_date }} {{ chip.name }}</span>
+              {% endfor %}
+            </div>
+          </td>
+          <td><span class="muted">Not configured</span></td>
+          <td>
+            <span class="shipment-summary-cell">
+              <strong>Pending configuration</strong>
+              <small>Shipment not configured</small>
+            </span>
+          </td>
+          <td>
+            <span class="shipment-summary-cell">
+              <span class="badge shipment-status-not-bundled">Not configured</span>
+              <small>Shipment recipient missing</small>
+            </span>
+          </td>
+          <td><span class="muted">-</span></td>
+        </tr>
+      {% endif %}
       {% for bundle in bundle_views %}
         <tr>
           <td><strong>Bundle {{ bundle.number }}</strong></td>
@@ -632,14 +922,15 @@
           </td>
           <td><a class="secondary-button compact-action" href="{{ url_for('staff.pre_session_control_tower', session_year=selected_session_year, view='bundle', bundle_id=bundle.id) }}">Open bundle</a></td>
         </tr>
-      {% else %}
+      {% endfor %}
+      {% if not bundle_views and not pending_shipment_bundle %}
         <tr>
           <td colspan="7" class="empty-state">
             <strong>No pending shipment bundles.</strong>
             <span>All current shipment bundles are either completed or not yet available.</span>
           </td>
         </tr>
-      {% endfor %}
+      {% endif %}
     </tbody>
   </table>
 </section>
@@ -719,13 +1010,13 @@
           <td>{{ session.exam_session_name }}</td>
           <td>{{ session.session_date|session_date }}</td>
           <td>
-            {% call contextual_cell_trigger(session, 'schedule-actions', 'Review schedule') %}
-              {{ schedule_table_cell(view.status, view.schedule_gate, view.review_round) }}
+            {% call contextual_cell_trigger(session, 'schedule-actions', 'Review schedule', selected_view == 'bundle') %}
+              {{ schedule_table_cell(view.status, view.schedule_gate, view.review_round, view.schedule_locked_by_staffing) }}
             {% endcall %}
           </td>
           <td>
-            {% call contextual_cell_trigger(session, 'staffing', 'Manage staffing') %}
-              {{ staffing_table_cell(view.staffing, false) }}
+            {% call contextual_cell_trigger(session, 'staffing', 'Manage staffing', staffing_only=true) %}
+              {{ staffing_table_cell(view.staffing, view.schedule_gate, false) }}
             {% endcall %}
           </td>
           <td>
@@ -894,6 +1185,7 @@
   {% set session = view.session %}
   {% set workflow = view.workflow %}
   {% set events = events_by_workflow.get(workflow.id, []) if workflow else [] %}
+  {% set schedule_notes = schedule_note_views(schedule_notes_by_workflow.get(workflow.id, []) if workflow else [], schedule_note_mentions_by_note_id) %}
   {% set session_review_flags_count = view.review_flags.active_flags_count if view.review_flags.active_flags_count is defined else 0 %}
   {% set overview_priority_target = view.priority_action.target if view.priority_action.target is defined and view.priority_action.target else 'priority-action' %}
   {% if overview_priority_target == 'schedule' %}
@@ -907,7 +1199,10 @@
     <div class="modal-panel large schedule-workflow-panel">
       <div class="modal-header">
         <div>
-          <p class="eyebrow">Schedule preparation and approval</p>
+          <p class="eyebrow">
+            <span class="modal-title-schedule">Schedule preparation and approval</span>
+            <span class="modal-title-staffing">STAFF PARTICIPATION AND CONFIRMATION</span>
+          </p>
           <h2 id="schedule-workflow-title-{{ session.id }}" tabindex="-1">{{ session.exam_session_name }}</h2>
           <p class="modal-focused-context" data-focused-context hidden></p>
           <p class="modal-subtitle">{{ session.session_date|long_session_date }}</p>
@@ -943,107 +1238,16 @@
             <strong>{{ view.session_readiness.label }}</strong>
           </div>
         </section>
-        <div class="overview-grid">
-          <article class="overview-primary-card">
-            <span>Session readiness</span>
-            <strong>{{ view.session_readiness.label }}</strong>
-            <p>{{ view.session_readiness.message }}</p>
-            <a class="secondary-button compact-action link-button" href="#readiness-{{ session.id }}">View readiness details</a>
-          </article>
-          <article class="overview-priority-card">
-            <span>Priority action</span>
-            <strong>{{ view.priority_action.label }}</strong>
-            <p>{{ view.priority_action.description }}</p>
-            <p><strong>{% if view.priority_action.is_complete %}&mdash;{% else %}{{ view.priority_action.responsible or 'Not assigned' }}{% endif %} · {{ priority_action_deadline_text(view.priority_action) }}</strong></p>
-            <a class="secondary-button compact-action link-button" href="#{{ overview_priority_target }}-{{ session.id }}">{{ view.priority_action.label }}</a>
-          </article>
-          <article class="overview-blockers-card">
-            <span>Key blockers</span>
-            {% if view.session_readiness.blockers or view.incidents.active_count or session_review_flags_count %}
-              <strong>Attention needed</strong>
-              <ul>
-                {% for blocker in view.session_readiness.blockers[:3] %}
-                  <li>{{ blocker.message }}</li>
-                {% endfor %}
-                {% if view.incidents.active_count %}
-                  <li>{{ view.incidents.active_count }} active incident{% if view.incidents.active_count != 1 %}s{% endif %}</li>
-                {% endif %}
-                {% if session_review_flags_count %}
-                  <li>{{ session_review_flags_count }} incident review flag{% if session_review_flags_count != 1 %}s{% endif %} requiring attention</li>
-                {% endif %}
-              </ul>
-            {% else %}
-              <strong>No key blockers detected.</strong>
-              <p>Session preparation is currently on track.</p>
-              <p>No active review flags.</p>
-            {% endif %}
-          </article>
-        </div>
-        <section class="overview-module" aria-labelledby="overview-links-title-{{ session.id }}">
-          <h4 id="overview-links-title-{{ session.id }}">Quick links</h4>
-          <div class="overview-quick-links" aria-label="Overview quick links">
-            <a href="#schedule-actions-{{ session.id }}">Review schedule</a>
-            <a href="#staffing-{{ session.id }}">Manage staffing</a>
-            <a href="#logistics-{{ session.id }}">Review logistics</a>
-            <a href="#packages-{{ session.id }}">Manage packages</a>
-            <a href="#shipments-{{ session.id }}">Track shipment</a>
-            <a href="#finance-{{ session.id }}">Review finance</a>
-            <a href="#sinapsis-{{ session.id }}">Check Sinapsis</a>
-            <a href="#communications-{{ session.id }}">Review communications</a>
-            <a href="#incidents-{{ session.id }}">Open incidents</a>
-            <a href="#readiness-{{ session.id }}">View readiness</a>
-            <a href="#journey-{{ session.id }}">Manage journey sharing</a>
-          </div>
-        </section>
-        <section class="overview-module" aria-labelledby="overview-readiness-title-{{ session.id }}">
-          <h4 id="overview-readiness-title-{{ session.id }}">Readiness summary</h4>
-          <div class="overview-readiness-grid">
-            <article>
-              <span>Core readiness</span>
-              {{ core_readiness_status_badge(view.core_readiness, false) }}
-              <p>{{ view.core_readiness.summary }}</p>
-              <a href="#readiness-{{ session.id }}">View details</a>
-            </article>
-            <article>
-              <span>Operational readiness</span>
-              {{ operational_readiness_status_badge(view.operational_readiness, false) }}
-              <p>{{ view.operational_readiness.summary }}</p>
-              <a href="#readiness-{{ session.id }}">View details</a>
-            </article>
-            <article>
-              <span>Session readiness</span>
-              {{ session_readiness_status_badge(view.session_readiness, false) }}
-              <p>{{ view.session_readiness.summary }}</p>
-              <a href="#readiness-{{ session.id }}">View details</a>
-            </article>
-          </div>
-        </section>
-        <section class="overview-module overview-split-module" aria-label="Journey sharing and recent activity">
-          <article>
-            <h4>Journey sharing</h4>
-            <p><strong>Institution:</strong> {{ view.journey_shares.institution.status }}</p>
-            <p><strong>Families and candidates:</strong> {{ view.journey_shares.public.status }}</p>
-            <a class="secondary-button compact-action link-button" href="#journey-{{ session.id }}">Manage journey sharing</a>
-          </article>
-          <article>
-            <h4>Recent activity</h4>
-            {% if view.activity_timeline.events %}
-              <ul>
-                {% for event in view.activity_timeline.events[:3] %}
-                  <li>{{ event.title }} · {{ event.created_at|localdt if event.created_at else 'Date not recorded' }}</li>
-                {% endfor %}
-              </ul>
-            {% else %}
-              <p>No activity recorded for this session yet.</p>
-            {% endif %}
-            <a class="secondary-button compact-action link-button" href="#activity-{{ session.id }}">View full activity timeline</a>
-          </article>
-        </section>
       </section>
+
+      {{ schedule_notes_panel(session, schedule_notes, csrf_token, selected_view, selected_bundle) }}
+      {% set staffing_notes = staffing_note_views(staffing_notes_by_session.get(session.id, []), staffing_note_mentions_by_note_id) %}
+      {{ staffing_notes_panel(session, staffing_notes, csrf_token, selected_schedule_status, selected_view, selected_bundle) }}
 
       <nav class="modal-section-nav" aria-label="Manage modal sections">
         <a href="#overview-{{ session.id }}">Overview</a>
         <a href="#schedule-overview-{{ session.id }}">Schedule</a>
+        <a href="#staffing-notes-{{ session.id }}">Staffing notes</a>
         <a href="#staffing-{{ session.id }}">Staffing</a>
         <a href="#logistics-{{ session.id }}">Logistics</a>
         <a href="#packages-{{ session.id }}">Packages</a>
@@ -1054,6 +1258,7 @@
         <a href="#incidents-{{ session.id }}">Incidents</a>
         <a href="#readiness-{{ session.id }}">Readiness</a>
         <a href="#journey-{{ session.id }}">Journey</a>
+        <a href="#schedule-notes-{{ session.id }}">Notes</a>
         <a href="#history-{{ session.id }}">History</a>
         <a href="#activity-{{ session.id }}">Activity</a>
       </nav>
@@ -1138,52 +1343,60 @@
         </div>
       </section>
 
-      <section class="staffing-control-section" id="staffing-{{ session.id }}" data-control-section data-default-collapsed="true" aria-labelledby="staffing-title-{{ session.id }}">
+      <section class="staffing-actions-section staffing-control-section" id="staffing-{{ session.id }}" data-control-section data-default-collapsed="true" aria-labelledby="staffing-title-{{ session.id }}">
         <div class="staffing-control-header">
           <div>
-            <h3 id="staffing-title-{{ session.id }}" tabindex="-1">Staffing</h3>
+            <h3 id="staffing-title-{{ session.id }}" tabindex="-1">Staffing actions</h3>
             {{ staffing_status_badge(view.staffing) }}
             <p>{{ view.staffing.summary }}</p>
           </div>
-          <a class="secondary-button compact-action link-button" href="{{ url_for('staff.exam_session_planner', session_year=session.session_date.year, open_session_modal=session.id) }}">Open in Exam session planner</a>
+          <div class="staffing-header-actions">
+            <strong class="responsible-chip">{{ view.staffing_control.department }}</strong>
+          </div>
         </div>
         {% if not view.schedule_gate.is_ready %}
           <p class="staffing-schedule-notice">Schedule approval is required before proceeding with the official staffing stage.</p>
         {% endif %}
         {{ review_flags_block(view.review_flags.by_area.get('staffing', []), session, selected_schedule_status, selected_view, csrf_token) }}
         <section class="staffing-control-metadata" aria-label="Staffing ownership and deadline">
+          {% set staffing_next = namespace(label='Review staffing') %}
+          {% set nearest_deadline = namespace(value=none, label='-') %}
+          {% if not view.schedule_gate.is_ready %}
+            {% set staffing_next.label = 'Wait for schedule approval' %}
+          {% elif view.staffing.ready %}
+            {% set staffing_next.label = 'Staffing completed' %}
+          {% else %}
+            {% if view.staffing.recommended_actions %}
+              {% set staffing_next.label = view.staffing.recommended_actions|join('; ') %}
+            {% endif %}
+            {% for row in view.staffing_rows %}
+              {% if row.deadline and row.deadline_status != 'completed' and (not nearest_deadline.value or row.deadline < nearest_deadline.value) %}
+                {% set nearest_deadline.value = row.deadline %}
+                {% set nearest_deadline.label = row.deadline_label %}
+              {% endif %}
+            {% endfor %}
+          {% endif %}
           <div>
-            <span>Responsible department</span>
+            <span>Current status</span>
+            <strong>{{ staffing_status_badge(view.staffing) }}</strong>
+          </div>
+          <div>
+            <span>Recommended next action</span>
+            <strong>{{ staffing_next.label }}</strong>
+          </div>
+          <div>
+            <span>Responsible</span>
             <strong>{{ view.staffing_control.department }}</strong>
           </div>
           <div>
-            <span>Responsible person</span>
-            <strong>{{ view.staffing_control.responsible_person_label }}</strong>
-          </div>
-          <div>
-            <span>Staffing deadline</span>
-            <strong>
-              {% if view.staffing_control.deadline_status in ['due_today', 'overdue', 'completed'] %}
-                {{ view.staffing_control.deadline_label }}
-              {% elif view.staffing_control.deadline %}
-                {{ view.staffing_control.deadline|session_date }}
-              {% else %}
-                {{ view.staffing_control.deadline_label }}
-              {% endif %}
-            </strong>
-            {% if view.staffing_control.deadline and view.staffing_control.deadline_status == 'completed' %}
-              <small>Saved deadline: {{ view.staffing_control.deadline|session_date }}</small>
-            {% endif %}
-          </div>
-          <div>
-            <span>Operational note</span>
-            <strong>{{ view.staffing_control.note if view.staffing_control.note else 'Not set' }}</strong>
+            <span>Nearest deadline</span>
+            <strong>{{ nearest_deadline.label }}</strong>
           </div>
         </section>
-        <button class="secondary-button compact-action staffing-control-edit-button" type="button" data-staffing-control-toggle aria-controls="staffing-control-form-{{ session.id }}" aria-expanded="false">Edit ownership and deadline</button>
         <form method="post" action="{{ url_for('staff.update_staffing_control', session_id=session.id) }}" id="staffing-control-form-{{ session.id }}" class="staffing-control-form" data-staffing-control-form data-disable-on-submit hidden>
           <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
           <input type="hidden" name="schedule_status" value="{{ selected_schedule_status }}">
+          {{ pre_session_return_fields(selected_view, selected_bundle) }}
           <div class="schedule-form-error" data-staffing-control-error hidden></div>
           <label>
             Responsible department
@@ -1202,30 +1415,119 @@
             <button class="primary-button compact-action" type="submit">Save staffing details</button>
           </div>
         </form>
-        {% if view.staffing.role_rows %}
+        {{ staffing_status_track_panel(session, view.staffing_events) }}
+        {% if view.staffing_rows %}
+          {% set staffing_actions_disabled = not view.schedule_gate.is_ready %}
           <div class="staffing-role-table-wrap">
             <table class="staffing-role-table">
               <thead>
                 <tr>
                   <th>Role</th>
-                  <th>Required</th>
-                  <th>Assigned</th>
-                  <th>Pending</th>
-                  <th>In progress</th>
-                  <th>Confirmed</th>
-                  <th>Open</th>
+                  <th>Staff member</th>
+                  <th>Status</th>
+                  <th>Deadline</th>
+                  <th>Official confirmation</th>
+                  <th>Update status</th>
                 </tr>
               </thead>
               <tbody>
-                {% for row in view.staffing.role_rows %}
+                {% for row in view.staffing_rows %}
                   <tr>
                     <th scope="row">{{ row.role }}</th>
-                    <td>{{ row.required }}</td>
-                    <td>{{ row.assigned }}</td>
-                    <td>{{ row.pending }}</td>
-                    <td>{{ row.sent }}</td>
-                    <td>{{ row.confirmed }}</td>
-                    <td>{{ row.open }}</td>
+                    <td>
+                      {% if row.has_staff_member %}
+                        <span class="staffing-member-name">{{ row.staff_name }}</span>
+                        {% if row.receives_shipment %}
+                          <span class="staffing-shipment-chip">Receives shipment</span>
+                        {% endif %}
+                      {% else %}
+                        <strong class="staffing-role-to-cover">Role to cover</strong>
+                      {% endif %}
+                    </td>
+                    <td>
+                      <span class="staff-card-header-tag participation-{{ row.status_class }}">{{ row.status }}</span>
+                    </td>
+                    <td>
+                      <span class="staffing-deadline-chip staffing-deadline-{{ row.deadline_status }}">{{ row.deadline_label }}</span>
+                    </td>
+                    <td>
+                      <div class="staffing-inline-actions">
+                        <a class="staffing-action-chip {% if staffing_actions_disabled %}staffing-action-chip-grey is-disabled{% else %}staffing-action-chip-blue{% if not row.staff_email %} is-disabled{% endif %}{% endif %}" href="{% if staffing_actions_disabled or not row.staff_email %}#{% else %}mailto:{{ row.staff_email }}{% endif %}"{% if staffing_actions_disabled or not row.staff_email %} aria-disabled="true" tabindex="-1"{% endif %}>Send email</a>
+                        <button class="copy-icon-button email-invitation-copy-button" type="button" data-copy-text="{{ row.staff_email }}" aria-label="Copy staff email" title="Copy staff email"{% if staffing_actions_disabled or not row.staff_email %} disabled{% endif %}>
+                          <svg class="copy-icon" viewBox="0 0 24 24" aria-hidden="true">
+                            <rect x="9" y="9" width="10" height="10" rx="2"></rect>
+                            <path d="M5 15V7a2 2 0 0 1 2-2h8"></path>
+                          </svg>
+                          <svg class="check-icon" viewBox="0 0 24 24" aria-hidden="true">
+                            <path d="m5 12 4 4 10-10"></path>
+                          </svg>
+                          <span class="copy-button-feedback">Copied!</span>
+                        </button>
+                      </div>
+                    </td>
+                    <td>
+                      {% if staffing_actions_disabled %}
+                        {% if row.status == 'Official confirmation sent' %}
+                          <div class="staffing-inline-actions">
+                            <button class="staffing-action-chip staffing-action-chip-grey is-disabled" type="button" disabled>Mark as confirmed</button>
+                            <button class="staffing-action-chip staffing-action-chip-grey is-disabled" type="button" disabled>Mark as declined</button>
+                          </div>
+                        {% elif row.status == 'Confirmed' %}
+                          <div class="staffing-inline-actions">
+                            <button class="staffing-action-chip staffing-action-chip-grey is-disabled" type="button" disabled>Force Pending</button>
+                            <button class="staffing-action-chip staffing-action-chip-grey is-disabled" type="button" disabled>Cancelled</button>
+                          </div>
+                        {% else %}
+                          <button class="staffing-action-chip staffing-action-chip-grey is-disabled" type="button" disabled>Mark as sent</button>
+                        {% endif %}
+                      {% elif not row.has_staff_member %}
+                        <button class="staffing-action-chip staffing-action-chip-grey is-disabled" type="button" disabled>Mark as sent</button>
+                      {% elif row.updatable and row.status == 'Official confirmation sent' %}
+                        <div class="staffing-inline-actions">
+                          <form method="post" action="{{ url_for('staff.update_staffing_assignment_status', session_id=session.id, assignment_type=row.assignment_type, assignment_id=row.assignment_id) }}" data-disable-on-submit>
+                            <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                            <input type="hidden" name="schedule_status" value="{{ selected_schedule_status }}">
+                            <input type="hidden" name="participation_status" value="Confirmed">
+                            {{ pre_session_return_fields(selected_view, selected_bundle) }}
+                            <button class="staffing-action-chip staffing-action-chip-green" type="submit">Mark as confirmed</button>
+                          </form>
+                          <form method="post" action="{{ url_for('staff.update_staffing_assignment_status', session_id=session.id, assignment_type=row.assignment_type, assignment_id=row.assignment_id) }}" data-disable-on-submit>
+                            <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                            <input type="hidden" name="schedule_status" value="{{ selected_schedule_status }}">
+                            <input type="hidden" name="participation_status" value="Declined">
+                            {{ pre_session_return_fields(selected_view, selected_bundle) }}
+                            <button class="staffing-action-chip staffing-action-chip-red" type="submit">Mark as declined</button>
+                          </form>
+                        </div>
+                      {% elif row.updatable and row.status == 'Confirmed' %}
+                        <div class="staffing-inline-actions">
+                          <form method="post" action="{{ url_for('staff.update_staffing_assignment_status', session_id=session.id, assignment_type=row.assignment_type, assignment_id=row.assignment_id) }}" data-disable-on-submit>
+                            <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                            <input type="hidden" name="schedule_status" value="{{ selected_schedule_status }}">
+                            <input type="hidden" name="participation_status" value="Pending">
+                            {{ pre_session_return_fields(selected_view, selected_bundle) }}
+                            <button class="staffing-action-chip staffing-action-chip-grey" type="submit">Force Pending</button>
+                          </form>
+                          <form method="post" action="{{ url_for('staff.update_staffing_assignment_status', session_id=session.id, assignment_type=row.assignment_type, assignment_id=row.assignment_id) }}" data-disable-on-submit>
+                            <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                            <input type="hidden" name="schedule_status" value="{{ selected_schedule_status }}">
+                            <input type="hidden" name="participation_status" value="Cancelled">
+                            {{ pre_session_return_fields(selected_view, selected_bundle) }}
+                            <button class="staffing-action-chip staffing-action-chip-grey" type="submit">Cancelled</button>
+                          </form>
+                        </div>
+                      {% elif row.updatable and row.status not in ['Confirmed', 'Declined'] %}
+                        <form method="post" action="{{ url_for('staff.update_staffing_assignment_status', session_id=session.id, assignment_type=row.assignment_type, assignment_id=row.assignment_id) }}" data-disable-on-submit>
+                          <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                          <input type="hidden" name="schedule_status" value="{{ selected_schedule_status }}">
+                          <input type="hidden" name="participation_status" value="Official confirmation sent">
+                          {{ pre_session_return_fields(selected_view, selected_bundle) }}
+                          <button class="staffing-action-chip staffing-action-chip-blue" type="submit">Mark as sent</button>
+                        </form>
+                      {% else %}
+                        <span class="muted">—</span>
+                      {% endif %}
+                    </td>
                   </tr>
                 {% endfor %}
               </tbody>
@@ -3066,11 +3368,9 @@
             <div>
               <span>Current deadline</span>
               <strong>{{ schedule_deadline(view) }}</strong>
-              {% if action_ns.update %}
-                <button class="link-button schedule-edit-deadline-button" type="button" data-schedule-action-toggle="schedule-action-form-{{ session.id }}-{{ action_ns.update.key }}" aria-controls="schedule-action-form-{{ session.id }}-{{ action_ns.update.key }}" aria-expanded="false">Edit deadline</button>
-              {% endif %}
             </div>
           </section>
+          {{ schedule_status_track_panel(session, events) }}
 
           {% if view.status == 'Approved' %}
             <article class="schedule-recommended-action is-completed">
@@ -3087,13 +3387,22 @@
                 <h4>{{ action_ns.primary.label }}</h4>
                 <p>{{ schedule_action_description(action_ns.primary.key) }}</p>
               </div>
-              <button class="primary-button compact-action" type="button" data-schedule-action-toggle="schedule-action-form-{{ session.id }}-{{ action_ns.primary.key }}" aria-controls="schedule-action-form-{{ session.id }}-{{ action_ns.primary.key }}" aria-expanded="false">{{ action_ns.primary.label }}</button>
+              <div class="schedule-recommended-action-buttons">
+                {% if action_ns.primary.key == 'send_for_review' %}
+                  {% set schedule_share_text = 'Schedules for ' ~ session.exam_session_name ~ ': ' ~ (session.details_url or '') %}
+                  {% set schedule_email_subject = 'Schedules for ' ~ session.exam_session_name %}
+                  {% set schedule_email_body = 'Please review the schedules for ' ~ session.exam_session_name ~ ': ' ~ (session.details_url or '') %}
+                  <a class="schedule-share-button compact-action{% if not session.details_url %} is-disabled{% endif %}" href="https://wa.me/?text={{ schedule_share_text|urlencode }}" target="_blank" rel="noopener"{% if not session.details_url %} aria-disabled="true" tabindex="-1"{% endif %}>WhatsApp schedule</a>
+                  <a class="schedule-share-button compact-action{% if not session.details_url %} is-disabled{% endif %}" href="mailto:?subject={{ schedule_email_subject|urlencode }}&body={{ schedule_email_body|urlencode }}"{% if not session.details_url %} aria-disabled="true" tabindex="-1"{% endif %}>Email schedule</a>
+                {% endif %}
+                <button class="primary-button compact-action" type="button" data-schedule-action-toggle="schedule-action-form-{{ session.id }}-{{ action_ns.primary.key }}" aria-controls="schedule-action-form-{{ session.id }}-{{ action_ns.primary.key }}" aria-expanded="false">{{ action_ns.primary.label }}</button>
+              </div>
             </article>
           {% endif %}
 
           <div class="schedule-action-panels">
             {% for action in view.available_transitions %}
-              {{ schedule_action_form(action, session, selected_schedule_status, csrf_token) }}
+              {{ schedule_action_form(action, session, selected_schedule_status, csrf_token, view, selected_view, selected_bundle) }}
             {% endfor %}
           </div>
 
@@ -3102,6 +3411,9 @@
             <section class="schedule-other-actions" aria-label="Other schedule workflow actions">
               <h4>Other actions</h4>
               <div class="schedule-other-action-list">
+                {% if action_ns.primary and action_ns.primary.key == 'send_for_review' %}
+                  <a class="schedule-share-button compact-action{% if not session.details_url %} is-disabled{% endif %}" href="{{ session.details_url or '#' }}" target="_blank" rel="noopener"{% if not session.details_url %} aria-disabled="true" tabindex="-1"{% endif %}>View schedule</a>
+                {% endif %}
                 {% for action in view.available_transitions %}
                   {% if action.key != primary_key and action.key != 'update_deadline' %}
                     <button class="secondary-button compact-action" type="button" data-schedule-action-toggle="schedule-action-form-{{ session.id }}-{{ action.key }}" aria-controls="schedule-action-form-{{ session.id }}-{{ action.key }}" aria-expanded="false">{{ action.label }}</button>

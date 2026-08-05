@@ -53,6 +53,8 @@ from app.models import (
     ExamSessionPackageEvent,
     ExamSessionPackageUnit,
     ExamSessionScheduleEvent,
+    ExamSessionScheduleNote,
+    ExamSessionScheduleNoteMention,
     ExamSessionScheduleWorkflow,
     ExamSessionShipmentBundle,
     ExamSessionShipmentBundleSession,
@@ -62,6 +64,9 @@ from app.models import (
     ExamSessionSinapsisControl,
     ExamSessionSinapsisEvent,
     ExamSessionStaffingControl,
+    ExamSessionStaffingEvent,
+    ExamSessionStaffingNote,
+    ExamSessionStaffingNoteMention,
     ExamSessionSupervisorAssignment,
     ExamSessionYear,
     Fee,
@@ -244,6 +249,8 @@ EXAM_SESSION_PARTICIPATION_OPTIONS = [
     "Pre-confirmed",
     "Official confirmation sent",
     "Confirmed",
+    "Declined",
+    "Cancelled",
 ]
 POTENTIAL_ENTRY_EXAM_SESSION_PARTICIPATION_OPTIONS = [
     "Pending",
@@ -481,6 +488,12 @@ def require_menu_permission_for_request():
     if request.endpoint == "staff.mark_potential_note_read":
         require_menu_view("staff_members")
         return None
+    if request.endpoint == "staff.mark_schedule_note_read":
+        require_menu_view("pre_session_control_tower")
+        return None
+    if request.endpoint == "staff.mark_staffing_note_read":
+        require_menu_view("pre_session_control_tower")
+        return None
     menu_key = menu_key_for_path(request.path)
     if not menu_key:
         return None
@@ -511,6 +524,10 @@ def inject_menu_permissions():
         "history_to_label": history_to_label,
         "history_to_labels": history_to_labels,
         "potential_entry_note_status": potential_entry_note_status,
+        "schedule_note_status": schedule_note_status,
+        "schedule_note_views": schedule_note_views,
+        "staffing_note_status": staffing_note_status,
+        "staffing_note_views": staffing_note_views,
         "potential_perform_action_modal_id": potential_perform_action_modal_id,
         "user_can_view": user_can_view,
         "user_can_edit": user_can_edit,
@@ -1030,26 +1047,22 @@ SCHEDULE_WORKFLOW_ACTIONS = {
         "from": "Not started",
         "to": "In progress",
         "label": "Start schedule preparation",
-        "deadline_required": True,
     },
     "mark_ready": {
         "from": "In progress",
         "to": "Ready to send",
         "label": "Mark schedules as ready to send",
-        "deadline_required": True,
     },
     "send_for_review": {
         "from": "Ready to send",
         "to": "Sent for review",
         "label": "Mark as sent for review",
-        "deadline_required": True,
         "sent": True,
     },
     "record_changes": {
         "from": "Sent for review",
         "to": "Changes requested",
         "label": "Record requested changes",
-        "deadline_required": True,
         "note_required": True,
         "changes_requested": True,
     },
@@ -1057,7 +1070,6 @@ SCHEDULE_WORKFLOW_ACTIONS = {
         "from": "Changes requested",
         "to": "Ready to send",
         "label": "Mark revised schedules as ready to send",
-        "deadline_required": True,
     },
     "approve": {
         "from": "Sent for review",
@@ -1069,13 +1081,11 @@ SCHEDULE_WORKFLOW_ACTIONS = {
         "from": "Ready to send",
         "to": "In progress",
         "label": "Continue editing schedules",
-        "deadline_required": True,
     },
     "reopen": {
         "from": "Approved",
         "to": "In progress",
         "label": "Reopen schedule preparation",
-        "deadline_required": True,
         "note_required": True,
         "reopen": True,
     },
@@ -1380,6 +1390,22 @@ def staffing_readiness_contract(supervisor_assignments=None, examiner_assignment
                 counts["assigned"] += 1
                 if participation_status == "Pending":
                     counts["pending_assigned"] += 1
+                elif participation_status == "Declined":
+                    counts["pending_assigned"] += 1
+                    blockers.append({
+                        "code": "STAFF_DECLINED",
+                        "role": role,
+                        "assignment_id": assignment_id,
+                        "message": f"{role} declined participation and needs follow-up.",
+                    })
+                elif participation_status == "Cancelled":
+                    counts["pending_assigned"] += 1
+                    blockers.append({
+                        "code": "STAFF_CANCELLED",
+                        "role": role,
+                        "assignment_id": assignment_id,
+                        "message": f"{role} participation was cancelled and needs follow-up.",
+                    })
                 elif participation_status_is_in_progress(participation_status):
                     counts["sent"] += 1
                 elif participation_status == "Confirmed":
@@ -1599,6 +1625,8 @@ def exam_session_pending_status_tooltip(staffing_contract, logistics_contract, s
 
     if session_record and not exam_session_emergency_contact_decision_ready(session_record):
         missing_items.append("Select Emergency contact required or Emergency contact NOT required.")
+    if session_record and session_record.date_confirmation_status != "Confirmed":
+        missing_items.append("Confirm the session date.")
     if session_record and not exam_session_shipment_recipient_ready(session_record, assignments or []):
         missing_items.append("Assign Receives shipment for onsite sessions.")
     if candidate_contract and not candidate_contract.get("ready"):
@@ -3092,6 +3120,190 @@ def potential_entry_note_status(note):
         "mention_id": current_mention.id if current_mention else None,
         "recipient_details": recipient_details,
     }
+
+
+def schedule_note_status(note):
+    return potential_entry_note_status(note)
+
+
+def register_schedule_note_mentions(workflow, note_id, comment_text, actor, recipients):
+    if not workflow or not note_id:
+        return []
+    mentions = []
+    for recipient in recipients:
+        if not recipient.get("user_id"):
+            continue
+        existing = ExamSessionScheduleNoteMention.query.filter_by(
+            note_id=note_id,
+            to_user_id=recipient.get("user_id"),
+        ).first()
+        if existing:
+            mentions.append(existing)
+            continue
+        mention = ExamSessionScheduleNoteMention(
+            note_id=note_id,
+            workflow_id=workflow.id,
+            from_user_id=actor.get("user_id"),
+            from_full_name=actor.get("full_name"),
+            from_department=actor.get("department"),
+            to_user_id=recipient.get("user_id"),
+            to_full_name=recipient.get("full_name"),
+            to_department=recipient.get("department"),
+            comment_text=comment_text.strip(),
+        )
+        db.session.add(mention)
+        mentions.append(mention)
+    return mentions
+
+
+def create_schedule_note(workflow, note_text, form=None):
+    note_text = (note_text or "").strip()
+    if not workflow or not note_text:
+        return None
+    if not workflow.id:
+        db.session.flush()
+    actor = current_note_actor()
+    recipients = selected_note_recipients(form or {})
+    note = ExamSessionScheduleNote(
+        workflow_id=workflow.id,
+        note_id=uuid.uuid4().hex,
+        note_text=note_text,
+        from_user_id=actor.get("user_id"),
+        from_full_name=actor.get("full_name"),
+        from_department=actor.get("department"),
+    )
+    db.session.add(note)
+    register_schedule_note_mentions(workflow, note.note_id, note_text, actor, recipients)
+    return note
+
+
+def schedule_note_view(note, mentions=None):
+    mentions = mentions or []
+    return {
+        "note_id": note.note_id,
+        "date": note.created_at.astimezone(LOCAL_TZ).strftime("%d/%m/%Y - %H:%M h.") if note.created_at else "Date not recorded",
+        "note": note.note_text,
+        "from_full_name": note.from_full_name or "",
+        "from_department": note.from_department or "",
+        "from_user_id": note.from_user_id,
+        "to_label": note_recipients_label([
+            {"user_id": mention.to_user_id, "full_name": mention.to_full_name, "department": mention.to_department}
+            for mention in mentions
+        ]),
+        "to_labels": [
+            note_party_label(mention.to_full_name, mention.to_department)
+            for mention in mentions
+            if mention.to_user_id
+        ],
+        "to_user_ids": [mention.to_user_id for mention in mentions if mention.to_user_id],
+        "mentions": mentions,
+        "mention": next(
+            (
+                mention for mention in mentions
+                if getattr(g, "current_user", None) and mention.to_user_id == g.current_user.id
+            ),
+            mentions[0] if mentions else None,
+        ),
+    }
+
+
+def schedule_note_views(notes, mentions_by_note_id=None):
+    mentions_by_note_id = mentions_by_note_id or {}
+    return [
+        schedule_note_view(note, mentions_by_note_id.get(note.note_id, []))
+        for note in notes
+    ]
+
+
+def staffing_note_status(note):
+    return potential_entry_note_status(note)
+
+
+def register_staffing_note_mentions(session_record, note_id, comment_text, actor, recipients):
+    if not session_record or not note_id:
+        return []
+    mentions = []
+    for recipient in recipients:
+        if not recipient.get("user_id"):
+            continue
+        existing = ExamSessionStaffingNoteMention.query.filter_by(
+            note_id=note_id,
+            to_user_id=recipient.get("user_id"),
+        ).first()
+        if existing:
+            mentions.append(existing)
+            continue
+        mention = ExamSessionStaffingNoteMention(
+            note_id=note_id,
+            exam_session_id=session_record.id,
+            from_user_id=actor.get("user_id"),
+            from_full_name=actor.get("full_name"),
+            from_department=actor.get("department"),
+            to_user_id=recipient.get("user_id"),
+            to_full_name=recipient.get("full_name"),
+            to_department=recipient.get("department"),
+            comment_text=comment_text.strip(),
+        )
+        db.session.add(mention)
+        mentions.append(mention)
+    return mentions
+
+
+def create_staffing_note(session_record, note_text, form=None):
+    note_text = (note_text or "").strip()
+    if not session_record or not note_text:
+        return None
+    actor = current_note_actor()
+    recipients = selected_note_recipients(form or {})
+    note = ExamSessionStaffingNote(
+        exam_session_id=session_record.id,
+        note_id=uuid.uuid4().hex,
+        note_text=note_text,
+        from_user_id=actor.get("user_id"),
+        from_full_name=actor.get("full_name"),
+        from_department=actor.get("department"),
+    )
+    db.session.add(note)
+    register_staffing_note_mentions(session_record, note.note_id, note_text, actor, recipients)
+    return note
+
+
+def staffing_note_view(note, mentions=None):
+    mentions = mentions or []
+    return {
+        "note_id": note.note_id,
+        "date": note.created_at.astimezone(LOCAL_TZ).strftime("%d/%m/%Y - %H:%M h.") if note.created_at else "Date not recorded",
+        "note": note.note_text,
+        "from_full_name": note.from_full_name or "",
+        "from_department": note.from_department or "",
+        "from_user_id": note.from_user_id,
+        "to_label": note_recipients_label([
+            {"user_id": mention.to_user_id, "full_name": mention.to_full_name, "department": mention.to_department}
+            for mention in mentions
+        ]),
+        "to_labels": [
+            note_party_label(mention.to_full_name, mention.to_department)
+            for mention in mentions
+            if mention.to_user_id
+        ],
+        "to_user_ids": [mention.to_user_id for mention in mentions if mention.to_user_id],
+        "mentions": mentions,
+        "mention": next(
+            (
+                mention for mention in mentions
+                if getattr(g, "current_user", None) and mention.to_user_id == g.current_user.id
+            ),
+            mentions[0] if mentions else None,
+        ),
+    }
+
+
+def staffing_note_views(notes, mentions_by_note_id=None):
+    mentions_by_note_id = mentions_by_note_id or {}
+    return [
+        staffing_note_view(note, mentions_by_note_id.get(note.note_id, []))
+        for note in notes
+    ]
 
 
 def record_potential_status_change(entry, previous_status, new_status):
@@ -4921,16 +5133,18 @@ def staffing_contract_blocker_messages(contract):
         return ["Staffing data needs to be reviewed before the session can be considered ready."]
     messages = []
     open_positions = totals.get("open_positions", 0)
-    awaiting = totals.get("pending_assigned", 0) + totals.get("sent", 0)
+    pending_confirmations = totals.get("pending_assigned", 0)
+    sent_confirmations = totals.get("sent", 0)
     if open_positions:
         for detail in contract.get("open_position_details", []):
             role = detail.get("role") or "Staff"
             messages.append(f"1 {role} position still needs to be filled.")
         if not messages:
             messages.append(f"{pluralize_phrase(open_positions, 'staff position')} still need to be filled.")
-    if awaiting:
-        verb = "is" if awaiting == 1 else "are"
-        messages.append(f"{pluralize_phrase(awaiting, 'staff member')} {verb} awaiting confirmation.")
+    if pending_confirmations:
+        messages.append(f"{pluralize_phrase(pending_confirmations, 'confirmation')} to be sent.")
+    if sent_confirmations:
+        messages.append(f"{pluralize_phrase(sent_confirmations, 'confirmation')} to be updated.")
     return messages
 
 
@@ -4939,7 +5153,9 @@ def staffing_presentation_from_contract(contract):
     required = totals.get("required", 0)
     confirmed = totals.get("confirmed", 0)
     open_positions = totals.get("open_positions", 0)
-    awaiting = totals.get("pending_assigned", 0) + totals.get("sent", 0)
+    pending_confirmations = totals.get("pending_assigned", 0)
+    sent_confirmations = totals.get("sent", 0)
+    awaiting = pending_confirmations + sent_confirmations
     status = contract.get("status", "not_configured")
     role_rows = []
     for role in ("Supervisor", "Examiner", "Intern"):
@@ -4958,8 +5174,10 @@ def staffing_presentation_from_contract(contract):
     secondary_lines = []
     if open_positions:
         secondary_lines.append(f"{pluralize_phrase(open_positions, 'role')} to cover")
-    if awaiting:
-        secondary_lines.append(f"{pluralize_phrase(awaiting, 'awaiting confirmation', 'awaiting confirmations')}")
+    if pending_confirmations:
+        secondary_lines.append(f"{pluralize_phrase(pending_confirmations, 'confirmation')} to be sent")
+    if sent_confirmations:
+        secondary_lines.append(f"{pluralize_phrase(sent_confirmations, 'confirmation')} to be updated")
     if required == 0:
         summary = "Staffing has not been configured for this session."
         table_summary = "No staff roles configured"
@@ -4979,9 +5197,46 @@ def staffing_presentation_from_contract(contract):
         if row["sent"]:
             parts.append(f"{row['sent']} sent")
         tooltip_lines.append(f"{row['role']}: {' · '.join(parts)}")
+    status_chips = []
+    if open_positions:
+        status_chips.append({
+            "status": "roles-to-cover",
+            "label": "Roles to cover",
+            "recommended_action": "Verify open roles with Management",
+        })
+    if totals.get("pending_assigned", 0):
+        status_chips.append({
+            "status": "confirmations-to-be-sent",
+            "label": "Confirmations to be sent",
+            "recommended_action": "Send official confirmation emails",
+        })
+    if totals.get("sent", 0):
+        status_chips.append({
+            "status": "confirmations-to-be-updated",
+            "label": "Confirmations to be updated",
+            "recommended_action": "Follow up on confirmation email status",
+        })
+    if required > 0 and open_positions == 0 and confirmed == required:
+        status_chips.append({
+            "status": "confirmed-staff",
+            "label": "Confirmed staff",
+            "recommended_action": "Staffing completed",
+        })
+    if not status_chips:
+        status_chips.append({
+            "status": status.replace("_", "-"),
+            "label": staffing_contract_status_label(status),
+        })
+    recommended_actions = [
+        chip["recommended_action"]
+        for chip in status_chips
+        if chip.get("recommended_action") and chip.get("recommended_action") != "Staffing completed"
+    ]
     return {
         "status": status,
         "label": staffing_contract_status_label(status),
+        "status_chips": status_chips,
+        "recommended_actions": recommended_actions,
         "summary": summary,
         "table_summary": table_summary,
         "secondary_lines": secondary_lines,
@@ -4997,6 +5252,253 @@ def staffing_presentation_from_contract(contract):
         "tooltip": "\n".join(tooltip_lines) if tooltip_lines else "Staffing has not been configured for this session.",
         "ready": contract.get("ready", False),
     }
+
+
+def staffing_assignment_person(assignment):
+    if not assignment:
+        return None
+    return assignment.team_member or assignment.potential_entry
+
+
+def staffing_assignment_person_name(assignment):
+    person = staffing_assignment_person(assignment)
+    return (getattr(person, "full_name", "") or "").strip()
+
+
+def staffing_assignment_person_email(assignment):
+    person = staffing_assignment_person(assignment)
+    return (getattr(person, "email", "") or "").strip()
+
+
+def staffing_assignment_role_label(assignment_type, assignment=None):
+    if assignment_type == "supervisor":
+        if assignment is not None and getattr(assignment, "is_remote", False):
+            return "Supervisor (remote)"
+        return "Supervisor"
+    if assignment_type == "examiner":
+        return "Examiner"
+    if assignment_type == "intern":
+        return "Intern"
+    return "Staff"
+
+
+def record_staffing_status_change(session_record, assignment, assignment_type, previous_status, new_status, note=None):
+    previous_label = staffing_participation_status_label(previous_status)
+    new_label = staffing_participation_status_label(new_status)
+    if previous_label == new_label:
+        return None
+    event = ExamSessionStaffingEvent(
+        exam_session_id=session_record.id,
+        assignment_type=assignment_type,
+        assignment_id=assignment.id,
+        role=staffing_assignment_role_label(assignment_type, assignment),
+        staff_member_name=staffing_assignment_person_name(assignment) or "Role to cover",
+        previous_status=previous_label,
+        new_status=new_label,
+        note=(note or "").strip() or None,
+        created_by=session.get("user") if has_request_context() else None,
+    )
+    db.session.add(event)
+    return event
+
+
+def staffing_participation_status_label(status):
+    return LEGACY_PARTICIPATION_STATUS_MAP.get(status, status or "Pending")
+
+
+def staffing_participation_status_class(status):
+    return staffing_participation_status_label(status).lower().replace(" ", "-")
+
+
+def staffing_assignment_has_staff_member(assignment):
+    return bool(
+        getattr(assignment, "team_member_id", None)
+        or getattr(assignment, "potential_entry_id", None)
+        or staffing_assignment_person_name(assignment)
+    )
+
+
+def staffing_deadline_start_date(value=None):
+    if isinstance(value, datetime):
+        return value.astimezone(LOCAL_TZ).date()
+    if isinstance(value, date):
+        return value
+    return datetime.now(LOCAL_TZ).date()
+
+
+def staffing_assignment_deadline_label(due_at, status="Pending", today=None):
+    clean_status = staffing_participation_status_label(status)
+    if clean_status in {"Confirmed", "Declined", "Cancelled", "Assigned"}:
+        return "Completed"
+    if not due_at:
+        return "-"
+    if today is None:
+        today = datetime.now(LOCAL_TZ).date()
+    if due_at < today:
+        return "Overdue"
+    if due_at == today:
+        return "Due today"
+    return due_at.strftime("%d/%m/%Y")
+
+
+def staffing_assignment_deadline_status(due_at, status="Pending", today=None):
+    clean_status = staffing_participation_status_label(status)
+    if clean_status in {"Confirmed", "Declined", "Cancelled", "Assigned"}:
+        return "completed"
+    if not due_at:
+        return "not-set"
+    if today is None:
+        today = datetime.now(LOCAL_TZ).date()
+    if due_at < today:
+        return "overdue"
+    if due_at == today:
+        return "due-today"
+    return "upcoming"
+
+
+def set_staffing_assignment_deadline(assignment, business_days, start_at=None, stage=""):
+    if not assignment:
+        return False
+    start_date = staffing_deadline_start_date(start_at)
+    due_at = argentina_add_business_days(start_date, business_days)
+    start_value = start_at if isinstance(start_at, datetime) else None
+    if not start_value:
+        start_value = datetime.now(timezone.utc)
+    if (
+        getattr(assignment, "staffing_status_due_at", None) != due_at
+        or getattr(assignment, "staffing_status_due_stage", None) != stage
+    ):
+        assignment.staffing_status_due_at = due_at
+        assignment.staffing_status_due_stage = stage or None
+        assignment.staffing_status_due_started_at = start_value
+        return True
+    return False
+
+
+def clear_staffing_assignment_deadline(assignment):
+    if assignment and (
+        getattr(assignment, "staffing_status_due_at", None) is not None
+        or getattr(assignment, "staffing_status_due_stage", None) is not None
+        or getattr(assignment, "staffing_status_due_started_at", None) is not None
+    ):
+        assignment.staffing_status_due_at = None
+        assignment.staffing_status_due_stage = None
+        assignment.staffing_status_due_started_at = None
+        return True
+    return False
+
+
+def sync_staffing_assignment_deadlines_for_session(session_record, workflow=None, assignments=None, today=None):
+    if not session_record:
+        return False
+    workflow = workflow or ExamSessionScheduleWorkflow.query.filter_by(exam_session_id=session_record.id).first()
+    assignments = assignments if assignments is not None else (
+        ExamSessionSupervisorAssignment.query.filter_by(exam_session_id=session_record.id).all()
+        + ExamSessionExaminerAssignment.query.filter_by(exam_session_id=session_record.id).all()
+        + ExamSessionInternAssignment.query.filter_by(exam_session_id=session_record.id).all()
+    )
+    schedule_unlocked = workflow and workflow.status == "Approved"
+    changed = False
+    for assignment in assignments:
+        status = staffing_participation_status_label(getattr(assignment, "participation_status", "Pending"))
+        if not schedule_unlocked or not staffing_assignment_has_staff_member(assignment):
+            changed = clear_staffing_assignment_deadline(assignment) or changed
+        elif status == "Pending":
+            if getattr(assignment, "staffing_status_due_stage", None) != "Pending" or not getattr(assignment, "staffing_status_due_at", None):
+                changed = set_staffing_assignment_deadline(
+                    assignment,
+                    2,
+                    workflow.approved_at or today,
+                    stage="Pending",
+                ) or changed
+        elif status == "Official confirmation sent":
+            if (
+                getattr(assignment, "staffing_status_due_stage", None) != "Official confirmation sent"
+                or not getattr(assignment, "staffing_status_due_at", None)
+            ):
+                changed = set_staffing_assignment_deadline(
+                    assignment,
+                    3,
+                    assignment.updated_on or today,
+                    stage="Official confirmation sent",
+                ) or changed
+        else:
+            if status not in {"Pending", "Official confirmation sent"}:
+                changed = clear_staffing_assignment_deadline(assignment) or changed
+    return changed
+
+
+def schedule_locked_by_staffing_assignments(session_record):
+    if not session_record:
+        return False
+    assignments = (
+        ExamSessionSupervisorAssignment.query.filter_by(exam_session_id=session_record.id).all()
+        + ExamSessionExaminerAssignment.query.filter_by(exam_session_id=session_record.id).all()
+        + ExamSessionInternAssignment.query.filter_by(exam_session_id=session_record.id).all()
+    )
+    return any(
+        normalize_participation_status(getattr(assignment, "participation_status", "Pending")) != "Pending"
+        for assignment in assignments
+    )
+
+
+def staffing_assignment_row(role, assignment=None, assignment_type="", status="Pending", staff_name="", staff_email="", receives_shipment=False, updatable=True):
+    clean_status = staffing_participation_status_label(status)
+    resolved_name = staff_name or staffing_assignment_person_name(assignment)
+    has_staff_member = bool(
+        resolved_name
+        or getattr(assignment, "team_member_id", None)
+        or getattr(assignment, "potential_entry_id", None)
+    )
+    return {
+        "role": role,
+        "assignment_type": assignment_type,
+        "assignment_id": assignment.id if assignment else None,
+        "staff_name": resolved_name or "Assigned staff member",
+        "staff_email": staff_email or staffing_assignment_person_email(assignment),
+        "status": clean_status,
+        "status_class": staffing_participation_status_class(clean_status),
+        "deadline": getattr(assignment, "staffing_status_due_at", None),
+        "deadline_label": staffing_assignment_deadline_label(getattr(assignment, "staffing_status_due_at", None), clean_status),
+        "deadline_status": staffing_assignment_deadline_status(getattr(assignment, "staffing_status_due_at", None), clean_status),
+        "receives_shipment": receives_shipment or bool(getattr(assignment, "is_shipment_recipient", False)),
+        "has_staff_member": has_staff_member,
+        "updatable": bool(updatable and assignment and assignment.id),
+    }
+
+
+def staffing_assignment_rows(session_record, supervisor_assignments=None, examiner_assignments=None, intern_assignments=None):
+    rows = []
+    if session_record and session_record.emergency_contact_member:
+        rows.append(staffing_assignment_row(
+            "Emergency contact",
+            status="Assigned",
+            staff_name=session_record.emergency_contact_member.full_name,
+            staff_email=session_record.emergency_contact_member.email,
+            updatable=False,
+        ))
+    for assignment in supervisor_assignments or []:
+        rows.append(staffing_assignment_row(
+            "Supervisor (remote)" if assignment.is_remote else "Supervisor",
+            assignment=assignment,
+            assignment_type="supervisor",
+            status=assignment.participation_status,
+        ))
+    for assignment in examiner_assignments or []:
+        rows.append(staffing_assignment_row(
+            "Examiner",
+            assignment=assignment,
+            assignment_type="examiner",
+            status=assignment.participation_status,
+        ))
+    for assignment in intern_assignments or []:
+        rows.append(staffing_assignment_row(
+            "Intern",
+            assignment=assignment,
+            assignment_type="intern",
+            status=assignment.participation_status,
+        ))
+    return rows
 
 
 def staffing_control_contract(staffing_control=None, staffing_contract=None, today=None):
@@ -7424,6 +7926,80 @@ def shipment_dispatch_deadline(earliest_session_date):
     return earliest_session_date - timedelta(days=SHIPMENT_TRANSIT_DAYS + SHIPMENT_RECEPTION_BUFFER_DAYS)
 
 
+def one_month_before(value):
+    if not value:
+        return None
+    month = value.month - 1
+    year = value.year
+    if month < 1:
+        month = 12
+        year -= 1
+    last_day = calendar.monthrange(year, month)[1]
+    return value.replace(year=year, month=month, day=min(value.day, last_day))
+
+
+def easter_sunday(year):
+    a = year % 19
+    b = year // 100
+    c = year % 100
+    d = b // 4
+    e = b % 4
+    f = (b + 8) // 25
+    g = (b - f + 1) // 3
+    h = (19 * a + b - d - g + 15) % 30
+    i = c // 4
+    k = c % 4
+    l = (32 + 2 * e + 2 * i - h - k) % 7
+    m = (a + 11 * h + 22 * l) // 451
+    month = (h + l - 7 * m + 114) // 31
+    day = ((h + l - 7 * m + 114) % 31) + 1
+    return date(year, month, day)
+
+
+def argentina_national_holidays(year):
+    easter = easter_sunday(year)
+    return {
+        date(year, 1, 1),
+        easter - timedelta(days=48),
+        easter - timedelta(days=47),
+        date(year, 3, 24),
+        easter - timedelta(days=2),
+        date(year, 4, 2),
+        date(year, 5, 1),
+        date(year, 5, 25),
+        date(year, 6, 17),
+        date(year, 6, 20),
+        date(year, 7, 9),
+        date(year, 8, 17),
+        date(year, 10, 12),
+        date(year, 11, 20),
+        date(year, 12, 8),
+        date(year, 12, 25),
+    }
+
+
+def is_argentina_business_day(value):
+    return value.weekday() < 5 and value not in argentina_national_holidays(value.year)
+
+
+def argentina_next_business_day(value):
+    current = value
+    while True:
+        current += timedelta(days=1)
+        if is_argentina_business_day(current):
+            return current
+
+
+def argentina_add_business_days(value, business_days):
+    current = value
+    remaining = business_days
+    while remaining > 0:
+        current += timedelta(days=1)
+        if is_argentina_business_day(current):
+            remaining -= 1
+    return current
+
+
 def shipment_bundle_year_from_sessions(bundle):
     session_dates = [session_record.session_date for session_record in shipment_bundle_sessions(bundle) if session_record.session_date]
     if session_dates:
@@ -7533,6 +8109,42 @@ def shipment_bundle_deadline_for_sessions(sessions):
     return shipment_dispatch_deadline(min(dates))
 
 
+def schedule_preparation_deadline_for_sessions(sessions):
+    dates = [session_record.session_date for session_record in sessions if session_record.session_date]
+    if not dates:
+        return None
+    return one_month_before(min(dates))
+
+
+def sync_schedule_preparation_deadline_for_bundle(bundle):
+    sessions = shipment_bundle_sessions(bundle)
+    deadline = schedule_preparation_deadline_for_sessions(sessions)
+    if not deadline:
+        return False
+    changed = False
+    for session_record in sessions:
+        workflow = get_or_create_schedule_workflow(session_record)
+        if workflow.status == "Approved":
+            continue
+        if workflow.next_action_due_at != deadline:
+            workflow.next_action_due_at = deadline
+            workflow.updated_at = datetime.now(timezone.utc)
+            changed = True
+    return changed
+
+
+def schedule_preparation_deadline_for_session_bundle(session_record):
+    link = (
+        ExamSessionShipmentBundleSession.query
+        .filter_by(exam_session_id=session_record.id)
+        .options(joinedload(ExamSessionShipmentBundleSession.bundle))
+        .first()
+    )
+    if not link or not link.bundle:
+        return None
+    return schedule_preparation_deadline_for_sessions(shipment_bundle_sessions(link.bundle))
+
+
 def create_auto_shipment_bundle(supervisor, sessions, bundle_year, split_from_bundle=None, event_note="Bundle automatically created."):
     sessions = sorted(sessions, key=lambda item: (item.session_date or datetime.max.date(), item.exam_session_name.lower(), item.id or 0))
     bundle = ExamSessionShipmentBundle(
@@ -7555,6 +8167,7 @@ def create_auto_shipment_bundle(supervisor, sessions, bundle_year, split_from_bu
     for session_record in sessions:
         db.session.add(ExamSessionShipmentBundleSession(bundle=bundle, exam_session_id=session_record.id))
     ensure_shipment_checklist_items(bundle)
+    sync_schedule_preparation_deadline_for_bundle(bundle)
     shipment_event(bundle, "AUTO_BUNDLE_CREATED", None, bundle.status, event_note)
     return bundle
 
@@ -7568,8 +8181,10 @@ def update_auto_bundle_deadline(bundle):
         bundle.dispatch_due_at = deadline
         bundle.updated_by = "system"
         shipment_event(bundle, "AUTO_BUNDLE_DEADLINE_RECALCULATED", bundle.status, bundle.status, f"Bundle deadline recalculated from {previous}.")
-        return True
-    return False
+        changed = True
+    else:
+        changed = False
+    return sync_schedule_preparation_deadline_for_bundle(bundle) or changed
 
 
 def split_overdue_auto_bundle_if_needed(bundle, today=None):
@@ -7588,8 +8203,7 @@ def split_overdue_auto_bundle_if_needed(bundle, today=None):
     original_keep = confirmed_sessions if confirmed_sessions else pending_sessions[:1]
     sessions_to_move = pending_sessions if confirmed_sessions else pending_sessions[1:]
     if not sessions_to_move:
-        update_auto_bundle_deadline(bundle)
-        return False
+        return update_auto_bundle_deadline(bundle)
     existing_links = {link.exam_session_id: link for link in list(bundle.session_links)}
     for session_record in sessions_to_move:
         link = existing_links.get(session_record.id)
@@ -7711,10 +8325,10 @@ def reconcile_auto_shipment_bundles(year_or_sessions, today=None):
             if is_shipment_bundle_completed(bundle) or bundle.status in SHIPMENT_PROTECTED_STATUSES or not bundle.auto_managed:
                 continue
             if bundle.split_from_bundle_id:
-                update_auto_bundle_deadline(bundle)
+                changed = update_auto_bundle_deadline(bundle) or changed
                 continue
             if bundle.supervisor_staff_id == supervisor.id:
-                update_auto_bundle_deadline(bundle)
+                changed = update_auto_bundle_deadline(bundle) or changed
                 continue
             db.session.delete(current_link)
             shipment_event(bundle, "SESSION_REMOVED_FROM_AUTO_BUNDLE", bundle.status, bundle.status, session_record.exam_session_name)
@@ -7739,7 +8353,7 @@ def reconcile_auto_shipment_bundles(year_or_sessions, today=None):
                     db.session.add(ExamSessionShipmentBundleSession(bundle=existing_bundle, exam_session_id=session_record.id))
                     shipment_event(existing_bundle, "SESSION_ADDED_TO_AUTO_BUNDLE", existing_bundle.status, existing_bundle.status, session_record.exam_session_name)
                     changed = True
-            update_auto_bundle_deadline(existing_bundle)
+            changed = update_auto_bundle_deadline(existing_bundle) or changed
         else:
             new_bundle = create_auto_shipment_bundle(supervisor, group_sessions, selected_year)
             db.session.flush()
@@ -8915,17 +9529,23 @@ def priority_action_contract(
         }
     if staffing_status == "awaiting_confirmations":
         totals = staffing_contract.get("totals", {})
-        awaiting = totals.get("pending_assigned", 0) + totals.get("sent", 0)
+        pending_confirmations = totals.get("pending_assigned", 0)
+        sent_confirmations = totals.get("sent", 0)
+        awaiting = pending_confirmations + sent_confirmations
         if awaiting <= 0:
             return review_action
-        verb = "is" if awaiting == 1 else "are"
+        description_parts = []
+        if pending_confirmations:
+            description_parts.append(f"{pluralize_phrase(pending_confirmations, 'confirmation')} to be sent")
+        if sent_confirmations:
+            description_parts.append(f"{pluralize_phrase(sent_confirmations, 'confirmation')} to be updated")
         return {
             "action_key": "follow_up_staff_confirmations",
             "label": "Follow up staff confirmations",
             "source": "staffing",
             "source_label": "Staffing",
             "status": "action_required",
-            "description": f"{pluralize_phrase(awaiting, 'staff member')} {verb} awaiting confirmation.",
+            "description": "; ".join(description_parts) + ".",
             "responsible": (staffing_control or {}).get("responsible_label", "ADMIN"),
             "deadline": (staffing_control or {}).get("deadline"),
             "deadline_label": (staffing_control or {}).get("deadline_label") or "Not set",
@@ -9948,7 +10568,7 @@ def render_journey_unavailable(status_code=404):
     ), status_code
 
 
-def schedule_workflow_view(session_record, workflow=None, today=None, staffing=None, logistics=None, core_readiness=None, operational_readiness=None, session_readiness=None, incidents=None, review_flags=None, priority_action=None, staffing_control=None, logistics_control=None, finance=None, finance_events=None, sinapsis=None, sinapsis_checklist_items=None, sinapsis_events=None, communications=None, communications_checklist_items=None, communications_events=None, schedule_gate=None, packages=None, shipments=None, activity_timeline=None, journey_shares=None):
+def schedule_workflow_view(session_record, workflow=None, today=None, staffing=None, logistics=None, core_readiness=None, operational_readiness=None, session_readiness=None, incidents=None, review_flags=None, priority_action=None, staffing_control=None, logistics_control=None, finance=None, finance_events=None, sinapsis=None, sinapsis_checklist_items=None, sinapsis_events=None, communications=None, communications_checklist_items=None, communications_events=None, schedule_gate=None, packages=None, shipments=None, activity_timeline=None, journey_shares=None, staffing_rows=None, staffing_events=None, schedule_locked_by_staffing=False):
     status = schedule_workflow_status(workflow)
     deadline = schedule_workflow_current_deadline(workflow)
     sinapsis_url = (session_record.details_url or "").strip()
@@ -9979,7 +10599,10 @@ def schedule_workflow_view(session_record, workflow=None, today=None, staffing=N
         "review_round": schedule_workflow_review_round(workflow),
         "health": schedule_workflow_health(status, deadline, today=today),
         "schedule_gate": gate,
+        "schedule_locked_by_staffing": bool(schedule_locked_by_staffing),
         "staffing": staffing,
+        "staffing_rows": staffing_rows or [],
+        "staffing_events": staffing_events or [],
         "staffing_control": staffing_control_view,
         "logistics": logistics or logistics_presentation_from_contract(logistics_readiness_contract([], [], None)),
         "logistics_control": logistics_control_view,
@@ -10348,9 +10971,23 @@ def parse_schedule_deadline(value):
     return None
 
 
-def schedule_workflow_redirect(session_record, status_filter="", action_key=""):
+def pre_session_control_tower_return_args(session_record, default_view="sessions"):
+    requested_view = request.form.get("view", default_view) or default_view
+    if requested_view not in {"bundles", "sessions", "bundle", "my-actions"}:
+        requested_view = default_view
     args = {
         "session_year": session_record.session_date.year,
+        "view": requested_view,
+    }
+    bundle_id = (request.form.get("bundle_id") or "").strip()
+    if requested_view == "bundle" and bundle_id.isdigit():
+        args["bundle_id"] = int(bundle_id)
+    return args
+
+
+def schedule_workflow_redirect(session_record, status_filter="", action_key="", schedule_only=False):
+    args = {
+        **pre_session_control_tower_return_args(session_record),
         "open_schedule_modal": session_record.id,
         "open_modal_target": "schedule-actions",
     }
@@ -10358,14 +10995,17 @@ def schedule_workflow_redirect(session_record, status_filter="", action_key=""):
         args["schedule_status"] = status_filter
     if action_key in SCHEDULE_WORKFLOW_ACTIONS:
         args["open_schedule_action"] = action_key
+    if schedule_only:
+        args["schedule_only"] = "1"
     return redirect(url_for("staff.pre_session_control_tower", **args))
 
 
 def staffing_control_redirect(session_record, status_filter="", edit=False):
     args = {
-        "session_year": session_record.session_date.year,
+        **pre_session_control_tower_return_args(session_record),
         "open_schedule_modal": session_record.id,
         "open_modal_target": "staffing",
+        "staffing_only": "1",
     }
     if status_filter in SCHEDULE_WORKFLOW_STATUSES:
         args["schedule_status"] = status_filter
@@ -10521,6 +11161,7 @@ def apply_schedule_workflow_transition(session_record, action_key, due_at=None, 
     if action.get("reopen"):
         workflow.approved_at = None
     workflow.updated_at = now
+    sync_staffing_assignment_deadlines_for_session(session_record, workflow=workflow, today=now)
 
     event = ExamSessionScheduleEvent(
         workflow=workflow,
@@ -12518,11 +13159,71 @@ def pre_session_control_tower():
     events_by_workflow = {}
     for event in event_records:
         events_by_workflow.setdefault(event.workflow_id, []).append(event)
+    staffing_event_records = (
+        ExamSessionStaffingEvent.query.filter(
+            ExamSessionStaffingEvent.exam_session_id.in_(session_ids)
+        )
+        .order_by(ExamSessionStaffingEvent.created_at.desc(), ExamSessionStaffingEvent.id.desc())
+        .all()
+        if session_ids else []
+    )
+    staffing_events_by_session = {}
+    for event in staffing_event_records:
+        staffing_events_by_session.setdefault(event.exam_session_id, []).append(event)
+    note_records = (
+        ExamSessionScheduleNote.query.filter(
+            ExamSessionScheduleNote.workflow_id.in_(workflow_ids)
+        )
+        .order_by(ExamSessionScheduleNote.created_at.desc(), ExamSessionScheduleNote.id.desc())
+        .all()
+        if workflow_ids else []
+    )
+    notes_by_workflow = {}
+    for note in note_records:
+        notes_by_workflow.setdefault(note.workflow_id, []).append(note)
+    note_ids = [note.note_id for note in note_records]
+    note_mention_records = (
+        ExamSessionScheduleNoteMention.query.filter(
+            ExamSessionScheduleNoteMention.note_id.in_(note_ids)
+        )
+        .order_by(ExamSessionScheduleNoteMention.id.asc())
+        .all()
+        if note_ids else []
+    )
+    note_mentions_by_note_id = {}
+    for mention in note_mention_records:
+        note_mentions_by_note_id.setdefault(mention.note_id, []).append(mention)
+    staffing_note_records = (
+        ExamSessionStaffingNote.query.filter(
+            ExamSessionStaffingNote.exam_session_id.in_(session_ids)
+        )
+        .order_by(ExamSessionStaffingNote.created_at.desc(), ExamSessionStaffingNote.id.desc())
+        .all()
+        if session_ids else []
+    )
+    staffing_notes_by_session = {}
+    for note in staffing_note_records:
+        staffing_notes_by_session.setdefault(note.exam_session_id, []).append(note)
+    staffing_note_ids = [note.note_id for note in staffing_note_records]
+    staffing_note_mention_records = (
+        ExamSessionStaffingNoteMention.query.filter(
+            ExamSessionStaffingNoteMention.note_id.in_(staffing_note_ids)
+        )
+        .order_by(ExamSessionStaffingNoteMention.id.asc())
+        .all()
+        if staffing_note_ids else []
+    )
+    staffing_note_mentions_by_note_id = {}
+    for mention in staffing_note_mention_records:
+        staffing_note_mentions_by_note_id.setdefault(mention.note_id, []).append(mention)
     supervisor_assignment_records = (
         ExamSessionSupervisorAssignment.query.filter(
             ExamSessionSupervisorAssignment.exam_session_id.in_(session_ids)
         )
-        .options(joinedload(ExamSessionSupervisorAssignment.team_member))
+        .options(
+            joinedload(ExamSessionSupervisorAssignment.team_member),
+            joinedload(ExamSessionSupervisorAssignment.potential_entry),
+        )
         .order_by(ExamSessionSupervisorAssignment.created_on.asc(), ExamSessionSupervisorAssignment.id.asc())
         .all()
         if session_ids else []
@@ -12531,7 +13232,10 @@ def pre_session_control_tower():
         ExamSessionExaminerAssignment.query.filter(
             ExamSessionExaminerAssignment.exam_session_id.in_(session_ids)
         )
-        .options(joinedload(ExamSessionExaminerAssignment.team_member))
+        .options(
+            joinedload(ExamSessionExaminerAssignment.team_member),
+            joinedload(ExamSessionExaminerAssignment.potential_entry),
+        )
         .all()
         if session_ids else []
     )
@@ -12539,7 +13243,10 @@ def pre_session_control_tower():
         ExamSessionInternAssignment.query.filter(
             ExamSessionInternAssignment.exam_session_id.in_(session_ids)
         )
-        .options(joinedload(ExamSessionInternAssignment.team_member))
+        .options(
+            joinedload(ExamSessionInternAssignment.team_member),
+            joinedload(ExamSessionInternAssignment.potential_entry),
+        )
         .all()
         if session_ids else []
     )
@@ -12849,21 +13556,49 @@ def pre_session_control_tower():
         )
         for session_record in sessions
     }
+    pending_shipment_bundle = {
+        "session_chips": [
+            {
+                "id": session_record.id,
+                "name": session_record.exam_session_name,
+                "date": session_record.session_date,
+            }
+            for session_record in sessions
+            if (
+                session_record.format == "Onsite"
+                and session_record.id not in shipment_links_by_session
+                and not get_exam_session_shipment_recipient_supervisor(
+                    shipment_recipient_assignments_by_session.get(session_record.id, [])
+                )
+            )
+        ]
+    }
 
     today = datetime.now(LOCAL_TZ).date()
     staffing_contracts_by_session = {}
     schedule_gates_by_session = {}
     packages_contracts_by_session = {}
+    staffing_deadlines_changed = False
     for session_record in sessions:
         supervisor_assignments = supervisor_assignments_by_session.get(session_record.id, [])
         examiner_assignments = examiner_assignments_by_session.get(session_record.id, [])
         intern_assignments = intern_assignments_by_session.get(session_record.id, [])
+        session_assignments = supervisor_assignments + examiner_assignments + intern_assignments
         staffing_contract = staffing_readiness_contract(
             supervisor_assignments,
             examiner_assignments,
             intern_assignments,
         )
         schedule_gate = schedule_gate_status(workflows_by_session.get(session_record.id))
+        staffing_deadlines_changed = (
+            sync_staffing_assignment_deadlines_for_session(
+                session_record,
+                workflow=workflows_by_session.get(session_record.id),
+                assignments=session_assignments,
+                today=today,
+            )
+            or staffing_deadlines_changed
+        )
         staffing_contracts_by_session[session_record.id] = staffing_contract
         schedule_gates_by_session[session_record.id] = schedule_gate
         packages_contracts_by_session[session_record.id] = packages_readiness_contract(
@@ -12873,6 +13608,8 @@ def pre_session_control_tower():
             schedule_gate=schedule_gate,
             staffing_contract=staffing_contract,
         )
+    if staffing_deadlines_changed:
+        db.session.commit()
     shipment_available_sessions = [
         {
             "id": option_session.id,
@@ -13088,6 +13825,17 @@ def pre_session_control_tower():
             schedule_gate=schedule_gate,
             activity_timeline=activity_timeline,
             journey_shares=journey_share_views(session_record, journey_shares_by_session.get(session_record.id, {})),
+            staffing_rows=staffing_assignment_rows(
+                session_record,
+                supervisor_assignments,
+                examiner_assignments,
+                intern_assignments,
+            ),
+            staffing_events=staffing_events_by_session.get(session_record.id, []),
+            schedule_locked_by_staffing=schedule_status == "Approved" and any(
+                normalize_participation_status(assignment.participation_status) != "Pending"
+                for assignment in session_assignments
+            ),
         ))
     summary = {
         "Not started": 0,
@@ -13169,6 +13917,7 @@ def pre_session_control_tower():
         schedule_views=schedule_views,
         modal_views=modal_views,
         bundle_views=bundle_views,
+        pending_shipment_bundle=pending_shipment_bundle if pending_shipment_bundle["session_chips"] else None,
         selected_bundle=selected_bundle_view,
         summary=summary,
         selected_view=selected_view,
@@ -13201,6 +13950,10 @@ def pre_session_control_tower():
         incident_default_departments=INCIDENT_TYPE_DEFAULT_DEPARTMENT,
         selected_schedule_status=status_filter,
         events_by_workflow=events_by_workflow,
+        schedule_notes_by_workflow=notes_by_workflow,
+        schedule_note_mentions_by_note_id=note_mentions_by_note_id,
+        staffing_notes_by_session=staffing_notes_by_session,
+        staffing_note_mentions_by_note_id=staffing_note_mentions_by_note_id,
         csrf_token=session.get("csrf_token"),
     )
 
@@ -13287,7 +14040,33 @@ def update_schedule_workflow(session_id):
     if not transition:
         flash("Please select a valid schedule workflow action.", "error")
         return schedule_workflow_redirect(session_record, status_filter)
+    if (
+        action_key == "reopen"
+        and schedule_locked_by_staffing_assignments(session_record)
+        and request.form.get("schedule_reopen_password", "") != "EditOK"
+    ):
+        flash("Password authorisation is required to reopen this schedule.", "error")
+        return schedule_workflow_redirect(session_record, status_filter, action_key)
     due_at = parse_schedule_deadline(request.form.get("next_action_due_at", ""))
+    if action_key in {"start_preparation", "reopen"}:
+        due_at = schedule_preparation_deadline_for_session_bundle(session_record)
+    if action_key == "mark_ready":
+        schedule_url = request.form.get("exam_session_schedule_url", "").strip()
+        if not schedule_url:
+            flash("Please add the Exam session schedule link before marking schedules as ready to send.", "error")
+            return schedule_workflow_redirect(session_record, status_filter, action_key)
+        if not is_valid_url(schedule_url):
+            flash("Please enter a valid Exam session schedule link.", "error")
+            return schedule_workflow_redirect(session_record, status_filter, action_key)
+        session_record.details_url = schedule_url
+        due_at = argentina_next_business_day(datetime.now(LOCAL_TZ).date())
+    if action_key == "send_for_review":
+        due_at = argentina_add_business_days(datetime.now(LOCAL_TZ).date(), 2)
+    if action_key in {"record_changes", "mark_revised_ready"}:
+        due_at = argentina_add_business_days(datetime.now(LOCAL_TZ).date(), 2)
+    if action_key == "continue_editing":
+        workflow = ExamSessionScheduleWorkflow.query.filter_by(exam_session_id=session_record.id).first()
+        due_at = workflow.next_action_due_at if workflow else None
     if transition.get("deadline_required") and due_at is None:
         flash("Please enter the next action deadline.", "error")
         return schedule_workflow_redirect(session_record, status_filter, action_key)
@@ -13305,6 +14084,8 @@ def update_schedule_workflow(session_id):
             flash(error, "error")
             return schedule_workflow_redirect(session_record, status_filter, action_key)
         else:
+            if note.strip():
+                create_schedule_note(workflow, note, request.form)
             db.session.commit()
             flash("Schedule workflow updated successfully.", "success")
     except Exception:
@@ -13312,7 +14093,121 @@ def update_schedule_workflow(session_id):
         current_app.logger.exception("Schedule workflow update failed")
         flash("The schedule workflow could not be updated. Please try again.", "error")
         return schedule_workflow_redirect(session_record, status_filter, action_key)
-    return schedule_workflow_redirect(session_record, status_filter)
+    return schedule_workflow_redirect(session_record, status_filter, schedule_only=True)
+
+
+@staff_bp.route("/pre-session-control-tower/sessions/<int:session_id>/schedule-notes", methods=["POST"])
+@login_required
+def add_schedule_note(session_id):
+    session_record = ExamSession.query.get_or_404(session_id)
+    status_filter = request.form.get("schedule_status", "").strip()
+    if status_filter not in SCHEDULE_WORKFLOW_STATUSES:
+        status_filter = ""
+    if not validate_csrf():
+        flash("Security token expired. Please try again.", "error")
+        return schedule_workflow_redirect(session_record, status_filter, schedule_only=True)
+    note = request.form.get("note", "").strip()
+    if not note:
+        flash("Schedule note cannot be empty.", "error")
+        return schedule_workflow_redirect(session_record, status_filter, schedule_only=True)
+    workflow = get_or_create_schedule_workflow(session_record)
+    create_schedule_note(workflow, note, request.form)
+    db.session.commit()
+    flash("Schedule note added successfully.", "success")
+    return redirect(url_for(
+        "staff.pre_session_control_tower",
+        **pre_session_control_tower_return_args(session_record),
+        open_schedule_modal=session_record.id,
+        open_modal_target="schedule-notes",
+        schedule_only="1",
+    ))
+
+
+@staff_bp.route("/schedule-note-mentions/<int:mention_id>/read", methods=["POST"])
+@login_required
+def mark_schedule_note_read(mention_id):
+    if not validate_csrf():
+        flash("Security token expired. Please try again.", "error")
+        return redirect(url_for("staff.dashboard"))
+
+    mention = ExamSessionScheduleNoteMention.query.get_or_404(mention_id)
+    current_user = getattr(g, "current_user", None)
+    if not current_user or mention.to_user_id != current_user.id:
+        abort(403)
+
+    if request.form.get("read") == "1" and not mention.is_read:
+        mention.is_read = True
+        mention.read_by_user_id = current_user.id
+        mention.read_on = datetime.now(timezone.utc)
+        db.session.commit()
+        flash("Note marked as read.", "success")
+
+    workflow = ExamSessionScheduleWorkflow.query.get_or_404(mention.workflow_id)
+    session_record = ExamSession.query.get_or_404(workflow.exam_session_id)
+    return redirect(url_for(
+        "staff.pre_session_control_tower",
+        **pre_session_control_tower_return_args(session_record),
+        open_schedule_modal=session_record.id,
+        open_modal_target="schedule-notes",
+        schedule_only="1",
+        highlight_note=(request.form.get("highlight_note") or mention.note_id).strip(),
+    ))
+
+
+@staff_bp.route("/pre-session-control-tower/sessions/<int:session_id>/staffing-notes", methods=["POST"])
+@login_required
+def add_staffing_note(session_id):
+    session_record = ExamSession.query.get_or_404(session_id)
+    status_filter = request.form.get("schedule_status", "").strip()
+    if status_filter not in SCHEDULE_WORKFLOW_STATUSES:
+        status_filter = ""
+    if not validate_csrf():
+        flash("Security token expired. Please try again.", "error")
+        return staffing_control_redirect(session_record, status_filter)
+    note = request.form.get("note", "").strip()
+    if not note:
+        flash("Staffing note cannot be empty.", "error")
+        return staffing_control_redirect(session_record, status_filter)
+    create_staffing_note(session_record, note, request.form)
+    db.session.commit()
+    flash("Staffing note added successfully.", "success")
+    return redirect(url_for(
+        "staff.pre_session_control_tower",
+        **pre_session_control_tower_return_args(session_record),
+        open_schedule_modal=session_record.id,
+        open_modal_target="staffing-notes",
+        staffing_only="1",
+    ))
+
+
+@staff_bp.route("/staffing-note-mentions/<int:mention_id>/read", methods=["POST"])
+@login_required
+def mark_staffing_note_read(mention_id):
+    if not validate_csrf():
+        flash("Security token expired. Please try again.", "error")
+        return redirect(url_for("staff.dashboard"))
+
+    mention = ExamSessionStaffingNoteMention.query.get_or_404(mention_id)
+    current_user = getattr(g, "current_user", None)
+    if not current_user or mention.to_user_id != current_user.id:
+        abort(403)
+
+    if request.form.get("read") == "1" and not mention.is_read:
+        mention.is_read = True
+        mention.read_by_user_id = current_user.id
+        mention.read_on = datetime.now(timezone.utc)
+        db.session.commit()
+        flash("Note marked as read.", "success")
+
+    session_record = ExamSession.query.get_or_404(mention.exam_session_id)
+    return redirect(url_for(
+        "staff.pre_session_control_tower",
+        **pre_session_control_tower_return_args(session_record),
+        open_schedule_modal=session_record.id,
+        open_modal_target="staffing-notes",
+        staffing_only="1",
+        highlight_note=(request.form.get("highlight_note") or mention.note_id).strip(),
+    ))
 
 
 @staff_bp.route("/pre-session-control-tower/sessions/<int:session_id>/staffing-control", methods=["POST"])
@@ -13349,6 +14244,136 @@ def update_staffing_control(session_id):
     control_record.updated_by = session.get("user")
     db.session.commit()
     flash("Staffing ownership and deadline saved successfully.", "success")
+    return staffing_control_redirect(session_record, status_filter)
+
+
+def staffing_assignment_model(assignment_type):
+    return {
+        "supervisor": ExamSessionSupervisorAssignment,
+        "examiner": ExamSessionExaminerAssignment,
+        "intern": ExamSessionInternAssignment,
+    }.get(assignment_type)
+
+
+def staffing_assignment_person_ref(assignment):
+    if assignment.team_member_id:
+        return str(assignment.team_member_id)
+    if assignment.potential_entry_id:
+        return f"potential:{assignment.potential_entry_id}"
+    return ""
+
+
+def add_session_non_available_ref(session_record, ref):
+    ref = (ref or "").strip()
+    if not ref:
+        return
+    refs = set(session_record.non_available_refs())
+    refs.add(ref)
+    session_record.non_available_member_ids = json.dumps(sorted(refs))
+
+
+def clear_staffing_assignment_for_decline(assignment):
+    assignment.non_available_member_ids = "[]"
+    assignment.team_member_id = None
+    assignment.potential_entry_id = None
+    assignment.participation_status = "Pending"
+    assignment.logistics_enabled = False
+    assignment.logistics_type = "Does not apply"
+    assignment.is_shipment_recipient = False
+    assignment.manual_fee_override = False
+    if hasattr(assignment, "is_remote"):
+        assignment.is_remote = False
+    assignment.km = None
+    assignment.start_time = None
+    assignment.end_time = None
+    assignment.time_ranges = None
+    for field in (
+        "role_fee",
+        "role_fee_currency",
+        "role_fee_base_value",
+        "role_fee_unit",
+        "device_dep",
+        "device_dep_currency",
+        "device_dep_base_value",
+        "device_dep_unit",
+        "commuting",
+        "commuting_currency",
+        "commuting_base_value",
+        "commuting_unit",
+        "fuel",
+        "fuel_currency",
+        "fuel_base_value",
+        "fuel_unit",
+        "vehicle_dep",
+        "vehicle_dep_currency",
+        "vehicle_dep_base_value",
+        "vehicle_dep_unit",
+        "seniority_fee",
+        "seniority_percentage",
+        "seniority_currency",
+        "fee_frozen_status",
+    ):
+        if hasattr(assignment, field):
+            setattr(assignment, field, None)
+    assignment.fuel_enabled = False
+    assignment.seniority_applied = False
+    assignment.fee_frozen_on = None
+
+
+@staff_bp.route("/pre-session-control-tower/sessions/<int:session_id>/staffing-assignments/<assignment_type>/<int:assignment_id>/status", methods=["POST"])
+@login_required
+def update_staffing_assignment_status(session_id, assignment_type, assignment_id):
+    session_record = ExamSession.query.get_or_404(session_id)
+    status_filter = request.form.get("schedule_status", "").strip()
+    if status_filter not in SCHEDULE_WORKFLOW_STATUSES:
+        status_filter = ""
+    if not validate_csrf():
+        flash("Security token expired. Please try again.", "error")
+        return staffing_control_redirect(session_record, status_filter)
+    assignment_model = staffing_assignment_model(assignment_type)
+    if not assignment_model:
+        flash("Please select a valid staffing assignment.", "error")
+        return staffing_control_redirect(session_record, status_filter)
+    assignment = assignment_model.query.filter_by(
+        id=assignment_id,
+        exam_session_id=session_record.id,
+    ).first()
+    if not assignment:
+        flash("Staffing assignment not found.", "error")
+        return staffing_control_redirect(session_record, status_filter)
+    if not (assignment.team_member_id or assignment.potential_entry_id):
+        flash("Assign a staff member before updating participation status.", "error")
+        return staffing_control_redirect(session_record, status_filter)
+    next_status = request.form.get("participation_status", "").strip()
+    allowed_statuses = {"Pending", "Official confirmation sent", "Confirmed", "Declined", "Cancelled"}
+    if next_status not in allowed_statuses:
+        flash("Please select a valid participation status.", "error")
+        return staffing_control_redirect(session_record, status_filter)
+    workflow = ExamSessionScheduleWorkflow.query.filter_by(exam_session_id=session_record.id).first()
+    schedule_unlocked = workflow and workflow.status == "Approved"
+    previous_status = assignment.participation_status
+    record_staffing_status_change(
+        session_record,
+        assignment,
+        assignment_type,
+        previous_status,
+        next_status,
+    )
+    if next_status in {"Declined", "Cancelled"}:
+        add_session_non_available_ref(session_record, staffing_assignment_person_ref(assignment))
+        clear_staffing_assignment_for_decline(assignment)
+        clear_staffing_assignment_deadline(assignment)
+    else:
+        assignment.participation_status = next_status
+        now = datetime.now(timezone.utc)
+        if next_status == "Official confirmation sent":
+            set_staffing_assignment_deadline(assignment, 3, now, stage="Official confirmation sent")
+        elif next_status == "Pending" and schedule_unlocked:
+            set_staffing_assignment_deadline(assignment, 2, now, stage="Pending")
+        else:
+            clear_staffing_assignment_deadline(assignment)
+    db.session.commit()
+    flash("Staffing participation status updated successfully.", "success")
     return staffing_control_redirect(session_record, status_filter)
 
 
@@ -14581,6 +15606,7 @@ def create_shipment_bundle(session_id):
             ))
             shipment_event(bundle, "SESSION_ADDED", bundle.status, bundle.status, included_session.exam_session_name)
         ensure_shipment_checklist_items(bundle)
+        sync_schedule_preparation_deadline_for_bundle(bundle)
         created_note = note
         if assisted_action_key:
             created_note = "Shipment bundle created from planning recommendation."
@@ -14677,6 +15703,7 @@ def update_shipment_bundle(bundle_id):
             if included_session.id not in existing_links:
                 db.session.add(ExamSessionShipmentBundleSession(bundle=bundle, exam_session_id=included_session.id))
                 shipment_event(bundle, "SESSION_ADDED", bundle.status, bundle.status, included_session.exam_session_name)
+        sync_schedule_preparation_deadline_for_bundle(bundle)
         db.session.commit()
         flash("Shipment bundle updated successfully.", "success")
     except Exception:
@@ -15627,8 +16654,12 @@ def update_exam_session_date_confirmation_status(session_id):
         return jsonify({"error": "Invalid date confirmation status."}), 400
 
     session_record.date_confirmation_status = requested_status
+    update_exam_session_overall_status(session_record)
     db.session.commit()
-    return jsonify({"date_confirmation_status": session_record.date_confirmation_status})
+    return jsonify({
+        "date_confirmation_status": session_record.date_confirmation_status,
+        "session_status": session_record.status,
+    })
 
 
 @staff_bp.route("/exam-session-planner/sessions/<int:session_id>/delete", methods=["POST"])
@@ -16211,6 +17242,7 @@ def exam_session_overall_statuses_by_session_ids(session_ids):
             logistics_by_session.get(session_id),
         )
         emergency_contact_ready = exam_session_emergency_contact_decision_ready(session_record)
+        date_confirmation_ready = bool(session_record and session_record.date_confirmation_status == "Confirmed")
         shipment_recipient_ready = exam_session_shipment_recipient_ready(session_record, all_assignments)
         candidate_requirement_ready = candidate_requirement_contracts.get(session_id, {}).get("ready", False)
         statuses_by_session[session_id] = (
@@ -16218,6 +17250,7 @@ def exam_session_overall_statuses_by_session_ids(session_ids):
             if (
                 final_email_ready(staffing_contract, logistics_contract)
                 and emergency_contact_ready
+                and date_confirmation_ready
                 and shipment_recipient_ready
                 and candidate_requirement_ready
             )

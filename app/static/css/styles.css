@@ -4627,6 +4627,21 @@ span.session-marker-chip {
   color: var(--badge-green-text);
 }
 
+.participation-assigned {
+  background: var(--badge-blue-bg);
+  color: var(--badge-blue-text);
+}
+
+.participation-declined {
+  background: var(--badge-red-bg);
+  color: var(--badge-red-text);
+}
+
+.participation-cancelled {
+  background: #eef1f3;
+  color: #4f5b62;
+}
+
 .logistics-chip-select {
   width: 100%;
   min-width: 0;
@@ -4738,13 +4753,38 @@ span.session-marker-chip {
   color: var(--badge-grey-text);
 }
 
+.staffing-status-badge-list {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+  width: fit-content;
+}
+
+.staffing-status-badge-list:focus {
+  outline: 2px solid var(--color-primary);
+  outline-offset: 2px;
+}
+
+.staffing-status-roles-to-cover {
+  background: var(--badge-red-bg);
+  color: var(--badge-red-text);
+}
+
+.staffing-status-confirmations-to-be-sent,
 .staffing-status-open-positions,
 .staffing-status-awaiting-confirmations {
   background: var(--badge-yellow-bg);
   color: var(--badge-yellow-text);
 }
 
-.staffing-status-confirmed {
+.staffing-status-confirmations-to-be-updated {
+  background: var(--path-cyan-50);
+  color: var(--badge-blue-text);
+}
+
+.staffing-status-confirmed,
+.staffing-status-confirmed-staff {
   background: var(--badge-green-bg);
   color: var(--badge-green-text);
 }
@@ -5108,6 +5148,43 @@ span.session-marker-chip {
   gap: 4px;
   align-items: start;
   min-width: 130px;
+}
+
+.workflow-gate-chip,
+.staffing-gate-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  width: fit-content;
+  border-radius: 999px;
+  padding: 4px 8px;
+  font-size: 11px;
+  font-weight: 900;
+  line-height: 1.1;
+  white-space: nowrap;
+}
+
+.workflow-gate-chip svg,
+.staffing-gate-chip svg {
+  width: 15px;
+  height: 15px;
+  fill: none;
+  stroke: currentColor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 2.4;
+}
+
+.workflow-gate-unblocked,
+.staffing-gate-unblocked {
+  background: #d9f0df;
+  color: #1f6a35;
+}
+
+.workflow-gate-blocked,
+.staffing-gate-blocked {
+  background: #f7d4d8;
+  color: #9f2635;
 }
 
 .schedule-summary-cell > span:not(.badge),
@@ -5566,6 +5643,32 @@ span.session-marker-chip {
   background: #f9fbfc;
 }
 
+.modal.is-schedule-only .modal-overview-return,
+.modal.is-schedule-only .modal-focused-context,
+.modal.is-schedule-only .control-tower-overview .overview-grid,
+.modal.is-schedule-only .control-tower-overview .overview-module,
+.modal.is-schedule-only .schedule-workflow-panel > :not(.modal-header):not(.control-tower-overview):not(.schedule-workflow-actions):not(.schedule-notes-section) {
+  display: none;
+}
+
+.modal.is-staffing-only .modal-overview-return,
+.modal.is-staffing-only .modal-focused-context,
+.modal.is-staffing-only .schedule-workflow-panel > :not(.modal-header):not(.control-tower-overview):not([id^="staffing-"]) {
+  display: none;
+}
+
+.modal-title-staffing {
+  display: none;
+}
+
+.modal.is-staffing-only .modal-title-schedule {
+  display: none;
+}
+
+.modal.is-staffing-only .modal-title-staffing {
+  display: inline;
+}
+
 .overview-heading,
 .overview-quick-links,
 .modal-section-nav {
@@ -5762,71 +5865,79 @@ span.session-marker-chip {
   position: sticky;
   top: 79px;
   z-index: 8;
-  order: 2;
+  order: 3;
   overflow-x: auto;
   padding: 10px 0;
   background: rgba(255, 255, 255, 0.96);
 }
 
-.priority-action-control-section {
+.schedule-notes-section {
+  order: 2;
+}
+
+.staffing-notes-section {
   order: 3;
 }
 
-.schedule-overview-section {
+.priority-action-control-section {
   order: 4;
 }
 
-.staffing-control-section[id^="staffing-"] {
+.schedule-overview-section {
   order: 5;
 }
 
-.logistics-control-section {
+.staffing-control-section[id^="staffing-"] {
   order: 6;
 }
 
-.packages-control-section {
+.logistics-control-section {
   order: 7;
 }
 
-.shipments-control-section {
+.packages-control-section {
   order: 8;
 }
 
-.finance-control-section {
+.shipments-control-section {
   order: 9;
 }
 
-.sinapsis-control-section {
+.finance-control-section {
   order: 10;
 }
 
-.communications-control-section {
+.sinapsis-control-section {
   order: 11;
 }
 
-.incidents-control-section {
+.communications-control-section {
   order: 12;
+}
+
+.incidents-control-section {
+  order: 13;
 }
 
 .readiness-details-section,
 .session-readiness-control-section {
-  order: 13;
+  order: 14;
 }
 
 .schedule-workflow-actions {
-  order: 14;
-}
-
-.schedule-history {
   order: 15;
 }
 
-.session-activity-timeline {
+.schedule-history {
   order: 16;
 }
 
+.session-activity-timeline {
+  order: 17;
+}
+
 .path-session-journey-section {
-  order: 14;
+  order: 15;
 }
 
 .control-section-toggle {
@@ -6317,6 +6428,14 @@ span.session-marker-chip {
   gap: 14px;
 }
 
+.staffing-header-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
 .staffing-control-header h3,
 .staffing-blockers h4 {
   margin: 0 0 8px;
@@ -6346,17 +6465,156 @@ span.session-marker-chip {
 }
 
 .staffing-role-table {
-  min-width: 620px;
+  min-width: 860px;
 }
 
 .staffing-role-table th,
 .staffing-role-table td {
+  padding: 6px 8px;
   text-align: right;
+  vertical-align: middle;
+  line-height: 1.2;
 }
 
 .staffing-role-table th:first-child,
 .staffing-role-table td:first-child {
   text-align: left;
+}
+
+.staffing-role-table th:nth-child(2),
+.staffing-role-table td:nth-child(2) {
+  text-align: left;
+}
+
+.staffing-role-table th:nth-child(3),
+.staffing-role-table td:nth-child(3) {
+  text-align: left;
+}
+
+.staffing-role-table th:nth-child(4),
+.staffing-role-table td:nth-child(4) {
+  text-align: left;
+}
+
+.staffing-role-table td:nth-child(4) .staffing-inline-actions {
+  justify-content: flex-start;
+}
+
+.staffing-role-table th:nth-child(5),
+.staffing-role-table td:nth-child(5),
+.staffing-role-table th:nth-child(6),
+.staffing-role-table td:nth-child(6) {
+  text-align: left;
+}
+
+.staffing-role-table td:nth-child(5) .staffing-inline-actions,
+.staffing-role-table td:nth-child(6) .staffing-inline-actions {
+  justify-content: flex-start;
+}
+
+.staffing-member-name {
+  display: block;
+  color: var(--color-primary-dark);
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.staffing-role-to-cover {
+  color: var(--badge-red-text);
+  font-size: 12px;
+}
+
+.staffing-shipment-chip,
+.staffing-deadline-chip,
+.staffing-action-chip {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: fit-content;
+  border: 1px solid transparent;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 900;
+  line-height: 1.1;
+  text-decoration: none;
+  white-space: nowrap;
+}
+
+.staffing-shipment-chip {
+  margin-top: 3px;
+  padding: 3px 7px;
+  background: var(--badge-green-bg);
+  color: var(--badge-green-text);
+}
+
+.staffing-deadline-chip {
+  padding: 4px 8px;
+  background: #eef1f3;
+  color: #4f5b62;
+}
+
+.staffing-deadline-upcoming {
+  background: var(--path-cyan-50);
+  color: var(--badge-blue-text);
+}
+
+.staffing-deadline-due-today {
+  background: var(--badge-yellow-bg);
+  color: var(--badge-yellow-text);
+}
+
+.staffing-deadline-overdue {
+  background: var(--badge-red-bg);
+  color: var(--badge-red-text);
+}
+
+.staffing-deadline-completed {
+  background: var(--badge-green-bg);
+  color: var(--badge-green-text);
+}
+
+.staffing-inline-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 4px;
+}
+
+.staffing-inline-actions form {
+  margin: 0;
+}
+
+.staffing-action-chip {
+  min-height: 24px;
+  padding: 4px 8px;
+  cursor: pointer;
+}
+
+.staffing-action-chip-blue {
+  background: var(--path-cyan-50);
+  color: var(--badge-blue-text);
+}
+
+.staffing-action-chip-green {
+  background: var(--badge-green-bg);
+  color: var(--badge-green-text);
+}
+
+.staffing-action-chip-red {
+  background: var(--badge-red-bg);
+  color: var(--badge-red-text);
+}
+
+.staffing-action-chip-grey {
+  background: #eef1f3;
+  color: #4f5b62;
+}
+
+.staffing-action-chip.is-disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+  pointer-events: none;
 }
 
 .staffing-blockers ul {
@@ -7141,6 +7399,7 @@ span.session-marker-chip {
 
 .schedule-workflow-details span,
 .schedule-workflow-actions h3,
+.staffing-actions-section h3,
 .schedule-history h3 {
   color: var(--color-muted);
   font-size: 12px;
@@ -7212,6 +7471,37 @@ span.session-marker-chip {
   font-size: 13px;
 }
 
+.schedule-recommended-action-buttons {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.schedule-share-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 36px;
+  border: 1px solid #bad6e4;
+  border-radius: 8px;
+  background: var(--path-cyan-50);
+  color: var(--badge-blue-text);
+  font-weight: 800;
+  text-decoration: none;
+}
+
+.schedule-share-button:hover {
+  border-color: var(--path-cyan);
+  background: #d8eef4;
+}
+
+.schedule-share-button.is-disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+  pointer-events: none;
+}
+
 .schedule-action-panels {
   display: grid;
   gap: 12px;
@@ -7255,6 +7545,30 @@ span.session-marker-chip {
   color: var(--badge-red-text);
   font-size: 12px;
   font-weight: 800;
+}
+
+.schedule-authorisation-warning {
+  display: grid;
+  gap: 4px;
+  padding: 10px 12px;
+  border: 1px solid #f2c36b;
+  border-left: 4px solid #d97706;
+  border-radius: 8px;
+  background: #fff7ed;
+  color: #7c2d12;
+}
+
+.schedule-authorisation-warning strong {
+  font-size: 12px;
+  font-weight: 900;
+  text-transform: uppercase;
+}
+
+.schedule-authorisation-warning p {
+  margin: 0;
+  color: #7c2d12;
+  font-size: 12px;
+  line-height: 1.35;
 }
 
 .schedule-other-actions {
