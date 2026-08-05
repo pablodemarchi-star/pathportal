@@ -81,7 +81,7 @@
         {% for month_number, month_name in months %}
           <th>{{ month_name }}</th>
         {% endfor %}
-        <th>Reset</th>
+        <th>Actions</th>
       </tr>
     </thead>
     <tbody>
@@ -89,9 +89,11 @@
         {% set session_registrations = registrations.get(session.id, {}) %}
         {% set session_candidate_totals = candidate_totals.get(session.id, {}) %}
         {% set session_candidate_trends = candidate_total_trends.get(session.id, {}) %}
-        <tr data-monthly-session-row data-session-id="{{ session.id }}">
+        {% set monthly_closed = session.monthly_registrations_closed %}
+        {% set monthly_status = monthly_statuses.get(session.id, 'Pending') %}
+        <tr data-monthly-session-row data-session-id="{{ session.id }}" class="{% if monthly_closed %}is-monthly-closed{% endif %}">
           <td class="sticky-registration-col status-col">
-            <span class="badge exam-status-{{ session.status|lower }}" data-monthly-session-status>{{ session.status }}</span>
+            <span class="badge exam-status-{{ monthly_status|lower|replace(' ', '-') }}" data-monthly-session-status>{{ monthly_status }}</span>
           </td>
           <td class="sticky-registration-col name-col">
             <div class="session-name-cell">
@@ -125,7 +127,11 @@
             {% set month_active = month_values|length > 0 or total_value is not none %}
             <td>
               <div class="monthly-registration-cell {% if month_active %}is-active{% endif %}" data-monthly-registration-cell>
-                <button class="badge monthly-inactive-badge" type="button" data-activate-monthly-cell {% if month_active %}hidden{% endif %}>Inactive</button>
+                {% if monthly_closed and not month_active %}
+                  <span class="monthly-na-badge">N/A</span>
+                {% else %}
+                  <button class="badge monthly-inactive-badge" type="button" data-activate-monthly-cell {% if month_active %}hidden{% endif %}>Inactive</button>
+                {% endif %}
                 <form method="post" action="{{ url_for('staff.update_monthly_exam_session_registration', session_id=session.id, month=month_number) }}" class="monthly-registration-form" {% if not month_active %}hidden{% endif %}>
                   <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
                   <label class="monthly-registration-field monthly-total-field">
@@ -143,6 +149,7 @@
                       title="{{ total_trend.get('tooltip', '') }}"
                       data-integer-input
                       data-total-candidates-input
+                      {% if monthly_closed %}readonly{% endif %}
                     >
                   </label>
                   {% for module in session.modules_list() %}
@@ -158,6 +165,7 @@
                         pattern="[0-9]*"
                         placeholder="{{ module }}"
                         data-integer-input
+                        {% if monthly_closed %}readonly{% endif %}
                       >
                     </label>
                   {% endfor %}
@@ -166,10 +174,17 @@
             </td>
           {% endfor %}
           <td>
-            <form method="post" action="{{ url_for('staff.reset_monthly_exam_session_registration', session_id=session.id) }}" data-reset-monthly-form>
-              <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-              <button class="danger-button compact-action" type="submit">Reset</button>
-            </form>
+            <div class="monthly-actions">
+              <form method="post" action="{{ url_for('staff.toggle_monthly_exam_session_registration_closed', session_id=session.id) }}">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                <input type="hidden" name="action" value="{% if monthly_closed %}reopen{% else %}close{% endif %}">
+                <button class="monthly-close-chip {% if monthly_closed %}is-reopen{% endif %}" type="submit">{% if monthly_closed %}Reopen{% else %}Close{% endif %}</button>
+              </form>
+              <form method="post" action="{{ url_for('staff.reset_monthly_exam_session_registration', session_id=session.id) }}" data-reset-monthly-form>
+                <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                <button class="danger-button compact-action" type="submit">Reset</button>
+              </form>
+            </div>
           </td>
         </tr>
       {% else %}

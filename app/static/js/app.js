@@ -1295,6 +1295,10 @@ const syncScheduleLinkRequirement = (form) => {
   const input = form.querySelector("[data-schedule-link-input]");
   const submit = form.querySelector("[data-schedule-link-submit]");
   if (!input || !submit) return;
+  if (form.dataset.scheduleMonthlyBlocked === "true") {
+    submit.disabled = true;
+    return;
+  }
   submit.disabled = !input.value.trim();
 };
 
@@ -3484,6 +3488,7 @@ document.addEventListener("change", (event) => {
 
 document.querySelectorAll("[data-activate-monthly-cell]").forEach((button) => {
   button.addEventListener("click", () => {
+    if (button.closest("[data-monthly-session-row]")?.classList.contains("is-monthly-closed")) return;
     const cell = button.closest("[data-monthly-registration-cell]");
     const form = cell?.querySelector(".monthly-registration-form");
     if (!cell || !form) return;
@@ -3499,15 +3504,16 @@ const initIntegerInputs = (root = document) => {
     if (input.dataset.integerInitialized === "true") return;
     input.dataset.integerInitialized = "true";
     input.addEventListener("input", () => {
-    input.value = input.value.replace(/[^0-9]/g, "");
-    if (input.matches("[data-total-candidates-input]")) {
-      syncCandidateTotalTrends(input.closest("tr"));
-    }
-    const monthlyForm = input.closest(".monthly-registration-form");
-    if (monthlyForm) queueMonthlyRegistrationSave(monthlyForm);
+      if (input.readOnly) return;
+      input.value = input.value.replace(/[^0-9]/g, "");
+      if (input.matches("[data-total-candidates-input]")) {
+        syncCandidateTotalTrends(input.closest("tr"));
+      }
+      const monthlyForm = input.closest(".monthly-registration-form");
+      if (monthlyForm) queueMonthlyRegistrationSave(monthlyForm);
     });
     input.addEventListener("keydown", (event) => {
-    if (["-", "+", ".", ",", "e", "E"].includes(event.key)) event.preventDefault();
+      if (["-", "+", ".", ",", "e", "E"].includes(event.key)) event.preventDefault();
     });
   });
 };
@@ -3580,13 +3586,16 @@ const saveMonthlyRegistrationForm = async (form) => {
         totalElement.title = total.tooltip || "";
       });
     }
-    if (data.session_status) {
+    if (data.monthly_status) {
       const row = form.closest("[data-monthly-session-row]");
       const statusElement = row?.querySelector("[data-monthly-session-status]");
       if (statusElement) {
-        statusElement.classList.remove("exam-status-pending", "exam-status-confirmed");
-        statusElement.classList.add(`exam-status-${String(data.session_status).toLowerCase()}`);
-        statusElement.textContent = data.session_status;
+        Array.from(statusElement.classList).forEach((className) => {
+          if (className.startsWith("exam-status-")) statusElement.classList.remove(className);
+        });
+        const statusClass = String(data.monthly_status).toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
+        statusElement.classList.add(`exam-status-${statusClass}`);
+        statusElement.textContent = data.monthly_status;
       }
     }
     form.classList.remove("is-saving");
@@ -3598,6 +3607,7 @@ const saveMonthlyRegistrationForm = async (form) => {
 };
 
 const queueMonthlyRegistrationSave = (form) => {
+  if (form?.closest("[data-monthly-session-row]")?.classList.contains("is-monthly-closed")) return;
   window.clearTimeout(Number(form.dataset.saveTimer || 0));
   const timer = window.setTimeout(() => saveMonthlyRegistrationForm(form), 450);
   form.dataset.saveTimer = String(timer);

@@ -12,23 +12,23 @@
   <span class="badge schedule-gate-{{ gate.status }}" title="{{ gate.message }}" aria-label="Schedule gate {{ gate.label }}: {{ gate.message }}"{% if focusable %} tabindex="0"{% endif %}>{{ gate.label }}</span>
 {%- endmacro %}
 
-{% macro schedule_table_cell(status, gate, review_round, locked_by_staffing=false) -%}
+{% macro schedule_table_cell(status, gate, review_round, monthly_registrations_closed=false) -%}
   <span class="schedule-summary-cell">
-    {% if locked_by_staffing %}
-      <span class="workflow-gate-chip workflow-gate-blocked" aria-label="Schedule gate blocked">
-        <svg viewBox="0 0 24 24" aria-hidden="true">
-          <rect x="5" y="10" width="14" height="10" rx="2"></rect>
-          <path d="M8 10V7a4 4 0 0 1 8 0v3"></path>
-        </svg>
-        BLOCKED
-      </span>
-    {% else %}
+    {% if monthly_registrations_closed %}
       <span class="workflow-gate-chip workflow-gate-unblocked" aria-label="Schedule gate unblocked">
         <svg viewBox="0 0 24 24" aria-hidden="true">
           <rect x="5" y="10" width="14" height="10" rx="2"></rect>
           <path d="M8 10V7a4 4 0 0 1 7.4-2.1"></path>
         </svg>
         UNBLOCKED
+      </span>
+    {% else %}
+      <span class="workflow-gate-chip workflow-gate-blocked" aria-label="Schedule gate blocked">
+        <svg viewBox="0 0 24 24" aria-hidden="true">
+          <rect x="5" y="10" width="14" height="10" rx="2"></rect>
+          <path d="M8 10V7a4 4 0 0 1 8 0v3"></path>
+        </svg>
+        BLOCKED
       </span>
     {% endif %}
     {{ schedule_status_badge(status) }}
@@ -529,7 +529,8 @@
 {%- endmacro %}
 
 {% macro schedule_action_form(action, session, selected_schedule_status, csrf_token, view=none, selected_view='sessions', selected_bundle=none) -%}
-  <form method="post" action="{{ url_for('staff.update_schedule_workflow', session_id=session.id) }}" id="schedule-action-form-{{ session.id }}-{{ action.key }}" class="schedule-action-form" data-schedule-action-panel data-schedule-action-key="{{ action.key }}" data-disable-on-submit hidden>
+  {% set schedule_monthly_blocked = view and not view.monthly_registrations_closed %}
+  <form method="post" action="{{ url_for('staff.update_schedule_workflow', session_id=session.id) }}" id="schedule-action-form-{{ session.id }}-{{ action.key }}" class="schedule-action-form" data-schedule-action-panel data-schedule-action-key="{{ action.key }}" data-disable-on-submit{% if schedule_monthly_blocked %} data-schedule-monthly-blocked="true"{% endif %} hidden>
     <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
     <input type="hidden" name="action_key" value="{{ action.key }}">
     <input type="hidden" name="schedule_status" value="{{ selected_schedule_status }}">
@@ -585,7 +586,7 @@
     </div>
     <div class="form-actions">
       <button class="secondary-button compact-action" type="button" data-schedule-action-cancel>Cancel</button>
-      <button class="primary-button compact-action" type="submit"{% if action.key == 'mark_ready' %} data-schedule-link-submit{% if not schedule_link_value %} disabled{% endif %}{% endif %}>{{ schedule_confirm_label(action.key) }}</button>
+      <button class="primary-button compact-action" type="submit"{% if action.key == 'mark_ready' %} data-schedule-link-submit{% if not schedule_link_value or schedule_monthly_blocked %} disabled{% endif %}{% elif schedule_monthly_blocked %} disabled{% endif %}>{{ schedule_confirm_label(action.key) }}</button>
     </div>
   </form>
 {%- endmacro %}
@@ -1011,7 +1012,7 @@
           <td>{{ session.session_date|session_date }}</td>
           <td>
             {% call contextual_cell_trigger(session, 'schedule-actions', 'Review schedule', selected_view == 'bundle') %}
-              {{ schedule_table_cell(view.status, view.schedule_gate, view.review_round, view.schedule_locked_by_staffing) }}
+              {{ schedule_table_cell(view.status, view.schedule_gate, view.review_round, view.monthly_registrations_closed) }}
             {% endcall %}
           </td>
           <td>
@@ -3323,7 +3324,7 @@
         {% endif %}
       </section>
 
-      <section class="schedule-workflow-actions staffing-control-section" id="schedule-actions-{{ session.id }}" data-control-section data-default-collapsed="true" data-section-aliases="schedule" aria-labelledby="schedule-actions-title-{{ session.id }}">
+      <section class="schedule-workflow-actions staffing-control-section {% if not view.monthly_registrations_closed %}is-monthly-blocked{% endif %}" id="schedule-actions-{{ session.id }}" data-control-section data-default-collapsed="true" data-section-aliases="schedule" aria-labelledby="schedule-actions-title-{{ session.id }}">
         <span class="modal-anchor" id="schedule-{{ session.id }}" aria-hidden="true"></span>
         <div class="staffing-control-header">
           <div>
@@ -3334,6 +3335,9 @@
           <strong class="responsible-chip">{{ view.responsible }}</strong>
         </div>
         {{ review_flags_block(view.review_flags.by_area.get('schedule', []), session, selected_schedule_status, selected_view, csrf_token) }}
+        {% if not view.monthly_registrations_closed %}
+          <p class="staffing-schedule-notice">Monthly exam session registrations must be closed before proceeding with schedule preparation.</p>
+        {% endif %}
         {% if view.available_transitions %}
           {% set primary_keys = {
             'Not started': 'start_preparation',
@@ -3392,10 +3396,10 @@
                   {% set schedule_share_text = 'Schedules for ' ~ session.exam_session_name ~ ': ' ~ (session.details_url or '') %}
                   {% set schedule_email_subject = 'Schedules for ' ~ session.exam_session_name %}
                   {% set schedule_email_body = 'Please review the schedules for ' ~ session.exam_session_name ~ ': ' ~ (session.details_url or '') %}
-                  <a class="schedule-share-button compact-action{% if not session.details_url %} is-disabled{% endif %}" href="https://wa.me/?text={{ schedule_share_text|urlencode }}" target="_blank" rel="noopener"{% if not session.details_url %} aria-disabled="true" tabindex="-1"{% endif %}>WhatsApp schedule</a>
-                  <a class="schedule-share-button compact-action{% if not session.details_url %} is-disabled{% endif %}" href="mailto:?subject={{ schedule_email_subject|urlencode }}&body={{ schedule_email_body|urlencode }}"{% if not session.details_url %} aria-disabled="true" tabindex="-1"{% endif %}>Email schedule</a>
+                  <a class="schedule-share-button compact-action{% if not session.details_url or not view.monthly_registrations_closed %} is-disabled{% endif %}" href="https://wa.me/?text={{ schedule_share_text|urlencode }}" target="_blank" rel="noopener"{% if not session.details_url or not view.monthly_registrations_closed %} aria-disabled="true" tabindex="-1"{% endif %}>WhatsApp schedule</a>
+                  <a class="schedule-share-button compact-action{% if not session.details_url or not view.monthly_registrations_closed %} is-disabled{% endif %}" href="mailto:?subject={{ schedule_email_subject|urlencode }}&body={{ schedule_email_body|urlencode }}"{% if not session.details_url or not view.monthly_registrations_closed %} aria-disabled="true" tabindex="-1"{% endif %}>Email schedule</a>
                 {% endif %}
-                <button class="primary-button compact-action" type="button" data-schedule-action-toggle="schedule-action-form-{{ session.id }}-{{ action_ns.primary.key }}" aria-controls="schedule-action-form-{{ session.id }}-{{ action_ns.primary.key }}" aria-expanded="false">{{ action_ns.primary.label }}</button>
+                <button class="primary-button compact-action" type="button" data-schedule-action-toggle="schedule-action-form-{{ session.id }}-{{ action_ns.primary.key }}" aria-controls="schedule-action-form-{{ session.id }}-{{ action_ns.primary.key }}" aria-expanded="false"{% if not view.monthly_registrations_closed %} disabled{% endif %}>{{ action_ns.primary.label }}</button>
               </div>
             </article>
           {% endif %}
@@ -3412,11 +3416,11 @@
               <h4>Other actions</h4>
               <div class="schedule-other-action-list">
                 {% if action_ns.primary and action_ns.primary.key == 'send_for_review' %}
-                  <a class="schedule-share-button compact-action{% if not session.details_url %} is-disabled{% endif %}" href="{{ session.details_url or '#' }}" target="_blank" rel="noopener"{% if not session.details_url %} aria-disabled="true" tabindex="-1"{% endif %}>View schedule</a>
+                  <a class="schedule-share-button compact-action{% if not session.details_url or not view.monthly_registrations_closed %} is-disabled{% endif %}" href="{{ session.details_url or '#' }}" target="_blank" rel="noopener"{% if not session.details_url or not view.monthly_registrations_closed %} aria-disabled="true" tabindex="-1"{% endif %}>View schedule</a>
                 {% endif %}
                 {% for action in view.available_transitions %}
                   {% if action.key != primary_key and action.key != 'update_deadline' %}
-                    <button class="secondary-button compact-action" type="button" data-schedule-action-toggle="schedule-action-form-{{ session.id }}-{{ action.key }}" aria-controls="schedule-action-form-{{ session.id }}-{{ action.key }}" aria-expanded="false">{{ action.label }}</button>
+                    <button class="secondary-button compact-action" type="button" data-schedule-action-toggle="schedule-action-form-{{ session.id }}-{{ action.key }}" aria-controls="schedule-action-form-{{ session.id }}-{{ action.key }}" aria-expanded="false"{% if not view.monthly_registrations_closed %} disabled{% endif %}>{{ action.label }}</button>
                   {% endif %}
                 {% endfor %}
               </div>

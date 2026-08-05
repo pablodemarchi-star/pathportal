@@ -670,6 +670,7 @@ class ExamSession(db.Model):
     emergency_contact_required = db.Column(db.Boolean, nullable=False, default=False)
     emergency_contact_not_required = db.Column(db.Boolean, nullable=False, default=False)
     emergency_contact_member_id = db.Column(db.Integer, db.ForeignKey("academic_staff.id"), nullable=True, index=True)
+    monthly_registrations_closed = db.Column(db.Boolean, nullable=False, default=False)
     created_on = db.Column(db.DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))
     updated_on = db.Column(
         db.DateTime(timezone=True),

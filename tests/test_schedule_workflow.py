@@ -160,6 +160,11 @@ class ScheduleWorkflowTest(unittest.TestCase):
             user_session["csrf_token"] = "token"
         return client
 
+    def close_monthly_registration_gate(self, session_record=None):
+        session_record = session_record or self.session_record
+        session_record.monthly_registrations_closed = True
+        db.session.commit()
+
     def create_package_unit_record(self, status="Not started", expected=None, actual=None, session_record=None):
         session_record = session_record or self.session_record
         unit = ExamSessionPackageUnit(
@@ -1898,11 +1903,180 @@ class ScheduleWorkflowTest(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(db.session.get(ExamSession, session_record.id).status, "Pending")
 
+    def test_monthly_registration_menu_status_is_pending_when_all_months_are_inactive(self):
+        client = self.login_client()
+
+        response = client.get("/monthly-exam-session-registrations")
+
+        html = response.get_data(as_text=True)
+        self.assertEqual(response.status_code, 200)
+        self.assertIn('class="badge exam-status-pending" data-monthly-session-status>Pending</span>', html)
+
+    def test_monthly_registration_menu_status_is_in_progress_when_latest_total_is_below_minimum(self):
+        db.session.add(ExamSessionMonthlyCandidateTotal(
+            exam_session_id=self.session_record.id,
+            month=6,
+            total_candidates=29,
+        ))
+        db.session.commit()
+        client = self.login_client()
+
+        response = client.get("/monthly-exam-session-registrations")
+
+        html = response.get_data(as_text=True)
+        self.assertEqual(response.status_code, 200)
+        self.assertIn('class="badge exam-status-in-progress" data-monthly-session-status>In progress</span>', html)
+
+    def test_monthly_registration_menu_status_is_achieved_when_latest_total_meets_minimum(self):
+        db.session.add(ExamSessionMonthlyCandidateTotal(
+            exam_session_id=self.session_record.id,
+            month=6,
+            total_candidates=30,
+        ))
+        db.session.commit()
+        client = self.login_client()
+
+        response = client.get("/monthly-exam-session-registrations")
+
+        html = response.get_data(as_text=True)
+        self.assertEqual(response.status_code, 200)
+        self.assertIn('class="badge exam-status-achieved" data-monthly-session-status>Achieved</span>', html)
+
+    def test_monthly_registration_menu_status_is_closed_when_closed(self):
+        self.session_record.monthly_registrations_closed = True
+        db.session.commit()
+        client = self.login_client()
+
+        response = client.get("/monthly-exam-session-registrations")
+
+        html = response.get_data(as_text=True)
+        self.assertEqual(response.status_code, 200)
+        self.assertIn('class="badge exam-status-closed" data-monthly-session-status>Closed</span>', html)
+
+    def test_monthly_registration_update_returns_monthly_status(self):
+        client = self.login_client()
+
+        response = client.post(
+            f"/monthly-exam-session-registrations/{self.session_record.id}/6",
+            data={
+                "csrf_token": "token",
+                "total_candidates": "30",
+                "registration_Speaking": "30",
+            },
+            headers={"X-Requested-With": "XMLHttpRequest"},
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json["monthly_status"], "Achieved")
+
+    def test_monthly_registration_close_locks_rendered_inputs_and_inactive_months(self):
+        db.session.add(ExamSessionMonthlyCandidateTotal(
+            exam_session_id=self.session_record.id,
+            month=6,
+            total_candidates=30,
+        ))
+        db.session.commit()
+        client = self.login_client()
+
+        response = client.post(
+            f"/monthly-exam-session-registrations/{self.session_record.id}/closed",
+            data={"csrf_token": "token", "action": "close"},
+            follow_redirects=True,
+        )
+
+        html = response.get_data(as_text=True)
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(db.session.get(ExamSession, self.session_record.id).monthly_registrations_closed)
+        self.assertIn(">Reopen<", html)
+        self.assertIn("readonly", html)
+        self.assertIn('class="monthly-na-badge">N/A</span>', html)
+
+    def test_monthly_registration_close_requires_latest_total_to_meet_minimum_candidates(self):
+        db.session.add(ExamSessionMonthlyCandidateTotal(
+            exam_session_id=self.session_record.id,
+            month=6,
+            total_candidates=29,
+        ))
+        db.session.commit()
+        client = self.login_client()
+
+        response = client.post(
+            f"/monthly-exam-session-registrations/{self.session_record.id}/closed",
+            data={"csrf_token": "token", "action": "close"},
+            follow_redirects=True,
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertFalse(db.session.get(ExamSession, self.session_record.id).monthly_registrations_closed)
+        self.assertIn("Total candidates is 29/30", response.get_data(as_text=True))
+
+    def test_monthly_registration_close_uses_latest_loaded_month_total(self):
+        db.session.add_all([
+            ExamSessionMonthlyCandidateTotal(
+                exam_session_id=self.session_record.id,
+                month=6,
+                total_candidates=30,
+            ),
+            ExamSessionMonthlyRegistration(
+                exam_session_id=self.session_record.id,
+                month=7,
+                module="Speaking",
+                registration_number=12,
+            ),
+        ])
+        db.session.commit()
+        client = self.login_client()
+
+        response = client.post(
+            f"/monthly-exam-session-registrations/{self.session_record.id}/closed",
+            data={"csrf_token": "token", "action": "close"},
+            follow_redirects=True,
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertFalse(db.session.get(ExamSession, self.session_record.id).monthly_registrations_closed)
+        self.assertIn("latest loaded month has no Total candidates value", response.get_data(as_text=True))
+
+    def test_monthly_registration_reopen_allows_updates_again(self):
+        self.session_record.monthly_registrations_closed = True
+        db.session.commit()
+        client = self.login_client()
+
+        response = client.post(
+            f"/monthly-exam-session-registrations/{self.session_record.id}/closed",
+            data={"csrf_token": "token", "action": "reopen"},
+            follow_redirects=True,
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertFalse(db.session.get(ExamSession, self.session_record.id).monthly_registrations_closed)
+        self.assertIn(">Close<", response.get_data(as_text=True))
+
+    def test_monthly_registration_update_is_rejected_when_closed(self):
+        self.session_record.monthly_registrations_closed = True
+        db.session.commit()
+        client = self.login_client()
+
+        response = client.post(
+            f"/monthly-exam-session-registrations/{self.session_record.id}/6",
+            data={
+                "csrf_token": "token",
+                "total_candidates": "12",
+                "registration_Speaking": "12",
+            },
+            follow_redirects=True,
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIsNone(ExamSessionMonthlyCandidateTotal.query.filter_by(exam_session_id=self.session_record.id).first())
+        self.assertIn("Monthly registrations are closed", response.get_data(as_text=True))
+
     def test_deadline_error_redirect_reopens_attempted_action_form(self):
         db.session.add(ExamSessionScheduleWorkflow(
             exam_session_id=self.session_record.id,
             status="In progress",
         ))
+        self.session_record.monthly_registrations_closed = True
         db.session.commit()
         client = self.login_client()
 
@@ -1933,7 +2107,45 @@ class ScheduleWorkflowTest(unittest.TestCase):
         self.assertNotIn("Set the date by which schedule preparation should be completed.", form)
         self.assertNotIn('name="next_action_due_at"', form)
 
+    def test_schedule_modal_action_buttons_are_disabled_until_monthly_registrations_are_closed(self):
+        client = self.login_client()
+
+        def schedule_actions_html():
+            response = client.get("/pre-session-control-tower?session_year=2026&view=sessions")
+            html = response.get_data(as_text=True)
+            actions_start = html.index(f'id="schedule-actions-{self.session_record.id}"')
+            actions_end = html.index(f'id="history-{self.session_record.id}"', actions_start)
+            return html[actions_start:actions_end]
+
+        actions = schedule_actions_html()
+        self.assertIn('aria-expanded="false" disabled>Start schedule preparation</button>', actions)
+        self.assertIn('data-schedule-monthly-blocked="true"', actions)
+        self.assertIn("Monthly exam session registrations must be closed before proceeding with schedule preparation.", actions)
+
+        self.close_monthly_registration_gate()
+        actions = schedule_actions_html()
+        self.assertIn('aria-expanded="false">Start schedule preparation</button>', actions)
+        self.assertNotIn('data-schedule-monthly-blocked="true"', actions)
+        self.assertNotIn("Monthly exam session registrations must be closed before proceeding with schedule preparation.", actions)
+
+    def test_schedule_workflow_post_is_blocked_until_monthly_registrations_are_closed(self):
+        client = self.login_client()
+
+        response = client.post(
+            f"/pre-session-control-tower/sessions/{self.session_record.id}/schedule",
+            data={
+                "csrf_token": "token",
+                "action_key": "start_preparation",
+            },
+            follow_redirects=True,
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(ExamSessionScheduleWorkflow.query.count(), 0)
+        self.assertIn("Schedule actions are blocked until Monthly exam session registrations is Closed.", response.get_data(as_text=True))
+
     def test_start_schedule_preparation_redirects_to_schedule_only_modal(self):
+        self.close_monthly_registration_gate()
         client = self.login_client()
 
         response = client.post(
@@ -1977,6 +2189,7 @@ class ScheduleWorkflowTest(unittest.TestCase):
             status="Approved",
             approved_at=datetime.now(timezone.utc),
         ))
+        self.session_record.monthly_registrations_closed = True
         db.session.flush()
         db.session.add(ExamSessionSupervisorAssignment(
             exam_session_id=self.session_record.id,
@@ -2187,6 +2400,7 @@ class ScheduleWorkflowTest(unittest.TestCase):
             status="In progress",
             next_action_due_at=date(2026, 6, 30),
         ))
+        self.session_record.monthly_registrations_closed = True
         db.session.commit()
         client = self.login_client_for_user(actor)
 
@@ -2305,6 +2519,7 @@ class ScheduleWorkflowTest(unittest.TestCase):
             status="Ready to send",
             next_action_due_at=original_deadline,
         ))
+        self.session_record.monthly_registrations_closed = True
         db.session.commit()
         client = self.login_client()
 
@@ -2376,6 +2591,7 @@ class ScheduleWorkflowTest(unittest.TestCase):
             status="Ready to send",
             next_action_due_at=date(2026, 6, 30),
         ))
+        self.session_record.monthly_registrations_closed = True
         db.session.commit()
         client = self.login_client()
 
@@ -2418,6 +2634,7 @@ class ScheduleWorkflowTest(unittest.TestCase):
             status="Sent for review",
             next_action_due_at=date(2026, 6, 30),
         ))
+        self.session_record.monthly_registrations_closed = True
         db.session.commit()
         client = self.login_client()
 
@@ -2460,6 +2677,7 @@ class ScheduleWorkflowTest(unittest.TestCase):
             status="Changes requested",
             next_action_due_at=date(2026, 6, 30),
         ))
+        self.session_record.monthly_registrations_closed = True
         db.session.commit()
         client = self.login_client()
 
@@ -2522,6 +2740,7 @@ class ScheduleWorkflowTest(unittest.TestCase):
 
     def test_mark_ready_form_preloads_existing_schedule_link_after_first_review_round(self):
         self.session_record.details_url = "https://example.com/existing-schedule"
+        self.session_record.monthly_registrations_closed = True
         db.session.add(ExamSessionScheduleWorkflow(
             exam_session_id=self.session_record.id,
             status="In progress",
@@ -2548,6 +2767,7 @@ class ScheduleWorkflowTest(unittest.TestCase):
             status="In progress",
             next_action_due_at=date(2026, 6, 30),
         ))
+        self.session_record.monthly_registrations_closed = True
         db.session.commit()
         client = self.login_client()
 
@@ -2575,6 +2795,7 @@ class ScheduleWorkflowTest(unittest.TestCase):
             status="In progress",
             next_action_due_at=date(2026, 6, 30),
         ))
+        self.session_record.monthly_registrations_closed = True
         db.session.commit()
         client = self.login_client()
 
@@ -5190,6 +5411,7 @@ class ScheduleWorkflowTest(unittest.TestCase):
         workflow = ExamSessionScheduleWorkflow.query.filter_by(exam_session_id=first.id).one()
         workflow.status = "Not started"
         workflow.next_action_due_at = None
+        first.monthly_registrations_closed = True
         staff_member = AcademicStaff(id=31, status="Active", full_name="Ian Intern", roles="Intern", email="ian@example.com")
         db.session.add(staff_member)
         db.session.flush()
@@ -5205,7 +5427,7 @@ class ScheduleWorkflowTest(unittest.TestCase):
         bundle_response = client.get(f"/pre-session-control-tower?session_year=2026&view=bundle&bundle_id={selected_link.bundle_id}")
         bundle_html = bundle_response.get_data(as_text=True)
         modal_start = bundle_html.index(f'id="schedule-workflow-{first.id}"')
-        next_modal = bundle_html.find('<div class="modal"', modal_start + 1)
+        next_modal = bundle_html.find('<div class="modal" id=', modal_start + 1)
         modal = bundle_html[modal_start:next_modal if next_modal != -1 else len(bundle_html)]
         staffing_form_index = modal.index(f"/staffing-assignments/intern/{assignment.id}/status")
         staffing_form = modal[modal.rfind("<form", 0, staffing_form_index):modal.index("</form>", staffing_form_index)]
@@ -7906,6 +8128,7 @@ class ScheduleWorkflowTest(unittest.TestCase):
             shifts="Morning",
             modules="Speaking",
             format="Online",
+            monthly_registrations_closed=True,
         )
         other_year_session = ExamSession(
             exam_session_name="Other year session",
@@ -7947,20 +8170,11 @@ class ScheduleWorkflowTest(unittest.TestCase):
         self.assertIn("Schedules are approved. The session can move to the next pre-session stages.", html)
         self.assertNotIn("Other year session", html)
 
-    def test_schedule_column_locks_when_any_staffing_status_is_not_pending(self):
-        staff_member = AcademicStaff(id=30, status="Active", full_name="Olivia Official", roles="Examiner")
-        db.session.add(staff_member)
+    def test_schedule_column_lock_depends_on_monthly_registration_closed_status(self):
         db.session.add(ExamSessionScheduleWorkflow(
             exam_session_id=self.session_record.id,
             status="Approved",
         ))
-        db.session.flush()
-        assignment = ExamSessionExaminerAssignment(
-            exam_session_id=self.session_record.id,
-            team_member_id=staff_member.id,
-            participation_status="Pending",
-        )
-        db.session.add(assignment)
         db.session.commit()
         client = self.login_client()
 
@@ -7977,16 +8191,16 @@ class ScheduleWorkflowTest(unittest.TestCase):
             return session_row[schedule_cell_start:staffing_cell_start]
 
         schedule_cell = schedule_cell_html()
-        self.assertIn("workflow-gate-unblocked", schedule_cell)
-        self.assertIn("UNBLOCKED", schedule_cell)
-        self.assertNotIn("workflow-gate-blocked", schedule_cell)
-
-        assignment.participation_status = "Official confirmation sent"
-        db.session.commit()
-        schedule_cell = schedule_cell_html()
         self.assertIn("workflow-gate-blocked", schedule_cell)
         self.assertIn("BLOCKED", schedule_cell)
         self.assertNotIn("workflow-gate-unblocked", schedule_cell)
+
+        self.session_record.monthly_registrations_closed = True
+        db.session.commit()
+        schedule_cell = schedule_cell_html()
+        self.assertIn("workflow-gate-unblocked", schedule_cell)
+        self.assertIn("UNBLOCKED", schedule_cell)
+        self.assertNotIn("workflow-gate-blocked", schedule_cell)
 
     def test_control_tower_sessions_table_uses_contextual_modal_targets(self):
         client = self.login_client()
@@ -9173,6 +9387,7 @@ class ScheduleWorkflowTest(unittest.TestCase):
             participation_status="Pending",
         )
         db.session.add(assignment)
+        self.session_record.monthly_registrations_closed = True
         db.session.commit()
         client = self.login_client()
 

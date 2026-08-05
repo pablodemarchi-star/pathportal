@@ -2160,6 +2160,21 @@ td .status-inactive {
   color: var(--badge-green-text);
 }
 
+.exam-status-in-progress {
+  background: var(--badge-yellow-bg);
+  color: var(--badge-yellow-text);
+}
+
+.exam-status-achieved {
+  background: var(--badge-blue-bg);
+  color: var(--badge-blue-text);
+}
+
+.exam-status-closed {
+  background: var(--badge-green-bg);
+  color: var(--badge-green-text);
+}
+
 .exam-module-reading-and-writing,
 .exam-format-onsite,
 .exam-location-map,
@@ -2602,7 +2617,7 @@ span.session-marker-chip {
 
 .monthly-registration-table th:last-child,
 .monthly-registration-table td:last-child {
-  min-width: 96px;
+  min-width: 112px;
 }
 
 .monthly-registration-table .status-col {
@@ -2704,6 +2719,19 @@ span.session-marker-chip {
   background: #e4e9e7;
 }
 
+.monthly-na-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 24px;
+  border-radius: 999px;
+  padding: 5px 10px;
+  background: var(--badge-grey-bg);
+  color: var(--badge-grey-text);
+  font-size: 11px;
+  font-weight: 900;
+}
+
 .monthly-registration-form {
   display: grid;
   gap: 6px;
@@ -2740,6 +2768,20 @@ span.session-marker-chip {
 .monthly-registration-form input::placeholder {
   color: #9aa5a0;
   font-weight: 700;
+}
+
+.monthly-registration-form input[readonly] {
+  border-color: var(--badge-grey-bg);
+  background: #f6f8f7;
+  color: var(--color-primary-dark);
+  cursor: default;
+}
+
+.monthly-registration-form .candidate-total-input[readonly],
+.monthly-registration-form .candidate-total-input[readonly].trend-neutral,
+.monthly-registration-form .candidate-total-input[readonly].trend-increase,
+.monthly-registration-form .candidate-total-input[readonly].trend-decrease {
+  color: #111827;
 }
 
 .monthly-registration-form.is-saving input {
@@ -2791,6 +2833,42 @@ span.session-marker-chip {
   min-height: 28px;
   padding: 5px 8px;
   font-size: 11px;
+}
+
+.monthly-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+}
+
+.monthly-close-chip {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 26px;
+  border: 0;
+  border-radius: 999px;
+  padding: 6px 10px;
+  background: #111827;
+  color: white;
+  cursor: pointer;
+  font-size: 11px;
+  font-weight: 900;
+  line-height: 1;
+}
+
+.monthly-close-chip:hover {
+  background: #263244;
+}
+
+.monthly-close-chip.is-reopen {
+  background: var(--badge-green-bg);
+  color: var(--badge-green-text);
+}
+
+.monthly-close-chip.is-reopen:hover {
+  background: #d5ead4;
 }
 
 .enter-session-button {
@@ -7500,6 +7578,16 @@ span.session-marker-chip {
   cursor: not-allowed;
   opacity: 0.55;
   pointer-events: none;
+}
+
+.schedule-workflow-actions.is-monthly-blocked .primary-button:disabled,
+.schedule-workflow-actions.is-monthly-blocked .secondary-button:disabled,
+.schedule-workflow-actions.is-monthly-blocked .schedule-share-button.is-disabled {
+  border-color: var(--badge-grey-bg);
+  background: var(--badge-grey-bg);
+  color: var(--badge-grey-text);
+  cursor: not-allowed;
+  opacity: 1;
 }
 
 .schedule-action-panels {

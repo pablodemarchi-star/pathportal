@@ -1581,6 +1581,52 @@ def monthly_candidate_requirement_contracts(session_ids):
     return contracts
 
 
+def monthly_registration_close_requirement(session_record):
+    if not session_record:
+        return {
+            "ready": False,
+            "current": None,
+            "required": 30,
+            "latest_month": None,
+        }
+    latest_total_month = (
+        db.session.query(db.func.max(ExamSessionMonthlyCandidateTotal.month))
+        .filter_by(exam_session_id=session_record.id)
+        .scalar()
+    )
+    latest_registration_month = (
+        db.session.query(db.func.max(ExamSessionMonthlyRegistration.month))
+        .filter_by(exam_session_id=session_record.id)
+        .scalar()
+    )
+    latest_months = [month for month in (latest_total_month, latest_registration_month) if month is not None]
+    latest_month = max(latest_months) if latest_months else None
+    required = session_record.minimum_candidates_required
+    required = required if required is not None else 30
+    total_record = None
+    if latest_month is not None:
+        total_record = ExamSessionMonthlyCandidateTotal.query.filter_by(
+            exam_session_id=session_record.id,
+            month=latest_month,
+        ).first()
+    current = total_record.total_candidates if total_record else None
+    return {
+        "ready": current is not None and current >= required,
+        "current": current,
+        "required": required,
+        "latest_month": latest_month,
+    }
+
+
+def monthly_registration_status(session_record, requirement=None):
+    if session_record and session_record.monthly_registrations_closed:
+        return "Closed"
+    requirement = requirement or monthly_registration_close_requirement(session_record)
+    if requirement["latest_month"] is None:
+        return "Pending"
+    return "Achieved" if requirement["ready"] else "In progress"
+
+
 def exam_session_pending_status_tooltip(staffing_contract, logistics_contract, session_record=None, assignments=None, candidate_contract=None):
     missing_items = []
     staffing_status = staffing_contract.get("status")
@@ -10573,6 +10619,7 @@ def schedule_workflow_view(session_record, workflow=None, today=None, staffing=N
     deadline = schedule_workflow_current_deadline(workflow)
     sinapsis_url = (session_record.details_url or "").strip()
     gate = schedule_gate or schedule_gate_status(workflow)
+    monthly_registrations_closed = bool(getattr(session_record, "monthly_registrations_closed", False))
     fallback_staffing_contract = staffing_readiness_contract([], [], [])
     staffing_control_view = staffing_control or staffing_control_contract(None, fallback_staffing_contract, today=today)
     fallback_logistics_contract = logistics_readiness_contract([], [], None)
@@ -10599,6 +10646,7 @@ def schedule_workflow_view(session_record, workflow=None, today=None, staffing=N
         "review_round": schedule_workflow_review_round(workflow),
         "health": schedule_workflow_health(status, deadline, today=today),
         "schedule_gate": gate,
+        "monthly_registrations_closed": monthly_registrations_closed,
         "schedule_locked_by_staffing": bool(schedule_locked_by_staffing),
         "staffing": staffing,
         "staffing_rows": staffing_rows or [],
@@ -14040,6 +14088,9 @@ def update_schedule_workflow(session_id):
     if not transition:
         flash("Please select a valid schedule workflow action.", "error")
         return schedule_workflow_redirect(session_record, status_filter)
+    if not session_record.monthly_registrations_closed:
+        flash("Schedule actions are blocked until Monthly exam session registrations is Closed.", "error")
+        return schedule_workflow_redirect(session_record, status_filter, action_key)
     if (
         action_key == "reopen"
         and schedule_locked_by_staffing_assignments(session_record)
@@ -16445,6 +16496,10 @@ def monthly_exam_session_registrations():
     candidate_totals = {}
     for record in total_records:
         candidate_totals.setdefault(record.exam_session_id, {})[record.month] = record.total_candidates
+    monthly_statuses = {
+        session_record.id: monthly_registration_status(session_record)
+        for session_record in sessions
+    }
     return render_template(
         "monthly_registrations/index.html",
         sessions=sessions,
@@ -16453,6 +16508,7 @@ def monthly_exam_session_registrations():
         registrations=registrations,
         candidate_totals=candidate_totals,
         candidate_total_trends=monthly_candidate_total_trends(candidate_totals),
+        monthly_statuses=monthly_statuses,
         monthly_totals=monthly_totals,
         session_years=session_years,
         archived_session_years=(
@@ -16482,6 +16538,12 @@ def update_monthly_exam_session_registration(session_id, month):
         return redirect(url_for("staff.monthly_exam_session_registrations"))
 
     session_record = ExamSession.query.get_or_404(session_id)
+    if session_record.monthly_registrations_closed:
+        if is_async:
+            return Response("Monthly registrations are closed for this exam session.", status=423)
+        flash("Monthly registrations are closed for this exam session. Reopen them before editing.", "error")
+        return redirect(url_for("staff.monthly_exam_session_registrations"))
+
     modules = session_record.modules_list()
     has_errors = False
     saved_modules = 0
@@ -16549,6 +16611,7 @@ def update_monthly_exam_session_registration(session_id, month):
             ]
             return jsonify({
                 "monthly_totals": monthly_candidate_total_sums(filtered_session_ids),
+                "monthly_status": monthly_registration_status(session_record),
                 "session_status": session_record.status,
             })
         if saved_modules or total_value:
@@ -16571,6 +16634,44 @@ def reset_monthly_exam_session_registration(session_id):
     update_exam_session_overall_status(session_record)
     db.session.commit()
     flash("Monthly registration data has been successfully reset.", "success")
+    return redirect(url_for("staff.monthly_exam_session_registrations"))
+
+
+@staff_bp.route("/monthly-exam-session-registrations/<int:session_id>/closed", methods=["POST"])
+@login_required
+def toggle_monthly_exam_session_registration_closed(session_id):
+    if not validate_csrf():
+        flash("Security token expired. Please try again.", "error")
+        return redirect(url_for("staff.monthly_exam_session_registrations"))
+
+    session_record = ExamSession.query.get_or_404(session_id)
+    action = (request.form.get("action") or "").strip().lower()
+    if action not in {"close", "reopen"}:
+        flash("Invalid monthly registration action.", "error")
+        return redirect(url_for("staff.monthly_exam_session_registrations"))
+
+    if action == "close":
+        requirement = monthly_registration_close_requirement(session_record)
+        if not requirement["ready"]:
+            current = requirement["current"]
+            latest_month = requirement["latest_month"]
+            if latest_month is None:
+                flash("Monthly registrations cannot be closed until Total candidates is loaded.", "error")
+            elif current is None:
+                flash("Monthly registrations cannot be closed because the latest loaded month has no Total candidates value.", "error")
+            else:
+                flash(
+                    f"Monthly registrations cannot be closed because Total candidates is {current}/{requirement['required']} in the latest loaded month.",
+                    "error",
+                )
+            return redirect(url_for("staff.monthly_exam_session_registrations"))
+
+    session_record.monthly_registrations_closed = action == "close"
+    db.session.commit()
+    flash(
+        "Monthly registrations closed." if session_record.monthly_registrations_closed else "Monthly registrations reopened.",
+        "success",
+    )
     return redirect(url_for("staff.monthly_exam_session_registrations"))
 
 

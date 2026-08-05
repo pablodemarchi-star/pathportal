@@ -609,6 +609,9 @@ def create_app():
         if exam_session_columns and "emergency_contact_member_id" not in exam_session_columns:
             db.session.execute(text("ALTER TABLE exam_session ADD COLUMN emergency_contact_member_id INTEGER"))
             db.session.commit()
+        if exam_session_columns and "monthly_registrations_closed" not in exam_session_columns:
+            db.session.execute(text("ALTER TABLE exam_session ADD COLUMN monthly_registrations_closed BOOLEAN NOT NULL DEFAULT 0"))
+            db.session.commit()
         if exam_session_columns and "status" in exam_session_columns:
             db.session.execute(text("UPDATE exam_session SET status = 'Pending' WHERE status IN ('Active', 'Inactive')"))
             db.session.commit()
