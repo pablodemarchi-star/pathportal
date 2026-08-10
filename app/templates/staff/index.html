@@ -556,7 +556,14 @@
         <td class="select-column">
           <input class="bulk-checkbox" type="checkbox" name="member_ids" value="{{ member.id }}" form="staff-bulk-export-form" data-member-select data-member-email="{{ member.email or '' }}" aria-label="Select {{ member.full_name }}">
         </td>
-        <td>{{ status_badge(member.status) }}</td>
+        <td>
+          <div class="staff-status-cell">
+            {{ status_badge(member.status) }}
+            <span class="staff-id-issued-note {% if member.id_issued %}is-issued{% endif %}">
+              {% if member.id_issued %}ID issued ✓{% else %}No ID issued{% endif %}
+            </span>
+          </div>
+        </td>
         <td>{{ member.title or '-' }}</td>
         <td>
           <div class="name-cell">

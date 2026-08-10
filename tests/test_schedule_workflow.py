@@ -1,5 +1,6 @@
 import json
 import os
+import re
 import subprocess
 import unittest
 from datetime import date, datetime, time, timedelta, timezone
@@ -97,11 +98,13 @@ from app.routes import (
     my_action_row_from_schedule_view,
     operational_readiness_contract,
     packages_action_contract,
+    package_preparation_status_contract,
     packages_readiness_contract,
     path_session_journey_contract,
     promote_potential_entry_exam_session_assignments,
     reconcile_auto_shipment_bundles,
     shipment_bundle_readiness_contract,
+    shipment_bundle_view,
     shipment_planning_action_contract,
     shipment_planning_contract,
     shipments_action_contract,
@@ -113,6 +116,7 @@ from app.routes import (
     sort_my_actions,
     priority_action_contract,
     schedule_gate_status,
+    schedule_preparation_deadline_for_session,
     schedule_workflow_health,
     schedule_workflow_view,
     staffing_readiness_contract,
@@ -163,6 +167,7 @@ class ScheduleWorkflowTest(unittest.TestCase):
     def close_monthly_registration_gate(self, session_record=None):
         session_record = session_record or self.session_record
         session_record.monthly_registrations_closed = True
+        session_record.monthly_registrations_closed_at = datetime.now(timezone.utc)
         db.session.commit()
 
     def create_package_unit_record(self, status="Not started", expected=None, actual=None, session_record=None):
@@ -236,6 +241,7 @@ class ScheduleWorkflowTest(unittest.TestCase):
             status="Active",
             full_name=name,
             roles="Supervisor",
+            phone="+54 9 351 555 0101",
             full_address_google_maps="Av. Siempre Viva 123",
             city="Cordoba",
             province="Cordoba",
@@ -303,6 +309,13 @@ class ScheduleWorkflowTest(unittest.TestCase):
             item.is_checked = True
         for item in ExamSessionPackageChecklistItem.query.filter_by(exam_session_id=session_record.id, scope="SESSION").all():
             item.is_checked = True
+        session_record.package_label_verification_status = "completed"
+        session_record.package_label_printing_status = "completed"
+        session_record.room_package_sealing_status = "completed"
+        session_record.return_packages_status = "completed"
+        session_record.staff_member_ids_status = "completed"
+        session_record.inclusion_final_items_status = "completed"
+        session_record.session_box_sealing_status = "completed"
         db.session.commit()
         return unit
 
@@ -1986,7 +1999,9 @@ class ScheduleWorkflowTest(unittest.TestCase):
 
         html = response.get_data(as_text=True)
         self.assertEqual(response.status_code, 200)
-        self.assertTrue(db.session.get(ExamSession, self.session_record.id).monthly_registrations_closed)
+        refreshed_session = db.session.get(ExamSession, self.session_record.id)
+        self.assertTrue(refreshed_session.monthly_registrations_closed)
+        self.assertIsNotNone(refreshed_session.monthly_registrations_closed_at)
         self.assertIn(">Reopen<", html)
         self.assertIn("readonly", html)
         self.assertIn('class="monthly-na-badge">N/A</span>', html)
@@ -2039,6 +2054,7 @@ class ScheduleWorkflowTest(unittest.TestCase):
 
     def test_monthly_registration_reopen_allows_updates_again(self):
         self.session_record.monthly_registrations_closed = True
+        self.session_record.monthly_registrations_closed_at = datetime(2026, 6, 15, 12, 0, tzinfo=timezone.utc)
         db.session.commit()
         client = self.login_client()
 
@@ -2049,8 +2065,60 @@ class ScheduleWorkflowTest(unittest.TestCase):
         )
 
         self.assertEqual(response.status_code, 200)
-        self.assertFalse(db.session.get(ExamSession, self.session_record.id).monthly_registrations_closed)
+        refreshed_session = db.session.get(ExamSession, self.session_record.id)
+        self.assertFalse(refreshed_session.monthly_registrations_closed)
+        self.assertIsNone(refreshed_session.monthly_registrations_closed_at)
         self.assertIn(">Close<", response.get_data(as_text=True))
+
+    def test_monthly_registration_reopen_requires_password_when_schedule_started(self):
+        self.session_record.monthly_registrations_closed = True
+        self.session_record.monthly_registrations_closed_at = datetime(2026, 6, 15, 12, 0, tzinfo=timezone.utc)
+        db.session.add(ExamSessionScheduleWorkflow(
+            exam_session_id=self.session_record.id,
+            status="In progress",
+        ))
+        db.session.commit()
+        client = self.login_client()
+
+        response = client.get("/monthly-exam-session-registrations?session_year=2026")
+        html = response.get_data(as_text=True)
+        form_index = html.index(f"/monthly-exam-session-registrations/{self.session_record.id}/closed")
+        form_html = html[html.rfind("<form", 0, form_index):html.index("</form>", form_index)]
+
+        self.assertIn("Password authorisation required", form_html)
+        self.assertIn(
+            "Editing the monthly session registration of the session may affect the Schedule stage, as schedule preparation has already started. Password authorisation is required to continue.",
+            form_html,
+        )
+        self.assertIn('data-confirm-password-value="EditOK"', form_html)
+        self.assertIn('name="confirmation_password" value=""', form_html)
+        self.assertNotIn("monthly-authorisation-warning", html)
+
+        response = client.post(
+            f"/monthly-exam-session-registrations/{self.session_record.id}/closed",
+            data={"csrf_token": "token", "action": "reopen"},
+            follow_redirects=False,
+        )
+
+        self.assertEqual(response.status_code, 302)
+        refreshed_session = db.session.get(ExamSession, self.session_record.id)
+        self.assertTrue(refreshed_session.monthly_registrations_closed)
+        self.assertIsNotNone(refreshed_session.monthly_registrations_closed_at)
+
+        response = client.post(
+            f"/monthly-exam-session-registrations/{self.session_record.id}/closed",
+            data={
+                "csrf_token": "token",
+                "action": "reopen",
+                "confirmation_password": "EditOK",
+            },
+            follow_redirects=False,
+        )
+
+        self.assertEqual(response.status_code, 302)
+        refreshed_session = db.session.get(ExamSession, self.session_record.id)
+        self.assertFalse(refreshed_session.monthly_registrations_closed)
+        self.assertIsNone(refreshed_session.monthly_registrations_closed_at)
 
     def test_monthly_registration_update_is_rejected_when_closed(self):
         self.session_record.monthly_registrations_closed = True
@@ -2162,6 +2230,28 @@ class ScheduleWorkflowTest(unittest.TestCase):
         self.assertIn("open_modal_target=schedule-actions", response.headers["Location"])
         self.assertIn("schedule_only=1", response.headers["Location"])
 
+    def test_start_schedule_preparation_sets_initial_deadline_from_monthly_registration_close(self):
+        closed_at = datetime(2026, 6, 15, 12, 0, tzinfo=timezone.utc)
+        self.session_record.monthly_registrations_closed = True
+        self.session_record.monthly_registrations_closed_at = closed_at
+        db.session.commit()
+        client = self.login_client()
+
+        response = client.post(
+            f"/pre-session-control-tower/sessions/{self.session_record.id}/schedule",
+            data={
+                "csrf_token": "token",
+                "action_key": "start_preparation",
+            },
+            follow_redirects=False,
+        )
+
+        self.assertEqual(response.status_code, 302)
+        workflow = ExamSessionScheduleWorkflow.query.filter_by(exam_session_id=self.session_record.id).one()
+        self.assertEqual(workflow.status, "In progress")
+        self.assertEqual(workflow.next_action_due_at, argentina_add_business_days(closed_at.date(), 8))
+        self.assertEqual(workflow.next_action_due_at, schedule_preparation_deadline_for_session(self.session_record))
+
     def test_schedule_actions_do_not_show_edit_deadline_button(self):
         db.session.add(ExamSessionScheduleWorkflow(
             exam_session_id=self.session_record.id,
@@ -2252,6 +2342,42 @@ class ScheduleWorkflowTest(unittest.TestCase):
         self.assertIn("workflow-gate-unblocked", schedule_cell)
         self.assertIn("UNBLOCKED", schedule_cell)
         self.assertNotIn("workflow-gate-blocked", schedule_cell)
+
+    def test_reopen_schedule_warning_mentions_package_when_package_preparation_started(self):
+        staff_member = AcademicStaff(id=33, status="Active", full_name="Pablo Package", roles="Supervisor", email="pablo-package@example.com")
+        db.session.add(staff_member)
+        db.session.add(ExamSessionScheduleWorkflow(
+            exam_session_id=self.session_record.id,
+            status="Approved",
+            approved_at=datetime.now(timezone.utc),
+        ))
+        self.session_record.monthly_registrations_closed = True
+        self.session_record.package_label_verification_status = "in_progress"
+        db.session.flush()
+        db.session.add(ExamSessionSupervisorAssignment(
+            exam_session_id=self.session_record.id,
+            team_member_id=staff_member.id,
+            participation_status="Official confirmation sent",
+        ))
+        db.session.commit()
+        client = self.login_client()
+
+        response = client.get("/pre-session-control-tower?session_year=2026&view=sessions")
+        html = response.get_data(as_text=True)
+        form_start = html.index(f'id="schedule-action-form-{self.session_record.id}-reopen"')
+        form_end = html.index("</form>", form_start)
+        form = html[form_start:form_end]
+
+        self.assertIn("Password authorisation required", form)
+        self.assertIn(
+            "Editing the schedule may affect the Staffing and Package stage, as official confirmations have already been sent and package preparation has started. Password authorisation is required to continue.",
+            form,
+        )
+        self.assertNotIn(
+            "Editing the schedule may affect the Staffing stage, as official confirmations have already been sent. Password authorisation is required to continue.",
+            form,
+        )
+        self.assertIn('name="schedule_reopen_password"', form)
 
     def test_schedule_modal_renders_status_track_for_status_changes(self):
         workflow = ExamSessionScheduleWorkflow(
@@ -2493,6 +2619,99 @@ class ScheduleWorkflowTest(unittest.TestCase):
         self.assertTrue(mention.is_read)
         self.assertEqual(mention.read_by_user_id, recipient.id)
         self.assertIsNotNone(mention.read_on)
+
+    def test_package_modal_notes_panel_reuses_staffing_notes_flow(self):
+        actor = User(full_name="Admin User", email="admin-package-note@example.com", department="Admin", is_active=True)
+        actor.set_password("secret123")
+        db.session.add(actor)
+        db.session.commit()
+        client = self.login_client_for_user(actor)
+
+        response = client.get("/pre-session-control-tower?session_year=2026&view=sessions")
+        html = response.get_data(as_text=True)
+        overview_index = html.index(f'id="overview-{self.session_record.id}"')
+        package_notes_index = html.index(f'id="packages-notes-{self.session_record.id}"')
+        packages_index = html.index(f'id="packages-{self.session_record.id}"')
+        package_notes_panel = html[package_notes_index:packages_index]
+
+        self.assertLess(overview_index, package_notes_index)
+        self.assertLess(package_notes_index, packages_index)
+        self.assertIn("Notes", package_notes_panel)
+        self.assertIn("Package notes and read tracking.", package_notes_panel)
+        self.assertIn('action="/pre-session-control-tower/sessions/1/staffing-notes"', package_notes_panel)
+        self.assertIn('name="note_modal_context" value="packages"', package_notes_panel)
+        self.assertIn("From", package_notes_panel)
+        self.assertIn("Admin User, Admin", package_notes_panel)
+        self.assertIn("No package notes yet.", package_notes_panel)
+
+        with open("app/static/css/styles.css", encoding="utf-8") as css_file:
+            css = css_file.read()
+        self.assertIn(".package-notes-section {\n  display: none;", css)
+        self.assertIn(".modal.is-packages-only .package-notes-section {\n  display: grid;", css)
+
+        response = client.post(
+            f"/pre-session-control-tower/sessions/{self.session_record.id}/staffing-notes",
+            data={
+                "csrf_token": "token",
+                "note": "Package labels need one final check.",
+                "note_modal_context": "packages",
+            },
+            follow_redirects=False,
+        )
+
+        self.assertEqual(response.status_code, 302)
+        self.assertIn("open_modal_target=packages-notes", response.headers["Location"])
+        self.assertIn("packages_only=1", response.headers["Location"])
+        self.assertNotIn("staffing_only=1", response.headers["Location"])
+        note = ExamSessionStaffingNote.query.one()
+        self.assertEqual(note.note_text, "Package labels need one final check.")
+
+    def test_shipment_modal_notes_panel_reuses_staffing_notes_flow(self):
+        actor = User(full_name="Admin User", email="admin-shipment-note@example.com", department="Admin", is_active=True)
+        actor.set_password("secret123")
+        db.session.add(actor)
+        db.session.commit()
+        client = self.login_client_for_user(actor)
+
+        response = client.get("/pre-session-control-tower?session_year=2026&view=sessions")
+        html = response.get_data(as_text=True)
+        overview_index = html.index(f'id="overview-{self.session_record.id}"')
+        shipment_notes_index = html.index(f'id="shipments-notes-{self.session_record.id}"')
+        shipments_index = html.index(f'id="shipments-{self.session_record.id}"')
+        shipment_notes_panel = html[shipment_notes_index:shipments_index]
+
+        self.assertLess(overview_index, shipment_notes_index)
+        self.assertLess(shipment_notes_index, shipments_index)
+        self.assertIn("Notes", shipment_notes_panel)
+        self.assertIn("Shipment notes and read tracking.", shipment_notes_panel)
+        self.assertIn('action="/pre-session-control-tower/sessions/1/staffing-notes"', shipment_notes_panel)
+        self.assertIn('name="note_modal_context" value="shipments"', shipment_notes_panel)
+        self.assertIn("From", shipment_notes_panel)
+        self.assertIn("Admin User, Admin", shipment_notes_panel)
+        self.assertIn("No shipment notes yet.", shipment_notes_panel)
+
+        with open("app/static/css/styles.css", encoding="utf-8") as css_file:
+            css = css_file.read()
+        self.assertIn(".shipment-notes-section {\n  display: none;", css)
+        self.assertIn(".modal.is-shipments-only .shipment-notes-section {\n  display: grid;", css)
+
+        response = client.post(
+            f"/pre-session-control-tower/sessions/{self.session_record.id}/staffing-notes",
+            data={
+                "csrf_token": "token",
+                "note": "Shipment recipient needs a confirmation call.",
+                "note_modal_context": "shipments",
+            },
+            follow_redirects=False,
+        )
+
+        self.assertEqual(response.status_code, 302)
+        self.assertIn("open_modal_target=shipments-notes", response.headers["Location"])
+        self.assertIn("shipments_only=1", response.headers["Location"])
+        self.assertNotIn("staffing_only=1", response.headers["Location"])
+        self.assertNotIn("packages_only=1", response.headers["Location"])
+        note = ExamSessionStaffingNote.query.one()
+        self.assertEqual(note.note_text, "Shipment recipient needs a confirmation call.")
 
     def test_continue_editing_form_does_not_show_manual_editing_deadline(self):
         db.session.add(ExamSessionScheduleWorkflow(
@@ -2908,6 +3127,8 @@ class ScheduleWorkflowTest(unittest.TestCase):
         )
 
         self.assertEqual(response.status_code, 302)
+        self.assertIn("open_modal_target=packages", response.headers["Location"])
+        self.assertIn("packages_only=1", response.headers["Location"])
         unit = ExamSessionPackageUnit.query.one()
         self.assertEqual(unit.room_name, "Room 1")
         self.assertEqual(unit.module_name, "Speaking")
@@ -2919,6 +3140,925 @@ class ScheduleWorkflowTest(unittest.TestCase):
         self.assertEqual(ExamSessionPackageChecklistItem.query.filter_by(package_unit_id=unit.id).count(), 7)
         self.assertEqual(ExamSessionPackageChecklistItem.query.filter_by(exam_session_id=self.session_record.id, scope="SESSION").count(), 8)
         self.assertEqual(ExamSessionPackageEvent.query.filter_by(package_unit_id=unit.id, event_type="PACKAGE_UNIT_CREATED").count(), 1)
+
+    def test_package_unit_create_supports_multiple_room_package_lines(self):
+        client = self.login_client()
+
+        response = client.post(
+            f"/pre-session-control-tower/sessions/{self.session_record.id}/packages/units",
+            data={
+                "csrf_token": "token",
+                "package_row_count": "2",
+                "room_name_0": "Room 1",
+                "module_name_0": "Speaking",
+                "expected_candidate_count_0": "12",
+                "actual_label_count_0": "12",
+                "has_nep_candidates_0": "1",
+                "room_name_1": "Room 2",
+                "module_name_1": "Speaking",
+                "expected_candidate_count_1": "8",
+                "actual_label_count_1": "7",
+                "has_nep_candidates_1": "1",
+                "note": "Prepare together.",
+            },
+            follow_redirects=False,
+        )
+
+        self.assertEqual(response.status_code, 302)
+        units = ExamSessionPackageUnit.query.order_by(ExamSessionPackageUnit.room_name).all()
+        self.assertEqual(len(units), 2)
+        self.assertEqual([unit.room_name for unit in units], ["Room 1", "Room 2"])
+        self.assertTrue(units[0].has_nep_candidates)
+        self.assertTrue(units[1].has_nep_candidates)
+        self.assertEqual(units[1].status, "Pre-packing blocked")
+        self.assertEqual({unit.note for unit in units}, {"Prepare together."})
+        self.assertEqual(ExamSessionPackageChecklistItem.query.filter(ExamSessionPackageChecklistItem.package_unit_id.isnot(None)).count(), 14)
+
+    def test_package_unit_create_rejects_more_than_twenty_lines(self):
+        client = self.login_client()
+
+        response = client.post(
+            f"/pre-session-control-tower/sessions/{self.session_record.id}/packages/units",
+            data={"csrf_token": "token", "package_row_count": "21"},
+            follow_redirects=False,
+        )
+
+        self.assertEqual(response.status_code, 302)
+        self.assertEqual(ExamSessionPackageUnit.query.count(), 0)
+
+    def test_package_label_verification_status_actions(self):
+        client = self.login_client()
+
+        self.assertEqual(self.session_record.package_label_verification_status, "not_started")
+        response = client.post(
+            f"/pre-session-control-tower/sessions/{self.session_record.id}/packages/label-verification",
+            data={"csrf_token": "token", "action": "mark_in_progress"},
+            follow_redirects=False,
+        )
+        self.assertEqual(response.status_code, 302)
+        self.assertIn("open_modal_target=package-label-verification", response.headers["Location"])
+        self.assertIn("packages_only=1", response.headers["Location"])
+        db.session.refresh(self.session_record)
+        self.assertEqual(self.session_record.package_label_verification_status, "in_progress")
+
+    def test_package_label_printing_status_actions_are_independent(self):
+        self.session_record.package_label_verification_status = "completed"
+        db.session.commit()
+        client = self.login_client()
+
+        response = client.post(
+            f"/pre-session-control-tower/sessions/{self.session_record.id}/packages/label-printing",
+            data={"csrf_token": "token", "action": "mark_complete"},
+            follow_redirects=False,
+        )
+
+        self.assertEqual(response.status_code, 302)
+        self.assertIn("open_modal_target=package-label-printing", response.headers["Location"])
+        self.assertIn("packages_only=1", response.headers["Location"])
+        db.session.refresh(self.session_record)
+        self.assertEqual(self.session_record.package_label_printing_status, "completed")
+        self.assertEqual(self.session_record.package_label_verification_status, "completed")
+
+    def test_room_package_sealing_status_actions_are_independent(self):
+        self.session_record.package_label_verification_status = "completed"
+        self.session_record.package_label_printing_status = "completed"
+        db.session.commit()
+        client = self.login_client()
+
+        response = client.post(
+            f"/pre-session-control-tower/sessions/{self.session_record.id}/packages/room-package-sealing",
+            data={"csrf_token": "token", "action": "mark_incident"},
+            follow_redirects=False,
+        )
+
+        self.assertEqual(response.status_code, 302)
+        self.assertIn("open_modal_target=package-room-package-sealing", response.headers["Location"])
+        self.assertIn("packages_only=1", response.headers["Location"])
+        db.session.refresh(self.session_record)
+        self.assertEqual(self.session_record.room_package_sealing_status, "incident")
+        self.assertEqual(self.session_record.package_label_verification_status, "completed")
+        self.assertEqual(self.session_record.package_label_printing_status, "completed")
+
+    def test_package_stage_buttons_wait_for_previous_stage_completion(self):
+        self.approve_schedule()
+        self.confirm_staffing()
+        client = self.login_client()
+
+        response = client.get("/pre-session-control-tower?session_year=2026&view=sessions")
+        html = response.get_data(as_text=True)
+        packages_section_start = html.index(f'<section class="staffing-control-section packages-control-section" id="packages-{self.session_record.id}"')
+        packages_section = html[packages_section_start:packages_section_start + 36000]
+        printing_guidance = packages_section[
+            packages_section.index("Candidate label printing and affixing") : packages_section.index("Room package sealing")
+        ]
+        room_guidance = packages_section[
+            packages_section.index("Room package sealing") : packages_section.index("Return packages")
+        ]
+        self.assertIn("disabled>Mark as in progress", printing_guidance)
+        self.assertIn("disabled>Mark as complete", printing_guidance)
+        self.assertIn("disabled>Mark incident", printing_guidance)
+        self.assertIn("disabled>Mark as in progress", room_guidance)
+        self.assertIn("disabled>Mark as complete", room_guidance)
+        self.assertIn("disabled>Mark incident", room_guidance)
+
+        response = client.post(
+            f"/pre-session-control-tower/sessions/{self.session_record.id}/packages/label-printing",
+            data={"csrf_token": "token", "action": "mark_complete"},
+            follow_redirects=True,
+        )
+        self.assertIn(
+            b"Candidate label verification must be completed before Candidate label printing and affixing can begin.",
+            response.data,
+        )
+        db.session.refresh(self.session_record)
+        self.assertEqual(self.session_record.package_label_printing_status, "not_started")
+
+        self.session_record.package_label_verification_status = "completed"
+        db.session.commit()
+        response = client.get("/pre-session-control-tower?session_year=2026&view=sessions")
+        html = response.get_data(as_text=True)
+        packages_section_start = html.index(f'<section class="staffing-control-section packages-control-section" id="packages-{self.session_record.id}"')
+        packages_section = html[packages_section_start:packages_section_start + 36000]
+        printing_guidance = packages_section[
+            packages_section.index("Candidate label printing and affixing") : packages_section.index("Room package sealing")
+        ]
+        room_guidance = packages_section[
+            packages_section.index("Room package sealing") : packages_section.index("Return packages")
+        ]
+        self.assertNotIn("disabled>Mark as in progress", printing_guidance)
+        self.assertNotIn("disabled>Mark as complete", printing_guidance)
+        self.assertNotIn("disabled>Mark incident", printing_guidance)
+        self.assertIn("disabled>Mark as in progress", room_guidance)
+        self.assertIn("disabled>Mark as complete", room_guidance)
+        self.assertIn("disabled>Mark incident", room_guidance)
+
+        response = client.post(
+            f"/pre-session-control-tower/sessions/{self.session_record.id}/packages/room-package-sealing",
+            data={"csrf_token": "token", "action": "mark_in_progress"},
+            follow_redirects=True,
+        )
+        self.assertIn(
+            b"Candidate label printing and affixing must be completed before Room package sealing can begin.",
+            response.data,
+        )
+        db.session.refresh(self.session_record)
+        self.assertEqual(self.session_record.room_package_sealing_status, "not_started")
+
+    def test_return_packages_status_actions_are_independent(self):
+        client = self.login_client()
+
+        response = client.post(
+            f"/pre-session-control-tower/sessions/{self.session_record.id}/packages/return-packages",
+            data={"csrf_token": "token", "action": "mark_complete"},
+            follow_redirects=False,
+        )
+
+        self.assertEqual(response.status_code, 302)
+        self.assertIn("open_modal_target=package-return-packages", response.headers["Location"])
+        self.assertIn("packages_only=1", response.headers["Location"])
+        db.session.refresh(self.session_record)
+        self.assertEqual(self.session_record.return_packages_status, "completed")
+        self.assertEqual(self.session_record.package_label_verification_status, "not_started")
+        self.assertEqual(self.session_record.package_label_printing_status, "not_started")
+        self.assertEqual(self.session_record.room_package_sealing_status, "not_started")
+
+        response = client.post(
+            f"/pre-session-control-tower/sessions/{self.session_record.id}/packages/label-verification",
+            data={"csrf_token": "token", "action": "mark_incident"},
+            follow_redirects=False,
+        )
+        self.assertEqual(response.status_code, 302)
+        self.assertIn("open_modal_target=package-label-verification", response.headers["Location"])
+        db.session.refresh(self.session_record)
+        self.assertEqual(self.session_record.package_label_verification_status, "incident")
+
+        response = client.post(
+            f"/pre-session-control-tower/sessions/{self.session_record.id}/packages/label-verification",
+            data={"csrf_token": "token", "action": "mark_complete"},
+            follow_redirects=False,
+        )
+        self.assertEqual(response.status_code, 302)
+        self.assertIn("open_modal_target=package-label-verification", response.headers["Location"])
+        db.session.refresh(self.session_record)
+        self.assertEqual(self.session_record.package_label_verification_status, "completed")
+
+        response = client.post(
+            f"/pre-session-control-tower/sessions/{self.session_record.id}/packages/label-verification",
+            data={"csrf_token": "token", "action": "reopen", "confirmation_password": "Wrong"},
+            follow_redirects=False,
+        )
+        self.assertEqual(response.status_code, 302)
+        self.assertIn("open_modal_target=package-label-verification", response.headers["Location"])
+        db.session.refresh(self.session_record)
+        self.assertEqual(self.session_record.package_label_verification_status, "completed")
+
+        response = client.post(
+            f"/pre-session-control-tower/sessions/{self.session_record.id}/packages/label-verification",
+            data={"csrf_token": "token", "action": "reopen", "confirmation_password": "EditOK"},
+            follow_redirects=False,
+        )
+        self.assertEqual(response.status_code, 302)
+        self.assertIn("open_modal_target=package-label-verification", response.headers["Location"])
+        db.session.refresh(self.session_record)
+        self.assertEqual(self.session_record.package_label_verification_status, "not_started")
+
+    def test_package_label_verification_incident_render_disables_incident_button(self):
+        self.approve_schedule()
+        self.session_record.package_label_verification_status = "incident"
+        db.session.commit()
+        client = self.login_client()
+
+        response = client.get("/pre-session-control-tower?session_year=2026&view=sessions")
+        html = response.get_data(as_text=True)
+        packages_section_start = html.index(f'<section class="staffing-control-section packages-control-section" id="packages-{self.session_record.id}"')
+        packages_section = html[packages_section_start:packages_section_start + 36000]
+
+        self.assertIn("With incident", packages_section)
+        self.assertIn("disabled>Mark incident", packages_section)
+
+    def test_room_package_sealing_warning_clears_when_staffing_confirmed(self):
+        self.approve_schedule()
+        self.confirm_staffing()
+        self.session_record.package_label_printing_status = "completed"
+        db.session.commit()
+        client = self.login_client()
+
+        response = client.get("/pre-session-control-tower?session_year=2026&view=sessions")
+        html = response.get_data(as_text=True)
+        packages_section_start = html.index(f'<section class="staffing-control-section packages-control-section" id="packages-{self.session_record.id}"')
+        packages_section = html[packages_section_start:packages_section_start + 36000]
+        third_guidance = packages_section[
+            packages_section.index("Room package sealing") : packages_section.index("Return packages")
+        ]
+
+        self.assertNotIn("Room package sealing warning", third_guidance)
+        self.assertNotIn("Staffing must be ready before the exam room records can be printed and affixed to the packages.", third_guidance)
+        self.assertNotIn("Do not proceed with this stage. Staff members have not been confirmed yet", third_guidance)
+        self.assertNotIn("disabled>Mark as complete", third_guidance)
+
+    def test_room_package_sealing_shows_en_label_step_when_pen_enabled(self):
+        self.approve_schedule()
+        self.session_record.pen_enabled = True
+        db.session.commit()
+        client = self.login_client()
+
+        response = client.get("/pre-session-control-tower?session_year=2026&view=sessions")
+        html = response.get_data(as_text=True)
+        packages_section_start = html.index(f'<section class="staffing-control-section packages-control-section" id="packages-{self.session_record.id}"')
+        packages_section = html[packages_section_start:packages_section_start + 36000]
+        third_guidance = packages_section[
+            packages_section.index("Room package sealing") : packages_section.index("Return packages")
+        ]
+
+        self.assertIn("Add the EN identification label to any exam room package that includes candidates with EN.", third_guidance)
+
+    def test_packages_modal_staff_member_ids_lists_only_members_without_issued_id(self):
+        pending_id_member = AcademicStaff(
+            id=101,
+            status="Active",
+            title="Prof.",
+            full_name="Pending ID Staff",
+            roles="Supervisor,Examiner",
+            id_issued=False,
+        )
+        issued_id_member = AcademicStaff(
+            id=102,
+            status="Active",
+            title="Dr.",
+            full_name="Issued ID Staff",
+            roles="Examiner",
+            id_issued=True,
+        )
+        db.session.add_all([
+            pending_id_member,
+            issued_id_member,
+            ExamSessionSupervisorAssignment(
+                exam_session_id=self.session_record.id,
+                team_member_id=pending_id_member.id,
+                participation_status="Confirmed",
+            ),
+            ExamSessionExaminerAssignment(
+                exam_session_id=self.session_record.id,
+                team_member_id=issued_id_member.id,
+                participation_status="Confirmed",
+            ),
+        ])
+        db.session.commit()
+        client = self.login_client()
+
+        response = client.get("/pre-session-control-tower?session_year=2026&view=sessions")
+        html = response.get_data(as_text=True)
+        packages_section_start = html.index(f'<section class="staffing-control-section packages-control-section" id="packages-{self.session_record.id}"')
+        packages_section = html[packages_section_start:packages_section_start + 22000]
+        staff_ids_section = packages_section[
+            packages_section.index("Staff member IDs") : packages_section.index("Inclusion of final items")
+        ]
+        final_items_section = packages_section[
+            packages_section.index("Inclusion of final items") : packages_section.index("Session box sealing")
+        ]
+
+        self.assertIn("Staff member IDs", staff_ids_section)
+        self.assertIn("Not started yet", staff_ids_section)
+        self.assertIn("Staff member IDs actions", staff_ids_section)
+        self.assertIn("Mark as in progress", staff_ids_section)
+        self.assertIn("Mark as complete", staff_ids_section)
+        self.assertIn("Mark incident", staff_ids_section)
+        self.assertIn("Include a lanyard, rigid ID card, and card holder for each of the following staff members:", staff_ids_section)
+        self.assertIn("Prof. Pending ID Staff", staff_ids_section)
+        self.assertNotIn("<strong>Pending ID Staff</strong>", staff_ids_section)
+        staff_id_row = staff_ids_section[
+            staff_ids_section.index("package-staff-id-name") : staff_ids_section.index("</li>", staff_ids_section.index("package-staff-id-name"))
+        ]
+        self.assertIn('<span class="badge role-supervisor">Supervisor</span>', staff_ids_section)
+        self.assertIn('<span class="badge role-examiner">Examiner</span>', staff_ids_section)
+        self.assertIn("package-staff-id-roles", staff_id_row)
+        self.assertIn("Pending ID Staff", staff_id_row)
+        self.assertNotIn("Issued ID Staff", staff_ids_section)
+
+        pending_id_member.id_issued = True
+        db.session.commit()
+
+        response = client.get("/pre-session-control-tower?session_year=2026&view=sessions")
+        html = response.get_data(as_text=True)
+        packages_section_start = html.index(f'<section class="staffing-control-section packages-control-section" id="packages-{self.session_record.id}"')
+        packages_section = html[packages_section_start:packages_section_start + 22000]
+
+        self.assertNotIn("Staff member IDs", packages_section)
+        self.assertNotIn("Include a lanyard, rigid ID card, and card holder for each of the following staff members:", packages_section)
+
+    def test_staff_member_ids_status_actions_are_independent(self):
+        client = self.login_client()
+        pending_id_member = AcademicStaff(
+            id=201,
+            status="Active",
+            title="Mr.",
+            full_name="Pulverio Garcia",
+            roles="Supervisor",
+            id_issued=False,
+        )
+        db.session.add_all([
+            pending_id_member,
+            ExamSessionSupervisorAssignment(
+                exam_session_id=self.session_record.id,
+                team_member_id=pending_id_member.id,
+                participation_status="Confirmed",
+            ),
+        ])
+        db.session.commit()
+
+        response = client.post(
+            f"/pre-session-control-tower/sessions/{self.session_record.id}/packages/staff-member-ids",
+            data={"csrf_token": "token", "action": "mark_complete"},
+            follow_redirects=False,
+        )
+
+        self.assertEqual(response.status_code, 302)
+        self.assertIn("open_modal_target=package-staff-member-ids", response.headers["Location"])
+        self.assertIn("packages_only=1", response.headers["Location"])
+        db.session.refresh(self.session_record)
+        db.session.refresh(pending_id_member)
+        self.assertEqual(self.session_record.staff_member_ids_status, "completed")
+        self.assertTrue(pending_id_member.id_issued)
+        self.assertEqual(self.session_record.return_packages_status, "not_started")
+        self.assertEqual(self.session_record.package_label_verification_status, "not_started")
+        self.assertEqual(self.session_record.package_label_printing_status, "not_started")
+        self.assertEqual(self.session_record.room_package_sealing_status, "not_started")
+
+        response = client.get("/staff-members")
+        html = response.get_data(as_text=True)
+
+        self.assertIn("Pulverio Garcia", html)
+        self.assertIn("ID issued ✓", html)
+        self.assertNotIn("No ID issued", html)
+
+        response = client.get("/pre-session-control-tower?session_year=2026&view=sessions")
+        html = response.get_data(as_text=True)
+        packages_section_start = html.index(f'<section class="staffing-control-section packages-control-section" id="packages-{self.session_record.id}"')
+        packages_section = html[packages_section_start:packages_section_start + 24000]
+        staff_ids_section = packages_section[
+            packages_section.index("Staff member IDs") : packages_section.index("Inclusion of final items")
+        ]
+
+        self.assertIn("Completed", staff_ids_section)
+        self.assertIn("Mr. Pulverio Garcia", staff_ids_section)
+
+    def test_staff_member_ids_warns_when_staffing_not_confirmed(self):
+        confirmed_member = AcademicStaff(
+            id=211,
+            status="Active",
+            title="Ms.",
+            full_name="Confirmed ID Staff",
+            roles="Supervisor",
+            id_issued=False,
+        )
+        pending_member = AcademicStaff(
+            id=212,
+            status="Active",
+            title="Mr.",
+            full_name="Pending Confirmation ID Staff",
+            roles="Examiner",
+            id_issued=False,
+        )
+        db.session.add_all([
+            confirmed_member,
+            pending_member,
+            ExamSessionSupervisorAssignment(
+                exam_session_id=self.session_record.id,
+                team_member_id=confirmed_member.id,
+                participation_status="Confirmed",
+            ),
+            ExamSessionExaminerAssignment(
+                exam_session_id=self.session_record.id,
+                team_member_id=pending_member.id,
+                participation_status="Pending",
+            ),
+        ])
+        db.session.commit()
+        client = self.login_client()
+
+        response = client.get("/pre-session-control-tower?session_year=2026&view=sessions")
+        html = response.get_data(as_text=True)
+        packages_section_start = html.index(f'<section class="staffing-control-section packages-control-section" id="packages-{self.session_record.id}"')
+        packages_section = html[packages_section_start:packages_section_start + 26000]
+        staff_ids_section = packages_section[
+            packages_section.index("Staff member IDs") : packages_section.index("Inclusion of final items")
+        ]
+        final_items_section = packages_section[
+            packages_section.index("Inclusion of final items") : packages_section.index("Session box sealing")
+        ]
+        confirmed_row = staff_ids_section[
+            staff_ids_section.index("Confirmed ID Staff") : staff_ids_section.index("</li>", staff_ids_section.index("Confirmed ID Staff"))
+        ]
+        pending_row = staff_ids_section[
+            staff_ids_section.index("Pending Confirmation ID Staff") : staff_ids_section.index("</li>", staff_ids_section.index("Pending Confirmation ID Staff"))
+        ]
+
+        self.assertIn("Staffing must be ready before staff member IDs can be issued.", staff_ids_section)
+        self.assertIn("disabled>Mark as complete", staff_ids_section)
+        self.assertNotIn("Do not proceed with printing this ID. The staff member has not been confirmed yet", confirmed_row)
+        self.assertIn("Do not proceed with printing this ID. The staff member has not been confirmed yet", pending_row)
+        self.assertNotIn("Do not proceed with this stage. Staff members have not been confirmed yet", pending_row)
+        self.assertIn("Staffing must be ready before adding full schedule for each room for the Supervisor.", final_items_section)
+        self.assertIn("package-preparation-blocked-chip", final_items_section)
+        self.assertIn("Do not proceed with printing full schedule. Staff members have not been confirmed yet", final_items_section)
+
+    def test_packages_modal_inclusion_final_items_uses_latest_total_and_supervisors(self):
+        db.session.add_all([
+            ExamSessionMonthlyCandidateTotal(
+                exam_session_id=self.session_record.id,
+                month=5,
+                total_candidates=18,
+            ),
+            ExamSessionMonthlyCandidateTotal(
+                exam_session_id=self.session_record.id,
+                month=6,
+                total_candidates=24,
+            ),
+            AcademicStaff(id=301, status="Active", full_name="Supervisor One", roles="Supervisor"),
+            AcademicStaff(id=302, status="Active", full_name="Supervisor Two", roles="Supervisor"),
+            ExamSessionSupervisorAssignment(
+                exam_session_id=self.session_record.id,
+                team_member_id=301,
+                participation_status="Confirmed",
+                is_remote=False,
+            ),
+            ExamSessionSupervisorAssignment(
+                exam_session_id=self.session_record.id,
+                team_member_id=302,
+                participation_status="Confirmed",
+                is_remote=True,
+            ),
+        ])
+        db.session.commit()
+        client = self.login_client()
+
+        response = client.get("/pre-session-control-tower?session_year=2026&view=sessions")
+        html = response.get_data(as_text=True)
+        packages_section_start = html.index(f'<section class="staffing-control-section packages-control-section" id="packages-{self.session_record.id}"')
+        packages_section = html[packages_section_start:packages_section_start + 26000]
+        final_items_section = packages_section[
+            packages_section.index("Inclusion of final items") : packages_section.index("Session box sealing")
+        ]
+
+        self.assertIn("Add 24 Path Examinations wristbands. Do not include any extras.", final_items_section)
+        self.assertIn("Add 2 stapled copies of the full session schedule for each room for the Supervisor.", final_items_section)
+        self.assertIn("Add a Path Examinations bag with the gift inside.", final_items_section)
+        self.assertIn("Not started yet", final_items_section)
+        self.assertIn("Inclusion of final items actions", final_items_section)
+        self.assertIn("Mark as in progress", final_items_section)
+        self.assertIn("Mark as complete", final_items_section)
+        self.assertIn("Mark incident", final_items_section)
+        self.assertNotIn("Staffing must be ready before adding full schedule for each room for the Supervisor.", final_items_section)
+        self.assertNotIn("Do not proceed with printing full schedule. Staff members have not been confirmed yet", final_items_section)
+
+        ExamSessionSupervisorAssignment.query.filter_by(team_member_id=302).delete()
+        db.session.commit()
+
+        response = client.get("/pre-session-control-tower?session_year=2026&view=sessions")
+        html = response.get_data(as_text=True)
+        packages_section_start = html.index(f'<section class="staffing-control-section packages-control-section" id="packages-{self.session_record.id}"')
+        packages_section = html[packages_section_start:packages_section_start + 26000]
+        final_items_section = packages_section[
+            packages_section.index("Inclusion of final items") : packages_section.index("Session box sealing")
+        ]
+
+        self.assertIn("Add 1 stapled copy of the full session schedule for each room for the Supervisor.", final_items_section)
+
+    def test_packages_modal_session_box_sealing_renders_after_inclusion_with_pdf_link(self):
+        client = self.login_client()
+
+        response = client.get("/pre-session-control-tower?session_year=2026&view=sessions")
+        html = response.get_data(as_text=True)
+        packages_section_start = html.index(f'<section class="staffing-control-section packages-control-section" id="packages-{self.session_record.id}"')
+        packages_section_end = html.index('<section class="staffing-control-section shipments-control-section"', packages_section_start)
+        packages_section = html[packages_section_start:packages_section_end]
+        final_items_index = packages_section.index("Inclusion of final items")
+        session_box_index = packages_section.index("Session box sealing")
+        session_box_section = packages_section[session_box_index:]
+
+        self.assertLess(final_items_index, session_box_index)
+        self.assertIn("Ensure all previous items are included in the session box.", session_box_section)
+        self.assertIn("Close the box, wrap it securely with black plastic wrap, and heat-seal it.", session_box_section)
+        self.assertIn("Print the ", session_box_section)
+        self.assertIn("session identification label", session_box_section)
+        self.assertIn("and affix it to the top of the sealed box.", session_box_section)
+        self.assertIn(
+            f'href="/pre-session-control-tower/sessions/{self.session_record.id}/session-identification-label.pdf"',
+            session_box_section,
+        )
+        self.assertIn('target="_blank"', session_box_section)
+        self.assertIn('rel="noopener noreferrer"', session_box_section)
+        self.assertIn('aria-label="Open session identification label PDF"', session_box_section)
+        self.assertIn("Not started yet", session_box_section)
+        self.assertIn("Session box sealing actions", session_box_section)
+        self.assertIn("Mark as in progress", session_box_section)
+        self.assertIn("Mark as complete", session_box_section)
+        self.assertIn("Mark incident", session_box_section)
+        self.assertIn("disabled>Mark as in progress", session_box_section)
+        self.assertIn("disabled>Mark as complete", session_box_section)
+        self.assertIn("disabled>Mark incident", session_box_section)
+
+    def test_session_identification_label_pdf_requires_login_and_permission(self):
+        url = f"/pre-session-control-tower/sessions/{self.session_record.id}/session-identification-label.pdf"
+
+        response = self.app.test_client().get(url)
+        self.assertEqual(response.status_code, 302)
+
+        user = User(full_name="No Access", email="no-access@example.com", department="Finance", is_active=True)
+        user.set_password("secret123")
+        db.session.add(user)
+        db.session.commit()
+        response = self.login_client_for_user(user).get(url)
+
+        self.assertEqual(response.status_code, 403)
+        self.assertIn("Access denied", response.get_data(as_text=True))
+
+    def test_session_identification_label_pdf_generates_one_page_reference_sized_label(self):
+        self.session_record.exam_session_name = "London Bridge Institute"
+        self.session_record.session_date = date(2026, 12, 10)
+        self.session_record.full_address_google_maps = "Las Amapolas 475"
+        self.session_record.city = "Pilar"
+        self.session_record.province = "Buenos Aires"
+        supervisor = AcademicStaff(
+            id=401,
+            status="Active",
+            full_name="Mariana Acosta",
+            roles="Supervisor",
+        )
+        other_supervisor = AcademicStaff(
+            id=402,
+            status="Active",
+            full_name="Other Supervisor",
+            roles="Supervisor",
+        )
+        viewer = User(full_name="Viewer", email="viewer@example.com", department="Finance", is_active=True)
+        viewer.set_password("secret123")
+        db.session.add_all([
+            supervisor,
+            other_supervisor,
+            viewer,
+            UserMenuPermission(user=viewer, menu_key="pre_session_control_tower", can_view=True, can_edit=False),
+            ExamSessionSupervisorAssignment(
+                exam_session_id=self.session_record.id,
+                team_member_id=other_supervisor.id,
+                participation_status="Confirmed",
+            ),
+            ExamSessionSupervisorAssignment(
+                exam_session_id=self.session_record.id,
+                team_member_id=supervisor.id,
+                participation_status="Confirmed",
+                is_shipment_recipient=True,
+            ),
+        ])
+        db.session.commit()
+        updated_on = self.session_record.updated_on
+        url = f"/pre-session-control-tower/sessions/{self.session_record.id}/session-identification-label.pdf"
+
+        response = self.login_client_for_user(viewer).get(url)
+        pdf = response.data
+        text = pdf.decode("latin-1", "ignore")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.headers["Content-Type"], "application/pdf")
+        self.assertIn("inline; filename=session-identification-label-", response.headers["Content-Disposition"])
+        self.assertEqual(len(re.findall(rb"/Type /Page\b", pdf)), 1)
+        self.assertIn(b"/MediaBox [0 0 280.630 161.575]", pdf)
+        self.assertIn("PATH EXAMINATIONS", text)
+        self.assertIn("SESSION IDENTIFICATION LABEL", text)
+        self.assertIn("London Bridge Institute", text)
+        self.assertIn("Thursday 10, December 2026", text)
+        self.assertIn("Las Amapolas 475", text)
+        self.assertIn("Pilar", text)
+        self.assertIn("Buenos Aires", text)
+        self.assertIn("Mariana Acosta", text)
+        self.assertIn("PRINT IDENTIFICATION LABEL AND AFFIX IT TO TOP OF SEALED SESSION BOX", text)
+        self.assertNotIn("PRINT IN BLACK AND AFFIX TO TOP OF SEALED SESSION BOX", text)
+        self.assertNotIn("Other Supervisor", text)
+        self.assertNotIn("undefined", text)
+        self.assertNotIn("null", text)
+        self.assertNotIn("None", text)
+        db.session.refresh(self.session_record)
+        self.assertEqual(self.session_record.updated_on, updated_on)
+
+    def test_session_identification_label_pdf_validates_required_data(self):
+        self.session_record.exam_session_name = "Missing data session"
+        self.session_record.full_address_google_maps = "Main Street 100"
+        self.session_record.city = "Pilar"
+        self.session_record.province = "Buenos Aires"
+        db.session.commit()
+        client = self.login_client()
+        url = f"/pre-session-control-tower/sessions/{self.session_record.id}/session-identification-label.pdf"
+
+        response = client.get(url)
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(response.mimetype, "text/plain")
+        self.assertIn("Supervisor is required to generate the session identification label.", response.get_data(as_text=True))
+
+        supervisor = AcademicStaff(id=403, status="Active", full_name="Label Supervisor", roles="Supervisor")
+        db.session.add_all([
+            supervisor,
+            ExamSessionSupervisorAssignment(
+                exam_session_id=self.session_record.id,
+                team_member_id=supervisor.id,
+                participation_status="Confirmed",
+            ),
+        ])
+        self.session_record.city = ""
+        db.session.commit()
+
+        response = client.get(url)
+        self.assertEqual(response.status_code, 400)
+        self.assertIn(
+            "Session information is incomplete. Please complete the session details before generating the identification label.",
+            response.get_data(as_text=True),
+        )
+
+    def test_bundle_label_pdf_requires_login_and_permission(self):
+        supervisor = self.create_supervisor(staff_id=410, name="Bundle Supervisor")
+        first_session = self.create_planning_ready_session("Bundle label A", date(2026, 8, 20), supervisor_id=supervisor.id)
+        bundle = ExamSessionShipmentBundle(
+            bundle_number="7-26",
+            bundle_sequence=7,
+            bundle_year=2026,
+            supervisor_staff_id=supervisor.id,
+            delivery_address="Meeting point 789",
+            delivery_city="Cordoba",
+            delivery_province="Cordoba",
+            delivery_option="meeting_point",
+            courier="Correo Argentino",
+            dispatch_due_at=date(2026, 8, 10),
+        )
+        db.session.add(bundle)
+        db.session.flush()
+        db.session.add(ExamSessionShipmentBundleSession(bundle_id=bundle.id, exam_session_id=first_session.id))
+        db.session.commit()
+        url = f"/pre-session-control-tower/bundles/{bundle.id}/bundle-label.pdf"
+
+        response = self.app.test_client().get(url)
+        self.assertEqual(response.status_code, 302)
+
+        user = User(full_name="No Bundle Access", email="no-bundle-access@example.com", department="Finance", is_active=True)
+        user.set_password("secret123")
+        db.session.add(user)
+        db.session.commit()
+        response = self.login_client_for_user(user).get(url)
+
+        self.assertEqual(response.status_code, 403)
+        self.assertIn("Access denied", response.get_data(as_text=True))
+
+    def test_bundle_label_pdf_generates_one_page_reference_sized_label(self):
+        supervisor = self.create_supervisor(staff_id=411, name="Bundle Supervisor")
+        first_session = self.create_planning_ready_session("Bundle label onsite", date(2026, 8, 20), supervisor_id=supervisor.id)
+        second_session = self.create_planning_ready_session("Bundle label online", date(2026, 9, 3), supervisor_id=supervisor.id)
+        extra_sessions = [
+            self.create_planning_ready_session(f"Bundle label extra {index:02d}", date(2026, 9, 3 + index), supervisor_id=supervisor.id)
+            for index in range(1, 11)
+        ]
+        first_session.format = "Onsite"
+        first_session.full_address_google_maps = "Las Amapolas 475"
+        first_session.city = "Pilar"
+        first_session.province = "Buenos Aires"
+        second_session.city = "Cordoba"
+        second_session.province = "Cordoba"
+        for session_record in extra_sessions:
+            session_record.city = "Rosario"
+            session_record.province = "Santa Fe"
+        viewer = User(full_name="Bundle Viewer", email="bundle-viewer@example.com", department="Finance", is_active=True)
+        viewer.set_password("secret123")
+        bundle = ExamSessionShipmentBundle(
+            bundle_number="8-26",
+            bundle_sequence=8,
+            bundle_year=2026,
+            supervisor_staff_id=supervisor.id,
+            delivery_address="Meeting point 789",
+            delivery_city="Cordoba",
+            delivery_province="Cordoba",
+            delivery_option="meeting_point",
+            courier="Correo Argentino",
+            status="Ready to dispatch",
+            dispatch_due_at=date(2026, 8, 10),
+        )
+        db.session.add_all([
+            viewer,
+            UserMenuPermission(user=viewer, menu_key="pre_session_control_tower", can_view=True, can_edit=False),
+            bundle,
+        ])
+        db.session.flush()
+        db.session.add_all([
+            ExamSessionShipmentBundleSession(bundle_id=bundle.id, exam_session_id=first_session.id),
+            ExamSessionShipmentBundleSession(bundle_id=bundle.id, exam_session_id=second_session.id),
+            *[
+                ExamSessionShipmentBundleSession(bundle_id=bundle.id, exam_session_id=session_record.id)
+                for session_record in extra_sessions
+            ],
+        ])
+        db.session.commit()
+        updated_at = bundle.updated_at
+        event_count = ExamSessionShipmentEvent.query.count()
+        url = f"/pre-session-control-tower/bundles/{bundle.id}/bundle-label.pdf"
+
+        response = self.login_client_for_user(viewer).get(url)
+        pdf = response.data
+        text = pdf.decode("latin-1", "ignore")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.headers["Content-Type"], "application/pdf")
+        self.assertIn("inline; filename=bundle-label-", response.headers["Content-Disposition"])
+        self.assertEqual(len(re.findall(rb"/Type /Page\b", pdf)), 2)
+        self.assertIn(b"/MediaBox [0 0 280.630 161.575]", pdf)
+        self.assertIn("PATH EXAMINATIONS", text)
+        self.assertIn("BUNDLE LABEL", text)
+        self.assertIn("8-26", text)
+        self.assertIn("Bundle Supervisor", text)
+        self.assertIn("SESSIONS", text)
+        self.assertIn("12", text)
+        self.assertIn("DELIVERY", text)
+        self.assertIn("Meeting point 789,", text)
+        self.assertIn("Cordoba, Cordoba", text)
+        self.assertIn("Bundle label onsite, 20/08/2026, Pilar, Buenos Aires", text)
+        self.assertIn("Bundle label online, 03/09/2026, Cordoba, Cordoba", text)
+        self.assertIn("Bundle label extra 10", text)
+        self.assertIn("Rosario, Santa Fe", text)
+        self.assertNotIn("STATUS", text)
+        self.assertNotIn("DEADLINE", text)
+        self.assertNotIn("PACKAGES", text)
+        self.assertNotIn("Ready to dispatch", text)
+        self.assertNotIn("Onsite", text)
+        self.assertNotIn("Las Amapolas 475, Pilar, Buenos Aires", text)
+        self.assertNotIn("Online", text)
+        self.assertIn("PRINT BUNDLE LABEL AND AFFIX IT TO TOP OF BUNDLE", text)
+        self.assertNotIn("undefined", text)
+        self.assertNotIn("null", text)
+        self.assertNotIn("None", text)
+        db.session.refresh(bundle)
+        self.assertEqual(bundle.updated_at, updated_at)
+        self.assertEqual(ExamSessionShipmentEvent.query.count(), event_count)
+
+    def test_bundle_label_pdf_validates_required_data(self):
+        supervisor = self.create_supervisor(staff_id=412, name="Bundle Supervisor")
+        bundle = ExamSessionShipmentBundle(
+            bundle_number="9-26",
+            bundle_sequence=9,
+            bundle_year=2026,
+            supervisor_staff_id=supervisor.id,
+            delivery_address="Meeting point 789",
+            delivery_city="Cordoba",
+            delivery_province="Cordoba",
+            delivery_option="meeting_point",
+            courier="Correo Argentino",
+            dispatch_due_at=date(2026, 8, 10),
+        )
+        db.session.add(bundle)
+        db.session.commit()
+        client = self.login_client()
+        url = f"/pre-session-control-tower/bundles/{bundle.id}/bundle-label.pdf"
+
+        response = client.get(url)
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(response.mimetype, "text/plain")
+        self.assertIn("This bundle does not include any sessions.", response.get_data(as_text=True))
+
+        session_record = self.create_planning_ready_session("Incomplete onsite", date(2026, 8, 20), supervisor_id=supervisor.id)
+        session_record.exam_session_name = ""
+        db.session.add(ExamSessionShipmentBundleSession(bundle_id=bundle.id, exam_session_id=session_record.id))
+        db.session.commit()
+
+        response = client.get(url)
+        self.assertEqual(response.status_code, 400)
+        self.assertIn(
+            "Bundle information is incomplete. Please complete the bundle details before generating the label.",
+            response.get_data(as_text=True),
+        )
+
+    def test_inclusion_final_items_status_actions_are_independent(self):
+        client = self.login_client()
+
+        response = client.post(
+            f"/pre-session-control-tower/sessions/{self.session_record.id}/packages/inclusion-final-items",
+            data={"csrf_token": "token", "action": "mark_complete"},
+            follow_redirects=False,
+        )
+
+        self.assertEqual(response.status_code, 302)
+        self.assertIn("open_modal_target=package-inclusion-final-items", response.headers["Location"])
+        self.assertIn("packages_only=1", response.headers["Location"])
+        db.session.refresh(self.session_record)
+        self.assertEqual(self.session_record.inclusion_final_items_status, "completed")
+        self.assertEqual(self.session_record.staff_member_ids_status, "not_started")
+        self.assertEqual(self.session_record.return_packages_status, "not_started")
+        self.assertEqual(self.session_record.package_label_verification_status, "not_started")
+        self.assertEqual(self.session_record.package_label_printing_status, "not_started")
+        self.assertEqual(self.session_record.room_package_sealing_status, "not_started")
+
+    def test_session_box_sealing_status_actions_are_independent(self):
+        self.session_record.package_label_verification_status = "completed"
+        self.session_record.package_label_printing_status = "completed"
+        self.session_record.room_package_sealing_status = "completed"
+        self.session_record.return_packages_status = "completed"
+        self.session_record.inclusion_final_items_status = "completed"
+        db.session.commit()
+        client = self.login_client()
+
+        response = client.post(
+            f"/pre-session-control-tower/sessions/{self.session_record.id}/packages/session-box-sealing",
+            data={"csrf_token": "token", "action": "mark_complete"},
+            follow_redirects=False,
+        )
+
+        self.assertEqual(response.status_code, 302)
+        self.assertIn("open_modal_target=package-session-box-sealing", response.headers["Location"])
+        self.assertIn("packages_only=1", response.headers["Location"])
+        db.session.refresh(self.session_record)
+        self.assertEqual(self.session_record.session_box_sealing_status, "completed")
+        self.assertEqual(self.session_record.inclusion_final_items_status, "completed")
+        self.assertEqual(self.session_record.staff_member_ids_status, "not_started")
+        self.assertEqual(self.session_record.return_packages_status, "completed")
+        self.assertEqual(self.session_record.package_label_verification_status, "completed")
+        self.assertEqual(self.session_record.package_label_printing_status, "completed")
+        self.assertEqual(self.session_record.room_package_sealing_status, "completed")
+
+    def test_session_box_sealing_actions_unlock_after_previous_stages_completed(self):
+        client = self.login_client()
+
+        response = client.post(
+            f"/pre-session-control-tower/sessions/{self.session_record.id}/packages/session-box-sealing",
+            data={"csrf_token": "token", "action": "mark_in_progress"},
+            follow_redirects=False,
+        )
+
+        self.assertEqual(response.status_code, 302)
+        self.assertIn("open_modal_target=package-session-box-sealing", response.headers["Location"])
+        db.session.refresh(self.session_record)
+        self.assertEqual(self.session_record.session_box_sealing_status, "not_started")
+
+        self.session_record.package_label_verification_status = "completed"
+        self.session_record.package_label_printing_status = "completed"
+        self.session_record.room_package_sealing_status = "completed"
+        self.session_record.return_packages_status = "completed"
+        self.session_record.inclusion_final_items_status = "completed"
+        db.session.commit()
+
+        response = client.get("/pre-session-control-tower?session_year=2026&view=sessions")
+        html = response.get_data(as_text=True)
+        packages_section_start = html.index(f'<section class="staffing-control-section packages-control-section" id="packages-{self.session_record.id}"')
+        packages_section_end = html.index('<section class="staffing-control-section shipments-control-section"', packages_section_start)
+        packages_section = html[packages_section_start:packages_section_end]
+        session_box_section = packages_section[packages_section.index("Session box sealing"):]
+
+        self.assertNotIn("disabled>Mark as in progress", session_box_section)
+        self.assertNotIn("disabled>Mark as complete", session_box_section)
+        self.assertNotIn("disabled>Mark incident", session_box_section)
+
+        response = client.post(
+            f"/pre-session-control-tower/sessions/{self.session_record.id}/packages/session-box-sealing",
+            data={"csrf_token": "token", "action": "mark_in_progress"},
+            follow_redirects=False,
+        )
+
+        self.assertEqual(response.status_code, 302)
+        self.assertIn("open_modal_target=package-session-box-sealing", response.headers["Location"])
+        db.session.refresh(self.session_record)
+        self.assertEqual(self.session_record.session_box_sealing_status, "in_progress")
 
     def test_package_unit_rejects_invalid_required_and_negative_values(self):
         client = self.login_client()
@@ -3092,7 +4232,7 @@ class ScheduleWorkflowTest(unittest.TestCase):
     def test_packages_readiness_contract_states(self):
         self.assertEqual(
             packages_readiness_contract(self.session_record, [], [], schedule_gate={"is_ready": False}, staffing_contract={"ready": False})["status"],
-            "not_configured",
+            "pre_packing_not_started",
         )
         unit = self.create_package_unit_record(expected=10, actual=9)
         contract = packages_readiness_contract(self.session_record, [unit], [], schedule_gate={"is_ready": True}, staffing_contract={"ready": False})
@@ -3140,7 +4280,7 @@ class ScheduleWorkflowTest(unittest.TestCase):
             staffing_contract={"ready": False},
             package_units=[],
         )
-        self.assertEqual(action["action_key"], "configure_package_units")
+        self.assertEqual(action["action_key"], "start_session_package_preparation")
         self.assertEqual(action["responsible"], "LOGISTICS")
 
         unit = self.create_package_unit_record(status="Pre-packing", expected=10, actual=9)
@@ -3174,21 +4314,186 @@ class ScheduleWorkflowTest(unittest.TestCase):
         )
         self.assertEqual(action["action_key"], "review_package_data")
 
+    def test_package_preparation_status_contract_summarizes_modal_stage_statuses(self):
+        self.assertEqual(package_preparation_status_contract(self.session_record)["status"], "not_started")
+        self.assertEqual(package_preparation_status_contract(self.session_record)["label"], "Not started yet")
+        self.assertEqual(package_preparation_status_contract(self.session_record)["table_summary"], "0 / 6 completed")
+
+        self.session_record.package_label_verification_status = "completed"
+        self.session_record.package_label_printing_status = "in_progress"
+        db.session.commit()
+        status_contract = package_preparation_status_contract(self.session_record)
+        self.assertEqual(status_contract["status"], "in_progress")
+        self.assertEqual(status_contract["label"], "In progress")
+        self.assertEqual(status_contract["table_summary"], "1 / 6 completed")
+        self.assertEqual(status_contract["secondary_lines"][0]["text"], "1 in progress")
+        self.assertIn("Candidate label printing and affixing", status_contract["secondary_lines"][0]["tooltip"])
+
+        self.session_record.package_label_printing_status = "completed"
+        self.session_record.room_package_sealing_status = "completed"
+        self.session_record.return_packages_status = "completed"
+        self.session_record.inclusion_final_items_status = "completed"
+        self.session_record.session_box_sealing_status = "completed"
+        db.session.commit()
+        status_contract = package_preparation_status_contract(self.session_record)
+        self.assertEqual(status_contract["status"], "completed")
+        self.assertEqual(status_contract["label"], "Completed")
+        self.assertEqual(status_contract["table_summary"], "6 / 6 completed")
+
+        self.session_record.return_packages_status = "incident"
+        db.session.commit()
+        status_contract = package_preparation_status_contract(self.session_record)
+        self.assertEqual(status_contract["status"], "incident")
+        self.assertEqual(status_contract["label"], "With incident")
+        self.assertEqual(status_contract["secondary_lines"][0]["text"], "1 with incident")
+        self.assertIn("Return packages", status_contract["secondary_lines"][0]["tooltip"])
+
     def test_control_tower_packages_render_and_does_not_change_core(self):
         self.approve_schedule()
         self.create_package_unit_record(status="Pre-packing", expected=10, actual=9)
+        db.session.add(ExamSessionMonthlyRegistration(exam_session_id=self.session_record.id, month=5, module="Reading and writing", registration_number=0))
+        db.session.add(ExamSessionMonthlyRegistration(exam_session_id=self.session_record.id, month=6, module="Reading and writing", registration_number=3))
+        db.session.add(ExamSessionMonthlyRegistration(exam_session_id=self.session_record.id, month=6, module="Listening and speaking", registration_number=0))
+        db.session.add(ExamSessionMonthlyRegistration(exam_session_id=self.session_record.id, month=6, module="Speaking", registration_number=2))
+        db.session.commit()
         client = self.login_client()
 
         response = client.get("/pre-session-control-tower?session_year=2026&view=sessions")
         html = response.data.decode()
 
         self.assertEqual(response.status_code, 200)
-        self.assertIn("<th>Packages</th>", html)
-        self.assertLess(html.index("<th>Logistics</th>"), html.index("<th>Packages</th>"))
-        self.assertLess(html.index("<th>Packages</th>"), html.index("<th>Shipment</th>"))
-        self.assertIn("Room 1", html)
-        self.assertIn("Label count mismatch. Report the issue to MANAGEMENT/ADMIN before continuing.", html)
+        self.assertIn("<th>Package</th>", html)
+        self.assertLess(html.index("<th>Staffing</th>"), html.index("<th>Package</th>"))
+        self.assertLess(html.index("<th>Package</th>"), html.index("<th>Logistics</th>"))
+        self.assertLess(html.index("<th>Package</th>"), html.index("<th>Shipment</th>"))
+        self.assertIn("SEMI-UNBLOCKED", html)
+        table = html[html.index('aria-label="Schedule preparation and approval"'):html.index('<div class="modal"', html.index('aria-label="Schedule preparation and approval"'))]
+        packages_button_start = table.index(f'data-modal-scroll-target="packages-{self.session_record.id}"')
+        packages_button = table[table.rfind("<button", 0, packages_button_start):table.index("</button>", packages_button_start)]
+        self.assertIn('data-modal-packages-only="true"', packages_button)
+        self.assertIn("SEMI-UNBLOCKED", packages_button)
+        self.assertIn("packages-status-not-started", packages_button)
+        self.assertIn("Not started yet", packages_button)
+        self.assertIn("0 / 6 completed", packages_button)
+        self.assertIn("Completed: -", packages_button)
+        self.assertIn("In progress: -", packages_button)
+        self.assertIn("With incident: -", packages_button)
+        self.assertNotIn("Blocked", packages_button)
+        packages_section_start = html.index(f'<section class="staffing-control-section packages-control-section" id="packages-{self.session_record.id}"')
+        packages_section_end = html.index('<section class="staffing-control-section shipments-control-section"', packages_section_start)
+        packages_section = html[packages_section_start:packages_section_end]
+        packages_header = packages_section[:packages_section.index('<div class="packages-preparation-start">')]
+        start_button = packages_section[
+            packages_section.index('data-start-package-preparation=') : packages_section.index("</button>", packages_section.index('data-start-package-preparation='))
+        ]
+        self.assertIn('class="package-actions-title" id=', packages_header)
+        self.assertIn("Package actions", packages_header)
+        self.assertIn("packages-status-not-started", packages_header)
+        self.assertIn("Not started yet", packages_header)
+        self.assertIn('<strong class="responsible-chip">LOGISTICS</strong>', packages_header)
+        self.assertNotIn("SEMI-UNBLOCKED", packages_header)
+        self.assertNotIn("UNBLOCKED", packages_header)
+        self.assertNotIn("BLOCKED", packages_header)
+        self.assertNotIn("Not configured", packages_header)
+        self.assertNotIn("No package units configured", packages_header)
+        self.assertNotIn("packages checked", packages_header)
+        packages_summary = packages_section[:packages_section.index('<div class="packages-preparation-start">')]
+        self.assertIn("Current status", packages_summary)
+        self.assertIn("Recommended next action", packages_summary)
+        self.assertIn("Responsible", packages_summary)
+        self.assertIn("Nearest deadline", packages_summary)
+        self.assertIn("Start session package preparation", packages_summary)
+        self.assertIn("LOGISTICS", packages_summary)
+        self.assertIn("Start session package preparation", start_button)
+        self.assertNotIn("disabled", start_button)
+        self.assertNotIn("Add room package", packages_section)
+        self.assertLess(
+            packages_section.index("Candidate label verification"),
+            len(packages_section),
+        )
+        self.assertLess(
+            packages_section.index("Candidate label printing and affixing"),
+            len(packages_section),
+        )
+        self.assertLess(
+            packages_section.index("Room package sealing"),
+            len(packages_section),
+        )
+        first_guidance = packages_section[
+            packages_section.index("Candidate label verification") : packages_section.index("Candidate label printing and affixing")
+        ]
+        second_guidance = packages_section[
+            packages_section.index("Candidate label printing and affixing") : packages_section.index("Room package sealing")
+        ]
+        third_guidance = packages_section[
+            packages_section.index("Room package sealing") : packages_section.index("Return packages")
+        ]
+        return_guidance = packages_section[
+            packages_section.index("Return packages") :
+        ]
+        self.assertIn("Enter the exam session in Sinapsis and download the candidate labels for each exam room.", packages_section)
+        self.assertIn("Verify that the label count matches the number of candidates in each room on the", packages_section)
+        self.assertIn(
+            '<a href="https://example.com/sinapsis" target="_blank" rel="noopener noreferrer" aria-label="Open approved schedule folder">approved schedule in this folder</a>.',
+            packages_section,
+        )
+        self.assertNotIn("approved schedule found in this folder", packages_section)
+        self.assertNotIn("approved schedule, not in Sinapsis", packages_section)
+        self.assertNotIn("Prepare the exam papers required for each room, arranging them in the exact order shown in the approved schedule.", first_guidance)
+        self.assertNotIn("Check whether any candidates listed have EN and require adapted exam papers.", first_guidance)
+        self.assertNotIn("Affix each label to the corresponding exam paper.", first_guidance)
+        self.assertIn("Prepare the exam papers required for each module and exam room, arranging them in the exact order shown on the approved schedule.", second_guidance)
+        self.assertIn("Check whether any listed candidates have EN and require adapted exam papers.", second_guidance)
+        self.assertIn("Affix each candidate label to the corresponding exam paper.", second_guidance)
+        self.assertIn("Seal each exam room package with transparent plastic wrap.", third_guidance)
+        self.assertIn("Print each exam room record on an A4 adhesive label.", third_guidance)
+        self.assertIn("Affix each label to the corresponding exam room package.", third_guidance)
+        self.assertNotIn("Add the EN identification label to any exam room package that includes candidates with EN.", third_guidance)
+        self.assertNotIn("Room package sealing warning", third_guidance)
+        self.assertIn("Staffing must be ready before the exam room records can be printed and affixed to the packages.", third_guidance)
+        self.assertIn("package-preparation-blocked-step", third_guidance)
+        self.assertIn("Do not proceed with this stage. Staff members have not been confirmed yet", third_guidance)
+        self.assertIn("disabled>Mark as complete", third_guidance)
+        self.assertIn("Candidate label verification actions", packages_section)
+        self.assertIn("Candidate label printing actions", packages_section)
+        self.assertIn("Room package sealing actions", packages_section)
+        self.assertIn("Return packages actions", return_guidance)
+        self.assertIn("Include the following return packages:", return_guidance)
+        self.assertIn("1 submitted Reading and writing modules.", return_guidance)
+        self.assertIn("1 absent Reading and writing modules.", return_guidance)
+        self.assertIn("1 submitted Listening and speaking modules.", return_guidance)
+        self.assertIn("1 absent Listening and speaking modules.", return_guidance)
+        self.assertIn("Not started yet", packages_section)
+        self.assertIn("Mark as in progress", packages_section)
+        self.assertIn("Mark as complete", packages_section)
+        self.assertIn("Mark incident", packages_section)
+        self.assertIn("data-package-preparation-panel hidden", packages_section)
+        response = client.get(
+            f"/pre-session-control-tower?session_year=2026&view=sessions&open_schedule_modal={self.session_record.id}&open_modal_target=package-label-verification&packages_only=1"
+        )
+        forced_html = response.get_data(as_text=True)
+        forced_packages_start = forced_html.index(f'<section class="staffing-control-section packages-control-section" id="packages-{self.session_record.id}"')
+        forced_packages_section = forced_html[forced_packages_start:forced_packages_start + 36000]
+        self.assertIn(f'id="package-preparation-panel-{self.session_record.id}" data-package-preparation-panel>', forced_packages_section)
+        self.assertNotIn(f'id="package-preparation-panel-{self.session_record.id}" data-package-preparation-panel hidden', forced_packages_section)
+        self.assertNotIn('data-add-package-unit-row aria-label="Add room package line"', packages_section)
+        self.assertNotIn('data-package-unit-row-template', packages_section)
+        self.assertNotIn("Package deadline", packages_section)
+        self.assertNotIn("Session pre-packing checklist", packages_section)
+        self.assertNotIn("Session final assembly checklist", packages_section)
+        self.assertNotIn("No package units configured.", packages_section)
+        self.assertNotIn("Schedule approval is required before package pre-packing can begin.", packages_section)
+        self.assertNotIn("Room 1", packages_section)
         self.assertIn("This status only covers schedule approval, staffing and logistics.", html)
+        with open("app/static/css/styles.css", encoding="utf-8") as css_file:
+            css = css_file.read()
+        self.assertIn(".packages-summary-cell .packages-status-in-progress", css)
+        self.assertIn(".packages-status-stack .packages-status-in-progress", css)
+        self.assertIn(".staffing-control-metadata .packages-status-in-progress", css)
+        self.assertIn(".staffing-control-metadata .badge {\n  font-weight: 700;", css)
+        self.assertIn(".staffing-actions-section h3,\n.packages-control-section h3,", css)
+        self.assertIn("background: var(--badge-yellow-bg);", css)
+        self.assertIn("color: var(--badge-yellow-text);", css)
 
         response = client.get("/pre-session-control-tower?session_year=2026&view=my-actions")
         html = response.data.decode()
@@ -3198,6 +4503,247 @@ class ScheduleWorkflowTest(unittest.TestCase):
         self.assertIn("Resolve package discrepancy", html[table_start:table_end])
         self.assertIn("LOGISTICS", html[table_start:table_end])
         self.assertNotIn("Room 1", html[table_start:table_end])
+
+    def test_packages_column_summarizes_modal_stage_counts_with_tooltips(self):
+        self.session_record.package_label_verification_status = "completed"
+        self.session_record.package_label_printing_status = "in_progress"
+        self.session_record.return_packages_status = "incident"
+        db.session.commit()
+        client = self.login_client()
+
+        response = client.get("/pre-session-control-tower?session_year=2026&view=sessions")
+        html = response.get_data(as_text=True)
+        table = html[html.index('aria-label="Schedule preparation and approval"'):html.index('<div class="modal"', html.index('aria-label="Schedule preparation and approval"'))]
+        packages_button_start = table.index(f'data-modal-scroll-target="packages-{self.session_record.id}"')
+        packages_button = table[table.rfind("<button", 0, packages_button_start):table.index("</button>", packages_button_start)]
+
+        self.assertIn("packages-status-incident", packages_button)
+        self.assertIn("With incident", packages_button)
+        self.assertIn("1 / 6 completed", packages_button)
+        self.assertIn("1 in progress", packages_button)
+        self.assertIn("1 with incident", packages_button)
+        self.assertIn("Completed: Candidate label verification", packages_button)
+        self.assertIn("In progress: Candidate label printing and affixing", packages_button)
+        self.assertIn("With incident: Return packages", packages_button)
+
+    def test_packages_modal_blockers_use_singular_staff_and_incident_copy(self):
+        self.approve_schedule()
+        self.create_package_unit_record(status="Not started", expected=1, actual=1)
+        db.session.add_all([
+            AcademicStaff(id=21, status="Active", full_name="Pending Member", roles="Examiner", email="pending@example.com"),
+            ExamSessionExaminerAssignment(
+                exam_session_id=self.session_record.id,
+                team_member_id=21,
+                participation_status="Pending",
+            ),
+            ExamSessionIncident(
+                exam_session_id=self.session_record.id,
+                incident_type="Supervisor changed",
+                title="Labels need review",
+                severity="Medium",
+                status="Open",
+                responsible_department="ADMIN",
+            ),
+        ])
+        db.session.commit()
+        client = self.login_client()
+
+        response = client.get("/pre-session-control-tower?session_year=2026&view=sessions")
+        html = response.get_data(as_text=True)
+        packages_section_start = html.index(f'<section class="staffing-control-section packages-control-section" id="packages-{self.session_record.id}"')
+        packages_section = html[packages_section_start:packages_section_start + 36000]
+
+        self.assertIn("1 staff member has not been confirmed yet.", packages_section)
+        self.assertIn("There is 1 unsolved incident.", packages_section)
+        self.assertNotIn("1 staff members have not been confirmed yet.", packages_section)
+        self.assertNotIn("There are 1 unsolved incidents.", packages_section)
+
+    def test_packages_modal_blockers_use_plural_staff_and_incident_copy(self):
+        self.approve_schedule()
+        self.create_package_unit_record(status="Not started", expected=1, actual=1)
+        db.session.add_all([
+            AcademicStaff(id=22, status="Active", full_name="First Pending Member", roles="Examiner", email="first@example.com"),
+            AcademicStaff(id=23, status="Active", full_name="Second Pending Member", roles="Intern", email="second@example.com"),
+            ExamSessionExaminerAssignment(
+                exam_session_id=self.session_record.id,
+                team_member_id=22,
+                participation_status="Pending",
+            ),
+            ExamSessionInternAssignment(
+                exam_session_id=self.session_record.id,
+                team_member_id=23,
+                participation_status="Official confirmation sent",
+            ),
+            ExamSessionIncident(
+                exam_session_id=self.session_record.id,
+                incident_type="Supervisor changed",
+                title="First open incident",
+                severity="Medium",
+                status="Open",
+                responsible_department="ADMIN",
+            ),
+            ExamSessionIncident(
+                exam_session_id=self.session_record.id,
+                incident_type="Supervisor changed",
+                title="Second open incident",
+                severity="High",
+                status="Open",
+                responsible_department="ADMIN",
+            ),
+        ])
+        db.session.commit()
+        client = self.login_client()
+
+        response = client.get("/pre-session-control-tower?session_year=2026&view=sessions")
+        html = response.get_data(as_text=True)
+        packages_section_start = html.index(f'<section class="staffing-control-section packages-control-section" id="packages-{self.session_record.id}"')
+        packages_section = html[packages_section_start:packages_section_start + 36000]
+
+        self.assertIn("2 staff members have not been confirmed yet.", packages_section)
+        self.assertIn("There are 2 unsolved incidents.", packages_section)
+        self.assertNotIn("2 staff member has not been confirmed yet.", packages_section)
+        self.assertNotIn("There is 2 unsolved incident.", packages_section)
+
+    def test_control_tower_packages_lock_state_follows_schedule_and_staffing(self):
+        client = self.login_client()
+
+        response = client.get("/pre-session-control-tower?session_year=2026&view=sessions")
+        html = response.data.decode()
+        self.assertIn("BLOCKED", html)
+        packages_section_start = html.index(f'<section class="staffing-control-section packages-control-section" id="packages-{self.session_record.id}"')
+        packages_section = html[packages_section_start:packages_section_start + 36000]
+        start_button = packages_section[
+            packages_section.index('data-start-package-preparation=') : packages_section.index("</button>", packages_section.index('data-start-package-preparation='))
+        ]
+        self.assertIn("Start session package preparation", start_button)
+        self.assertIn("disabled", start_button)
+        self.assertIn("The schedule must be approved before package preparation can begin.", packages_section)
+
+        self.approve_schedule()
+        response = client.get("/pre-session-control-tower?session_year=2026&view=sessions")
+        html = response.data.decode()
+        self.assertIn("SEMI-UNBLOCKED", html)
+        packages_section_start = html.index(f'<section class="staffing-control-section packages-control-section" id="packages-{self.session_record.id}"')
+        packages_section = html[packages_section_start:packages_section_start + 36000]
+        start_button = packages_section[
+            packages_section.index('data-start-package-preparation=') : packages_section.index("</button>", packages_section.index('data-start-package-preparation='))
+        ]
+        self.assertNotIn("disabled", start_button)
+
+        self.confirm_staffing()
+        response = client.get("/pre-session-control-tower?session_year=2026&view=sessions")
+        html = response.data.decode()
+        self.assertIn("UNBLOCKED", html)
+
+    def test_package_label_verification_completed_render_shows_reopen(self):
+        self.approve_schedule()
+        self.session_record.package_label_verification_status = "completed"
+        db.session.commit()
+        client = self.login_client()
+
+        response = client.get("/pre-session-control-tower?session_year=2026&view=sessions")
+        html = response.get_data(as_text=True)
+        packages_section_start = html.index(f'<section class="staffing-control-section packages-control-section" id="packages-{self.session_record.id}"')
+        packages_section = html[packages_section_start:packages_section_start + 36000]
+
+        self.assertIn("Completed", packages_section)
+        self.assertIn("Mark as in progress</button>", packages_section)
+        self.assertIn("Mark incident</button>", packages_section)
+        self.assertIn("disabled>Mark as in progress", packages_section)
+        self.assertIn("disabled>Mark incident", packages_section)
+        self.assertIn("Reopen", packages_section)
+        self.assertIn("data-confirm-password-value=\"EditOK\"", packages_section)
+        self.assertIn("Are you sure you want to reopen editing for Candidate label verification?", packages_section)
+
+    def test_packages_column_opens_packages_only_modal_context(self):
+        self.session_record.package_label_verification_status = "in_progress"
+        self.session_record.package_label_verification_updated_at = datetime(2026, 6, 20, 14, 30, tzinfo=timezone.utc)
+        self.session_record.package_label_verification_updated_by = "Admin User"
+        db.session.commit()
+        client = self.login_client()
+
+        response = client.get("/pre-session-control-tower?session_year=2026&view=sessions")
+        html = response.get_data(as_text=True)
+        session_id = self.session_record.id
+        table = html[html.index('aria-label="Schedule preparation and approval"'):html.index('<div class="modal"', html.index('aria-label="Schedule preparation and approval"'))]
+        packages_button_start = table.index(f'data-modal-scroll-target="packages-{session_id}"')
+        packages_button = table[table.rfind("<button", 0, packages_button_start):table.index("</button>", packages_button_start)]
+
+        self.assertIn('data-modal-packages-only="true"', packages_button)
+        self.assertIn('data-modal-target-label="Manage packages"', packages_button)
+        modal = html[html.index(f'id="schedule-workflow-{session_id}"'):html.index(f'id="shipments-{session_id}"')]
+        packages_section = modal[modal.index(f'id="packages-{session_id}"'):]
+        package_metadata_index = packages_section.index('aria-label="Package ownership and deadline"')
+        package_status_track_index = packages_section.index(f'id="package-status-track-{session_id}"')
+        self.assertIn('<span class="modal-title-packages">SESSION PACKAGE PREPARATION</span>', modal)
+        self.assertLess(package_metadata_index, package_status_track_index)
+        self.assertIn("Status track", packages_section)
+        self.assertIn(f'id="package-status-track-{session_id}"', packages_section)
+        self.assertIn(f'id="package-label-verification-{session_id}"', packages_section)
+        self.assertIn(f'id="package-label-printing-{session_id}"', packages_section)
+        self.assertIn(f'id="package-room-package-sealing-{session_id}"', packages_section)
+        self.assertIn(f'id="package-return-packages-{session_id}"', packages_section)
+        self.assertIn(f'id="package-inclusion-final-items-{session_id}"', packages_section)
+        self.assertIn(f'id="package-session-box-sealing-{session_id}"', packages_section)
+        self.assertIn(f'aria-controls="package-preparation-panel-{session_id}" aria-expanded="true"', packages_section)
+        self.assertIn(f'id="package-preparation-panel-{session_id}" data-package-preparation-panel>', packages_section)
+        self.assertNotIn(f'id="package-preparation-panel-{session_id}" data-package-preparation-panel hidden', packages_section)
+        self.assertIn("Candidate label verification: Not started yet → In progress", packages_section)
+        self.assertIn("Admin User", packages_section)
+        with open("app/static/css/styles.css", encoding="utf-8") as css_file:
+            css = css_file.read()
+        self.assertIn(
+            '.modal.is-packages-only .schedule-workflow-panel > :not(.modal-header):not(.control-tower-overview):not([id^="packages-"])',
+            css,
+        )
+        self.assertIn(".modal.is-packages-only .modal-title-schedule", css)
+        self.assertIn(".modal.is-packages-only .modal-title-packages", css)
+        with open("app/static/js/app.js", encoding="utf-8") as js_file:
+            js = js_file.read()
+        self.assertIn('const packagesOnly = params.get("packages_only") === "1";', js)
+        self.assertIn('modal.classList.toggle("is-packages-only", packagesOnly);', js)
+        self.assertIn('const isPackagesOnlyMode = opener.dataset.modalPackagesOnly === "true";', js)
+        self.assertIn('"package-label-verification": "Candidate label verification"', js)
+        self.assertIn('"package-label-verification": ["packages", "package-label-verification"]', js)
+        self.assertIn('"package-session-box-sealing": "Session box sealing"', js)
+        self.assertIn('"package-session-box-sealing": ["packages", "package-session-box-sealing"]', js)
+        self.assertIn('const scrollBehavior = targetKey.startsWith("package-") ? "auto" : "smooth";', js)
+        self.assertIn('const packagePreparationTrigger = event.target.closest("[data-start-package-preparation]");', js)
+        self.assertIn("panel.hidden = false;", js)
+
+    def test_shipment_column_opens_shipments_only_modal_context(self):
+        self.create_supervisor(staff_id=1, name="Laura Mendez")
+        self.create_shipment_bundle_record(status="Preparing bundle")
+        db.session.commit()
+        client = self.login_client()
+
+        response = client.get("/pre-session-control-tower?session_year=2026&view=sessions")
+        html = response.get_data(as_text=True)
+        session_id = self.session_record.id
+        table = html[html.index('aria-label="Schedule preparation and approval"'):html.index('<div class="modal"', html.index('aria-label="Schedule preparation and approval"'))]
+        shipments_button_start = table.index(f'data-modal-scroll-target="shipments-{session_id}"')
+        shipments_button = table[table.rfind("<button", 0, shipments_button_start):table.index("</button>", shipments_button_start)]
+        modal_start = html.index(f'id="schedule-workflow-{session_id}"')
+        next_modal = html.find('<div class="modal"', modal_start + 1)
+        modal = html[modal_start:next_modal if next_modal != -1 else len(html)]
+
+        self.assertIn('data-modal-shipments-only="true"', shipments_button)
+        self.assertIn('data-modal-target-label="Track shipment"', shipments_button)
+        self.assertIn('<span class="modal-title-shipments">BUNDLE SHIPMENT</span>', modal)
+        self.assertNotIn('<span class="modal-title-shipments">SHIPMENT</span>', modal)
+        with open("app/static/css/styles.css", encoding="utf-8") as css_file:
+            css = css_file.read()
+        self.assertIn(
+            '.modal.is-shipments-only .schedule-workflow-panel > :not(.modal-header):not([id^="shipments-"])',
+            css,
+        )
+        self.assertIn(".modal.is-shipments-only .modal-title-schedule", css)
+        self.assertIn(".modal.is-shipments-only .modal-title-shipments", css)
+        with open("app/static/js/app.js", encoding="utf-8") as js_file:
+            js = js_file.read()
+        self.assertIn('const shipmentsOnly = params.get("shipments_only") === "1";', js)
+        self.assertIn('modal.classList.toggle("is-shipments-only", shipmentsOnly);', js)
+        self.assertIn('const isShipmentsOnlyMode = opener.dataset.modalShipmentsOnly === "true";', js)
 
     def test_control_tower_my_actions_includes_packages_as_parallel_lane(self):
         self.approve_schedule()
@@ -5048,13 +6594,14 @@ class ScheduleWorkflowTest(unittest.TestCase):
         self.assertEqual(ExamSessionShipmentBundleSession.query.count(), 2)
         self.assertEqual({link.exam_session_id for link in bundle.session_links}, {first.id, second.id})
 
-    def test_auto_shipment_bundle_sets_schedule_deadline_from_earliest_session(self):
+    def test_auto_shipment_bundle_sets_schedule_deadline_from_monthly_registration_close(self):
         self.create_supervisor(staff_id=1, name="Laura Mendez")
         sessions = []
-        for name, session_date in [
-            ("October session", date(2026, 10, 13)),
-            ("November session", date(2026, 11, 17)),
-            ("December session", date(2026, 12, 20)),
+        closed_dates = {}
+        for name, session_date, closed_at in [
+            ("October session", date(2026, 10, 13), datetime(2026, 8, 3, 12, 0, tzinfo=timezone.utc)),
+            ("November session", date(2026, 11, 17), datetime(2026, 8, 10, 12, 0, tzinfo=timezone.utc)),
+            ("December session", date(2026, 12, 20), datetime(2026, 8, 17, 12, 0, tzinfo=timezone.utc)),
         ]:
             session_record = ExamSession(
                 exam_session_name=name,
@@ -5064,11 +6611,14 @@ class ScheduleWorkflowTest(unittest.TestCase):
                 shifts="Morning",
                 modules="Speaking",
                 format="Online",
+                monthly_registrations_closed=True,
+                monthly_registrations_closed_at=closed_at,
             )
             db.session.add(session_record)
             db.session.flush()
             self.assign_confirmed_supervisor(session_record, supervisor_id=1)
             sessions.append(session_record)
+            closed_dates[session_record.id] = closed_at.date()
         db.session.add(ExamSessionScheduleWorkflow(
             exam_session_id=sessions[0].id,
             status="In progress",
@@ -5085,7 +6635,13 @@ class ScheduleWorkflowTest(unittest.TestCase):
             ).all()
         }
         self.assertEqual(ExamSessionShipmentBundle.query.count(), 1)
-        self.assertEqual({workflow.next_action_due_at for workflow in workflows.values()}, {date(2026, 9, 13)})
+        self.assertEqual(
+            {session_id: workflow.next_action_due_at for session_id, workflow in workflows.items()},
+            {
+                session_record.id: argentina_add_business_days(closed_dates[session_record.id], 8)
+                for session_record in sessions
+            },
+        )
         self.assertEqual(set(workflows), {session_record.id for session_record in sessions})
 
     def test_auto_shipment_bundles_separate_supervisors_and_skip_missing_supervisor(self):
@@ -5110,22 +6666,132 @@ class ScheduleWorkflowTest(unittest.TestCase):
         self.assertEqual(ExamSessionShipmentBundle.query.count(), 2)
         self.assertIsNone(ExamSessionShipmentBundleSession.query.filter_by(exam_session_id=without_supervisor.id).first())
 
-    def test_auto_shipment_bundle_blocked_contract_and_session_display(self):
+    def test_auto_shipment_bundle_gate_contract_uses_staffing_and_package(self):
         self.create_supervisor(staff_id=1, name="Laura Mendez")
         first = self.create_planning_ready_session("Axis English", date(2026, 7, 9), supervisor_id=1, packages_ready=True)
-        second = self.create_planning_ready_session("Lincoln", date(2026, 7, 12), supervisor_id=1, packages_ready=False)
+        second = ExamSession(
+            exam_session_name="Lincoln",
+            category="Path School",
+            status="Pending",
+            session_date=date(2026, 7, 12),
+            shifts="Morning",
+            modules="Speaking",
+            format="Online",
+        )
+        db.session.add(second)
+        db.session.flush()
+        self.assign_confirmed_supervisor(second, supervisor_id=1)
+        self.mark_session_packages_quality_checked(second)
         reconcile_auto_shipment_bundles([first, second], today=date(2026, 6, 20))
         bundle = ExamSessionShipmentBundle.query.one()
         links = {link.exam_session_id: link for link in ExamSessionShipmentBundleSession.query.all()}
 
         readiness = shipment_bundle_readiness_contract(bundle)
-        self.assertEqual(readiness["packages_ready_count"], 1)
+        self.assertEqual(readiness["preparation_ready_count"], 1)
         self.assertEqual(readiness["sessions_count"], 2)
+        self.assertEqual(shipment_bundle_view(bundle)["gate"]["sessions_completed_count"], 1)
         first_contract = session_shipment_contract(first, links[first.id])
         second_contract = session_shipment_contract(second, links[second.id])
-        self.assertEqual(first_contract["label"], "BLOCKED")
-        self.assertIn("Waiting for other sessions", first_contract["secondary_lines"])
-        self.assertIn("Blocking bundle - Packages pending", second_contract["secondary_lines"])
+        self.assertTrue(first_contract["unblocked"])
+        self.assertTrue(second_contract["unblocked"])
+        self.assertEqual(shipment_bundle_view(bundle)["display_status"], "UNBLOCKED")
+
+        second_schedule = ExamSessionScheduleWorkflow(exam_session_id=second.id, status="Approved")
+        db.session.add(second_schedule)
+        second.package_label_verification_status = "in_progress"
+        db.session.commit()
+        package_pending_contract = session_shipment_contract(second, links[second.id])
+        self.assertEqual(package_pending_contract["label"], "SEMI-UNBLOCKED")
+        self.assertIn("Package pending", package_pending_contract["secondary_lines"])
+        self.assertEqual(shipment_bundle_view(bundle)["display_status"], "SEMI-UNBLOCKED")
+
+    def test_bundles_view_shipment_gate_uses_lock_and_unblocks_when_all_sessions_ready(self):
+        self.create_supervisor(staff_id=1, name="Laura Mendez")
+        ready_first = self.create_planning_ready_session("Ready A", date(2026, 7, 9), supervisor_id=1, packages_ready=True)
+        ready_second = self.create_planning_ready_session("Ready B", date(2026, 7, 12), supervisor_id=1, packages_ready=True)
+        schedule_pending_ready_package_session = ExamSession(
+            exam_session_name="Schedule pending package ready",
+            category="Path School",
+            status="Pending",
+            session_date=date(2026, 7, 15),
+            shifts="Morning",
+            modules="Speaking",
+            format="Online",
+        )
+        db.session.add(schedule_pending_ready_package_session)
+        db.session.flush()
+        self.assign_confirmed_supervisor(schedule_pending_ready_package_session, supervisor_id=1)
+        self.mark_session_packages_quality_checked(schedule_pending_ready_package_session)
+        package_pending_session = self.create_planning_ready_session("Package in progress", date(2026, 7, 16), supervisor_id=1, packages_ready=False)
+        blocked_session = ExamSession(
+            exam_session_name="Blocked session",
+            category="Path School",
+            status="Pending",
+            session_date=date(2026, 7, 18),
+            shifts="Morning",
+            modules="Speaking",
+            format="Online",
+        )
+        db.session.add(blocked_session)
+        ready_bundle = self.create_shipment_bundle_record(status="Preparing bundle", session_record=ready_first)
+        db.session.add(ExamSessionShipmentBundleSession(bundle_id=ready_bundle.id, exam_session_id=ready_second.id))
+        self.create_shipment_bundle_record(status="Preparing bundle", session_record=schedule_pending_ready_package_session)
+        self.create_shipment_bundle_record(status="Preparing bundle", session_record=package_pending_session)
+        self.create_shipment_bundle_record(status="Preparing bundle", session_record=blocked_session)
+        db.session.commit()
+        client = self.login_client()
+
+        response = client.get("/pre-session-control-tower?session_year=2026&view=bundles")
+        html = response.get_data(as_text=True)
+        table = html[html.index('aria-label="Shipment bundles"'):html.index('<div class="modal"', html.index('aria-label="Shipment bundles"'))]
+        self.assertLess(table.index("<th>Shipment</th>"), table.index("<th>Department</th>"))
+        self.assertLess(table.index("<th>Department</th>"), table.index("<th>Action description</th>"))
+        self.assertNotIn("<th>Action</th>", table)
+        ready_row_index = table.index("Ready A")
+        ready_row = table[table.rfind("<tr", 0, ready_row_index):table.index("</tr>", ready_row_index)]
+        ready_bundle_number_cell = ready_row[ready_row.index("<td>"):ready_row.index("</td>")]
+        self.assertIn("bundle-number-cell", ready_bundle_number_cell)
+        self.assertIn("Bundle ", ready_bundle_number_cell)
+        self.assertIn("Open bundle", ready_bundle_number_cell)
+        schedule_pending_row_index = table.index("Schedule pending package ready")
+        schedule_pending_row = table[table.rfind("<tr", 0, schedule_pending_row_index):table.index("</tr>", schedule_pending_row_index)]
+        package_pending_row_index = table.index("Package in progress")
+        package_pending_row = table[table.rfind("<tr", 0, package_pending_row_index):table.index("</tr>", package_pending_row_index)]
+        blocked_row_index = table.index("Blocked session")
+        blocked_row = table[table.rfind("<tr", 0, blocked_row_index):table.index("</tr>", blocked_row_index)]
+
+        self.assertIn("shipment-gate-unblocked", ready_row)
+        self.assertIn("UNBLOCKED", ready_row)
+        self.assertIn("Bundle preparation ready", ready_row)
+        self.assertIn("shipment-status-bundle-preparation-ready", ready_row)
+        self.assertIn('<span class="responsible-chip users-department-chip">LOGISTICS</span>', ready_row)
+        self.assertIn("Complete shipment bundle preparation.", ready_row)
+        self.assertIn('class="responsible-chip bundle-supervisor-chip"', ready_row)
+        self.assertIn('aria-label="Shipment bundle unblocked"', ready_row)
+        self.assertIn('<path d="M8 10V7a4 4 0 0 1 8 0"></path>', ready_row)
+        self.assertIn("shipment-gate-unblocked", schedule_pending_row)
+        self.assertIn("UNBLOCKED", schedule_pending_row)
+        self.assertNotIn("SEMI-UNBLOCKED", schedule_pending_row)
+        self.assertIn("shipment-gate-semi-unblocked", package_pending_row)
+        self.assertIn("SEMI-UNBLOCKED", package_pending_row)
+        self.assertIn("Bundle preparation not finished", package_pending_row)
+        self.assertIn("shipment-status-bundle-preparation-not-finished", package_pending_row)
+        self.assertIn("0/1 sessions completed", package_pending_row)
+        self.assertIn('<span class="responsible-chip users-department-chip">LOGISTICS</span>', package_pending_row)
+        self.assertIn("Complete package preparation for all sessions included in this bundle.", package_pending_row)
+        self.assertNotIn("shipment-gate-unblocked", package_pending_row)
+        self.assertIn("shipment-gate-blocked", blocked_row)
+        self.assertIn("BLOCKED", blocked_row)
+        self.assertIn("Bundle preparation not finished", blocked_row)
+        self.assertIn("shipment-status-bundle-preparation-not-finished", blocked_row)
+        self.assertIn("0/1 sessions completed", blocked_row)
+        self.assertIn('<span class="responsible-chip users-department-chip">ADMIN</span>', blocked_row)
+        self.assertIn("Confirm staffing for all sessions included in this bundle.", blocked_row)
+        self.assertIn('aria-label="Shipment bundle blocked"', blocked_row)
+        self.assertIn('<path d="M8 10V7a4 4 0 0 1 8 0v3"></path>', blocked_row)
+        with open("app/static/css/styles.css", encoding="utf-8") as css_file:
+            css = css_file.read()
+        self.assertIn(".bundle-supervisor-chip {\n  font-weight: 700;\n}", css)
 
     def test_auto_shipment_bundle_overdue_split_is_idempotent_and_keeps_confirmed_unblocked(self):
         self.create_supervisor(staff_id=1, name="Laura Mendez")
@@ -5339,15 +7005,83 @@ class ScheduleWorkflowTest(unittest.TestCase):
         self.assertIn("Open bundle", html)
         self.assertIn("Axis English", html)
         bundle = ExamSessionShipmentBundle.query.one()
+        table = html[html.index('aria-label="Shipment bundles"'):html.index('<div class="modal"', html.index('aria-label="Shipment bundles"'))]
+        self.assertNotIn("<th>Action</th>", table)
+        axis_index = table.index("Axis English")
+        bundle_row = table[table.rfind("<tr", 0, axis_index):table.index("</tr>", axis_index)]
+        bundle_number_cell = bundle_row[bundle_row.index("<td>"):bundle_row.index("</td>")]
+        self.assertIn("Open bundle", bundle_number_cell)
+        first_session_link = ExamSessionShipmentBundleSession.query.filter_by(bundle_id=bundle.id).order_by(ExamSessionShipmentBundleSession.id.asc()).first()
+        self.assertIn(f'data-open-modal="schedule-workflow-{first_session_link.exam_session_id}"', bundle_row)
+        self.assertIn(f'data-modal-scroll-target="shipments-{first_session_link.exam_session_id}"', bundle_row)
+        self.assertIn('data-modal-target-label="Track shipment"', bundle_row)
+        self.assertIn('data-modal-shipments-only="true"', bundle_row)
 
         detail = client.get(f"/pre-session-control-tower?session_year=2026&view=bundle&bundle_id={bundle.id}")
         detail_html = detail.get_data(as_text=True)
+        detail_table = detail_html[detail_html.index('aria-label="Schedule preparation and approval"'):detail_html.index('<div class="modal"', detail_html.index('aria-label="Schedule preparation and approval"'))]
         self.assertIn(f"Bundle {bundle.bundle_number}", detail_html)
         self.assertIn("Back to Bundles", detail_html)
-        self.assertIn("<th>Shipment</th>", detail_html)
+        self.assertNotIn("<th>Action</th>", detail_table)
+        self.assertIn("<th>Session</th>", detail_table)
+        self.assertIn("<th>Date</th>", detail_table)
+        self.assertIn("<th>Department</th>", detail_table)
+        self.assertIn("<th>Action description</th>", detail_table)
+        self.assertIn("<th>Schedule</th>", detail_table)
+        self.assertIn("<th>Staffing</th>", detail_table)
+        self.assertIn("<th>Package</th>", detail_table)
+        self.assertLess(detail_table.index("<th>Date</th>"), detail_table.index("<th>Department</th>"))
+        self.assertLess(detail_table.index("<th>Department</th>"), detail_table.index("<th>Action description</th>"))
+        self.assertLess(detail_table.index("<th>Action description</th>"), detail_table.index("<th>Schedule</th>"))
+        self.assertNotIn("<th>Logistics</th>", detail_table)
+        self.assertNotIn("<th>Shipment</th>", detail_table)
+        self.assertNotIn("<th>Finance</th>", detail_table)
+        self.assertNotIn("<th>Sinapsis</th>", detail_table)
+        self.assertNotIn("<th>Communications</th>", detail_table)
+        self.assertNotIn("<th>Session readiness</th>", detail_table)
+        self.assertNotIn("<th>Incidents</th>", detail_table)
+        self.assertNotIn("<th>Priority action</th>", detail_table)
         self.assertIn("Axis English", detail_html)
         self.assertIn("Lincoln", detail_html)
         self.assertLess(detail_html.index("Axis English"), detail_html.index("Lincoln"))
+
+    def test_bundle_detail_lists_parallel_departments_and_action_descriptions(self):
+        self.create_supervisor(staff_id=1, name="Laura Mendez")
+        session_record = ExamSession(
+            exam_session_name="Parallel actions session",
+            category="Path School",
+            status="Pending",
+            session_date=date(2026, 7, 9),
+            shifts="Morning",
+            modules="Speaking",
+            format="Online",
+        )
+        staff_member = AcademicStaff(id=28, status="Active", full_name="Pending Staff", roles="Examiner", email="pending-staff@example.com")
+        db.session.add_all([session_record, staff_member])
+        db.session.flush()
+        db.session.add_all([
+            ExamSessionScheduleWorkflow(exam_session_id=session_record.id, status="Approved"),
+            ExamSessionExaminerAssignment(
+                exam_session_id=session_record.id,
+                team_member_id=staff_member.id,
+                participation_status="Pending",
+            ),
+        ])
+        db.session.flush()
+        bundle = self.create_shipment_bundle_record(status="Preparing", session_record=session_record)
+        db.session.commit()
+        client = self.login_client()
+
+        response = client.get(f"/pre-session-control-tower?session_year=2026&view=bundle&bundle_id={bundle.id}")
+        html = response.get_data(as_text=True)
+        table = html[html.index('aria-label="Schedule preparation and approval"'):html.index('<div class="modal"', html.index('aria-label="Schedule preparation and approval"'))]
+        row_index = table.index("Parallel actions session")
+        row = table[table.rfind("<tr", 0, row_index):table.index("</tr>", row_index)]
+
+        self.assertIn("ADMIN", row)
+        self.assertIn("LOGISTICS", row)
+        self.assertIn("1 confirmation to be sent.", row)
+        self.assertIn("Session package preparation has not started yet.", row)
 
     def test_bundle_detail_only_shows_sessions_for_selected_bundle(self):
         self.create_supervisor(staff_id=1, name="Laura Mendez")
@@ -5365,8 +7099,8 @@ class ScheduleWorkflowTest(unittest.TestCase):
         self.assertIn("Selected bundle session", table)
         self.assertNotIn("Other bundle session", table)
         self.assertIn('data-modal-scroll-target="packages-', table)
-        self.assertIn('data-modal-scroll-target="shipments-', table)
-        self.assertIn('data-modal-scroll-target="readiness-', table)
+        self.assertNotIn('data-modal-scroll-target="shipments-', table)
+        self.assertNotIn('data-modal-scroll-target="readiness-', table)
 
     def test_bundle_detail_schedule_modal_only_shows_schedule_context(self):
         self.create_supervisor(staff_id=1, name="Laura Mendez")
@@ -5604,14 +7338,16 @@ class ScheduleWorkflowTest(unittest.TestCase):
         sessions_response = client.get("/pre-session-control-tower?session_year=2026&view=sessions")
         sessions_html = sessions_response.get_data(as_text=True)
         table = sessions_html[sessions_html.index('aria-label="Schedule preparation and approval"'):sessions_html.index('<div class="modal"', sessions_html.index('aria-label="Schedule preparation and approval"'))]
+        completed_row_index = table.index("Completed shipment session")
+        completed_row = table[table.rfind("<tr", 0, completed_row_index):table.index("</tr>", completed_row_index)]
 
-        self.assertIn("Completed shipment session", table)
-        self.assertIn(f"Bundle {completed_bundle.bundle_number}", table)
-        self.assertIn("Bundle completed", table)
-        self.assertIn("Recipient review successful", table)
-        self.assertNotIn("BLOCKED", table)
-        self.assertNotIn("Blocking bundle", table)
-        self.assertNotIn("Waiting for other sessions", table)
+        self.assertIn("Completed shipment session", completed_row)
+        self.assertIn(f"Bundle {completed_bundle.bundle_number}", completed_row)
+        self.assertIn("Bundle completed", completed_row)
+        self.assertIn("Recipient review successful", completed_row)
+        self.assertNotIn("BLOCKED", completed_row)
+        self.assertNotIn("Blocking bundle", completed_row)
+        self.assertNotIn("Waiting for other sessions", completed_row)
 
         detail = client.get(f"/pre-session-control-tower?session_year=2026&view=bundle&bundle_id={completed_bundle.id}")
         detail_html = detail.get_data(as_text=True)
@@ -5636,8 +7372,9 @@ class ScheduleWorkflowTest(unittest.TestCase):
         new_link = ExamSessionShipmentBundleSession.query.filter_by(exam_session_id=new_session.id).one()
         self.assertNotEqual(new_link.bundle_id, completed_bundle.id)
 
-    def test_shipment_ready_to_dispatch_requires_quality_checked_packages_and_checklist(self):
+    def test_shipment_ready_to_dispatch_requires_checklist_not_quality_checked_packages(self):
         self.create_supervisor()
+        self.approve_schedule()
         self.assign_confirmed_supervisor()
         client = self.login_client()
         client.post(
@@ -5657,23 +7394,316 @@ class ScheduleWorkflowTest(unittest.TestCase):
             data={"csrf_token": "token", "current_session_id": str(self.session_record.id), "new_status": "Ready to dispatch"},
             follow_redirects=True,
         )
-        self.assertIn(b"All included sessions must have packages quality checked before the bundle can be marked as ready to dispatch.", response.data)
+        self.assertIn(b"Complete shipment bundle requirements before marking it ready to dispatch.", response.data)
         self.assertEqual(ExamSessionShipmentBundle.query.get(bundle.id).status, "Preparing bundle")
 
-        self.mark_session_packages_quality_checked()
         for item in ExamSessionShipmentChecklistItem.query.filter_by(bundle_id=bundle.id).all():
             item.is_checked = True
         db.session.commit()
         contract = shipment_bundle_readiness_contract(bundle)
         self.assertTrue(contract["ready_to_dispatch"])
+        self.assertGreater(contract["packages_missing_count"], 0)
+        self.assertNotIn("PACKAGES_NOT_READY", {blocker["code"] for blocker in contract["blockers"]})
 
         response = client.post(
             f"/pre-session-control-tower/shipments/bundles/{bundle.id}/status",
-            data={"csrf_token": "token", "current_session_id": str(self.session_record.id), "new_status": "Ready to dispatch"},
+            data={
+                "csrf_token": "token",
+                "current_session_id": str(self.session_record.id),
+                "new_status": "Ready to dispatch",
+                "note": "All bundle materials are sealed and ready.",
+            },
             follow_redirects=False,
         )
         self.assertEqual(response.status_code, 302)
+        self.assertIn("open_modal_target=shipments", response.headers["Location"])
+        self.assertIn("shipments_only=1", response.headers["Location"])
         self.assertEqual(ExamSessionShipmentBundle.query.get(bundle.id).status, "Ready to dispatch")
+        event = ExamSessionShipmentEvent.query.filter_by(
+            bundle_id=bundle.id,
+            event_type="STATUS_CHANGED",
+            new_status="Ready to dispatch",
+        ).one()
+        self.assertEqual(event.created_by, "admin")
+        self.assertEqual(event.note, "All bundle materials are sealed and ready.")
+        response = client.get("/pre-session-control-tower?session_year=2026&view=sessions")
+        html = response.get_data(as_text=True)
+        self.assertNotIn("Dispatch history", html)
+        self.assertIn("Shipment status: Preparing bundle → Ready to dispatch", html)
+        self.assertIn("All bundle materials are sealed and ready.", html)
+        self.assertIn("admin", html)
+
+    def test_meeting_point_dispatch_action_labels_use_meeting_point_copy(self):
+        from app.routes import shipment_bundle_transition_options
+
+        self.create_supervisor()
+        bundle = self.create_shipment_bundle_record(status="Ready to dispatch")
+        bundle.delivery_option = "meeting_point"
+        db.session.commit()
+
+        options = shipment_bundle_transition_options(bundle)
+        self.assertEqual(options["primary"], [{
+            "status": "In transit to post office",
+            "label": "Mark as in transit to meeting point",
+        }])
+
+        bundle.status = "Dispatched"
+        db.session.commit()
+        options = shipment_bundle_transition_options(bundle)
+        self.assertEqual(options["primary"], [{
+            "status": "Recipient notified",
+            "label": "Mark as recipient notified",
+        }])
+
+        bundle.delivery_option = "listed_address"
+        db.session.commit()
+        options = shipment_bundle_transition_options(bundle)
+        self.assertEqual(options["primary"], [{
+            "status": "Recipient notified",
+            "label": "Mark as recipient notified",
+        }])
+
+    def test_delivery_option_change_requires_password_after_final_checklist_completed(self):
+        self.create_supervisor()
+        self.assign_confirmed_supervisor()
+        bundle = self.create_shipment_bundle_record(status="Preparing bundle")
+        bundle.delivery_option = "store_pickup"
+        bundle.delivery_city = "Cordoba"
+        bundle.delivery_province = "Cordoba"
+        final_item = ExamSessionShipmentChecklistItem.query.filter_by(
+            bundle_id=bundle.id,
+            item_key="correo_label",
+        ).one()
+        final_item.is_checked = True
+        db.session.commit()
+        client = self.login_client()
+
+        response = client.get("/pre-session-control-tower?session_year=2026&view=sessions")
+        html = response.get_data(as_text=True)
+        self.assertIn(
+            'data-confirm-password-submit="Changing the delivery option at this stage may affect the entire process. Management password authorisation is required to continue."',
+            html,
+        )
+        self.assertIn('data-confirm-password-value="EditOK"', html)
+        self.assertIn('name="confirmation_password" value=""', html)
+        with open("app/static/js/app.js", encoding="utf-8") as js_file:
+            js = js_file.read()
+        self.assertIn("fieldset.dataset.shipmentDeliverySelectedValue", js)
+        self.assertIn("option.checked = option.value === previousValue;", js)
+        self.assertIn("window.prompt(`${message}\\n\\nEnter the confirmation password to continue:`)", js)
+        self.assertIn("if (confirmationPasswordInput) confirmationPasswordInput.value = password;", js)
+
+        response = client.post(
+            f"/pre-session-control-tower/shipments/bundles/{bundle.id}",
+            data={
+                "csrf_token": "token",
+                "view": "sessions",
+                "current_session_id": str(self.session_record.id),
+                "supervisor_staff_id": "1",
+                "delivery_address": "Av. Siempre Viva 123",
+                "delivery_city": "Cordoba",
+                "delivery_province": "Cordoba",
+                "courier": "Correo Argentino",
+                "dispatch_due_at": "",
+                "included_session_ids": [str(self.session_record.id)],
+            },
+            follow_redirects=True,
+        )
+
+        self.assertIn(
+            b"Changing the delivery option at this stage may affect the entire process. Management password authorisation is required to continue.",
+            response.data,
+        )
+        db.session.refresh(bundle)
+        self.assertEqual(bundle.delivery_option, "store_pickup")
+
+        response = client.post(
+            f"/pre-session-control-tower/shipments/bundles/{bundle.id}",
+            data={
+                "csrf_token": "token",
+                "view": "sessions",
+                "current_session_id": str(self.session_record.id),
+                "supervisor_staff_id": "1",
+                "delivery_address": "Av. Siempre Viva 123",
+                "delivery_city": "Cordoba",
+                "delivery_province": "Cordoba",
+                "courier": "Correo Argentino",
+                "dispatch_due_at": "",
+                "included_session_ids": [str(self.session_record.id)],
+                "confirmation_password": "EditOK",
+            },
+            follow_redirects=False,
+        )
+
+        self.assertEqual(response.status_code, 302)
+        self.assertIn("open_modal_target=shipments", response.headers["Location"])
+        self.assertIn("shipments_only=1", response.headers["Location"])
+        db.session.refresh(bundle)
+        self.assertEqual(bundle.delivery_option, "")
+
+        bundle.status = "Ready to dispatch"
+        db.session.commit()
+        response = client.post(
+            f"/pre-session-control-tower/shipments/bundles/{bundle.id}",
+            data={
+                "csrf_token": "token",
+                "view": "sessions",
+                "current_session_id": str(self.session_record.id),
+                "supervisor_staff_id": "1",
+                "delivery_address": "Av. Siempre Viva 123",
+                "delivery_city": "Cordoba",
+                "delivery_province": "Cordoba",
+                "delivery_option": "meeting_point",
+                "courier": "Correo Argentino",
+                "dispatch_due_at": "",
+                "included_session_ids": [str(self.session_record.id)],
+            },
+            follow_redirects=True,
+        )
+
+        self.assertIn(
+            b"Changing the delivery option at this stage may affect the entire process. Management password authorisation is required to continue.",
+            response.data,
+        )
+        db.session.refresh(bundle)
+        self.assertEqual(bundle.delivery_option, "")
+
+        response = client.post(
+            f"/pre-session-control-tower/shipments/bundles/{bundle.id}",
+            data={
+                "csrf_token": "token",
+                "view": "sessions",
+                "current_session_id": str(self.session_record.id),
+                "supervisor_staff_id": "1",
+                "delivery_address": "Av. Siempre Viva 123",
+                "delivery_city": "Cordoba",
+                "delivery_province": "Cordoba",
+                "delivery_option": "meeting_point",
+                "courier": "Correo Argentino",
+                "dispatch_due_at": "",
+                "included_session_ids": [str(self.session_record.id)],
+                "confirmation_password": "EditOK",
+            },
+            follow_redirects=False,
+        )
+
+        self.assertEqual(response.status_code, 302)
+        db.session.refresh(bundle)
+        self.assertEqual(bundle.delivery_option, "meeting_point")
+
+    def test_sealed_session_boxes_requires_delivery_planning_before_completion(self):
+        self.create_supervisor()
+        self.assign_confirmed_supervisor()
+        bundle = self.create_shipment_bundle_record(status="Preparing bundle")
+        sealed_boxes_item = ExamSessionShipmentChecklistItem.query.filter_by(
+            bundle_id=bundle.id,
+            item_key="verify_sessions_boxes",
+        ).one()
+        from app.routes import shipment_pre_dispatch_cards
+
+        def sealed_card():
+            db.session.refresh(bundle)
+            db.session.refresh(sealed_boxes_item)
+            cards = shipment_pre_dispatch_cards(bundle)
+            return next(card for card in cards if card["item_key"] == "verify_sessions_boxes")
+
+        self.assertFalse(sealed_card()["can_complete"])
+
+        client = self.login_client()
+        response = client.post(
+            f"/pre-session-control-tower/shipments/checklist-items/{sealed_boxes_item.id}",
+            data={
+                "csrf_token": "token",
+                "view": "sessions",
+                "current_session_id": str(self.session_record.id),
+                "is_checked": "1",
+            },
+            follow_redirects=True,
+        )
+        self.assertIn(b"Complete the shipment planning requirements before marking this stage as complete.", response.data)
+        db.session.refresh(sealed_boxes_item)
+        self.assertFalse(sealed_boxes_item.is_checked)
+
+        bundle.delivery_option = "meeting_point"
+        bundle.delivery_address = "Av. Siempre Viva 123"
+        bundle.shipping_label_url = None
+        bundle.tracking_number = None
+        db.session.commit()
+        self.assertFalse(sealed_card()["can_complete"])
+
+        bundle.delivery_address = "Meeting point 789"
+        db.session.commit()
+        self.assertFalse(sealed_card()["can_complete"])
+
+        self.mark_session_packages_quality_checked()
+        db.session.refresh(bundle)
+        self.assertTrue(sealed_card()["can_complete"])
+
+        bundle.delivery_option = "different_address"
+        bundle.delivery_address = "Alternate address 456"
+        bundle.shipping_label_url = None
+        bundle.tracking_number = None
+        db.session.commit()
+        self.assertFalse(sealed_card()["can_complete"])
+
+        bundle.shipping_label_url = "https://example.com/label.pdf"
+        db.session.commit()
+        self.assertFalse(sealed_card()["can_complete"])
+
+        bundle.tracking_number = "TRACK-123"
+        db.session.commit()
+        self.assertTrue(sealed_card()["can_complete"])
+
+        bundle.delivery_option = "store_pickup"
+        bundle.shipping_label_url = None
+        bundle.tracking_number = None
+        db.session.commit()
+        self.assertTrue(sealed_card()["can_complete"])
+
+    def test_shipment_operational_status_follows_bundle_planning_predispatch_and_dispatch(self):
+        self.create_supervisor()
+        self.assign_confirmed_supervisor()
+        bundle = self.create_shipment_bundle_record(status="Preparing bundle")
+        from app.routes import shipment_bundle_operational_status
+
+        self.assertEqual(shipment_bundle_operational_status(bundle)["label"], "Bundle preparation not finished")
+
+        self.mark_session_packages_quality_checked()
+        db.session.refresh(bundle)
+        self.assertEqual(shipment_bundle_operational_status(bundle)["label"], "Bundle preparation ready")
+
+        bundle.delivery_option = "store_pickup"
+        db.session.commit()
+        self.assertEqual(shipment_bundle_operational_status(bundle)["label"], "Shipment planning in progress")
+
+        bundle.shipping_label_url = "https://example.com/label.pdf"
+        bundle.tracking_number = "TRACK-123"
+        db.session.commit()
+        self.assertEqual(shipment_bundle_operational_status(bundle)["label"], "Shipment planning ready")
+
+        sealed_boxes_item = ExamSessionShipmentChecklistItem.query.filter_by(
+            bundle_id=bundle.id,
+            item_key="verify_sessions_boxes",
+        ).one()
+        sealed_boxes_item.is_checked = True
+        db.session.commit()
+        self.assertEqual(shipment_bundle_operational_status(bundle)["label"], "Shipment pre-dispatch in progress")
+
+        for item in ExamSessionShipmentChecklistItem.query.filter(
+            ExamSessionShipmentChecklistItem.bundle_id == bundle.id,
+            ExamSessionShipmentChecklistItem.item_key.in_({"verify_sessions_boxes", "jbl_speakers_dice", "emergency_pack", "correo_label"}),
+        ).all():
+            item.is_checked = True
+        db.session.commit()
+        self.assertEqual(shipment_bundle_operational_status(bundle)["label"], "Shipment pre-dispatch ready")
+
+        bundle.status = "Ready to dispatch"
+        db.session.commit()
+        self.assertEqual(shipment_bundle_operational_status(bundle)["label"], "Shipment dispatch in progress")
+
+        bundle.status = "Delivered successfully"
+        db.session.commit()
+        self.assertEqual(shipment_bundle_operational_status(bundle)["label"], "Shipment delivered")
 
     def test_shipment_transitions_tracking_delivery_and_recipient_review(self):
         self.create_supervisor()
@@ -5682,6 +7712,7 @@ class ScheduleWorkflowTest(unittest.TestCase):
         bundle = ExamSessionShipmentBundle(
             supervisor_staff_id=1,
             delivery_address="Av. Siempre Viva 123",
+            delivery_option="listed_address",
             courier="Correo Argentino",
             status="Ready to dispatch",
         )
@@ -5700,26 +7731,63 @@ class ScheduleWorkflowTest(unittest.TestCase):
         )
         self.assertEqual(response.status_code, 302)
         self.assertEqual(ExamSessionShipmentBundle.query.get(bundle.id).status, "In transit to post office")
+        response = client.get("/pre-session-control-tower?session_year=2026&view=sessions")
+        html = response.get_data(as_text=True)
+        dispatched_action_index = html.index('name="new_status" value="Dispatched"')
+        dispatch_form_end = html.index("</form>", dispatched_action_index)
+        dispatch_form = html[dispatched_action_index:dispatch_form_end]
+        self.assertNotIn("Tracking number", dispatch_form)
+        self.assertNotIn('name="tracking_number"', dispatch_form)
 
         response = client.post(
             f"/pre-session-control-tower/shipments/bundles/{bundle.id}/status",
             data={"csrf_token": "token", "current_session_id": str(self.session_record.id), "new_status": "Dispatched"},
-            follow_redirects=True,
-        )
-        self.assertIn(b"Tracking number is required before marking the shipment as dispatched.", response.data)
-
-        response = client.post(
-            f"/pre-session-control-tower/shipments/bundles/{bundle.id}/status",
-            data={"csrf_token": "token", "current_session_id": str(self.session_record.id), "new_status": "Dispatched", "tracking_number": "CA123"},
             follow_redirects=False,
         )
         self.assertEqual(response.status_code, 302)
         bundle = ExamSessionShipmentBundle.query.get(bundle.id)
         self.assertEqual(bundle.status, "Dispatched")
-        self.assertEqual(bundle.tracking_number, "CA123")
+        self.assertIsNone(bundle.tracking_number)
         self.assertIsNotNone(bundle.dispatched_at)
+        response = client.get("/pre-session-control-tower?session_year=2026&view=sessions")
+        html = response.get_data(as_text=True)
+        dispatch_actions_index = html.index("Shipment dispatch")
+        dispatch_actions_panel = html[dispatch_actions_index:html.index("Readiness details", dispatch_actions_index)]
+        dispatch_status_panel = dispatch_actions_panel[
+            dispatch_actions_panel.index("Mark shipment as:"):dispatch_actions_panel.index("Reopen dispatch stage")
+        ]
+        self.assertIn("Mark shipment as:", dispatch_actions_panel)
+        self.assertNotIn("dispatch-current-status-chip", dispatch_actions_panel)
+        ready_row_index = dispatch_status_panel.index('name="new_status" value="Ready to dispatch"')
+        ready_row = dispatch_status_panel[ready_row_index:dispatch_status_panel.index("</div>", ready_row_index)]
+        self.assertIn(" checked", ready_row)
+        self.assertIn("disabled", ready_row)
+        transit_row_index = dispatch_status_panel.index('name="new_status" value="In transit to post office"')
+        transit_row = dispatch_status_panel[transit_row_index:dispatch_status_panel.index("</div>", transit_row_index)]
+        self.assertIn(" checked", transit_row)
+        self.assertIn("disabled", transit_row)
+        dispatched_row_index = dispatch_status_panel.index('name="new_status" value="Dispatched"')
+        dispatched_row_end = dispatch_status_panel.index("</div>", dispatched_row_index)
+        dispatched_row = dispatch_status_panel[dispatched_row_index:dispatched_row_end]
+        self.assertIn(" checked", dispatched_row)
+        self.assertIn("disabled", dispatched_row)
+        self.assertNotIn("Notify recipient", dispatched_row)
+        recipient_notified_row_index = dispatch_status_panel.index('name="new_status" value="Recipient notified"')
+        recipient_notified_row_end = dispatch_status_panel.index("</div>", recipient_notified_row_index)
+        recipient_notified_row = dispatch_status_panel[recipient_notified_row_index:recipient_notified_row_end]
+        self.assertNotIn(" checked", recipient_notified_row)
+        self.assertNotIn("disabled", recipient_notified_row)
+        self.assertIn("Notify recipient", recipient_notified_row)
+        self.assertIn('href="https://wa.me/5493515550101"', recipient_notified_row)
+        self.assertIn('target="_blank"', recipient_notified_row)
+        self.assertIn('rel="noopener noreferrer"', recipient_notified_row)
+        self.assertIn("shipment-action-copy-button", recipient_notified_row)
+        self.assertIn('data-copy-text="Av. Siempre Viva 123"', recipient_notified_row)
+        self.assertIn("Copy delivery address", recipient_notified_row)
 
-        for new_status in ["Recipient notified", "In transit to recipient", "Delivered successfully"]:
+        self.assertNotIn("Mark as in transit to recipient", html)
+        self.assertNotIn("Mark as delayed", html)
+        for new_status in ["Recipient notified", "Delivered successfully"]:
             response = client.post(
                 f"/pre-session-control-tower/shipments/bundles/{bundle.id}/status",
                 data={"csrf_token": "token", "current_session_id": str(self.session_record.id), "new_status": new_status},
@@ -5729,23 +7797,107 @@ class ScheduleWorkflowTest(unittest.TestCase):
         bundle = ExamSessionShipmentBundle.query.get(bundle.id)
         self.assertEqual(bundle.status, "Delivered successfully")
         self.assertIsNotNone(bundle.delivered_at)
+        response = client.get("/pre-session-control-tower?session_year=2026&view=sessions")
+        html = response.get_data(as_text=True)
+        delivered_dispatch_index = html.index("Shipment dispatch")
+        delivered_panel = html[delivered_dispatch_index:html.index("Readiness details", delivered_dispatch_index)]
+        delivered_status_panel = delivered_panel[
+            delivered_panel.index("Mark shipment as:"):delivered_panel.index("Reopen dispatch stage")
+        ]
+        for status in [
+            "Ready to dispatch",
+            "In transit to post office",
+            "Dispatched",
+            "Recipient notified",
+            "Delivered successfully",
+        ]:
+            row_index = delivered_status_panel.index(f'name="new_status" value="{status}"')
+            row = delivered_status_panel[row_index:delivered_status_panel.index("</div>", row_index)]
+            self.assertIn(" checked", row)
+            self.assertIn("disabled", row)
+        self.assertIn("Notify recipient", delivered_status_panel)
+        self.assertNotIn('href="https://wa.me/5493515550101"', delivered_status_panel)
+        self.assertNotIn("dispatch-current-status-chip", html)
+        self.assertNotIn("No primary shipment action available.", html)
+        self.assertNotIn("Mark recipient review successful", html)
+        self.assertNotIn("Mark recipient review with discrepancy", html)
+        self.assertNotIn("Other actions", delivered_panel)
+        self.assertNotIn("shipment-reopen-form", delivered_panel)
+        self.assertIn("Reopen dispatch stage", delivered_panel)
+        self.assertIn('data-confirm-message="Management password authorisation is required to reopen dispatch stages."', delivered_panel)
+        self.assertIn('data-confirm-password-value="EditOK"', html)
+
+        response = client.post(
+            f"/pre-session-control-tower/shipments/bundles/{bundle.id}/status",
+            data={
+                "csrf_token": "token",
+                "current_session_id": str(self.session_record.id),
+                "new_status": "Recipient notified",
+                "note": "Reopen status.",
+            },
+            follow_redirects=True,
+        )
+        self.assertIn(b"This shipment status transition is not allowed.", response.data)
+        bundle = ExamSessionShipmentBundle.query.get(bundle.id)
+        self.assertEqual(bundle.status, "Delivered successfully")
+
+        response = client.post(
+            f"/pre-session-control-tower/shipments/bundles/{bundle.id}/status",
+            data={
+                "csrf_token": "token",
+                "current_session_id": str(self.session_record.id),
+                "new_status": "Recipient notified",
+                "note": "Reopen status.",
+                "confirmation_password": "EditOK",
+                "dispatch_reopen_authorized": "1",
+            },
+            follow_redirects=False,
+        )
+        self.assertEqual(response.status_code, 302)
+        bundle = ExamSessionShipmentBundle.query.get(bundle.id)
+        self.assertEqual(bundle.status, "Recipient notified")
+        bundle.status = "Delivered successfully"
+        db.session.commit()
 
         response = client.post(
             f"/pre-session-control-tower/shipments/bundles/{bundle.id}/status",
             data={"csrf_token": "token", "current_session_id": str(self.session_record.id), "new_status": "Recipient review with discrepancy"},
             follow_redirects=True,
         )
-        self.assertIn(b"A note is required when recording a recipient review discrepancy.", response.data)
+        self.assertIn(b"This shipment status transition is not allowed.", response.data)
+        bundle = ExamSessionShipmentBundle.query.get(bundle.id)
+        self.assertEqual(bundle.status, "Delivered successfully")
+        self.assertIsNone(bundle.recipient_reviewed_at)
+
+    def test_reopen_dispatch_stage_can_untick_ready_to_dispatch(self):
+        self.create_supervisor()
+        self.assign_confirmed_supervisor()
+        self.mark_session_packages_quality_checked()
+        bundle = self.create_shipment_bundle_record(status="Ready to dispatch")
+        client = self.login_client()
 
         response = client.post(
             f"/pre-session-control-tower/shipments/bundles/{bundle.id}/status",
-            data={"csrf_token": "token", "current_session_id": str(self.session_record.id), "new_status": "Recipient review with discrepancy", "note": "Missing tape."},
+            data={
+                "csrf_token": "token",
+                "current_session_id": str(self.session_record.id),
+                "new_status": "Preparing bundle",
+                "confirmation_password": "EditOK",
+                "dispatch_reopen_authorized": "1",
+            },
             follow_redirects=False,
         )
+
         self.assertEqual(response.status_code, 302)
         bundle = ExamSessionShipmentBundle.query.get(bundle.id)
-        self.assertEqual(bundle.status, "Recipient review with discrepancy")
-        self.assertIsNotNone(bundle.recipient_reviewed_at)
+        self.assertEqual(bundle.status, "Preparing bundle")
+        response = client.get("/pre-session-control-tower?session_year=2026&view=sessions")
+        html = response.get_data(as_text=True)
+        dispatch_index = html.index("Shipment dispatch")
+        dispatch_panel = html[dispatch_index:html.index("Readiness details", dispatch_index)]
+        ready_row_index = dispatch_panel.index('name="new_status" value="Ready to dispatch"')
+        ready_row = dispatch_panel[ready_row_index:dispatch_panel.index("</div>", ready_row_index)]
+        self.assertNotIn(" checked", ready_row)
 
     def test_control_tower_shipments_render_without_my_actions_or_core_changes(self):
         self.create_supervisor()
@@ -5771,11 +7923,10 @@ class ScheduleWorkflowTest(unittest.TestCase):
 
         self.assertEqual(response.status_code, 200)
         self.assertIn("<th>Shipment</th>", html)
-        self.assertLess(html.index("<th>Packages</th>"), html.index("<th>Shipment</th>"))
+        self.assertLess(html.index("<th>Package</th>"), html.index("<th>Shipment</th>"))
         self.assertLess(html.index("<th>Shipment</th>"), html.index("<th>Finance</th>"))
-        self.assertIn("Tracking: CA123", html)
         self.assertIn("Shipments", html)
-        self.assertIn("Shipment history", html)
+        self.assertNotIn("Shipment history", html)
         self.assertIn("This status only covers schedule approval, staffing and logistics.", html)
 
         response = client.get("/pre-session-control-tower?session_year=2026&view=my-actions")
@@ -5809,7 +7960,7 @@ class ScheduleWorkflowTest(unittest.TestCase):
             "Ready to dispatch": "dispatch_shipment_bundle",
             "In transit to post office": "confirm_shipment_dispatch",
             "Dispatched": "notify_shipment_recipient",
-            "Recipient notified": "track_shipment_to_recipient",
+            "Recipient notified": "monitor_shipment_delivery",
             "In transit to recipient": "monitor_shipment_delivery",
             "Delayed": "resolve_shipment_delay",
             "Delivered successfully": "complete_recipient_review",
@@ -6106,7 +8257,16 @@ class ScheduleWorkflowTest(unittest.TestCase):
         self.assertIn("Planning:", html)
         self.assertIn("Shipment planning", html)
         self.assertIn("Dispatch deadline", html)
-        self.assertIn("Related sessions", html)
+        self.assertIn("Sessions included in this bundle", html)
+        sessions_included_start = html.index("Sessions included in this bundle")
+        sessions_included_end = html.index("</ul>", sessions_included_start)
+        sessions_included_html = html[sessions_included_start:sessions_included_end]
+        self.assertNotIn("Waiting for packages", sessions_included_html)
+        self.assertNotIn("Packages ready", sessions_included_html)
+        self.assertNotIn("Current bundle:", html)
+        self.assertNotIn("<strong>Suggested action</strong>", html)
+        self.assertNotIn("Open shipment bundle", html)
+        self.assertNotIn("Use the shipment actions below to continue without changing status automatically.", html)
         self.assertNotIn("Create recommended bundle", html)
         self.assertEqual(ExamSessionShipmentBundle.query.count(), before_bundles + 1)
         bundle = ExamSessionShipmentBundle.query.one()
@@ -6280,6 +8440,18 @@ class ScheduleWorkflowTest(unittest.TestCase):
         self.create_supervisor()
         first_session = self.create_planning_ready_session("Ready bundle A", date(2026, 8, 20))
         second_session = self.create_planning_ready_session("Ready bundle B", date(2026, 9, 3))
+        examiner_assignments = []
+        for offset, session_record in enumerate([first_session] * 3 + [second_session] * 5, start=20):
+            db.session.add(AcademicStaff(id=offset, status="Active", full_name=f"Examiner {offset}", roles="Examiner"))
+            examiner_assignments.append(
+                ExamSessionExaminerAssignment(
+                    exam_session_id=session_record.id,
+                    team_member_id=offset,
+                    participation_status="Confirmed",
+                )
+            )
+        db.session.add_all(examiner_assignments)
+        db.session.commit()
         client = self.login_client()
 
         response = client.get("/pre-session-control-tower?session_year=2026&open_schedule_modal=%s" % first_session.id)
@@ -6302,6 +8474,413 @@ class ScheduleWorkflowTest(unittest.TestCase):
                 "delivery_address": "Av. Siempre Viva 123",
                 "delivery_city": "Cordoba",
                 "delivery_province": "Cordoba",
+                "delivery_option": "store_pickup",
+                "courier": "Correo Argentino",
+                "dispatch_due_at": "2026-08-10",
+                "included_session_ids": [str(first_session.id), str(second_session.id)],
+                "note": "Confirmed by logistics.",
+                "confirmation_password": "EditOK",
+            },
+            follow_redirects=False,
+        )
+
+        self.assertEqual(response.status_code, 302)
+        bundle = ExamSessionShipmentBundle.query.one()
+        self.assertEqual(bundle.status, "Preparing bundle")
+        self.assertEqual(bundle.delivery_address, "Av. Siempre Viva 123")
+        self.assertEqual(bundle.delivery_option, "store_pickup")
+        self.assertEqual({link.exam_session_id for link in bundle.session_links}, {first_session.id, second_session.id})
+        self.assertTrue(bundle.checklist_items)
+        event = ExamSessionShipmentEvent.query.filter_by(bundle_id=bundle.id, event_type="SHIPMENT_BUNDLE_CREATED").one()
+        self.assertIn("Shipment bundle created from planning recommendation.", event.note)
+
+        response = client.get("/pre-session-control-tower?session_year=2026&view=sessions")
+        html = response.get_data(as_text=True)
+        modal_start = html.index(f'id="schedule-workflow-{first_session.id}"')
+        next_modal = html.find('<div class="modal"', modal_start + 1)
+        modal = html[modal_start:next_modal if next_modal != -1 else len(html)]
+        self.assertIn("Shipment actions", modal)
+        self.assertNotIn(">Shipments</h3>", modal)
+        shipments_header = modal[modal.index("Shipment actions"):modal.index("<h4>Shipment planning</h4>")]
+        self.assertIn('<strong class="responsible-chip">LOGISTICS</strong>', shipments_header)
+        self.assertNotIn('<strong class="core-readiness-count">LOGISTICS</strong>', shipments_header)
+        self.assertEqual(shipments_header.count("Shipment planning in progress"), 2)
+        self.assertEqual(shipments_header.count("shipment-status-shipment-planning-in-progress"), 2)
+        self.assertIn("Current status", shipments_header)
+        self.assertIn("Recommended next action", shipments_header)
+        self.assertIn("Responsible", shipments_header)
+        self.assertIn("Current deadline", shipments_header)
+        self.assertIn("Complete shipment bundle preparation", shipments_header)
+        self.assertIn("10/08/2026", shipments_header)
+        shipment_status_track_index = modal.index(f'id="shipment-status-track-{first_session.id}"')
+        self.assertLess(modal.index("Current deadline"), shipment_status_track_index)
+        self.assertLess(shipment_status_track_index, modal.index("<h4>Shipment planning</h4>"))
+        self.assertIn("Status track", modal)
+        self.assertIn("Bundle created", modal)
+        blockers_index = modal.index("Blockers", shipment_status_track_index)
+        self.assertLess(shipment_status_track_index, blockers_index)
+        with open("app/static/css/styles.css", encoding="utf-8") as css_file:
+            css = css_file.read()
+        self.assertIn(".packages-control-section h3,\n.shipments-control-section h3,", css)
+        shipment_planning_index = modal.index("<h4>Shipment planning</h4>")
+        self.assertLess(blockers_index, shipment_planning_index)
+        visible_delivery_options_index = modal.index("shipment-delivery-options")
+        planning_panel_close_index = modal.index("</section>", visible_delivery_options_index)
+        shipment_process_index = modal.index("class=\"shipment-process-section\"", visible_delivery_options_index)
+        planning_details_index = modal.index("<span>Supervisor</span>", shipment_process_index)
+        sessions_included_index = modal.index("Sessions included in this bundle", shipment_process_index)
+        self.assertLess(shipment_planning_index, visible_delivery_options_index)
+        self.assertLess(planning_panel_close_index, shipment_process_index)
+        self.assertLess(shipment_process_index, planning_details_index)
+        shipment_process_panel = modal[shipment_process_index:sessions_included_index]
+        self.assertNotIn("<h4>Shipment process</h4>", modal)
+        self.assertIn("Delivery address", shipment_process_panel)
+        self.assertIn("Ship to nearby store", shipment_process_panel)
+        self.assertIn("<span>Dispatch deadline</span>", shipment_process_panel)
+        self.assertIn("Shipping label information", shipment_process_panel)
+        self.assertIn("Length: 26cm", shipment_process_panel)
+        self.assertIn("Width: 30cm", shipment_process_panel)
+        self.assertIn("Height: 20cm", shipment_process_panel)
+        self.assertIn("Weight: 1kg", shipment_process_panel)
+        self.assertIn('class="shipment-label-card"', shipment_process_panel)
+        self.assertIn("Shipping label", shipment_process_panel)
+        self.assertIn("Insert link to shipping label and tracking number", shipment_process_panel)
+        self.assertIn("Save shipping label and tracking number", shipment_process_panel)
+        self.assertIn('name="shipping_label_update" value="1"', shipment_process_panel)
+        self.assertIn("Shipping label link", shipment_process_panel)
+        self.assertIn('name="shipping_label_url" maxlength="500" value="" required', shipment_process_panel)
+        self.assertIn("Tracking number", shipment_process_panel)
+        self.assertIn('name="tracking_number" maxlength="160" value="" required', shipment_process_panel)
+        self.assertIn(">Confirm with the bundle recipient which delivery option they prefer:<", modal)
+        self.assertLess(
+            modal.index("Confirm with the bundle recipient which delivery option they prefer:"),
+            modal.index('type="checkbox" name="delivery_option" value="meeting_point"', visible_delivery_options_index),
+        )
+        self.assertIn('type="checkbox" name="delivery_option" value="store_pickup" checked', modal)
+        self.assertNotIn("Save delivery option", modal)
+        self.assertNotIn("Current bundle:", modal)
+        self.assertNotIn("<span>Bundle</span>", modal)
+        self.assertNotIn("<span>Supervisor recipient</span>", modal)
+        self.assertNotIn("<span>Delivery option</span>", modal)
+        self.assertNotIn("<span>Tracking</span>", modal)
+        self.assertNotIn("<span>Dispatch due date</span>", modal)
+        pre_dispatch_index = modal.index("Shipment pre-dispatch", sessions_included_index)
+        sessions_included_panel = modal[sessions_included_index:pre_dispatch_index]
+        self.assertNotIn("Edit shipment bundle", modal)
+        self.assertNotIn("shipment-remove-session-button", modal)
+        self.assertNotIn("Remove this session from the bundle", modal)
+        self.assertNotIn("Save shipment bundle", modal)
+        self.assertNotIn("name=\"included_session_ids\"", sessions_included_panel)
+        self.assertNotIn("<h4>Included sessions</h4>", modal)
+        sealed_boxes_index = modal.index("Sealed session boxes", pre_dispatch_index)
+        listening_pack_index = modal.index("Listening and speaking pack", sealed_boxes_index)
+        emergency_pack_index = modal.index("Emergency pack", listening_pack_index)
+        final_checklist_index = modal.index("Final checklist before delivery", emergency_pack_index)
+        self.assertLess(pre_dispatch_index, sealed_boxes_index)
+        self.assertLess(sealed_boxes_index, listening_pack_index)
+        self.assertLess(listening_pack_index, emergency_pack_index)
+        self.assertLess(emergency_pack_index, final_checklist_index)
+        self.assertIn("Confirm that all sessions included in this bundle have their sealed boxes ready.", modal)
+        self.assertIn("Include the Listening and speaking pack for examiners, containing", modal)
+        self.assertIn('<span class="shipment-pack-count-chip">5</span> JBL speakers and dice.', modal)
+        self.assertIn("Include one sealed emergency pack containing two exam papers for each level.", modal)
+        self.assertIn(
+            "Wrap all session boxes, the Listening and speaking pack for examiners, and the emergency pack together with black nylon. Heat-seal the bundle to prepare it as a single shipment.",
+            modal,
+        )
+        self.assertIn("Print the shipping label and affix it to the top of the bundle.", modal)
+        pre_dispatch_end = modal.index("Shipment dispatch", final_checklist_index)
+        pre_dispatch_cards = modal[pre_dispatch_index:pre_dispatch_end]
+        self.assertEqual(pre_dispatch_cards.count("shipment-pre-dispatch-complete-chip"), 4)
+        self.assertEqual(pre_dispatch_cards.count("Mark as complete"), 4)
+        self.assertEqual(pre_dispatch_cards.count("Not started yet"), 4)
+        self.assertNotIn("package-checklist-row", pre_dispatch_cards)
+        dispatch_actions_panel = modal[pre_dispatch_end:modal.index("Readiness details", pre_dispatch_end)]
+        self.assertIn("Mark shipment as:", dispatch_actions_panel)
+        self.assertIn("ready to dispatch", dispatch_actions_panel)
+        self.assertIn("in transit to post office", dispatch_actions_panel)
+        self.assertIn("dispatched", dispatch_actions_panel)
+        self.assertIn("dispatched and recipient notified", dispatch_actions_panel)
+        self.assertIn("delivered successfully", dispatch_actions_panel)
+        ready_row_index = dispatch_actions_panel.index('name="new_status" value="Ready to dispatch"')
+        ready_row = dispatch_actions_panel[ready_row_index:dispatch_actions_panel.index("</div>", ready_row_index)]
+        self.assertIn("disabled", ready_row)
+        self.assertNotIn("dispatch-current-status-chip", dispatch_actions_panel)
+        sealed_boxes_card = pre_dispatch_cards[
+            pre_dispatch_cards.index("Sealed session boxes"):pre_dispatch_cards.index("Listening and speaking pack")
+        ]
+        listening_pack_card = pre_dispatch_cards[
+            pre_dispatch_cards.index("Listening and speaking pack"):pre_dispatch_cards.index("Emergency pack")
+        ]
+        emergency_pack_card = pre_dispatch_cards[
+            pre_dispatch_cards.index("Emergency pack"):pre_dispatch_cards.index("Final checklist before delivery")
+        ]
+        final_checklist_card = pre_dispatch_cards[pre_dispatch_cards.index("Final checklist before delivery"):]
+        self.assertIn("shipment-pre-dispatch-complete-chip", sealed_boxes_card)
+        self.assertNotIn("disabled", sealed_boxes_card)
+        self.assertIn("disabled", listening_pack_card)
+        self.assertIn("disabled", emergency_pack_card)
+        self.assertIn("disabled", final_checklist_card)
+
+        sealed_boxes_item = ExamSessionShipmentChecklistItem.query.filter_by(
+            bundle_id=bundle.id,
+            item_key="verify_sessions_boxes",
+        ).one()
+        response = client.post(
+            f"/pre-session-control-tower/shipments/checklist-items/{sealed_boxes_item.id}",
+            data={
+                "csrf_token": "token",
+                "view": "sessions",
+                "current_session_id": str(first_session.id),
+                "is_checked": "1",
+            },
+            follow_redirects=False,
+        )
+        self.assertEqual(response.status_code, 302)
+        db.session.refresh(sealed_boxes_item)
+        self.assertTrue(sealed_boxes_item.is_checked)
+        response = client.get("/pre-session-control-tower?session_year=2026&view=sessions")
+        html = response.get_data(as_text=True)
+        modal_start = html.index(f'id="schedule-workflow-{first_session.id}"')
+        next_modal = html.find('<div class="modal"', modal_start + 1)
+        modal = html[modal_start:next_modal if next_modal != -1 else len(html)]
+        sealed_boxes_index = modal.index("Sealed session boxes")
+        listening_pack_index = modal.index("Listening and speaking pack", sealed_boxes_index)
+        sealed_boxes_card = modal[sealed_boxes_index:listening_pack_index]
+        emergency_pack_index = modal.index("Emergency pack", listening_pack_index)
+        listening_pack_card = modal[listening_pack_index:emergency_pack_index]
+        self.assertIn("Completed", sealed_boxes_card)
+        self.assertIn("package-preparation-state-completed", sealed_boxes_card)
+        self.assertIn("Reopen", sealed_boxes_card)
+        self.assertNotIn("Mark as complete", sealed_boxes_card)
+        self.assertIn('data-confirm-password-submit="Management password authorisation is required to reopen this stage:"', sealed_boxes_card)
+        self.assertIn('data-confirm-password-value="EditOK"', sealed_boxes_card)
+        self.assertNotIn("disabled", listening_pack_card)
+
+        response = client.post(
+            f"/pre-session-control-tower/shipments/checklist-items/{sealed_boxes_item.id}",
+            data={
+                "csrf_token": "token",
+                "view": "sessions",
+                "current_session_id": str(first_session.id),
+                "is_checked": "0",
+            },
+            follow_redirects=False,
+        )
+        self.assertEqual(response.status_code, 302)
+        db.session.refresh(sealed_boxes_item)
+        self.assertTrue(sealed_boxes_item.is_checked)
+
+        response = client.post(
+            f"/pre-session-control-tower/shipments/checklist-items/{sealed_boxes_item.id}",
+            data={
+                "csrf_token": "token",
+                "view": "sessions",
+                "current_session_id": str(first_session.id),
+                "is_checked": "0",
+                "confirmation_password": "EditOK",
+            },
+            follow_redirects=False,
+        )
+        self.assertEqual(response.status_code, 302)
+        db.session.refresh(sealed_boxes_item)
+        self.assertFalse(sealed_boxes_item.is_checked)
+
+        response = client.post(
+            f"/pre-session-control-tower/shipments/bundles/{bundle.id}",
+            data={
+                "csrf_token": "token",
+                "view": "sessions",
+                "current_session_id": str(first_session.id),
+                "supervisor_staff_id": "1",
+                "delivery_address": "Av. Siempre Viva 123",
+                "delivery_city": "Cordoba",
+                "delivery_province": "Cordoba",
+                "delivery_option": "store_pickup",
+                "courier": "Correo Argentino",
+                "tracking_number": "TRACK-001",
+                "shipping_label_url": "https://labels.example.com/bundle-1",
+                "shipping_label_update": "1",
+                "dispatch_due_at": "2026-08-10",
+                "included_session_ids": [str(first_session.id), str(second_session.id)],
+                "note": "Confirmed by logistics.",
+                "confirmation_password": "EditOK",
+            },
+            follow_redirects=False,
+        )
+
+        self.assertEqual(response.status_code, 302)
+        db.session.refresh(bundle)
+        self.assertEqual(bundle.shipping_label_url, "https://labels.example.com/bundle-1")
+        self.assertEqual(bundle.tracking_number, "TRACK-001")
+        response = client.get("/pre-session-control-tower?session_year=2026&view=sessions")
+        html = response.get_data(as_text=True)
+        modal_start = html.index(f'id="schedule-workflow-{first_session.id}"')
+        next_modal = html.find('<div class="modal"', modal_start + 1)
+        modal = html[modal_start:next_modal if next_modal != -1 else len(html)]
+        shipment_process_index = modal.index("class=\"shipment-process-section\"")
+        sessions_included_index = modal.index("Sessions included in this bundle", shipment_process_index)
+        shipment_process_panel = modal[shipment_process_index:sessions_included_index]
+        self.assertIn("Open shipping label", shipment_process_panel)
+        self.assertIn('href="https://labels.example.com/bundle-1"', shipment_process_panel)
+        self.assertIn('<span class="shipment-tracking-chip">TRACK-001</span>', shipment_process_panel)
+        self.assertIn("shipment-tracking-copy-button", shipment_process_panel)
+        self.assertIn('data-copy-text="TRACK-001"', shipment_process_panel)
+        self.assertIn("Copy tracking number", shipment_process_panel)
+        self.assertIn("Adding a new shipping label will replace the previously uploaded file. Management password authorisation is required to continue.", shipment_process_panel)
+        self.assertIn('data-confirm-password-value="EditOK"', shipment_process_panel)
+        final_checklist_index = modal.index("Final checklist before delivery")
+        dispatch_actions_index = modal.index("Shipment dispatch", final_checklist_index)
+        final_checklist_card = modal[final_checklist_index:dispatch_actions_index]
+        self.assertIn(
+            'Print the <a href="https://labels.example.com/bundle-1" target="_blank" rel="noopener noreferrer" aria-label="Open shipping label">shipping label</a> and affix it to the top of the bundle.',
+            final_checklist_card,
+        )
+
+        response = client.post(
+            f"/pre-session-control-tower/shipments/bundles/{bundle.id}",
+            data={
+                "csrf_token": "token",
+                "view": "sessions",
+                "current_session_id": str(first_session.id),
+                "supervisor_staff_id": "1",
+                "delivery_address": "Av. Siempre Viva 123",
+                "delivery_city": "Cordoba",
+                "delivery_province": "Cordoba",
+                "delivery_option": "store_pickup",
+                "courier": "Correo Argentino",
+                "shipping_label_url": "https://labels.example.com/missing-tracking",
+                "shipping_label_update": "1",
+                "confirmation_password": "EditOK",
+                "dispatch_due_at": "2026-08-10",
+                "included_session_ids": [str(first_session.id), str(second_session.id)],
+                "note": "Confirmed by logistics.",
+            },
+            follow_redirects=False,
+        )
+
+        self.assertEqual(response.status_code, 302)
+        db.session.refresh(bundle)
+        self.assertEqual(bundle.shipping_label_url, "https://labels.example.com/bundle-1")
+        self.assertEqual(bundle.tracking_number, "TRACK-001")
+
+        response = client.post(
+            f"/pre-session-control-tower/shipments/bundles/{bundle.id}",
+            data={
+                "csrf_token": "token",
+                "view": "sessions",
+                "current_session_id": str(first_session.id),
+                "supervisor_staff_id": "1",
+                "delivery_address": "Av. Siempre Viva 123",
+                "delivery_city": "Cordoba",
+                "delivery_province": "Cordoba",
+                "delivery_option": "store_pickup",
+                "courier": "Correo Argentino",
+                "tracking_number": "TRACK-002",
+                "shipping_label_url": "https://labels.example.com/replacement",
+                "shipping_label_update": "1",
+                "dispatch_due_at": "2026-08-10",
+                "included_session_ids": [str(first_session.id), str(second_session.id)],
+                "note": "Confirmed by logistics.",
+            },
+            follow_redirects=False,
+        )
+
+        self.assertEqual(response.status_code, 302)
+        db.session.refresh(bundle)
+        self.assertEqual(bundle.shipping_label_url, "https://labels.example.com/bundle-1")
+        self.assertEqual(bundle.tracking_number, "TRACK-001")
+
+        response = client.post(
+            f"/pre-session-control-tower/shipments/bundles/{bundle.id}",
+            data={
+                "csrf_token": "token",
+                "view": "sessions",
+                "current_session_id": str(first_session.id),
+                "supervisor_staff_id": "1",
+                "delivery_address": "Av. Siempre Viva 123",
+                "delivery_city": "Cordoba",
+                "delivery_province": "Cordoba",
+                "delivery_option": "store_pickup",
+                "courier": "Correo Argentino",
+                "tracking_number": "TRACK-002",
+                "shipping_label_url": "https://labels.example.com/replacement",
+                "shipping_label_update": "1",
+                "confirmation_password": "EditOK",
+                "dispatch_due_at": "2026-08-10",
+                "included_session_ids": [str(first_session.id), str(second_session.id)],
+                "note": "Confirmed by logistics.",
+            },
+            follow_redirects=False,
+        )
+
+        self.assertEqual(response.status_code, 302)
+        db.session.refresh(bundle)
+        self.assertEqual(bundle.shipping_label_url, "https://labels.example.com/replacement")
+        self.assertEqual(bundle.tracking_number, "TRACK-002")
+
+        for item in ExamSessionShipmentChecklistItem.query.filter_by(bundle_id=bundle.id).all():
+            if item.item_key in {"verify_sessions_boxes", "jbl_speakers_dice", "emergency_pack", "correo_label"}:
+                item.is_checked = True
+        db.session.commit()
+        response = client.get("/pre-session-control-tower?session_year=2026&view=sessions")
+        html = response.get_data(as_text=True)
+        modal_start = html.index(f'id="schedule-workflow-{first_session.id}"')
+        next_modal = html.find('<div class="modal"', modal_start + 1)
+        modal = html[modal_start:next_modal if next_modal != -1 else len(html)]
+        dispatch_actions_index = modal.index("Shipment dispatch")
+        dispatch_history_index = modal.index("Readiness details", dispatch_actions_index)
+        dispatch_actions_panel = modal[dispatch_actions_index:dispatch_history_index]
+        ready_row_index = dispatch_actions_panel.index('name="new_status" value="Ready to dispatch"')
+        ready_row = dispatch_actions_panel[ready_row_index:dispatch_actions_panel.index("</div>", ready_row_index)]
+        self.assertIn("ready to dispatch", ready_row)
+        self.assertNotIn("disabled", ready_row)
+
+        response = client.post(
+            f"/pre-session-control-tower/shipments/bundles/{bundle.id}",
+            data={
+                "csrf_token": "token",
+                "view": "sessions",
+                "current_session_id": str(first_session.id),
+                "supervisor_staff_id": "1",
+                "delivery_address": "Av. Siempre Viva 123",
+                "delivery_city": "Cordoba",
+                "delivery_province": "Cordoba",
+                "delivery_option": "different_address",
+                "courier": "Correo Argentino",
+                "dispatch_due_at": "2026-08-10",
+                "included_session_ids": [str(first_session.id), str(second_session.id)],
+                "note": "Confirmed by logistics.",
+                "confirmation_password": "EditOK",
+            },
+            follow_redirects=False,
+        )
+
+        self.assertEqual(response.status_code, 302)
+        db.session.refresh(bundle)
+        self.assertEqual(bundle.delivery_option, "different_address")
+        response = client.get("/pre-session-control-tower?session_year=2026&view=sessions")
+        html = response.get_data(as_text=True)
+        modal_start = html.index(f'id="schedule-workflow-{first_session.id}"')
+        next_modal = html.find('<div class="modal"', modal_start + 1)
+        modal = html[modal_start:next_modal if next_modal != -1 else len(html)]
+        shipment_process_index = modal.index("class=\"shipment-process-section\"")
+        shipment_process_end = modal.index("</section>", shipment_process_index)
+        shipment_process = modal[shipment_process_index:shipment_process_end]
+        self.assertIn("Enter new delivery address", shipment_process)
+        self.assertNotIn("<strong>Av. Siempre Viva 123</strong>", shipment_process)
+
+        response = client.post(
+            f"/pre-session-control-tower/shipments/bundles/{bundle.id}",
+            data={
+                "csrf_token": "token",
+                "view": "sessions",
+                "current_session_id": str(first_session.id),
+                "supervisor_staff_id": "1",
+                "delivery_address": "Nueva direccion 456",
+                "delivery_city": "Rosario",
+                "delivery_province": "Santa Fe",
+                "delivery_option": "different_address",
                 "courier": "Correo Argentino",
                 "dispatch_due_at": "2026-08-10",
                 "included_session_ids": [str(first_session.id), str(second_session.id)],
@@ -6311,13 +8890,373 @@ class ScheduleWorkflowTest(unittest.TestCase):
         )
 
         self.assertEqual(response.status_code, 302)
-        bundle = ExamSessionShipmentBundle.query.one()
-        self.assertEqual(bundle.status, "Preparing bundle")
+        db.session.refresh(bundle)
+        self.assertEqual(bundle.delivery_address, "Nueva direccion 456")
+        self.assertEqual(bundle.delivery_city, "Rosario")
+        self.assertEqual(bundle.delivery_province, "Santa Fe")
+        supervisor = AcademicStaff.query.get(1)
+        self.assertEqual(supervisor.full_address_google_maps, "Av. Siempre Viva 123")
+        self.assertEqual(supervisor.city, "Cordoba")
+        self.assertEqual(supervisor.province, "Cordoba")
+        response = client.get("/pre-session-control-tower?session_year=2026&view=sessions")
+        html = response.get_data(as_text=True)
+        modal_start = html.index(f'id="schedule-workflow-{first_session.id}"')
+        next_modal = html.find('<div class="modal"', modal_start + 1)
+        modal = html[modal_start:next_modal if next_modal != -1 else len(html)]
+        shipment_process_index = modal.index("class=\"shipment-process-section\"")
+        shipment_process_end = modal.index("</section>", shipment_process_index)
+        shipment_process = modal[shipment_process_index:shipment_process_end]
+        self.assertIn("Nueva direccion 456", shipment_process)
+        self.assertNotIn("Enter new delivery address", shipment_process)
+
+        response = client.post(
+            f"/pre-session-control-tower/shipments/bundles/{bundle.id}",
+            data={
+                "csrf_token": "token",
+                "view": "sessions",
+                "current_session_id": str(first_session.id),
+                "supervisor_staff_id": "1",
+                "delivery_address": "Av. Siempre Viva 123",
+                "delivery_city": "Cordoba",
+                "delivery_province": "Cordoba",
+                "delivery_option": "meeting_point",
+                "courier": "Correo Argentino",
+                "dispatch_due_at": "2026-08-10",
+                "included_session_ids": [str(first_session.id), str(second_session.id)],
+                "note": "Confirmed by logistics.",
+                "confirmation_password": "EditOK",
+            },
+            follow_redirects=False,
+        )
+
+        self.assertEqual(response.status_code, 302)
+        db.session.refresh(bundle)
+        self.assertEqual(bundle.delivery_option, "meeting_point")
+        response = client.get("/pre-session-control-tower?session_year=2026&view=sessions")
+        html = response.get_data(as_text=True)
+        modal_start = html.index(f'id="schedule-workflow-{first_session.id}"')
+        next_modal = html.find('<div class="modal"', modal_start + 1)
+        modal = html[modal_start:next_modal if next_modal != -1 else len(html)]
+        shipment_process_index = modal.index("class=\"shipment-process-section\"")
+        sessions_included_index = modal.index("Sessions included in this bundle", shipment_process_index)
+        shipment_process_panel = modal[shipment_process_index:sessions_included_index]
+        self.assertIn("<span>Supervisor</span>", shipment_process_panel)
+        self.assertIn("Delivery address", shipment_process_panel)
+        self.assertIn("Enter new delivery address", shipment_process_panel)
+        self.assertIn('name="delivery_option" value="meeting_point"', shipment_process_panel)
+        self.assertIn('name="delivery_address_update" value="1"', shipment_process_panel)
+        self.assertIn("<span>Dispatch deadline</span>", shipment_process_panel)
+        self.assertNotIn("Shipping label information", shipment_process_panel)
+
+        response = client.post(
+            f"/pre-session-control-tower/shipments/bundles/{bundle.id}",
+            data={
+                "csrf_token": "token",
+                "view": "sessions",
+                "current_session_id": str(first_session.id),
+                "supervisor_staff_id": "1",
+                "delivery_address": "Meeting point 789",
+                "delivery_city": "Cordoba",
+                "delivery_province": "Cordoba",
+                "delivery_option": "meeting_point",
+                "courier": "Correo Argentino",
+                "dispatch_due_at": "2026-08-10",
+                "included_session_ids": [str(first_session.id), str(second_session.id)],
+                "note": "Confirmed by logistics.",
+                "confirmation_password": "EditOK",
+            },
+            follow_redirects=False,
+        )
+
+        self.assertEqual(response.status_code, 302)
+        db.session.refresh(bundle)
+        self.assertEqual(bundle.delivery_option, "meeting_point")
+        self.assertEqual(bundle.delivery_address, "Meeting point 789")
+        response = client.get("/pre-session-control-tower?session_year=2026&view=sessions")
+        html = response.get_data(as_text=True)
+        modal_start = html.index(f'id="schedule-workflow-{first_session.id}"')
+        next_modal = html.find('<div class="modal"', modal_start + 1)
+        modal = html[modal_start:next_modal if next_modal != -1 else len(html)]
+        shipment_process_index = modal.index("class=\"shipment-process-section\"")
+        sessions_included_index = modal.index("Sessions included in this bundle", shipment_process_index)
+        shipment_process_panel = modal[shipment_process_index:sessions_included_index]
+        self.assertIn("Meeting point 789", shipment_process_panel)
+        self.assertNotIn("Enter new delivery address", shipment_process_panel)
+        self.assertIn("Reset", shipment_process_panel)
+        self.assertIn('name="delivery_address_update" value="1"', shipment_process_panel)
+        self.assertIn('data-confirm-password-submit="Management password authorisation is required to reset the delivery address."', shipment_process_panel)
+        self.assertIn('data-confirm-password-value="EditOK"', shipment_process_panel)
+        final_checklist_index = modal.index("Final checklist before delivery")
+        dispatch_actions_index = modal.index("Shipment dispatch", final_checklist_index)
+        final_checklist_card = modal[final_checklist_index:dispatch_actions_index]
+        self.assertIn(
+            f'Print the <a href="/pre-session-control-tower/bundles/{bundle.id}/bundle-label.pdf" target="_blank" rel="noopener noreferrer" aria-label="Open bundle label PDF">bundle label</a> and affix it to the top of the bundle.',
+            final_checklist_card,
+        )
+        self.assertNotIn("shipping label</a> and affix it to the top of the bundle.", final_checklist_card)
+
+        response = client.post(
+            f"/pre-session-control-tower/shipments/bundles/{bundle.id}",
+            data={
+                "csrf_token": "token",
+                "view": "sessions",
+                "current_session_id": str(first_session.id),
+                "supervisor_staff_id": "1",
+                "delivery_option": "meeting_point",
+                "reset_delivery_address": "1",
+            },
+            follow_redirects=True,
+        )
+        self.assertIn(b"Management password authorisation is required to reset the delivery address.", response.data)
+        db.session.refresh(bundle)
+        self.assertEqual(bundle.delivery_address, "Meeting point 789")
+
+        response = client.post(
+            f"/pre-session-control-tower/shipments/bundles/{bundle.id}",
+            data={
+                "csrf_token": "token",
+                "view": "sessions",
+                "current_session_id": str(first_session.id),
+                "supervisor_staff_id": "1",
+                "delivery_option": "meeting_point",
+                "reset_delivery_address": "1",
+                "confirmation_password": "EditOK",
+            },
+            follow_redirects=False,
+        )
+        self.assertEqual(response.status_code, 302)
+        db.session.refresh(bundle)
         self.assertEqual(bundle.delivery_address, "Av. Siempre Viva 123")
-        self.assertEqual({link.exam_session_id for link in bundle.session_links}, {first_session.id, second_session.id})
-        self.assertTrue(bundle.checklist_items)
-        event = ExamSessionShipmentEvent.query.filter_by(bundle_id=bundle.id, event_type="SHIPMENT_BUNDLE_CREATED").one()
-        self.assertIn("Shipment bundle created from planning recommendation.", event.note)
+        self.assertEqual(bundle.delivery_city, "Cordoba")
+        self.assertEqual(bundle.delivery_province, "Cordoba")
+        supervisor = AcademicStaff.query.get(1)
+        self.assertEqual(supervisor.full_address_google_maps, "Av. Siempre Viva 123")
+        response = client.get("/pre-session-control-tower?session_year=2026&view=sessions")
+        html = response.get_data(as_text=True)
+        modal_start = html.index(f'id="schedule-workflow-{first_session.id}"')
+        next_modal = html.find('<div class="modal"', modal_start + 1)
+        modal = html[modal_start:next_modal if next_modal != -1 else len(html)]
+        shipment_process_index = modal.index("class=\"shipment-process-section\"")
+        sessions_included_index = modal.index("Sessions included in this bundle", shipment_process_index)
+        shipment_process_panel = modal[shipment_process_index:sessions_included_index]
+        self.assertIn("Enter new delivery address", shipment_process_panel)
+        self.assertNotIn("Meeting point 789", shipment_process_panel)
+
+        response = client.post(
+            f"/pre-session-control-tower/shipments/bundles/{bundle.id}",
+            data={
+                "csrf_token": "token",
+                "view": "sessions",
+                "current_session_id": str(first_session.id),
+                "supervisor_staff_id": "1",
+                "delivery_address": "Av. Siempre Viva 123",
+                "delivery_city": "Cordoba",
+                "delivery_province": "Cordoba",
+                "courier": "Correo Argentino",
+                "dispatch_due_at": "2026-08-10",
+                "included_session_ids": [str(first_session.id), str(second_session.id)],
+                "note": "Confirmed by logistics.",
+                "confirmation_password": "EditOK",
+            },
+            follow_redirects=False,
+        )
+
+        self.assertEqual(response.status_code, 302)
+        db.session.refresh(bundle)
+        self.assertEqual(bundle.delivery_option, "")
+        self.assertEqual(bundle.delivery_address, "Av. Siempre Viva 123")
+        self.assertEqual(bundle.delivery_city, "Cordoba")
+        self.assertEqual(bundle.delivery_province, "Cordoba")
+
+        self.assertEqual(
+            {link.exam_session_id for link in ExamSessionShipmentBundleSession.query.filter_by(bundle_id=bundle.id).all()},
+            {first_session.id, second_session.id},
+        )
+
+    def test_meeting_point_delivery_address_saves_after_bundle_preparation_started(self):
+        self.create_supervisor()
+        first_session = self.create_planning_ready_session("Meeting point bundle", date(2026, 8, 20))
+        bundle = ExamSessionShipmentBundle(
+            supervisor_staff_id=1,
+            delivery_address="Av. Siempre Viva 123",
+            delivery_city="Cordoba",
+            delivery_province="Cordoba",
+            delivery_option="meeting_point",
+            courier="Correo Argentino",
+            status="Ready to dispatch",
+            responsible_department="LOGISTICS",
+        )
+        db.session.add(bundle)
+        db.session.flush()
+        db.session.add(ExamSessionShipmentBundleSession(bundle=bundle, exam_session_id=first_session.id))
+        db.session.commit()
+        client = self.login_client()
+
+        response = client.post(
+            f"/pre-session-control-tower/shipments/bundles/{bundle.id}",
+            data={
+                "csrf_token": "token",
+                "view": "sessions",
+                "current_session_id": str(first_session.id),
+                "supervisor_staff_id": "1",
+                "delivery_address": "Meeting point 789",
+                "delivery_city": "Pilar",
+                "delivery_province": "Buenos Aires",
+                "delivery_option": "meeting_point",
+                "courier": "Correo Argentino",
+                "included_session_ids": [str(first_session.id)],
+            },
+            follow_redirects=False,
+        )
+
+        self.assertEqual(response.status_code, 302)
+        db.session.refresh(bundle)
+        self.assertEqual(bundle.status, "Ready to dispatch")
+        self.assertEqual(bundle.delivery_option, "meeting_point")
+        self.assertEqual(bundle.delivery_address, "Meeting point 789")
+        self.assertEqual(bundle.delivery_city, "Pilar")
+        self.assertEqual(bundle.delivery_province, "Buenos Aires")
+        supervisor = AcademicStaff.query.get(1)
+        self.assertEqual(supervisor.full_address_google_maps, "Av. Siempre Viva 123")
+        self.assertEqual(
+            ExamSessionShipmentEvent.query.filter_by(bundle_id=bundle.id, event_type="ADDRESS_CHANGED").count(),
+            1,
+        )
+
+        response = client.post(
+            f"/pre-session-control-tower/shipments/bundles/{bundle.id}",
+            data={
+                "csrf_token": "token",
+                "view": "sessions",
+                "current_session_id": str(first_session.id),
+                "supervisor_staff_id": "1",
+                "delivery_address": "Second meeting point",
+                "delivery_city": "Rosario",
+                "delivery_province": "Santa Fe",
+                "delivery_option": "meeting_point",
+                "delivery_address_update": "1",
+                "courier": "Correo Argentino",
+                "included_session_ids": [str(first_session.id)],
+            },
+            follow_redirects=True,
+        )
+
+        self.assertIn(b"Management password authorisation is required to reset the delivery address.", response.data)
+        db.session.refresh(bundle)
+        self.assertEqual(bundle.delivery_address, "Meeting point 789")
+
+        response = client.post(
+            f"/pre-session-control-tower/shipments/bundles/{bundle.id}",
+            data={
+                "csrf_token": "token",
+                "view": "sessions",
+                "current_session_id": str(first_session.id),
+                "supervisor_staff_id": "1",
+                "delivery_address": "Second meeting point",
+                "delivery_city": "Rosario",
+                "delivery_province": "Santa Fe",
+                "delivery_option": "meeting_point",
+                "delivery_address_update": "1",
+                "courier": "Correo Argentino",
+                "included_session_ids": [str(first_session.id)],
+                "confirmation_password": "EditOK",
+            },
+            follow_redirects=False,
+        )
+
+        self.assertEqual(response.status_code, 302)
+        db.session.refresh(bundle)
+        self.assertEqual(bundle.delivery_address, "Second meeting point")
+        self.assertEqual(bundle.delivery_city, "Rosario")
+        self.assertEqual(bundle.delivery_province, "Santa Fe")
+        self.assertEqual(supervisor.full_address_google_maps, "Av. Siempre Viva 123")
+
+    def test_blocked_shipment_bundle_disables_delivery_option_checkboxes(self):
+        self.create_supervisor()
+        ready_session = self.create_planning_ready_session("Ready shipment session", date(2026, 8, 20))
+        blocked_session = ExamSession(
+            exam_session_name="Staffing pending shipment session",
+            category="Path School",
+            status="Pending",
+            session_date=date(2026, 8, 21),
+            shifts="Morning",
+            modules="Speaking",
+            format="Online",
+        )
+        db.session.add(blocked_session)
+        db.session.flush()
+        bundle = ExamSessionShipmentBundle(
+            supervisor_staff_id=1,
+            delivery_address="Av. Siempre Viva 123",
+            delivery_city="Cordoba",
+            delivery_province="Cordoba",
+            delivery_option="",
+            courier="Correo Argentino",
+            status="Preparing bundle",
+            responsible_department="LOGISTICS",
+        )
+        db.session.add(bundle)
+        db.session.flush()
+        db.session.add_all([
+            ExamSessionShipmentBundleSession(bundle=bundle, exam_session_id=ready_session.id),
+            ExamSessionShipmentBundleSession(bundle=bundle, exam_session_id=blocked_session.id),
+        ])
+        db.session.commit()
+        client = self.login_client()
+
+        response = client.get(f"/pre-session-control-tower?session_year=2026&view=sessions&open_schedule_modal={ready_session.id}")
+        html = response.get_data(as_text=True)
+        modal_start = html.index(f'id="schedule-workflow-{ready_session.id}"')
+        next_modal = html.find('<div class="modal"', modal_start + 1)
+        modal = html[modal_start:next_modal if next_modal != -1 else len(html)]
+        delivery_options_index = modal.index("shipment-delivery-options")
+        delivery_options_end = modal.index("</fieldset>", delivery_options_index)
+        delivery_options = modal[delivery_options_index:delivery_options_end]
+
+        self.assertIn("shipment-delivery-options is-disabled", delivery_options)
+        self.assertIn('disabled aria-disabled="true"', delivery_options)
+        self.assertEqual(delivery_options.count('type="checkbox" name="delivery_option"'), 4)
+        self.assertEqual(delivery_options.count(' disabled>'), 4)
+
+        response = client.post(
+            f"/pre-session-control-tower/shipments/bundles/{bundle.id}",
+            data={
+                "csrf_token": "token",
+                "view": "sessions",
+                "current_session_id": str(ready_session.id),
+                "supervisor_staff_id": "1",
+                "delivery_address": "Av. Siempre Viva 123",
+                "delivery_city": "Cordoba",
+                "delivery_province": "Cordoba",
+                "delivery_option": "meeting_point",
+                "courier": "Correo Argentino",
+                "included_session_ids": [str(ready_session.id), str(blocked_session.id)],
+            },
+            follow_redirects=True,
+        )
+
+        db.session.refresh(bundle)
+        self.assertEqual(bundle.delivery_option, "")
+
+        db.session.add(ExamSessionSupervisorAssignment(
+            exam_session_id=blocked_session.id,
+            team_member_id=1,
+            participation_status="Confirmed",
+            is_shipment_recipient=True,
+        ))
+        db.session.commit()
+
+        response = client.get(f"/pre-session-control-tower?session_year=2026&view=sessions&open_schedule_modal={ready_session.id}")
+        html = response.get_data(as_text=True)
+        modal_start = html.index(f'id="schedule-workflow-{ready_session.id}"')
+        next_modal = html.find('<div class="modal"', modal_start + 1)
+        modal = html[modal_start:next_modal if next_modal != -1 else len(html)]
+        delivery_options_index = modal.index("shipment-delivery-options")
+        delivery_options_end = modal.index("</fieldset>", delivery_options_index)
+        delivery_options = modal[delivery_options_index:delivery_options_end]
+
+        self.assertNotIn("shipment-delivery-options is-disabled", delivery_options)
+        self.assertNotIn('disabled aria-disabled="true"', delivery_options)
 
     def test_control_tower_shipment_planning_assisted_revalidates_changed_recommendation(self):
         self.create_supervisor()
@@ -6363,7 +9302,17 @@ class ScheduleWorkflowTest(unittest.TestCase):
         waiting_start = html.index('id="schedule-workflow-%s"' % waiting_session.id)
         waiting_end = html.find('<div class="modal"', waiting_start + 1)
         waiting_panel = html[waiting_start:waiting_end if waiting_end != -1 else len(html)]
-        self.assertIn("Packages must be quality checked before shipment can be created.", waiting_panel)
+        self.assertIn("shipment-delivery-options", waiting_panel)
+        self.assertIn(">Confirm with the bundle recipient which delivery option they prefer:<", waiting_panel)
+        self.assertNotIn("Packages must be quality checked before shipment can be planned.", waiting_panel)
+        self.assertIn('type="checkbox" name="delivery_option" value="meeting_point"', waiting_panel)
+        self.assertNotIn('name="delivery_option" value="meeting_point" checked', waiting_panel)
+        self.assertIn("Collection at an agreed meeting point", waiting_panel)
+        self.assertIn("Courier delivery to a store near their address", waiting_panel)
+        self.assertIn("Courier delivery to the address listed below.", waiting_panel)
+        self.assertIn("Courier delivery to a different address", waiting_panel)
+        self.assertNotIn("Packages must be quality checked before shipment can be created.", waiting_panel)
+        self.assertNotIn("shipment-assisted-info", waiting_panel)
         self.assertNotIn("Create bundle with ready sessions", waiting_panel)
 
     def test_logistics_control_view_does_not_create_record(self):
@@ -9052,6 +12001,15 @@ class ScheduleWorkflowTest(unittest.TestCase):
         self.assertIn('aria-label="Close modal"', modal)
         self.assertIn("View full session overview", modal)
         self.assertIn(f'data-overview-target="overview-{session_id}"', modal)
+        self.assertIn('aria-label="Session quick links"', modal)
+        self.assertIn("View session planner", modal)
+        self.assertIn(
+            f"/exam-session-planner?session_year=2026&amp;open_session_modal={session_id}&amp;session_fullscreen=1",
+            modal,
+        )
+        self.assertIn("View in Sinapsis", modal)
+        self.assertIn('href="https://example.com/sinapsis"', modal)
+        self.assertIn('target="_blank"', modal)
         self.assertIn("data-focused-context", modal)
         self.assertIn(f'id="overview-{session_id}"', modal)
         self.assertIn("A quick operational snapshot for this exam session.", modal)
@@ -9072,21 +12030,22 @@ class ScheduleWorkflowTest(unittest.TestCase):
         self.assertIn(f'id="schedule-{session_id}"', modal)
         staffing_id_index = modal.index(f'id="staffing-{session_id}"')
         staffing_start = modal.rfind("<section", 0, staffing_id_index)
-        staffing_end = modal.index(f'id="logistics-{session_id}"')
+        staffing_end = modal.index(f'id="packages-{session_id}"')
         staffing_section = modal[staffing_start:staffing_end]
+        staffing_summary = staffing_section[:staffing_section.index('<form method="post"')]
         self.assertIn("staffing-actions-section", staffing_section)
         self.assertIn("Staffing actions", staffing_section)
         self.assertIn("staffing-header-actions", staffing_section)
         self.assertIn('<strong class="responsible-chip">ADMIN</strong>', staffing_section)
-        self.assertIn("Current status", staffing_section)
-        self.assertIn("Recommended next action", staffing_section)
-        self.assertIn("Responsible", staffing_section)
-        self.assertIn("Nearest deadline", staffing_section)
-        self.assertNotIn("Responsible person", staffing_section)
-        self.assertNotIn("Staffing deadline", staffing_section)
-        self.assertNotIn("Operational note", staffing_section)
-        self.assertNotIn("Open in Exam session planner", staffing_section)
-        self.assertNotIn("Edit ownership and deadline", staffing_section)
+        self.assertIn("Current status", staffing_summary)
+        self.assertIn("Recommended next action", staffing_summary)
+        self.assertIn("Responsible", staffing_summary)
+        self.assertIn("Nearest deadline", staffing_summary)
+        self.assertNotIn("Responsible person", staffing_summary)
+        self.assertNotIn("Staffing deadline", staffing_summary)
+        self.assertNotIn("Operational note", staffing_summary)
+        self.assertNotIn("Open in Exam session planner", staffing_summary)
+        self.assertNotIn("Edit ownership and deadline", staffing_summary)
         with open("app/static/css/styles.css", encoding="utf-8") as css_file:
             css = css_file.read()
         self.assertIn(".schedule-workflow-actions h3,\n.staffing-actions-section h3,", css)
@@ -9183,7 +12142,8 @@ class ScheduleWorkflowTest(unittest.TestCase):
         self.assertIn("Confirmations to be updated", html)
         self.assertIn("1 confirmation to be sent", html)
         self.assertIn("1 confirmation to be updated", html)
-        self.assertIn("Confirmed staff", html)
+        self.assertIn("Confirmed", html)
+        self.assertNotIn(">Confirmed staff<", html)
         self.assertIn("3 / 3 confirmed", html)
         self.assertIn("Supervisor", html)
         self.assertIn("Examiner", html)
@@ -9294,6 +12254,111 @@ class ScheduleWorkflowTest(unittest.TestCase):
         self.assertIn(".staffing-status-confirmations-to-be-sent", css)
         self.assertIn(".staffing-status-confirmations-to-be-updated", css)
         self.assertIn(".staffing-status-confirmed-staff", css)
+
+    def test_emergency_contact_staffing_row_can_update_status(self):
+        self.session_record.format = "Onsite"
+        emergency_contact = AcademicStaff(id=10, status="Active", full_name="Eva Emergency", roles="Supervisor", email="eva@example.com")
+        db.session.add(emergency_contact)
+        self.session_record.emergency_contact_required = True
+        self.session_record.emergency_contact_member_id = emergency_contact.id
+        db.session.add(ExamSessionScheduleWorkflow(
+            exam_session_id=self.session_record.id,
+            status="Approved",
+            approved_at=datetime.now(timezone.utc),
+        ))
+        db.session.commit()
+        client = self.login_client()
+
+        response = client.get("/pre-session-control-tower?session_year=2026&view=sessions")
+        html = response.get_data(as_text=True)
+        modal_start = html.index(f'id="staffing-{self.session_record.id}"')
+        modal_end = html.index(f'id="logistics-{self.session_record.id}"')
+        staffing = html[modal_start:modal_end]
+        emergency_index = staffing.index("Eva Emergency")
+        emergency_row = staffing[staffing.rfind("<tr", 0, emergency_index):staffing.index("</tr>", emergency_index)]
+
+        self.assertIn("Eva Emergency", emergency_row)
+        self.assertIn("Pending", emergency_row)
+        self.assertIn(
+            f"/pre-session-control-tower/sessions/{self.session_record.id}/staffing-assignments/emergency_contact/{self.session_record.id}/status",
+            emergency_row,
+        )
+        self.assertIn("Mark as sent", emergency_row)
+
+        response = client.post(
+            f"/pre-session-control-tower/sessions/{self.session_record.id}/staffing-assignments/emergency_contact/{self.session_record.id}/status",
+            data={
+                "csrf_token": "token",
+                "participation_status": "Official confirmation sent",
+            },
+            follow_redirects=False,
+        )
+
+        self.assertEqual(response.status_code, 302)
+        db.session.refresh(self.session_record)
+        self.assertEqual(self.session_record.emergency_contact_participation_status, "Official confirmation sent")
+        self.assertIsNotNone(self.session_record.emergency_contact_status_due_at)
+        event = ExamSessionStaffingEvent.query.filter_by(
+            exam_session_id=self.session_record.id,
+            assignment_type="emergency_contact",
+        ).one()
+        self.assertEqual(event.role, "Emergency contact")
+        self.assertEqual(event.staff_member_name, "Eva Emergency")
+        self.assertEqual(event.previous_status, "Pending")
+        self.assertEqual(event.new_status, "Official confirmation sent")
+
+    def test_staffing_status_counts_emergency_contact_as_staff_member(self):
+        self.session_record.format = "Onsite"
+        emergency_contact = AcademicStaff(id=10, status="Active", full_name="Eva Emergency", roles="Supervisor", email="eva@example.com")
+        supervisor = AcademicStaff(id=11, status="Active", full_name="Rita Remote", roles="Supervisor", email="rita@example.com")
+        examiner = AcademicStaff(id=12, status="Active", full_name="Eli Examiner", roles="Examiner", email="eli@example.com")
+        db.session.add_all([emergency_contact, supervisor, examiner])
+        self.session_record.emergency_contact_required = True
+        self.session_record.emergency_contact_member_id = emergency_contact.id
+        self.session_record.emergency_contact_participation_status = "Pending"
+        db.session.add_all([
+            ExamSessionSupervisorAssignment(
+                exam_session_id=self.session_record.id,
+                team_member_id=supervisor.id,
+                participation_status="Confirmed",
+            ),
+            ExamSessionExaminerAssignment(
+                exam_session_id=self.session_record.id,
+                team_member_id=examiner.id,
+                participation_status="Confirmed",
+            ),
+        ])
+        db.session.commit()
+        client = self.login_client()
+
+        response = client.get("/pre-session-control-tower?session_year=2026&view=sessions")
+        html = response.get_data(as_text=True)
+        row_start = html.index("June exam session")
+        row_end = html.index("</tr>", row_start)
+        session_row = html[row_start:row_end]
+
+        self.assertIn("2 / 3 confirmed", session_row)
+        self.assertIn("Confirmations to be sent", session_row)
+        self.assertNotIn("staffing-status-confirmed-staff", session_row)
+
+        response = client.post(
+            f"/pre-session-control-tower/sessions/{self.session_record.id}/staffing-assignments/emergency_contact/{self.session_record.id}/status",
+            data={
+                "csrf_token": "token",
+                "participation_status": "Confirmed",
+            },
+            follow_redirects=False,
+        )
+        self.assertEqual(response.status_code, 302)
+
+        response = client.get("/pre-session-control-tower?session_year=2026&view=sessions")
+        html = response.get_data(as_text=True)
+        row_start = html.index("June exam session")
+        row_end = html.index("</tr>", row_start)
+        session_row = html[row_start:row_end]
+
+        self.assertIn("3 / 3 confirmed", session_row)
+        self.assertIn("staffing-status-confirmed-staff", session_row)
 
     def test_staffing_recommended_next_action_matches_active_status_priority(self):
         pending_member = AcademicStaff(id=26, status="Active", full_name="Pablo Pending", roles="Examiner", email="pablo@example.com")
@@ -9590,6 +12655,100 @@ class ScheduleWorkflowTest(unittest.TestCase):
         self.assertIn('const staffingOnly = params.get("staffing_only") === "1";', js)
         self.assertIn('modal.classList.toggle("is-staffing-only", staffingOnly);', js)
         self.assertIn('params.delete("staffing_only");', js)
+
+    def test_staffing_force_pending_and_cancelled_require_password_when_package_stages_started(self):
+        first_staff_member = AcademicStaff(id=121, status="Active", full_name="Fiona Force", roles="Intern", email="fiona@example.com")
+        second_staff_member = AcademicStaff(id=122, status="Active", full_name="Cal Cancel", roles="Supervisor", email="cal@example.com")
+        db.session.add_all([first_staff_member, second_staff_member])
+        db.session.flush()
+        force_assignment = ExamSessionInternAssignment(
+            exam_session_id=self.session_record.id,
+            team_member_id=first_staff_member.id,
+            participation_status="Confirmed",
+        )
+        cancel_assignment = ExamSessionSupervisorAssignment(
+            exam_session_id=self.session_record.id,
+            team_member_id=second_staff_member.id,
+            participation_status="Confirmed",
+        )
+        self.session_record.room_package_sealing_status = "in_progress"
+        db.session.add(ExamSessionScheduleWorkflow(
+            exam_session_id=self.session_record.id,
+            status="Approved",
+            approved_at=datetime.now(timezone.utc),
+        ))
+        db.session.add_all([force_assignment, cancel_assignment])
+        db.session.commit()
+        client = self.login_client()
+
+        response = client.get("/pre-session-control-tower?session_year=2026&view=sessions")
+        staffing_html = response.get_data(as_text=True)
+
+        self.assertIn("Password authorisation required", staffing_html)
+        self.assertIn(
+            "Editing the staff and staff satus may affect the Package stage, as package preparation has started. Password authorisation is required to continue.",
+            staffing_html,
+        )
+        self.assertIn('data-confirm-password-value="EditOK"', staffing_html)
+        self.assertIn('name="confirmation_password" value=""', staffing_html)
+
+        response = client.post(
+            f"/pre-session-control-tower/sessions/{self.session_record.id}/staffing-assignments/intern/{force_assignment.id}/status",
+            data={
+                "csrf_token": "token",
+                "participation_status": "Pending",
+            },
+            follow_redirects=False,
+        )
+
+        self.assertEqual(response.status_code, 302)
+        db.session.refresh(force_assignment)
+        self.assertEqual(force_assignment.participation_status, "Confirmed")
+        self.assertEqual(ExamSessionStaffingEvent.query.count(), 0)
+
+        response = client.post(
+            f"/pre-session-control-tower/sessions/{self.session_record.id}/staffing-assignments/intern/{force_assignment.id}/status",
+            data={
+                "csrf_token": "token",
+                "participation_status": "Pending",
+                "confirmation_password": "EditOK",
+            },
+            follow_redirects=False,
+        )
+
+        self.assertEqual(response.status_code, 302)
+        db.session.refresh(force_assignment)
+        self.assertEqual(force_assignment.participation_status, "Pending")
+
+        response = client.post(
+            f"/pre-session-control-tower/sessions/{self.session_record.id}/staffing-assignments/supervisor/{cancel_assignment.id}/status",
+            data={
+                "csrf_token": "token",
+                "participation_status": "Cancelled",
+                "confirmation_password": "Wrong",
+            },
+            follow_redirects=False,
+        )
+
+        self.assertEqual(response.status_code, 302)
+        db.session.refresh(cancel_assignment)
+        self.assertEqual(cancel_assignment.participation_status, "Confirmed")
+        self.assertEqual(cancel_assignment.team_member_id, second_staff_member.id)
+
+        response = client.post(
+            f"/pre-session-control-tower/sessions/{self.session_record.id}/staffing-assignments/supervisor/{cancel_assignment.id}/status",
+            data={
+                "csrf_token": "token",
+                "participation_status": "Cancelled",
+                "confirmation_password": "EditOK",
+            },
+            follow_redirects=False,
+        )
+
+        self.assertEqual(response.status_code, 302)
+        db.session.refresh(cancel_assignment)
+        self.assertEqual(cancel_assignment.participation_status, "Pending")
+        self.assertIsNone(cancel_assignment.team_member_id)
 
     def test_staffing_actions_cancelled_clears_assignment_and_marks_non_available(self):
         staff_member = AcademicStaff(id=23, status="Active", full_name="Cami Cancelled", roles="Supervisor", email="cami@example.com")
@@ -10042,7 +13201,8 @@ class ScheduleWorkflowTest(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(counts_before, counts_after)
         self.assertLess(html.index("<th>Action</th>"), html.index("<th>Session</th>"))
-        self.assertLess(html.index("<th>Logistics</th>"), html.index("<th>Packages</th>"))
+        self.assertLess(html.index("<th>Staffing</th>"), html.index("<th>Package</th>"))
+        self.assertLess(html.index("<th>Package</th>"), html.index("<th>Logistics</th>"))
         self.assertNotIn("<th>Core readiness</th>", html)
         self.assertNotIn("<th>Operational readiness</th>", html)
         self.assertNotIn("<th>Next action</th>", html)

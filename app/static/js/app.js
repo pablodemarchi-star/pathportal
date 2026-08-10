@@ -948,6 +948,13 @@ const targetLabels = {
   staffing: "Staffing",
   logistics: "Logistics",
   packages: "Packages",
+  "package-label-verification": "Candidate label verification",
+  "package-label-printing": "Candidate label printing and affixing",
+  "package-room-package-sealing": "Room package sealing",
+  "package-return-packages": "Return packages",
+  "package-staff-member-ids": "Staff member IDs",
+  "package-inclusion-final-items": "Inclusion of final items",
+  "package-session-box-sealing": "Session box sealing",
   shipments: "Shipments",
   finance: "Finance",
   sinapsis: "Sinapsis",
@@ -965,6 +972,13 @@ const relatedFocusedTargets = {
   "schedule-actions": ["schedule-actions", "schedule-overview", "history"],
   "schedule-notes": ["schedule-notes", "schedule-actions", "schedule-overview", "history"],
   "schedule-overview": ["schedule-overview", "schedule-actions"],
+  "package-label-verification": ["packages", "package-label-verification"],
+  "package-label-printing": ["packages", "package-label-printing"],
+  "package-room-package-sealing": ["packages", "package-room-package-sealing"],
+  "package-return-packages": ["packages", "package-return-packages"],
+  "package-staff-member-ids": ["packages", "package-staff-member-ids"],
+  "package-inclusion-final-items": ["packages", "package-inclusion-final-items"],
+  "package-session-box-sealing": ["packages", "package-session-box-sealing"],
   readiness: ["readiness", "session-readiness"],
   "session-readiness": ["readiness", "session-readiness"],
   incidents: ["incidents"],
@@ -1044,6 +1058,8 @@ const clearFocusedMode = (modal) => {
   modal.classList.remove("is-focused-mode");
   modal.classList.remove("is-schedule-only");
   modal.classList.remove("is-staffing-only");
+  modal.classList.remove("is-packages-only");
+  modal.classList.remove("is-shipments-only");
   delete modal.dataset.focusedTarget;
   const context = modal.querySelector("[data-focused-context]");
   if (context) {
@@ -1088,7 +1104,9 @@ const focusModalTarget = (targetId) => {
   if (!target) return false;
   const section = target.closest("[data-control-section]");
   expandControlSection(section);
-  target.scrollIntoView({ block: "start", behavior: "smooth" });
+  const targetKey = modalTargetKey(targetId);
+  const scrollBehavior = targetKey.startsWith("package-") ? "auto" : "smooth";
+  target.scrollIntoView({ block: "start", behavior: scrollBehavior });
   target.setAttribute("tabindex", "-1");
   target.focus({ preventScroll: true });
   highlightModalTarget(target);
@@ -1132,10 +1150,14 @@ const openRequestedScheduleModal = () => {
   const actionKey = params.get("open_schedule_action");
   const scheduleOnly = params.get("schedule_only") === "1";
   const staffingOnly = params.get("staffing_only") === "1";
+  const packagesOnly = params.get("packages_only") === "1";
+  const shipmentsOnly = params.get("shipments_only") === "1";
   const modal = document.getElementById(`schedule-workflow-${sessionId}`);
   if (modal) {
     modal.classList.toggle("is-schedule-only", scheduleOnly);
     modal.classList.toggle("is-staffing-only", staffingOnly);
+    modal.classList.toggle("is-packages-only", packagesOnly);
+    modal.classList.toggle("is-shipments-only", shipmentsOnly);
   }
   if (actionKey) {
     const form = document.querySelector(`#schedule-workflow-${sessionId} [data-schedule-action-panel][data-schedule-action-key="${CSS.escape(actionKey)}"]`);
@@ -1220,6 +1242,8 @@ const openRequestedScheduleModal = () => {
   params.delete("open_schedule_action");
   params.delete("schedule_only");
   params.delete("staffing_only");
+  params.delete("packages_only");
+  params.delete("shipments_only");
   params.delete("open_staffing_control");
   params.delete("open_logistics_control");
   params.delete("open_finance_control");
@@ -1235,6 +1259,8 @@ const openRequestedScheduleModal = () => {
       if (modal) {
         modal.classList.toggle("is-schedule-only", scheduleOnly);
         modal.classList.toggle("is-staffing-only", staffingOnly);
+        modal.classList.toggle("is-packages-only", packagesOnly);
+        modal.classList.toggle("is-shipments-only", shipmentsOnly);
       }
       if (!focusModalTarget(targetId)) {
         focusModalHeading(modal);
@@ -1626,6 +1652,51 @@ document.addEventListener("click", (event) => {
     return;
   }
 
+  const packagePreparationTrigger = event.target.closest("[data-start-package-preparation]");
+  if (packagePreparationTrigger) {
+    event.preventDefault();
+    const panel = document.getElementById(packagePreparationTrigger.dataset.startPackagePreparation);
+    if (!panel) return;
+    panel.hidden = false;
+    const addPanel = panel.matches("details") ? panel : panel.querySelector("details");
+    if (addPanel) addPanel.open = true;
+    packagePreparationTrigger.setAttribute("aria-expanded", "true");
+    window.requestAnimationFrame(() => {
+      panel.querySelector("summary, input:not([type='hidden']), select, textarea, button")?.focus();
+    });
+    return;
+  }
+
+  const packageRowAddButton = event.target.closest("[data-add-package-unit-row]");
+  if (packageRowAddButton) {
+    event.preventDefault();
+    const form = packageRowAddButton.closest("[data-package-unit-create-form]");
+    const rows = form?.querySelector("[data-package-unit-rows]");
+    const template = form?.querySelector("template[data-package-unit-row-template]");
+    const countInput = form?.querySelector("[data-package-row-count]");
+    if (!form || !rows || !template || !countInput) return;
+    const currentCount = rows.querySelectorAll("[data-package-unit-row]").length;
+    if (currentCount >= 20) {
+      packageRowAddButton.disabled = true;
+      return;
+    }
+    const index = currentCount;
+    const fragment = template.content.cloneNode(true);
+    const row = fragment.querySelector("[data-package-unit-row]");
+    if (!row) return;
+    row.dataset.packageRowIndex = String(index);
+    row.querySelectorAll("[name]").forEach((field) => {
+      field.name = field.name.replace("__INDEX__", String(index));
+    });
+    rows.appendChild(fragment);
+    countInput.value = String(index + 1);
+    if (index + 1 >= 20) packageRowAddButton.disabled = true;
+    window.requestAnimationFrame(() => {
+      row.querySelector("input, select, textarea")?.focus();
+    });
+    return;
+  }
+
   const modalNavLink = event.target.closest(".modal-section-nav a, .overview-quick-links a");
   if (modalNavLink) {
     const hash = modalNavLink.getAttribute("href");
@@ -1662,9 +1733,13 @@ document.addEventListener("click", (event) => {
     const isOverviewMode = opener.dataset.modalMode === "overview";
     const isScheduleOnlyMode = opener.dataset.modalScheduleOnly === "true";
     const isStaffingOnlyMode = opener.dataset.modalStaffingOnly === "true";
+    const isPackagesOnlyMode = opener.dataset.modalPackagesOnly === "true";
+    const isShipmentsOnlyMode = opener.dataset.modalShipmentsOnly === "true";
     clearFocusedMode(modal);
     if (modal) modal.classList.toggle("is-schedule-only", isScheduleOnlyMode);
     if (modal) modal.classList.toggle("is-staffing-only", isStaffingOnlyMode);
+    if (modal) modal.classList.toggle("is-packages-only", isPackagesOnlyMode);
+    if (modal) modal.classList.toggle("is-shipments-only", isShipmentsOnlyMode);
     resetControlSectionsToDefault(modal);
     openModal(opener.dataset.openModal, { opener, focus: !opener.dataset.modalScrollTarget });
     window.requestAnimationFrame(() => {
@@ -2163,23 +2238,78 @@ document.addEventListener("input", (event) => {
   }
 });
 
+document.addEventListener("click", (event) => {
+  const reopenDispatchButton = event.target.closest("[data-reopen-dispatch-stage]");
+  if (!reopenDispatchButton) return;
+  const panel = reopenDispatchButton.closest(".shipment-dispatch-status-panel");
+  if (!panel) return;
+  const message = reopenDispatchButton.dataset.confirmMessage || "Management password authorisation is required to reopen dispatch stages.";
+  const expectedPassword = reopenDispatchButton.dataset.confirmPasswordValue || "EditOK";
+  if (!window.confirm(message)) return;
+  const password = window.prompt("Enter the confirmation password to continue:");
+  if (password !== expectedPassword) {
+    window.alert("Incorrect password. The action was cancelled.");
+    return;
+  }
+  panel.querySelectorAll(".shipment-dispatch-checkbox-form").forEach((form) => {
+    const passwordInput = form.querySelector("input[name='confirmation_password']");
+    const reopenInput = form.querySelector("input[name='dispatch_reopen_authorized']");
+    if (passwordInput) passwordInput.value = password;
+    if (reopenInput) reopenInput.value = "1";
+  });
+  panel.querySelectorAll("[data-shipment-dispatch-checkbox]").forEach((checkbox) => {
+    checkbox.disabled = false;
+  });
+  panel.querySelectorAll(".shipment-dispatch-checkbox-row").forEach((row) => {
+    row.classList.remove("is-disabled");
+  });
+  reopenDispatchButton.disabled = true;
+  reopenDispatchButton.textContent = "Dispatch stages reopened";
+});
+
+document.addEventListener("change", (event) => {
+  const dispatchCheckbox = event.target.closest("[data-shipment-dispatch-checkbox]");
+  if (!dispatchCheckbox) return;
+  const form = dispatchCheckbox.closest(".shipment-dispatch-checkbox-form");
+  if (!form) return;
+  const statusInput = form.querySelector("input[name='new_status']");
+  if (statusInput) {
+    statusInput.value = dispatchCheckbox.checked
+      ? dispatchCheckbox.dataset.checkedStatus
+      : dispatchCheckbox.dataset.uncheckedStatus;
+  }
+  if (form.requestSubmit) {
+    form.requestSubmit();
+  } else {
+    form.submit();
+  }
+});
+
 document.addEventListener("submit", (event) => {
   const passwordForm = event.target.closest("[data-confirm-password-submit]");
   if (passwordForm) {
     const message = passwordForm.dataset.confirmPasswordSubmit || "This action cannot be undone.";
+    const expectedPassword = passwordForm.dataset.confirmPasswordValue || "Path1234";
+    const passwordInput = passwordForm.querySelector("input[name='deletion_password']");
+    const confirmationPasswordInput = passwordForm.querySelector("input[name='confirmation_password']");
+    if (
+      (passwordInput && passwordInput.value === expectedPassword)
+      || (confirmationPasswordInput && confirmationPasswordInput.value === expectedPassword)
+    ) {
+      return;
+    }
     if (!window.confirm(message)) {
       event.preventDefault();
       return;
     }
-    const expectedPassword = passwordForm.dataset.confirmPasswordValue || "Path1234";
     const password = window.prompt("Enter the confirmation password to continue:");
     if (password !== expectedPassword) {
       event.preventDefault();
       window.alert("Incorrect password. The action was cancelled.");
       return;
     }
-    const passwordInput = passwordForm.querySelector("input[name='deletion_password']");
     if (passwordInput) passwordInput.value = password;
+    if (confirmationPasswordInput) confirmationPasswordInput.value = password;
   }
 
   const confirmForm = event.target.closest("[data-confirm-submit]");
@@ -10136,6 +10266,66 @@ document.addEventListener("click", (event) => {
       row.remove();
     }
     syncInterviewOptionControls(root);
+  }
+});
+
+const syncShipmentDeliveryOptions = (fieldset) => {
+  if (!fieldset) return;
+  const inputs = Array.from(fieldset.querySelectorAll("input[name='delivery_option']"));
+  const selected = inputs.find((input) => input.checked);
+  if (fieldset.dataset.shipmentDeliverySelectedValue === undefined) {
+    fieldset.dataset.shipmentDeliverySelectedValue = selected?.value || "";
+  }
+  inputs.forEach((input) => {
+    const disabled = Boolean(selected && input !== selected);
+    input.disabled = disabled;
+    input.closest("label")?.classList.toggle("is-disabled", disabled);
+  });
+};
+
+document.querySelectorAll(".shipment-delivery-options").forEach(syncShipmentDeliveryOptions);
+
+document.addEventListener("change", (event) => {
+  const input = event.target.closest?.(".shipment-delivery-options input[name='delivery_option']");
+  if (!input) return;
+  const fieldset = input.closest(".shipment-delivery-options");
+  const form = fieldset?.closest("form");
+  const previousValue = fieldset?.dataset.shipmentDeliverySelectedValue || "";
+  const nextValue = input.checked ? input.value : "";
+  if (fieldset?.dataset.shipmentDeliveryAutoSave === "true" && form?.dataset.confirmPasswordSubmit && nextValue !== previousValue) {
+    const message = form.dataset.confirmPasswordSubmit || "This action cannot be undone.";
+    const expectedPassword = form.dataset.confirmPasswordValue || "Path1234";
+    const password = window.prompt(`${message}\n\nEnter the confirmation password to continue:`);
+    if (password === null) {
+      fieldset.querySelectorAll("input[name='delivery_option']").forEach((option) => {
+        option.checked = option.value === previousValue;
+      });
+      syncShipmentDeliveryOptions(fieldset);
+      return;
+    }
+    if (password !== expectedPassword) {
+      window.alert("Incorrect password. The action was cancelled.");
+      fieldset.querySelectorAll("input[name='delivery_option']").forEach((option) => {
+        option.checked = option.value === previousValue;
+      });
+      syncShipmentDeliveryOptions(fieldset);
+      return;
+    }
+    const confirmationPasswordInput = form.querySelector("input[name='confirmation_password']");
+    if (confirmationPasswordInput) confirmationPasswordInput.value = password;
+  }
+  if (input.checked) {
+    fieldset?.querySelectorAll("input[name='delivery_option']").forEach((option) => {
+      if (option !== input) option.checked = false;
+    });
+  }
+  syncShipmentDeliveryOptions(fieldset);
+  if (fieldset?.dataset.shipmentDeliveryAutoSave === "true") {
+    if (form?.requestSubmit) {
+      form.requestSubmit();
+    } else {
+      form?.submit();
+    }
   }
 });
 

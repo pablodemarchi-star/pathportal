@@ -4846,6 +4846,69 @@ console.log(JSON.stringify({ enabledState, missingState }));
         self.assertIn("<th>Dietary requirements</th>", html)
         self.assertIn('<span class="dietary-requirements-chip">Vegetarian</span>', html)
 
+    def test_member_id_issued_indicator_and_edit_checkbox(self):
+        response = self.client().post(
+            "/members",
+            data={
+                "csrf_token": "token",
+                "status": "Active",
+                "title": "Prof.",
+                "full_name": "ID Staff",
+                "roles": ["Examiner"],
+                "phone": "555-778",
+                "email": "id-staff@example.com",
+                "has_car": "Yes",
+                "started_in": "2026",
+                "full_address_google_maps": "https://maps.google.com/?q=Path",
+                "city": "CABA",
+                "province": "Buenos Aires",
+                "country": "Argentina",
+                "cv": "https://example.com/cv.pdf",
+                "account_id": "ACC-778",
+                "profile_picture": "https://example.com/profile.jpg",
+                "account_owner": "ID Staff",
+            },
+            follow_redirects=True,
+        )
+        html = response.get_data(as_text=True)
+        member = AcademicStaff.query.filter_by(email="id-staff@example.com").first()
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIsNotNone(member)
+        self.assertFalse(member.id_issued)
+        self.assertIn("No ID issued", html)
+        self.assertIn('name="id_issued" type="checkbox"', html)
+
+        response = self.client().post(
+            f"/members/{member.id}",
+            data={
+                "csrf_token": "token",
+                "status": "Active",
+                "title": "Prof.",
+                "full_name": "ID Staff",
+                "roles": ["Examiner"],
+                "phone": "555-778",
+                "email": "id-staff@example.com",
+                "has_car": "Yes",
+                "started_in": "2026",
+                "id_issued": "on",
+                "full_address_google_maps": "https://maps.google.com/?q=Path",
+                "city": "CABA",
+                "province": "Buenos Aires",
+                "country": "Argentina",
+                "cv": "https://example.com/cv.pdf",
+                "account_id": "ACC-778",
+                "profile_picture": "https://example.com/profile.jpg",
+                "account_owner": "ID Staff",
+            },
+            follow_redirects=True,
+        )
+        html = response.get_data(as_text=True)
+        db.session.refresh(member)
+
+        self.assertTrue(member.id_issued)
+        self.assertIn("ID issued ✓", html)
+
     def test_accept_potential_entry_requires_complete_member_fields_except_seniority_and_history(self):
         entry = self.add_entry(full_name="Incomplete Accepted Candidate")
         response = self.client().post(

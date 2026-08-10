@@ -2,6 +2,7 @@ import json
 import os
 import re
 import secrets
+import textwrap
 from decimal import Decimal, InvalidOperation, ROUND_FLOOR
 from datetime import date, datetime, timezone, timedelta
 import calendar
@@ -974,6 +975,30 @@ SHIPMENT_BUNDLE_STATUSES = [
     "Recipient review with discrepancy",
 ]
 SHIPMENT_DEFAULT_COURIER = "Correo Argentino"
+SHIPMENT_DELIVERY_OPTION_CHOICES = [
+    {
+        "value": "meeting_point",
+        "label": "Collection at an agreed meeting point",
+        "description": "with no shipping required. This is the preferred option for nearby recipients.",
+    },
+    {
+        "value": "store_pickup",
+        "label": "Courier delivery to a store near their address",
+        "description": "where they can collect the bundle.",
+    },
+    {
+        "value": "listed_address",
+        "label": "Courier delivery to the address listed below.",
+        "description": "",
+    },
+    {
+        "value": "different_address",
+        "label": "Courier delivery to a different address",
+        "description": "to be specified by the recipient.",
+    },
+]
+SHIPMENT_DELIVERY_OPTION_VALUES = {option["value"] for option in SHIPMENT_DELIVERY_OPTION_CHOICES} | {""}
+SHIPMENT_DEFAULT_DELIVERY_OPTION = ""
 SHIPMENT_TRANSIT_DAYS = 10
 SHIPMENT_RECEPTION_BUFFER_DAYS = 0
 SHIPMENT_DELIVERY_RISK_DAYS = 3
@@ -1000,29 +1025,29 @@ SHIPMENT_AUTO_MANAGED_STATUSES = {"Preparing bundle", "Ready to dispatch"}
 SHIPMENT_CHECKLIST_TEMPLATES = [
     {
         "item_key": "verify_sessions_boxes",
-        "label": "Verify included sessions and sealed boxes.",
+        "label": "Sealed session boxes",
         "description": "Confirm that all sessions included in this bundle have their sealed boxes ready.",
         "is_required": True,
         "display_order": 10,
     },
     {
         "item_key": "emergency_pack",
-        "label": "Include sealed emergency pack.",
-        "description": "Include one sealed emergency pack with two exams of each level.",
-        "is_required": True,
-        "display_order": 20,
-    },
-    {
-        "item_key": "jbl_speakers_dice",
-        "label": "Include JBL speakers and dice pack.",
-        "description": "Include the JBL speakers and dice pack according to the session with the highest number of simultaneous Listening and Speaking rooms.",
+        "label": "Emergency pack",
+        "description": "Include one sealed emergency pack containing two exam papers for each level.",
         "is_required": True,
         "display_order": 30,
     },
     {
+        "item_key": "jbl_speakers_dice",
+        "label": "Listening and speaking pack",
+        "description": "Include the Listening and speaking pack for examiners.",
+        "is_required": True,
+        "display_order": 20,
+    },
+    {
         "item_key": "correo_label",
-        "label": "Attach Correo Argentino shipping label.",
-        "description": "Attach the Correo Argentino shipping label to the top of the bundle/set.",
+        "label": "Final checklist before delivery",
+        "description": "Wrap and label the bundle before delivery.",
         "is_required": True,
         "display_order": 40,
     },
@@ -1034,6 +1059,12 @@ SHIPMENT_CHECKLIST_TEMPLATES = [
         "display_order": 50,
     },
 ]
+SHIPMENT_PRE_DISPATCH_CARD_KEYS = {
+    "verify_sessions_boxes",
+    "jbl_speakers_dice",
+    "emergency_pack",
+    "correo_label",
+}
 SCHEDULE_WORKFLOW_STATUSES = [
     "Not started",
     "In progress",
@@ -1364,7 +1395,7 @@ def participation_status_is_in_progress(status):
     }
 
 
-def staffing_readiness_contract(supervisor_assignments=None, examiner_assignments=None, intern_assignments=None):
+def staffing_readiness_contract(supervisor_assignments=None, examiner_assignments=None, intern_assignments=None, session_record=None):
     role_sources = {
         "Supervisor": list(supervisor_assignments or []),
         "Examiner": list(examiner_assignments or []),
@@ -1375,6 +1406,45 @@ def staffing_readiness_contract(supervisor_assignments=None, examiner_assignment
     open_position_details = []
     blockers = []
     invalid_found = False
+    if session_record and session_record.emergency_contact_member_id:
+        counts = empty_staffing_counts()
+        participation_status = normalize_participation_status(session_record.emergency_contact_participation_status)
+        counts["required"] = 1
+        counts["assigned"] = 1
+        if participation_status == "Pending":
+            counts["pending_assigned"] = 1
+        elif participation_status == "Declined":
+            counts["pending_assigned"] = 1
+            blockers.append({
+                "code": "STAFF_DECLINED",
+                "role": "Emergency contact",
+                "assignment_id": session_record.id,
+                "message": "Emergency contact declined participation and needs follow-up.",
+            })
+        elif participation_status == "Cancelled":
+            counts["pending_assigned"] = 1
+            blockers.append({
+                "code": "STAFF_CANCELLED",
+                "role": "Emergency contact",
+                "assignment_id": session_record.id,
+                "message": "Emergency contact participation was cancelled and needs follow-up.",
+            })
+        elif participation_status_is_in_progress(participation_status):
+            counts["sent"] = 1
+        elif participation_status == "Confirmed":
+            counts["confirmed"] = 1
+        else:
+            invalid_found = True
+            blockers.append({
+                "code": "INVALID_PARTICIPATION_STATUS",
+                "role": "Emergency contact",
+                "assignment_id": session_record.id,
+                "message": "Emergency contact has an invalid participation status.",
+            })
+        counts["ready"] = counts["confirmed"] == counts["required"]
+        by_role["Emergency contact"] = counts
+        for key in totals:
+            totals[key] += counts[key]
 
     for role, assignments in role_sources.items():
         counts = empty_staffing_counts()
@@ -1625,6 +1695,400 @@ def monthly_registration_status(session_record, requirement=None):
     if requirement["latest_month"] is None:
         return "Pending"
     return "Achieved" if requirement["ready"] else "In progress"
+
+
+def return_package_requirements_for_session(session_record):
+    if not session_record:
+        return []
+    latest_month = (
+        db.session.query(db.func.max(ExamSessionMonthlyRegistration.month))
+        .filter_by(exam_session_id=session_record.id)
+        .scalar()
+    )
+    if latest_month is None:
+        return []
+    registrations = ExamSessionMonthlyRegistration.query.filter_by(
+        exam_session_id=session_record.id,
+        month=latest_month,
+    ).all()
+    registrations_by_module = {
+        registration.module: registration.registration_number or 0
+        for registration in registrations
+    }
+    has_reading_and_writing = registrations_by_module.get("Reading and writing", 0) > 0
+    has_listening_or_speaking = (
+        registrations_by_module.get("Listening and speaking", 0) > 0
+        or registrations_by_module.get("Speaking", 0) > 0
+    )
+    requirements = []
+    if has_reading_and_writing:
+        requirements.extend([
+            "1 submitted Reading and writing modules.",
+            "1 absent Reading and writing modules.",
+        ])
+    if has_listening_or_speaking:
+        requirements.extend([
+            "1 submitted Listening and speaking modules.",
+            "1 absent Listening and speaking modules.",
+        ])
+    return requirements
+
+
+def staff_members_pending_id_for_session(session_record, assignments=None):
+    if not session_record and not assignments:
+        return []
+    seen_member_ids = set()
+    staff_members = []
+    if session_record and session_record.emergency_contact_member:
+        staff_members.append(session_record.emergency_contact_member)
+    for assignment in assignments or []:
+        staff_member = getattr(assignment, "team_member", None)
+        if staff_member:
+            staff_members.append(staff_member)
+    pending_staff_members = []
+    for staff_member in staff_members:
+        if not staff_member or staff_member.id in seen_member_ids:
+            continue
+        seen_member_ids.add(staff_member.id)
+        if not getattr(staff_member, "id_issued", False):
+            pending_staff_members.append(staff_member)
+    return sorted(pending_staff_members, key=lambda value: value.full_name.casefold())
+
+
+def staff_member_confirmation_by_id(session_record, assignments=None):
+    confirmation_by_id = {}
+    if session_record and session_record.emergency_contact_member_id:
+        confirmation_by_id[session_record.emergency_contact_member_id] = False
+    for assignment in assignments or []:
+        staff_member_id = getattr(assignment, "team_member_id", None)
+        if not staff_member_id:
+            continue
+        is_confirmed = normalize_participation_status(getattr(assignment, "participation_status", "")) == "Confirmed"
+        confirmation_by_id[staff_member_id] = confirmation_by_id.get(staff_member_id, False) or is_confirmed
+    return confirmation_by_id
+
+
+def staff_member_id_requirement_payload(staff_member, is_confirmed=True):
+    return {
+        "id": staff_member.id,
+        "title": staff_member.title or "",
+        "name": staff_member.full_name,
+        "roles": staff_member.roles_list(),
+        "is_confirmed": bool(is_confirmed),
+    }
+
+
+def staff_member_id_snapshot_for_session(session_record):
+    if not session_record:
+        return []
+    try:
+        snapshot = json.loads(session_record.staff_member_ids_snapshot or "[]")
+    except (TypeError, ValueError, json.JSONDecodeError):
+        return []
+    if not isinstance(snapshot, list):
+        return []
+    clean_snapshot = []
+    for item in snapshot:
+        if not isinstance(item, dict):
+            continue
+        name = (item.get("name") or "").strip()
+        if not name:
+            continue
+        clean_snapshot.append({
+            "id": item.get("id"),
+            "title": (item.get("title") or "").strip(),
+            "name": name,
+            "roles": [str(role).strip() for role in item.get("roles", []) if str(role).strip()],
+            "is_confirmed": bool(item.get("is_confirmed", True)),
+        })
+    return clean_snapshot
+
+
+def staff_member_id_requirements_for_session(session_record, assignments=None):
+    requirements = []
+    confirmation_by_id = staff_member_confirmation_by_id(session_record, assignments)
+    for staff_member in staff_members_pending_id_for_session(session_record, assignments):
+        requirements.append(staff_member_id_requirement_payload(
+            staff_member,
+            is_confirmed=confirmation_by_id.get(staff_member.id, False),
+        ))
+    return requirements or staff_member_id_snapshot_for_session(session_record)
+
+
+def inclusion_final_items_for_session(session_record, supervisor_assignments=None):
+    if not session_record:
+        return {
+            "total_candidates": 0,
+            "supervisor_count": 0,
+            "schedule_copy_label": "copies",
+        }
+    latest_total_month = (
+        db.session.query(db.func.max(ExamSessionMonthlyCandidateTotal.month))
+        .filter_by(exam_session_id=session_record.id)
+        .scalar()
+    )
+    total_candidates = 0
+    if latest_total_month is not None:
+        total_record = ExamSessionMonthlyCandidateTotal.query.filter_by(
+            exam_session_id=session_record.id,
+            month=latest_total_month,
+        ).first()
+        total_candidates = total_record.total_candidates if total_record else 0
+    assigned_supervisors = [
+        assignment
+        for assignment in supervisor_assignments or []
+        if getattr(assignment, "team_member_id", None) or getattr(assignment, "potential_entry_id", None)
+    ]
+    supervisor_count = len(assigned_supervisors)
+    return {
+        "total_candidates": total_candidates or 0,
+        "supervisor_count": supervisor_count,
+        "schedule_copy_label": "copy" if supervisor_count == 1 else "copies",
+    }
+
+
+SESSION_IDENTIFICATION_LABEL_SIZE = (280.63, 161.575)
+
+
+def session_identification_label_supervisor(supervisor_assignments):
+    assigned = [
+        assignment for assignment in supervisor_assignments or []
+        if getattr(assignment, "team_member_id", None)
+    ]
+    if len(assigned) == 1:
+        assignment = assigned[0]
+        return assignment.team_member or AcademicStaff.query.get(assignment.team_member_id)
+    supervisor = get_exam_session_shipment_recipient_supervisor(assigned)
+    return supervisor
+
+
+def session_identification_label_payload(session_record):
+    supervisor_assignments = ExamSessionSupervisorAssignment.query.filter_by(
+        exam_session_id=session_record.id,
+    ).order_by(ExamSessionSupervisorAssignment.id.asc()).all()
+    supervisor = session_identification_label_supervisor(supervisor_assignments)
+    if not supervisor:
+        return None, "Supervisor is required to generate the session identification label."
+    fields = {
+        "EXAM SESSION": session_record.exam_session_name,
+        "DATE": long_session_date_filter(session_record.session_date),
+        "FULL ADDRESS": session_record.full_address_google_maps,
+        "CITY": session_record.city,
+        "PROVINCE": session_record.province,
+        "SUPERVISOR": supervisor.full_name,
+    }
+    if any(not (value or "").strip() for value in fields.values()):
+        return None, "Session information is incomplete. Please complete the session details before generating the identification label."
+    return fields, ""
+
+
+def pdf_text(value):
+    text = re.sub(r"\s+", " ", str(value or "").strip())
+    return text.encode("latin-1", "replace").decode("latin-1")
+
+
+def pdf_escape(value):
+    text = pdf_text(value)
+    return text.replace("\\", "\\\\").replace("(", "\\(").replace(")", "\\)")
+
+
+def pdf_text_width(value, font_size):
+    return len(pdf_text(value)) * font_size * 0.47
+
+
+def pdf_wrap(value, font_size, max_width, max_lines=2):
+    words = pdf_text(value).split()
+    if not words:
+        return [""]
+    lines = []
+    current = ""
+    for word in words:
+        candidate = f"{current} {word}".strip()
+        if current and pdf_text_width(candidate, font_size) > max_width:
+            lines.append(current)
+            current = word
+            if len(lines) >= max_lines:
+                break
+        else:
+            current = candidate
+    if len(lines) < max_lines and current:
+        lines.append(current)
+    if len(lines) > max_lines:
+        lines = lines[:max_lines]
+    return lines
+
+
+def pdf_command_text(x, y, value, font="/F1", size=8):
+    return f"BT {font} {size} Tf {x:.2f} {y:.2f} Td ({pdf_escape(value)}) Tj ET"
+
+
+def build_pdf_document_pages(width, height, pages_commands):
+    page_count = len(pages_commands)
+    page_object_ids = [5 + (index * 2) for index in range(page_count)]
+    objects = [
+        b"<< /Type /Catalog /Pages 2 0 R >>",
+        f"<< /Type /Pages /Kids [{' '.join(f'{page_id} 0 R' for page_id in page_object_ids)}] /Count {page_count} /MediaBox [0 0 {width:.3f} {height:.3f}] >>".encode("ascii"),
+        b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
+        b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Bold >>",
+    ]
+    for index, commands in enumerate(pages_commands):
+        page_id = 5 + (index * 2)
+        content_id = page_id + 1
+        content = "\n".join(commands).encode("latin-1", "replace")
+        objects.extend([
+            f"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 {width:.3f} {height:.3f}] /Resources << /Font << /F1 3 0 R /F2 4 0 R >> >> /Contents {content_id} 0 R >>".encode("ascii"),
+            b"<< /Length " + str(len(content)).encode("ascii") + b" >>\nstream\n" + content + b"\nendstream",
+        ])
+    pdf = bytearray(b"%PDF-1.4\n%\xe2\xe3\xcf\xd3\n")
+    offsets = [0]
+    for index, obj in enumerate(objects, start=1):
+        offsets.append(len(pdf))
+        pdf.extend(f"{index} 0 obj\n".encode("ascii"))
+        pdf.extend(obj)
+        pdf.extend(b"\nendobj\n")
+    xref_offset = len(pdf)
+    pdf.extend(f"xref\n0 {len(objects) + 1}\n".encode("ascii"))
+    pdf.extend(b"0000000000 65535 f \n")
+    for offset in offsets[1:]:
+        pdf.extend(f"{offset:010d} 00000 n \n".encode("ascii"))
+    pdf.extend(
+        f"trailer\n<< /Size {len(objects) + 1} /Root 1 0 R >>\nstartxref\n{xref_offset}\n%%EOF\n".encode("ascii")
+    )
+    return bytes(pdf)
+
+
+def build_pdf_document(width, height, commands):
+    return build_pdf_document_pages(width, height, [commands])
+
+
+def build_session_identification_label_pdf(fields):
+    width, height = SESSION_IDENTIFICATION_LABEL_SIZE
+    commands = [
+        "0 0 0 RG 0 0 0 rg",
+        "0.8 w",
+        f"5 5 {width - 10:.2f} {height - 10:.2f} re S",
+        "1.2 w",
+        f"12 {height - 36:.2f} {width - 24:.2f} 24 re S",
+        pdf_command_text(18, height - 23, "PATH EXAMINATIONS", "/F2", 11),
+        pdf_command_text(18, height - 33, "SESSION IDENTIFICATION LABEL", "/F1", 6.5),
+        f"12 {height - 44:.2f} m {width - 12:.2f} {height - 44:.2f} l S",
+    ]
+    session_lines = pdf_wrap(fields["EXAM SESSION"], 10.5, width - 32, max_lines=2)
+    y = height - 55
+    commands.append(pdf_command_text(18, y, "EXAM SESSION", "/F2", 5.5))
+    y -= 10
+    for line in session_lines:
+        commands.append(pdf_command_text(18, y, line, "/F2", 10.5))
+        y -= 11
+    commands.append(f"12 {y + 4:.2f} m {width - 12:.2f} {y + 4:.2f} l S")
+    grid_top = y - 7
+    left_x = 18
+    right_x = width / 2 + 6
+    row_gap = 24
+    grid_fields = [
+        ("DATE", fields["DATE"], left_x, grid_top),
+        ("SUPERVISOR", fields["SUPERVISOR"], right_x, grid_top),
+        ("FULL ADDRESS", fields["FULL ADDRESS"], left_x, grid_top - row_gap),
+        ("CITY", fields["CITY"], right_x, grid_top - row_gap),
+        ("PROVINCE", fields["PROVINCE"], left_x, grid_top - row_gap * 2),
+    ]
+    for label, value, x, field_y in grid_fields:
+        commands.append(pdf_command_text(x, field_y, label, "/F2", 5.2))
+        for index, line in enumerate(pdf_wrap(value, 7.1, (width / 2) - 24, max_lines=2)):
+            commands.append(pdf_command_text(x, field_y - 8 - (index * 8), line, "/F1", 7.1))
+    commands.append(f"12 16 m {width - 12:.2f} 16 l S")
+    commands.append(pdf_command_text(18, 9, "PRINT IDENTIFICATION LABEL AND AFFIX IT TO TOP OF SEALED SESSION BOX", "/F2", 5.2))
+    return build_pdf_document(width, height, commands)
+
+
+def bundle_label_payload(bundle):
+    if not bundle:
+        return None, "Bundle information is incomplete. Please complete the bundle details before generating the label."
+    if not shipment_bundle_display_number(bundle):
+        return None, "Bundle information is incomplete. Please complete the bundle details before generating the label."
+    if not bundle.supervisor:
+        return None, "Supervisor is required to generate the bundle label."
+    sessions = shipment_bundle_sessions(bundle)
+    if not sessions:
+        return None, "This bundle does not include any sessions."
+    clean_sessions = []
+    for session_record in sorted(sessions, key=lambda item: (item.session_date or datetime.max.date(), (item.exam_session_name or "").casefold())):
+        if not (session_record.exam_session_name or "").strip():
+            return None, "Bundle information is incomplete. Please complete the bundle details before generating the label."
+        detail_parts = [
+            session_date_filter(session_record.session_date) if session_record.session_date else "",
+            session_record.city,
+            session_record.province,
+        ]
+        clean_sessions.append({
+            "name": session_record.exam_session_name.strip(),
+            "details": ", ".join(part.strip() for part in detail_parts if (part or "").strip()),
+        })
+    return {
+        "bundle_number": shipment_bundle_display_number(bundle).lstrip("#"),
+        "supervisor": bundle.supervisor.full_name,
+        "session_count": str(len(clean_sessions)),
+        "delivery_address": ", ".join(part.strip() for part in [
+            bundle.delivery_address,
+            bundle.delivery_city,
+            bundle.delivery_province,
+        ] if (part or "").strip()) or "Not set",
+        "sessions": clean_sessions,
+    }, ""
+
+
+def build_bundle_label_pdf(payload):
+    width, height = SESSION_IDENTIFICATION_LABEL_SIZE
+    sessions_per_page = 9
+    session_pages = [
+        payload["sessions"][index:index + sessions_per_page]
+        for index in range(0, len(payload["sessions"]), sessions_per_page)
+    ] or [[]]
+    pages = []
+    for page_index, page_sessions in enumerate(session_pages):
+        commands = [
+            "0 0 0 RG 0 0 0 rg",
+            "0.8 w",
+            f"5 5 {width - 10:.2f} {height - 10:.2f} re S",
+            "1.2 w",
+            f"12 {height - 34:.2f} {width - 24:.2f} 22 re S",
+            pdf_command_text(18, height - 21, "PATH EXAMINATIONS", "/F2", 10.5),
+            pdf_command_text(18, height - 31, "BUNDLE LABEL", "/F1", 6.5),
+            pdf_command_text(width - 88, height - 23, "BUNDLE", "/F2", 5.5),
+            pdf_command_text(width - 88, height - 33, payload["bundle_number"], "/F2", 12),
+            f"12 {height - 42:.2f} m {width - 12:.2f} {height - 42:.2f} l S",
+        ]
+        y = height - 52
+        left_x = 18
+        middle_x = 95
+        right_x = 168
+        summary_width = 72
+        summary = [
+            ("SUPERVISOR", payload["supervisor"], left_x, y),
+            ("SESSIONS", payload["session_count"], middle_x, y),
+            ("DELIVERY", payload["delivery_address"], right_x, y),
+        ]
+        for label, value, x, row_y in summary:
+            commands.append(pdf_command_text(x, row_y, label, "/F2", 5.1))
+            for line_index, line in enumerate(pdf_wrap(value, 6.1, summary_width, max_lines=2)):
+                commands.append(pdf_command_text(x, row_y - 8 - (line_index * 6.5), line, "/F1", 6.1))
+        sessions_top = y - 26
+        commands.append(f"12 {sessions_top + 6:.2f} m {width - 12:.2f} {sessions_top + 6:.2f} l S")
+        sessions_label = "SESSIONS INCLUDED"
+        if len(session_pages) > 1:
+            sessions_label = f"{sessions_label} ({page_index + 1}/{len(session_pages)})"
+        commands.append(pdf_command_text(18, sessions_top, sessions_label, "/F2", 5.8))
+        for row, session_item in enumerate(page_sessions):
+            item_number = (page_index * sessions_per_page) + row + 1
+            current_y = sessions_top - 8 - (row * 7.1)
+            details = f", {session_item['details']}" if session_item["details"] else ""
+            title = f"{item_number}. {session_item['name']}{details}"
+            for line in pdf_wrap(title, 6.1, width - 34, max_lines=1):
+                commands.append(pdf_command_text(18, current_y, line, "/F1", 6.1))
+        commands.append(f"12 14 m {width - 12:.2f} 14 l S")
+        commands.append(pdf_command_text(18, 8, "PRINT BUNDLE LABEL AND AFFIX IT TO TOP OF BUNDLE", "/F2", 5.2))
+        pages.append(commands)
+    return build_pdf_document_pages(width, height, pages)
 
 
 def exam_session_pending_status_tooltip(staffing_contract, logistics_contract, session_record=None, assignments=None, candidate_contract=None):
@@ -5204,7 +5668,7 @@ def staffing_presentation_from_contract(contract):
     awaiting = pending_confirmations + sent_confirmations
     status = contract.get("status", "not_configured")
     role_rows = []
-    for role in ("Supervisor", "Examiner", "Intern"):
+    for role in ("Emergency contact", "Supervisor", "Examiner", "Intern"):
         counts = contract.get("by_role", {}).get(role, empty_staffing_counts())
         if counts.get("required", 0) == 0:
             continue
@@ -5265,7 +5729,7 @@ def staffing_presentation_from_contract(contract):
     if required > 0 and open_positions == 0 and confirmed == required:
         status_chips.append({
             "status": "confirmed-staff",
-            "label": "Confirmed staff",
+            "label": "Confirmed",
             "recommended_action": "Staffing completed",
         })
     if not status_chips:
@@ -5317,6 +5781,8 @@ def staffing_assignment_person_email(assignment):
 
 
 def staffing_assignment_role_label(assignment_type, assignment=None):
+    if assignment_type == "emergency_contact":
+        return "Emergency contact"
     if assignment_type == "supervisor":
         if assignment is not None and getattr(assignment, "is_remote", False):
             return "Supervisor (remote)"
@@ -5488,7 +5954,7 @@ def schedule_locked_by_staffing_assignments(session_record):
     )
 
 
-def staffing_assignment_row(role, assignment=None, assignment_type="", status="Pending", staff_name="", staff_email="", receives_shipment=False, updatable=True):
+def staffing_assignment_row(role, assignment=None, assignment_type="", status="Pending", staff_name="", staff_email="", receives_shipment=False, updatable=True, assignment_id=None, due_at=None):
     clean_status = staffing_participation_status_label(status)
     resolved_name = staff_name or staffing_assignment_person_name(assignment)
     has_staff_member = bool(
@@ -5499,17 +5965,17 @@ def staffing_assignment_row(role, assignment=None, assignment_type="", status="P
     return {
         "role": role,
         "assignment_type": assignment_type,
-        "assignment_id": assignment.id if assignment else None,
+        "assignment_id": assignment_id if assignment_id is not None else (assignment.id if assignment else None),
         "staff_name": resolved_name or "Assigned staff member",
         "staff_email": staff_email or staffing_assignment_person_email(assignment),
         "status": clean_status,
         "status_class": staffing_participation_status_class(clean_status),
-        "deadline": getattr(assignment, "staffing_status_due_at", None),
-        "deadline_label": staffing_assignment_deadline_label(getattr(assignment, "staffing_status_due_at", None), clean_status),
-        "deadline_status": staffing_assignment_deadline_status(getattr(assignment, "staffing_status_due_at", None), clean_status),
+        "deadline": due_at if due_at is not None else getattr(assignment, "staffing_status_due_at", None),
+        "deadline_label": staffing_assignment_deadline_label(due_at if due_at is not None else getattr(assignment, "staffing_status_due_at", None), clean_status),
+        "deadline_status": staffing_assignment_deadline_status(due_at if due_at is not None else getattr(assignment, "staffing_status_due_at", None), clean_status),
         "receives_shipment": receives_shipment or bool(getattr(assignment, "is_shipment_recipient", False)),
         "has_staff_member": has_staff_member,
-        "updatable": bool(updatable and assignment and assignment.id),
+        "updatable": bool(updatable and (assignment_id is not None or (assignment and assignment.id))),
     }
 
 
@@ -5518,10 +5984,12 @@ def staffing_assignment_rows(session_record, supervisor_assignments=None, examin
     if session_record and session_record.emergency_contact_member:
         rows.append(staffing_assignment_row(
             "Emergency contact",
-            status="Assigned",
+            assignment_type="emergency_contact",
+            assignment_id=session_record.id,
+            status=session_record.emergency_contact_participation_status,
             staff_name=session_record.emergency_contact_member.full_name,
             staff_email=session_record.emergency_contact_member.email,
-            updatable=False,
+            due_at=session_record.emergency_contact_status_due_at,
         ))
     for assignment in supervisor_assignments or []:
         rows.append(staffing_assignment_row(
@@ -7333,21 +7801,169 @@ def package_status_label(status):
     }.get(status, "Needs review")
 
 
+def package_preparation_stage_statuses(session_record, staff_member_id_requirements=None):
+    stages = [
+        ("Candidate label verification", session_record.package_label_verification_status),
+        ("Candidate label printing and affixing", session_record.package_label_printing_status),
+        ("Room package sealing", session_record.room_package_sealing_status),
+        ("Return packages", session_record.return_packages_status),
+    ]
+    if staff_member_id_requirements:
+        stages.append(("Staff member IDs", session_record.staff_member_ids_status))
+    stages.extend([
+        ("Inclusion of final items", session_record.inclusion_final_items_status),
+        ("Session box sealing", session_record.session_box_sealing_status),
+    ])
+    return stages
+
+
+def package_preparation_started(session_record):
+    if not session_record:
+        return False
+    return any(
+        (status or "not_started") != "not_started"
+        for _label, status in package_preparation_stage_statuses(session_record, staff_member_id_requirements_for_session(session_record))
+    )
+
+
+def package_staffing_sensitive_stages_started(session_record):
+    if not session_record:
+        return False
+    return any(
+        (getattr(session_record, status_attr, None) or "not_started") in {"in_progress", "completed", "incident"}
+        for status_attr in (
+            "room_package_sealing_status",
+            "staff_member_ids_status",
+            "session_box_sealing_status",
+        )
+    )
+
+
+def package_preparation_status_contract(session_record, staff_member_id_requirements=None):
+    stages = package_preparation_stage_statuses(session_record, staff_member_id_requirements)
+    normalized = [
+        (title, (status or "not_started"))
+        for title, status in stages
+    ]
+    statuses = [status for _, status in normalized]
+    grouped_titles = {
+        "completed": [title for title, status in normalized if status == "completed"],
+        "in_progress": [title for title, status in normalized if status == "in_progress"],
+        "incident": [title for title, status in normalized if status == "incident"],
+    }
+    total = len(normalized)
+    completed = len(grouped_titles["completed"])
+    in_progress = len(grouped_titles["in_progress"])
+    incident = len(grouped_titles["incident"])
+    if incident:
+        status = "incident"
+    elif total and completed == total:
+        status = "completed"
+    elif completed or in_progress:
+        status = "in_progress"
+    else:
+        status = "not_started"
+    label = package_label_verification_status_label(status)
+    secondary_lines = []
+    if in_progress:
+        secondary_lines.append({
+            "text": f"{in_progress} in progress",
+            "tooltip": "In progress: " + ", ".join(grouped_titles["in_progress"]),
+        })
+    if incident:
+        secondary_lines.append({
+            "text": f"{incident} with incident",
+            "tooltip": "With incident: " + ", ".join(grouped_titles["incident"]),
+        })
+    return {
+        "status": status,
+        "label": label,
+        "summary": f"Package preparation is {label.lower()}.",
+        "table_summary": f"{completed} / {total} completed",
+        "secondary_lines": secondary_lines,
+        "tooltip": "\n".join([
+            "Completed: " + (", ".join(grouped_titles["completed"]) or "-"),
+            "In progress: " + (", ".join(grouped_titles["in_progress"]) or "-"),
+            "With incident: " + (", ".join(grouped_titles["incident"]) or "-"),
+        ]),
+    }
+
+
+def packages_modal_blocker_messages(packages_contract, staffing_contract=None, incidents_contract=None):
+    blockers = list((packages_contract or {}).get("blockers") or [])
+    staffing_totals = (staffing_contract or {}).get("totals", {})
+    staff_required = staffing_totals.get("required", 0) or 0
+    staff_confirmed = staffing_totals.get("confirmed", 0) or 0
+    staff_not_confirmed = max(staff_required - staff_confirmed, 0)
+    if staff_not_confirmed:
+        if staff_not_confirmed == 1:
+            blockers.append("1 staff member has not been confirmed yet.")
+        else:
+            blockers.append(f"{staff_not_confirmed} staff members have not been confirmed yet.")
+    unsolved_incidents = (incidents_contract or {}).get("active_count", 0) or 0
+    if unsolved_incidents:
+        if unsolved_incidents == 1:
+            blockers.append("There is 1 unsolved incident.")
+        else:
+            blockers.append(f"There are {unsolved_incidents} unsolved incidents.")
+    return list(dict.fromkeys(blockers))
+
+
+PACKAGE_STATUS_TRACK_FIELDS = (
+    ("Candidate label verification", "package_label_verification_status", "package_label_verification_updated_at", "package_label_verification_updated_by"),
+    ("Candidate label printing and affixing", "package_label_printing_status", "package_label_printing_updated_at", "package_label_printing_updated_by"),
+    ("Room package sealing", "room_package_sealing_status", "room_package_sealing_updated_at", "room_package_sealing_updated_by"),
+    ("Return packages", "return_packages_status", "return_packages_updated_at", "return_packages_updated_by"),
+    ("Staff member IDs", "staff_member_ids_status", "staff_member_ids_updated_at", "staff_member_ids_updated_by"),
+    ("Inclusion of final items", "inclusion_final_items_status", "inclusion_final_items_updated_at", "inclusion_final_items_updated_by"),
+    ("Session box sealing", "session_box_sealing_status", "session_box_sealing_updated_at", "session_box_sealing_updated_by"),
+)
+
+
+def package_status_track_events(session_record, staff_member_id_requirements=None):
+    if not session_record:
+        return []
+    visible_stage_labels = {label for label, _status in package_preparation_stage_statuses(session_record, staff_member_id_requirements)}
+    events = []
+    for label, status_attr, updated_at_attr, updated_by_attr in PACKAGE_STATUS_TRACK_FIELDS:
+        if label not in visible_stage_labels:
+            continue
+        updated_at = getattr(session_record, updated_at_attr, None)
+        if not updated_at:
+            continue
+        status = getattr(session_record, status_attr, None) or "not_started"
+        events.append({
+            "stage": label,
+            "previous_status": "Not started yet",
+            "new_status": package_label_verification_status_label(status),
+            "created_at": updated_at,
+            "created_by": getattr(session_record, updated_by_attr, None),
+        })
+    def sort_key(event):
+        created_at = event["created_at"] or datetime.min
+        if getattr(created_at, "tzinfo", None):
+            return created_at.astimezone(timezone.utc).replace(tzinfo=None)
+        return created_at
+    return sorted(events, key=sort_key, reverse=True)
+
+
 def packages_readiness_contract(session_record=None, package_units=None, session_items=None, schedule_gate=None, staffing_contract=None):
     package_units = list(package_units or [])
     session_items = list(session_items or [])
     if not package_units:
         return {
-            "status": "not_configured",
-            "label": "Not configured",
+            "status": "pre_packing_not_started",
+            "label": package_status_label("pre_packing_not_started"),
             "ready": False,
             "total_package_units": 0,
             "package_units_by_status": {},
             "pre_packing_complete_units": 0,
             "final_complete_units": 0,
             "quality_checked_units": 0,
-            "summary": "No package units configured",
-            "blockers": ["No package units configured."],
+            "session_pre_packing_complete": False,
+            "session_final_assembly_complete": False,
+            "summary": "Package preparation not started",
+            "blockers": [],
         }
 
     known_statuses = set(PACKAGE_UNIT_STATUSES)
@@ -7415,7 +8031,7 @@ def packages_readiness_contract(session_record=None, package_units=None, session
     elif status in {"impersonal_ready", "ready_for_final_assembly"}:
         summary = f"{pre_complete_units} / {total_units} packages impersonal ready"
     elif status == "not_configured":
-        summary = "No package units configured"
+        summary = "Package preparation not started"
     else:
         summary = f"{pre_complete_units} / {total_units} packages impersonal ready"
 
@@ -7469,9 +8085,9 @@ def packages_action_contract(session_record, packages_contract=None, schedule_ga
         )
     if status == "not_configured":
         return action(
-            "configure_package_units",
-            "Configure package units",
-            "Package units have not been configured for this session.",
+            "start_session_package_preparation",
+            "Start session package preparation",
+            "Session package preparation has not started yet.",
         )
     if status == "blocked_discrepancy":
         return action(
@@ -7484,7 +8100,7 @@ def packages_action_contract(session_record, packages_contract=None, schedule_ga
         return action(
             "start_package_pre_packing",
             "Start package pre-packing",
-            "Package units are configured and pre-packing has not started yet.",
+            "Session package preparation has not started yet.",
             earliest_package_unit_deadline(package_units, lambda unit: unit.status != "Quality checked"),
         )
     if status == "pre_packing_in_progress":
@@ -7530,6 +8146,39 @@ def packages_action_contract(session_record, packages_contract=None, schedule_ga
         "Review package data",
         "Package readiness could not be determined safely.",
     )
+
+
+def bundle_detail_action_items(
+    schedule_status,
+    schedule_gate,
+    schedule_next_action,
+    schedule_responsible,
+    staffing_contract=None,
+    staffing_control=None,
+    packages_action=None,
+):
+    actions = []
+    if not (schedule_gate or {}).get("is_ready"):
+        actions.append({
+            "department": schedule_responsible or "MANAGEMENT",
+            "description": schedule_next_action or "Complete schedule preparation and approval.",
+        })
+
+    staffing_contract = staffing_contract or {}
+    if staffing_contract.get("status") != "confirmed":
+        staffing_messages = staffing_contract_blocker_messages(staffing_contract)
+        actions.append({
+            "department": (staffing_control or {}).get("responsible_label", "ADMIN"),
+            "description": staffing_messages[0] if staffing_messages else "Complete staff participation and confirmation.",
+        })
+
+    if packages_action and not packages_action.get("is_complete"):
+        actions.append({
+            "department": packages_action.get("responsible") or "LOGISTICS",
+            "description": packages_action.get("description") or packages_action.get("label") or "Continue session package preparation.",
+        })
+
+    return actions
 
 
 def package_unit_view(package_unit, today=None):
@@ -7645,7 +8294,10 @@ def ensure_shipment_checklist_items(bundle):
 
 
 def shipment_checklist_complete(bundle):
-    required_items = [item for item in bundle.checklist_items if item.is_required]
+    required_items = [
+        item for item in bundle.checklist_items
+        if item.is_required and item.item_key in SHIPMENT_PRE_DISPATCH_CARD_KEYS
+    ]
     return bool(required_items) and all(item.is_checked for item in required_items)
 
 
@@ -7655,6 +8307,233 @@ def shipment_bundle_sessions(bundle):
         for link in sorted(bundle.session_links, key=lambda link: ((link.exam_session.session_date if link.exam_session else None) or datetime.max.date(), link.exam_session_id))
         if link.exam_session
     ]
+
+
+def shipment_pre_dispatch_cards(bundle, max_examiner_count=0):
+    checklist_by_key = {item.item_key: item for item in bundle.checklist_items}
+    definitions = [
+        {
+            "item_key": "verify_sessions_boxes",
+            "title": "Sealed session boxes",
+            "description": "Confirm that all sessions included in this bundle have their sealed boxes ready.",
+        },
+        {
+            "item_key": "jbl_speakers_dice",
+            "requires_item_key": "verify_sessions_boxes",
+            "title": "Listening and speaking pack",
+            "description": "Include the Listening and speaking pack for examiners, containing",
+            "count": max_examiner_count,
+            "suffix": f"JBL speaker{'s' if max_examiner_count != 1 else ''} and dice.",
+        },
+        {
+            "item_key": "emergency_pack",
+            "requires_item_key": "jbl_speakers_dice",
+            "title": "Emergency pack",
+            "description": "Include one sealed emergency pack containing two exam papers for each level.",
+        },
+        {
+            "item_key": "correo_label",
+            "requires_item_key": "emergency_pack",
+            "title": "Final checklist before delivery",
+            "shipping_label_url": bundle.shipping_label_url or "",
+            "bundle_label_url": f"/pre-session-control-tower/bundles/{bundle.id}/bundle-label.pdf" if getattr(bundle, "id", None) else "",
+            "delivery_option": bundle.delivery_option or "",
+            "steps": [
+                "Wrap all session boxes, the Listening and speaking pack for examiners, and the emergency pack together with black nylon. Heat-seal the bundle to prepare it as a single shipment.",
+                "Print the shipping label and affix it to the top of the bundle.",
+            ],
+        },
+    ]
+    cards = []
+    for definition in definitions:
+        item = checklist_by_key.get(definition["item_key"])
+        if not item:
+            continue
+        card = dict(definition)
+        card["item"] = item
+        card["status"] = "completed" if item.is_checked else "not_started"
+        card["status_label"] = "Completed" if item.is_checked else "Not started yet"
+        card["can_complete"] = shipment_pre_dispatch_card_can_complete(bundle, item, definition, checklist_by_key)
+        cards.append(card)
+    return cards
+
+
+def shipment_bundle_final_checklist_completed(bundle):
+    if not bundle:
+        return False
+    checklist_items = (
+        ExamSessionShipmentChecklistItem.query.filter_by(bundle_id=bundle.id).all()
+        if getattr(bundle, "id", None)
+        else list(bundle.checklist_items or [])
+    )
+    return any(item.item_key == "correo_label" and item.is_checked for item in checklist_items)
+
+
+def shipment_bundle_has_alternate_delivery_address(bundle):
+    if not bundle:
+        return False
+    supervisor_address = supervisor_delivery_address(bundle.supervisor)
+    return (
+        (bundle.delivery_option or "") in {"different_address", "meeting_point"}
+        and bool((bundle.delivery_address or "").strip())
+        and normalize_shipment_address(bundle.delivery_address) != normalize_shipment_address(supervisor_address)
+    )
+
+
+def shipment_pre_dispatch_card_can_complete(bundle, item, definition, checklist_by_key):
+    if item.is_checked:
+        return True
+    item_key = definition.get("item_key")
+    if item_key == "verify_sessions_boxes":
+        gate = shipment_bundle_gate_contract(shipment_bundle_sessions(bundle))
+        if not gate.get("unblocked"):
+            return False
+        delivery_option = (bundle.delivery_option or "").strip()
+        if not delivery_option:
+            return False
+        if delivery_option == "meeting_point":
+            return shipment_bundle_has_alternate_delivery_address(bundle)
+        if delivery_option == "different_address":
+            return (
+                shipment_bundle_has_alternate_delivery_address(bundle)
+                and bool((bundle.shipping_label_url or "").strip())
+                and bool((bundle.tracking_number or "").strip())
+            )
+        return True
+    required_item = checklist_by_key.get(definition.get("requires_item_key"))
+    return not definition.get("requires_item_key") or bool(required_item and required_item.is_checked)
+
+
+def shipment_bundle_planning_progress(bundle):
+    if not bundle:
+        return {"started": False, "ready": False}
+    delivery_option = (bundle.delivery_option or "").strip()
+    has_shipping_label = bool((bundle.shipping_label_url or "").strip())
+    has_tracking_number = bool((bundle.tracking_number or "").strip())
+    has_alternate_address = shipment_bundle_has_alternate_delivery_address(bundle)
+    has_delivery_address = bool((bundle.delivery_address or "").strip())
+    started = any([
+        delivery_option,
+        has_shipping_label,
+        has_tracking_number,
+        has_alternate_address,
+    ])
+    ready = False
+    if delivery_option == "meeting_point":
+        ready = has_alternate_address
+    elif delivery_option == "different_address":
+        ready = has_alternate_address and has_shipping_label and has_tracking_number
+    elif delivery_option in {"store_pickup", "listed_address"}:
+        ready = has_delivery_address and has_shipping_label and has_tracking_number
+    return {"started": started, "ready": ready}
+
+
+def shipment_bundle_pre_dispatch_progress(bundle):
+    checklist_items = [
+        item for item in (bundle.checklist_items or [])
+        if item.item_key in SHIPMENT_PRE_DISPATCH_CARD_KEYS
+    ] if bundle else []
+    total = len(checklist_items)
+    completed = sum(1 for item in checklist_items if item.is_checked)
+    return {
+        "total": total,
+        "completed": completed,
+        "started": completed > 0,
+        "ready": bool(total) and completed == total,
+    }
+
+
+def shipment_bundle_dispatch_step(bundle):
+    status = (bundle.status or "").strip() if bundle else ""
+    return {
+        "Preparing bundle": -1,
+        "Ready to dispatch": 0,
+        "In transit to post office": 1,
+        "Dispatched": 2,
+        "Recipient notified": 3,
+        "Delivered successfully": 4,
+        "Recipient review successful": 4,
+    }.get(status, -1)
+
+
+def shipment_bundle_operational_status(bundle, gate=None):
+    if not bundle:
+        return {
+            "label": "Not bundled",
+            "status": "not_bundled",
+        }
+    if (bundle.status or "").strip() in {"Delivered successfully", "Recipient review successful"}:
+        return {
+            "label": "Shipment delivered",
+            "status": "shipment_delivered",
+        }
+    dispatch_step = shipment_bundle_dispatch_step(bundle)
+    if dispatch_step >= 0:
+        return {
+            "label": "Shipment dispatch in progress",
+            "status": "shipment_dispatch_in_progress",
+        }
+    pre_dispatch = shipment_bundle_pre_dispatch_progress(bundle)
+    if pre_dispatch["ready"]:
+        return {
+            "label": "Shipment pre-dispatch ready",
+            "status": "shipment_pre_dispatch_ready",
+        }
+    if pre_dispatch["started"]:
+        return {
+            "label": "Shipment pre-dispatch in progress",
+            "status": "shipment_pre_dispatch_in_progress",
+        }
+    gate = gate or shipment_bundle_gate_contract(shipment_bundle_sessions(bundle))
+    if gate.get("blocked") or gate.get("semi_unblocked"):
+        return {
+            "label": "Bundle preparation not finished",
+            "status": "bundle_preparation_not_finished",
+        }
+    planning = shipment_bundle_planning_progress(bundle)
+    if planning["ready"]:
+        return {
+            "label": "Shipment planning ready",
+            "status": "shipment_planning_ready",
+        }
+    if planning["started"]:
+        return {
+            "label": "Shipment planning in progress",
+            "status": "shipment_planning_in_progress",
+        }
+    return {
+        "label": "Bundle preparation ready",
+        "status": "bundle_preparation_ready",
+    }
+
+
+def shipment_status_track_events(bundle):
+    if not bundle:
+        return []
+    event_labels = {
+        "SHIPMENT_BUNDLE_CREATED": "Bundle created",
+        "DELIVERY_OPTION_CHANGED": "Delivery option",
+        "ADDRESS_CHANGED": "Delivery address",
+        "COURIER_CHANGED": "Courier",
+        "TRACKING_UPDATED": "Tracking",
+        "SHIPPING_LABEL_LINK_UPDATED": "Shipping label",
+        "CHECKLIST_UPDATED": "Pre-dispatch checklist",
+        "STATUS_CHANGED": "Shipment status",
+        "RECIPIENT_REVIEWED": "Recipient review",
+    }
+    events = []
+    for event in sorted(bundle.events, key=lambda value: (value.created_at, value.id or 0), reverse=True):
+        label = event_labels.get(event.event_type)
+        if not label:
+            continue
+        events.append({
+            "stage": label,
+            "previous_status": event.previous_status or "-",
+            "new_status": event.new_status or "-",
+            "created_at": event.created_at,
+            "created_by": event.created_by,
+        })
+    return events
 
 
 def session_packages_quality_checked(session_record):
@@ -7674,12 +8553,164 @@ def session_packages_quality_checked(session_record):
     return bool(contract.get("ready"))
 
 
+def session_package_preparation_completed(session_record):
+    return package_preparation_status_contract(
+        session_record,
+        staff_member_id_requirements_for_session(session_record),
+    ).get("status") == "completed"
+
+
+def session_schedule_and_staffing_ready_for_shipment(session_record):
+    schedule_ready = schedule_workflow_status(getattr(session_record, "schedule_workflow", None)) == "Approved"
+    staffing_ready = staffing_readiness_contract(
+        list(getattr(session_record, "supervisor_assignments", []) or []),
+        list(getattr(session_record, "examiner_assignments", []) or []),
+        list(getattr(session_record, "intern_assignments", []) or []),
+        session_record=session_record,
+    ).get("ready")
+    return bool(schedule_ready and staffing_ready)
+
+
+def session_schedule_completed_for_shipment(session_record):
+    return schedule_workflow_status(getattr(session_record, "schedule_workflow", None)) == "Approved"
+
+
+def session_staffing_confirmed_for_shipment(session_record):
+    return bool(staffing_readiness_contract(
+        list(getattr(session_record, "supervisor_assignments", []) or []),
+        list(getattr(session_record, "examiner_assignments", []) or []),
+        list(getattr(session_record, "intern_assignments", []) or []),
+        session_record=session_record,
+    ).get("ready"))
+
+
+def shipment_bundle_gate_contract(included_sessions):
+    sessions = list(included_sessions or [])
+    sessions_count = len(sessions)
+    staffing_confirmed_count = sum(1 for session_record in sessions if session_staffing_confirmed_for_shipment(session_record))
+    package_completed_count = sum(1 for session_record in sessions if session_package_preparation_completed(session_record))
+    sessions_completed_count = sum(
+        1
+        for session_record in sessions
+        if (
+            session_schedule_completed_for_shipment(session_record)
+            and session_staffing_confirmed_for_shipment(session_record)
+            and session_package_preparation_completed(session_record)
+        )
+    )
+    staffing_all_confirmed = sessions_count > 0 and staffing_confirmed_count == sessions_count
+    package_all_completed = sessions_count > 0 and package_completed_count == sessions_count
+    if not sessions_count:
+        status = "BLOCKED"
+    elif not staffing_all_confirmed:
+        status = "BLOCKED"
+    elif not package_all_completed:
+        status = "SEMI-UNBLOCKED"
+    else:
+        status = "UNBLOCKED"
+    return {
+        "status": status,
+        "blocked": status == "BLOCKED",
+        "semi_unblocked": status == "SEMI-UNBLOCKED",
+        "unblocked": status == "UNBLOCKED",
+        "sessions_count": sessions_count,
+        "sessions_completed_count": sessions_completed_count,
+        "staffing_confirmed_count": staffing_confirmed_count,
+        "package_completed_count": package_completed_count,
+        "staffing_all_confirmed": staffing_all_confirmed,
+        "package_all_completed": package_all_completed,
+    }
+
+
+def shipment_bundle_action_items(bundle, gate=None):
+    gate = gate or shipment_bundle_gate_contract(shipment_bundle_sessions(bundle))
+    actions = []
+    if gate.get("sessions_count", 0) <= 0:
+        actions.append({
+            "department": "LOGISTICS",
+            "description": "Add sessions to the shipment bundle.",
+        })
+    if gate.get("staffing_confirmed_count", 0) < gate.get("sessions_count", 0):
+        actions.append({
+            "department": "ADMIN",
+            "description": "Confirm staffing for all sessions included in this bundle.",
+        })
+    if gate.get("staffing_all_confirmed") and gate.get("package_completed_count", 0) < gate.get("sessions_count", 0):
+        actions.append({
+            "department": "LOGISTICS",
+            "description": "Complete package preparation for all sessions included in this bundle.",
+        })
+    if not actions and bundle:
+        status = (bundle.status or "").strip()
+        if status == "Preparing bundle":
+            actions.append({
+                "department": "LOGISTICS",
+                "description": "Complete shipment bundle preparation.",
+            })
+        elif status == "Ready to dispatch":
+            actions.append({
+                "department": "LOGISTICS",
+                "description": "Dispatch the shipment bundle.",
+            })
+        elif status == "In transit to post office":
+            actions.append({
+                "department": "LOGISTICS",
+                "description": "Confirm shipment dispatch.",
+            })
+        elif status == "Dispatched":
+            actions.append({
+                "department": "LOGISTICS",
+                "description": "Notify recipient and share shipment information.",
+            })
+        elif status == "Recipient notified":
+            actions.append({
+                "department": "LOGISTICS",
+                "description": "Monitor shipment delivery.",
+            })
+        elif status in {"Delivered successfully", "Recipient review successful", "Recipient review with discrepancy"}:
+            actions.append({
+                "department": "LOGISTICS",
+                "description": "Shipment process completed.",
+            })
+        else:
+            actions.append({
+                "department": "LOGISTICS",
+                "description": "Review shipment bundle status.",
+            })
+    deduped = []
+    seen = set()
+    for action in actions:
+        key = (action["department"], action["description"])
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(action)
+    return deduped
+
+
+def session_ready_for_shipment_bundle_unlock(session_record):
+    return bool(
+        session_schedule_and_staffing_ready_for_shipment(session_record)
+        and session_package_preparation_completed(session_record)
+    )
+
+
 def shipment_bundle_readiness_contract(bundle):
     included_sessions = shipment_bundle_sessions(bundle)
     sessions_count = len(included_sessions)
-    packages_ready_count = sum(1 for session_record in included_sessions if session_packages_quality_checked(session_record))
+    preparation_ready_count = sum(1 for session_record in included_sessions if session_schedule_and_staffing_ready_for_shipment(session_record))
+    packages_ready_count = sum(1 for session_record in included_sessions if session_ready_for_shipment_bundle_unlock(session_record))
     packages_missing_count = sessions_count - packages_ready_count
-    checklist_items = sorted(bundle.checklist_items, key=lambda item: (item.display_order, item.id or 0))
+    preparation_missing_count = sessions_count - preparation_ready_count
+    raw_checklist_items = (
+        ExamSessionShipmentChecklistItem.query.filter_by(bundle_id=bundle.id).all()
+        if getattr(bundle, "id", None)
+        else list(bundle.checklist_items or [])
+    )
+    checklist_items = [
+        item for item in sorted(raw_checklist_items, key=lambda item: (item.display_order, item.id or 0))
+        if item.item_key in SHIPMENT_PRE_DISPATCH_CARD_KEYS
+    ]
     checklist_total = sum(1 for item in checklist_items if item.is_required)
     checklist_checked = sum(1 for item in checklist_items if item.is_required and item.is_checked)
     tracking_available = bool((bundle.tracking_number or "").strip())
@@ -7689,11 +8720,6 @@ def shipment_bundle_readiness_contract(bundle):
     blockers = []
     if sessions_count == 0:
         blockers.append({"code": "NO_SESSIONS", "message": "Add at least one session to this shipment bundle."})
-    if packages_missing_count:
-        blockers.append({
-            "code": "PACKAGES_NOT_READY",
-            "message": "All included sessions must have packages quality checked before dispatch.",
-        })
     if checklist_checked < checklist_total:
         blockers.append({"code": "CHECKLIST_INCOMPLETE", "message": "Complete the shipment pre-dispatch checklist."})
     if not delivery_address_available:
@@ -7702,7 +8728,6 @@ def shipment_bundle_readiness_contract(bundle):
         blockers.append({"code": "SUPERVISOR_MISSING", "message": "Supervisor recipient is required."})
     ready_to_dispatch = (
         sessions_count > 0
-        and packages_missing_count == 0
         and checklist_total > 0
         and checklist_checked == checklist_total
         and delivery_address_available
@@ -7711,6 +8736,8 @@ def shipment_bundle_readiness_contract(bundle):
     return {
         "status": bundle.status,
         "sessions_count": sessions_count,
+        "preparation_ready_count": preparation_ready_count,
+        "preparation_missing_count": preparation_missing_count,
         "packages_ready_count": packages_ready_count,
         "packages_missing_count": packages_missing_count,
         "checklist_total": checklist_total,
@@ -7752,14 +8779,18 @@ def session_shipment_contract(session_record, shipment_link=None):
         }
     bundle = shipment_link.bundle
     readiness = shipment_bundle_readiness_contract(bundle)
+    gate = shipment_bundle_gate_contract(shipment_bundle_sessions(bundle))
     supervisor_name = bundle.supervisor.full_name if bundle.supervisor else "Supervisor not set"
     status = bundle.status
     completed = is_shipment_bundle_completed(bundle)
     sessions_count = readiness["sessions_count"]
+    preparation_ready_count = readiness["preparation_ready_count"]
+    preparation_missing_count = readiness["preparation_missing_count"]
     packages_ready_count = readiness["packages_ready_count"]
     packages_missing_count = readiness["packages_missing_count"]
-    blocked = packages_missing_count > 0 and not completed
-    session_packages_ready = session_packages_quality_checked(session_record)
+    semi_unblocked = gate["semi_unblocked"] and not completed
+    blocked = gate["blocked"] and not completed
+    session_packages_ready = session_ready_for_shipment_bundle_unlock(session_record)
     bundle_number = shipment_bundle_display_number(bundle)
     secondary_lines = [f"Bundle of {sessions_count} session{'s' if sessions_count != 1 else ''}"]
     if completed:
@@ -7768,12 +8799,17 @@ def session_shipment_contract(session_record, shipment_link=None):
         secondary_lines = ["Bundle completed", shipment_status_label(status)]
     elif blocked:
         label = "BLOCKED"
-        summary = "Blocked until all packages are confirmed."
+        summary = "Blocked until staffing is confirmed for all sessions."
         secondary_lines.append(f"{packages_ready_count}/{sessions_count} packages confirmed")
-        if session_packages_ready:
-            secondary_lines.append("Waiting for other sessions")
+        secondary_lines.append(f"{gate['staffing_confirmed_count']}/{sessions_count} staffing confirmed")
+    elif semi_unblocked:
+        label = "SEMI-UNBLOCKED"
+        summary = "Staffing is confirmed. Package completion is pending for at least one session."
+        secondary_lines.append(f"{packages_ready_count}/{sessions_count} packages confirmed")
+        if session_package_preparation_completed(session_record):
+            secondary_lines.append("Waiting for other packages")
         else:
-            secondary_lines.append("Blocking bundle - Packages pending")
+            secondary_lines.append("Package pending")
     else:
         label = shipment_status_label(status)
         secondary_lines.append(f"{packages_ready_count}/{sessions_count} packages confirmed")
@@ -7801,10 +8837,13 @@ def session_shipment_contract(session_record, shipment_link=None):
         "bundle_id": bundle.id,
         "bundle_number": bundle_number,
         "blocked": blocked,
+        "semi_unblocked": semi_unblocked,
+        "unblocked": gate["unblocked"] and not completed,
         "completed": completed,
         "session_packages_ready": session_packages_ready,
         "secondary_lines": secondary_lines,
         "readiness": readiness,
+        "gate": gate,
     }
 
 
@@ -7865,9 +8904,6 @@ def shipments_action_contract(session_record, shipment_contract=None, packages_c
 
     blocker_codes = {blocker.get("code") for blocker in readiness.get("blockers", []) if isinstance(blocker, dict)}
     if status == "Preparing bundle":
-        only_packages_missing = blocker_codes == {"PACKAGES_NOT_READY"}
-        if only_packages_missing:
-            return None
         if "SUPERVISOR_MISSING" in blocker_codes:
             return action(
                 "review_shipment_data",
@@ -7877,8 +8913,6 @@ def shipments_action_contract(session_record, shipment_contract=None, packages_c
             )
         if "CHECKLIST_INCOMPLETE" in blocker_codes:
             description = "The shipment bundle checklist is not complete."
-        elif "PACKAGES_NOT_READY" in blocker_codes:
-            description = "All included sessions must have packages quality checked before dispatch."
         elif "DELIVERY_ADDRESS_MISSING" in blocker_codes:
             description = "Delivery address must be completed before dispatch."
         elif readiness.get("ready_to_dispatch"):
@@ -7915,9 +8949,9 @@ def shipments_action_contract(session_record, shipment_contract=None, packages_c
         )
     if status == "Recipient notified":
         return action(
-            "track_shipment_to_recipient",
-            "Track shipment to recipient",
-            "The recipient has been notified. Track the shipment until it reaches destination.",
+            "monitor_shipment_delivery",
+            "Monitor shipment delivery",
+            "The shipment is in transit and the recipient has been notified.",
             dispatch_due_at,
         )
     if status == "In transit to recipient":
@@ -8155,20 +9189,46 @@ def shipment_bundle_deadline_for_sessions(sessions):
     return shipment_dispatch_deadline(min(dates))
 
 
-def schedule_preparation_deadline_for_sessions(sessions):
-    dates = [session_record.session_date for session_record in sessions if session_record.session_date]
-    if not dates:
+def monthly_registrations_closed_date(session_record, today=None):
+    closed_at = getattr(session_record, "monthly_registrations_closed_at", None)
+    if closed_at:
+        if closed_at.tzinfo:
+            return closed_at.astimezone(LOCAL_TZ).date()
+        return closed_at.date()
+    if today is None:
+        today = datetime.now(LOCAL_TZ).date()
+    return today
+
+
+def schedule_preparation_deadline_for_session(session_record, today=None):
+    if not session_record or not getattr(session_record, "monthly_registrations_closed", False):
         return None
-    return one_month_before(min(dates))
+    return argentina_add_business_days(monthly_registrations_closed_date(session_record, today=today), 8)
+
+
+def monthly_registration_reopen_affects_schedule(session_record):
+    workflow = getattr(session_record, "schedule_workflow", None)
+    return bool(workflow and schedule_workflow_status(workflow) != "Not started")
+
+
+def schedule_preparation_deadline_for_sessions(sessions):
+    deadlines = [
+        schedule_preparation_deadline_for_session(session_record)
+        for session_record in sessions
+    ]
+    deadlines = [deadline for deadline in deadlines if deadline]
+    if not deadlines:
+        return None
+    return min(deadlines)
 
 
 def sync_schedule_preparation_deadline_for_bundle(bundle):
     sessions = shipment_bundle_sessions(bundle)
-    deadline = schedule_preparation_deadline_for_sessions(sessions)
-    if not deadline:
-        return False
     changed = False
     for session_record in sessions:
+        deadline = schedule_preparation_deadline_for_session(session_record)
+        if not deadline:
+            continue
         workflow = get_or_create_schedule_workflow(session_record)
         if workflow.status == "Approved":
             continue
@@ -8180,15 +9240,7 @@ def sync_schedule_preparation_deadline_for_bundle(bundle):
 
 
 def schedule_preparation_deadline_for_session_bundle(session_record):
-    link = (
-        ExamSessionShipmentBundleSession.query
-        .filter_by(exam_session_id=session_record.id)
-        .options(joinedload(ExamSessionShipmentBundleSession.bundle))
-        .first()
-    )
-    if not link or not link.bundle:
-        return None
-    return schedule_preparation_deadline_for_sessions(shipment_bundle_sessions(link.bundle))
+    return schedule_preparation_deadline_for_session(session_record)
 
 
 def create_auto_shipment_bundle(supervisor, sessions, bundle_year, split_from_bundle=None, event_note="Bundle automatically created."):
@@ -8198,6 +9250,7 @@ def create_auto_shipment_bundle(supervisor, sessions, bundle_year, split_from_bu
         delivery_address=supervisor_delivery_address(supervisor) or "Supervisor address required",
         delivery_city=supervisor.city or None,
         delivery_province=supervisor.province or None,
+        delivery_option="",
         courier=SHIPMENT_DEFAULT_COURIER,
         status="Preparing bundle",
         dispatch_due_at=shipment_bundle_deadline_for_sessions(sessions),
@@ -8564,7 +9617,7 @@ def shipment_planning_contract(
         if any(not item["packages_ready"] for item in candidate_sessions):
             return base(
                 "waiting_for_packages",
-                "Packages must be quality checked before shipment can be planned.",
+                "",
                 supervisor=supervisor,
                 delivery_address=delivery_address,
                 earliest_session_date=earliest_session_date,
@@ -8644,7 +9697,7 @@ def shipment_planning_contract(
     if not current_ready:
         return base(
             "waiting_for_packages",
-            "Packages must be quality checked before shipment can be planned.",
+            "",
             supervisor=supervisor,
             delivery_address=delivery_address,
             earliest_session_date=earliest_session_date,
@@ -8751,7 +9804,7 @@ def shipment_planning_action_contract(session_record, planning_contract=None, pa
         return action(
             "wait_for_packages_before_shipment",
             "Wait for packages before shipment planning",
-            "Packages must be quality checked before shipment can be planned.",
+            "",
             dispatch_deadline,
         )
     if status == "bundle_recommended":
@@ -8845,6 +9898,8 @@ def shipment_planning_assisted_action_contract(session_record, planning_contract
             "delivery_city": "",
             "delivery_province": "",
             "courier": SHIPMENT_DEFAULT_COURIER,
+            "delivery_option": SHIPMENT_DEFAULT_DELIVERY_OPTION,
+            "delivery_options": SHIPMENT_DELIVERY_OPTION_CHOICES,
             "dispatch_due_at": dispatch_deadline,
             "selected_session_ids": selected_session_ids or [],
             "candidate_sessions": candidate_sessions,
@@ -8950,8 +10005,8 @@ def shipment_planning_assisted_action_contract(session_record, planning_contract
         return base(
             "assisted_waiting_for_packages",
             "Waiting for packages",
-            "Packages must be quality checked before shipment can be created.",
-            blocker="Packages must be quality checked before shipment can be created.",
+            "",
+            blocker="",
         )
     return None
 
@@ -8961,28 +10016,60 @@ def shipment_bundle_view(bundle):
         return None
     readiness = shipment_bundle_readiness_contract(bundle)
     completed = is_shipment_bundle_completed(bundle)
-    blocked = readiness["packages_missing_count"] > 0 and not completed
+    included_sessions = shipment_bundle_sessions(bundle)
+    gate = shipment_bundle_gate_contract(included_sessions)
+    included_session_ids = [session_record.id for session_record in included_sessions]
+    examiner_counts = {session_id: 0 for session_id in included_session_ids}
+    if included_session_ids:
+        examiner_assignments = ExamSessionExaminerAssignment.query.filter(
+            ExamSessionExaminerAssignment.exam_session_id.in_(included_session_ids),
+            ExamSessionExaminerAssignment.team_member_id.isnot(None),
+        ).all()
+        for assignment in examiner_assignments:
+            examiner_counts[assignment.exam_session_id] = examiner_counts.get(assignment.exam_session_id, 0) + 1
+    max_examiner_count = max(examiner_counts.values(), default=0)
+    checklist_items = sorted(bundle.checklist_items, key=lambda item: (item.display_order, item.id or 0))
+    semi_unblocked = gate["semi_unblocked"] and not completed
+    blocked = gate["blocked"] and not completed
+    has_alternate_delivery_address = shipment_bundle_has_alternate_delivery_address(bundle)
+    operational_status = shipment_bundle_operational_status(bundle, gate)
     return {
         "record": bundle,
         "id": bundle.id,
         "number": shipment_bundle_display_number(bundle),
         "label": f"Bundle {shipment_bundle_display_number(bundle)}",
         "status": bundle.status,
-        "display_status": "Bundle completed" if completed else ("BLOCKED" if blocked else shipment_status_label(bundle.status)),
+        "display_status": "Bundle completed" if completed else gate["status"],
+        "operational_status": operational_status,
         "blocked": blocked,
+        "semi_unblocked": semi_unblocked,
+        "unblocked": gate["unblocked"] and not completed,
         "completed": completed,
+        "gate": gate,
+        "action_items": shipment_bundle_action_items(bundle, gate),
         "supervisor_name": bundle.supervisor.full_name if bundle.supervisor else "Supervisor not set",
+        "supervisor_whatsapp_phone": normalize_whatsapp_phone(bundle.supervisor.phone) if bundle.supervisor else "",
         "delivery_address": bundle.delivery_address,
         "delivery_city": bundle.delivery_city or "",
         "delivery_province": bundle.delivery_province or "",
+        "has_alternate_delivery_address": has_alternate_delivery_address,
         "courier": bundle.courier or SHIPMENT_DEFAULT_COURIER,
+        "delivery_option": bundle.delivery_option or "",
+        "delivery_options": SHIPMENT_DELIVERY_OPTION_CHOICES,
         "tracking_number": bundle.tracking_number or "",
+        "shipping_label_url": bundle.shipping_label_url or "",
         "dispatch_due_at": bundle.dispatch_due_at,
         "responsible_department": bundle.responsible_department or "LOGISTICS",
         "note": bundle.note or "",
-        "included_sessions": shipment_bundle_sessions(bundle),
-        "included_session_ids": [session_record.id for session_record in shipment_bundle_sessions(bundle)],
-        "checklist_items": sorted(bundle.checklist_items, key=lambda item: (item.display_order, item.id or 0)),
+        "included_sessions": included_sessions,
+        "included_session_ids": included_session_ids,
+        "max_examiner_count": max_examiner_count,
+        "pre_dispatch_cards": shipment_pre_dispatch_cards(bundle, max_examiner_count),
+        "final_checklist_completed": shipment_bundle_final_checklist_completed(bundle),
+        "checklist_items": [
+            item for item in checklist_items
+            if item.item_key not in SHIPMENT_PRE_DISPATCH_CARD_KEYS
+        ],
         "events": sorted(bundle.events, key=lambda event: (event.created_at, event.id or 0), reverse=True),
         "packages_label": f"{readiness['packages_ready_count']}/{readiness['sessions_count']} confirmed" if readiness["sessions_count"] else "Packages pending",
         "readiness": readiness,
@@ -8991,24 +10078,23 @@ def shipment_bundle_view(bundle):
 
 
 def shipment_bundle_transition_options(bundle):
+    uses_meeting_point = (bundle.delivery_option or "").strip() == "meeting_point"
+    in_transit_label = "Mark as in transit to meeting point" if uses_meeting_point else "Mark as in transit to post office"
     primary = {
         "Preparing bundle": [("Ready to dispatch", "Mark as ready to dispatch")],
-        "Ready to dispatch": [("In transit to post office", "Mark as in transit to post office")],
+        "Ready to dispatch": [("In transit to post office", in_transit_label)],
         "In transit to post office": [("Dispatched", "Mark as dispatched")],
-        "Dispatched": [("Recipient notified", "Mark recipient as notified")],
-        "Recipient notified": [("In transit to recipient", "Mark as in transit to recipient")],
-        "In transit to recipient": [("Delayed", "Mark as delayed"), ("Delivered successfully", "Mark as delivered successfully")],
-        "Delayed": [("In transit to recipient", "Mark as in transit to recipient")],
-        "Delivered successfully": [
-            ("Recipient review successful", "Mark recipient review successful"),
-            ("Recipient review with discrepancy", "Mark recipient review with discrepancy"),
-        ],
+        "Dispatched": [("Recipient notified", "Mark as recipient notified")],
+        "Recipient notified": [("Delivered successfully", "Mark as delivered successfully")],
+        "In transit to recipient": [("Delivered successfully", "Mark as delivered successfully")],
+        "Delayed": [("Recipient notified", "Reopen in transit and recipient notified")],
+        "Delivered successfully": [],
     }
     reopen = {
         "Ready to dispatch": [("Preparing bundle", "Reopen bundle preparation")],
         "Dispatched": [("In transit to post office", "Reopen post office transit")],
         "Recipient notified": [("Dispatched", "Reopen dispatched status")],
-        "Delivered successfully": [("In transit to recipient", "Reopen recipient transit")],
+        "Delivered successfully": [("Recipient notified", "Reopen in transit and recipient notified")],
         "Recipient review successful": [("Delivered successfully", "Reopen recipient review")],
         "Recipient review with discrepancy": [("Delivered successfully", "Reopen recipient review")],
     }
@@ -9020,15 +10106,24 @@ def shipment_bundle_transition_options(bundle):
 
 def shipment_transition_allowed(bundle, new_status, note="", tracking_number=None):
     old_status = bundle.status
+    dispatch_reopen_authorized = request.form.get("dispatch_reopen_authorized", "").strip() == "1" and request.form.get("confirmation_password", "").strip() == "EditOK"
+    dispatch_stage_statuses = {
+        "Preparing bundle",
+        "Ready to dispatch",
+        "In transit to post office",
+        "Dispatched",
+        "Recipient notified",
+        "Delivered successfully",
+    }
     allowed = {
         "Preparing bundle": {"Ready to dispatch"},
         "Ready to dispatch": {"In transit to post office", "Preparing bundle"},
         "In transit to post office": {"Dispatched"},
         "Dispatched": {"Recipient notified", "In transit to post office"},
-        "Recipient notified": {"In transit to recipient", "Dispatched"},
-        "In transit to recipient": {"Delayed", "Delivered successfully"},
-        "Delayed": {"In transit to recipient"},
-        "Delivered successfully": {"Recipient review successful", "Recipient review with discrepancy", "In transit to recipient"},
+        "Recipient notified": {"Delivered successfully", "Dispatched"},
+        "In transit to recipient": {"Delivered successfully"},
+        "Delayed": {"Recipient notified"},
+        "Delivered successfully": {"Recipient notified"},
         "Recipient review successful": {"Delivered successfully"},
         "Recipient review with discrepancy": {"Delivered successfully"},
     }
@@ -9036,25 +10131,23 @@ def shipment_transition_allowed(bundle, new_status, note="", tracking_number=Non
         ("Ready to dispatch", "Preparing bundle"),
         ("Dispatched", "In transit to post office"),
         ("Recipient notified", "Dispatched"),
-        ("Delivered successfully", "In transit to recipient"),
+        ("Delivered successfully", "Recipient notified"),
         ("Recipient review successful", "Delivered successfully"),
         ("Recipient review with discrepancy", "Delivered successfully"),
     }
     if new_status not in SHIPMENT_BUNDLE_STATUSES:
         return "Please select a valid shipment status."
+    if dispatch_reopen_authorized and new_status in dispatch_stage_statuses:
+        return ""
+    if (old_status, new_status) in reopen_transitions:
+        return "This shipment status transition is not allowed."
     if new_status not in allowed.get(old_status, set()):
         return "This shipment status transition is not allowed."
-    if (old_status, new_status) in reopen_transitions and not (note or "").strip():
-        return "A note is required when reopening or correcting a shipment status."
     if new_status == "Ready to dispatch":
         readiness = shipment_bundle_readiness_contract(bundle)
         if not readiness["ready_to_dispatch"]:
-            if any(blocker["code"] == "PACKAGES_NOT_READY" for blocker in readiness["blockers"]):
-                return "All included sessions must have packages quality checked before the bundle can be marked as ready to dispatch."
             return "Complete shipment bundle requirements before marking it ready to dispatch."
     if new_status == "Dispatched":
-        if not ((tracking_number or bundle.tracking_number or "").strip()):
-            return "Tracking number is required before marking the shipment as dispatched."
         if not ((bundle.courier or SHIPMENT_DEFAULT_COURIER).strip()):
             return "Courier is required before marking the shipment as dispatched."
     if new_status == "Recipient review with discrepancy" and not (note or "").strip():
@@ -10334,7 +11427,7 @@ def path_session_journey_sources(session_record, today=None):
     communications_control = ExamSessionCommunicationsControl.query.filter_by(exam_session_id=session_record.id).first()
     communications_items = communications_control.checklist_items if communications_control else []
 
-    staffing = staffing_readiness_contract(supervisor_assignments, examiner_assignments, intern_assignments)
+    staffing = staffing_readiness_contract(supervisor_assignments, examiner_assignments, intern_assignments, session_record=session_record)
     logistics = logistics_readiness_contract(session_assignments, logistics_concepts, logistics_config)
     schedule_gate = schedule_gate_status(workflow)
     packages = packages_readiness_contract(
@@ -10614,7 +11707,7 @@ def render_journey_unavailable(status_code=404):
     ), status_code
 
 
-def schedule_workflow_view(session_record, workflow=None, today=None, staffing=None, logistics=None, core_readiness=None, operational_readiness=None, session_readiness=None, incidents=None, review_flags=None, priority_action=None, staffing_control=None, logistics_control=None, finance=None, finance_events=None, sinapsis=None, sinapsis_checklist_items=None, sinapsis_events=None, communications=None, communications_checklist_items=None, communications_events=None, schedule_gate=None, packages=None, shipments=None, activity_timeline=None, journey_shares=None, staffing_rows=None, staffing_events=None, schedule_locked_by_staffing=False):
+def schedule_workflow_view(session_record, workflow=None, today=None, staffing=None, logistics=None, core_readiness=None, operational_readiness=None, session_readiness=None, incidents=None, review_flags=None, priority_action=None, staffing_control=None, logistics_control=None, finance=None, finance_events=None, sinapsis=None, sinapsis_checklist_items=None, sinapsis_events=None, communications=None, communications_checklist_items=None, communications_events=None, schedule_gate=None, packages=None, shipments=None, activity_timeline=None, journey_shares=None, staffing_rows=None, staffing_events=None, bundle_detail_actions=None, schedule_locked_by_staffing=False):
     status = schedule_workflow_status(workflow)
     deadline = schedule_workflow_current_deadline(workflow)
     sinapsis_url = (session_record.details_url or "").strip()
@@ -10648,9 +11741,12 @@ def schedule_workflow_view(session_record, workflow=None, today=None, staffing=N
         "schedule_gate": gate,
         "monthly_registrations_closed": monthly_registrations_closed,
         "schedule_locked_by_staffing": bool(schedule_locked_by_staffing),
+        "schedule_reopen_affects_packages": package_preparation_started(session_record),
+        "staffing_status_change_affects_packages": package_staffing_sensitive_stages_started(session_record),
         "staffing": staffing,
         "staffing_rows": staffing_rows or [],
         "staffing_events": staffing_events or [],
+        "bundle_detail_actions": bundle_detail_actions or [],
         "staffing_control": staffing_control_view,
         "logistics": logistics or logistics_presentation_from_contract(logistics_readiness_contract([], [], None)),
         "logistics_control": logistics_control_view,
@@ -10664,12 +11760,17 @@ def schedule_workflow_view(session_record, workflow=None, today=None, staffing=N
         "communications_events": communications_events or [],
         "packages": packages or {
             "contract": packages_readiness_contract(session_record, [], [], schedule_gate=gate, staffing_contract=fallback_staffing_contract),
+            "preparation_status": package_preparation_status_contract(session_record, staff_member_id_requirements_for_session(session_record)),
             "action": None,
             "unit_views": [],
             "session_pre_packing_items": [],
             "session_final_assembly_items": [],
             "schedule_ready": bool(gate.get("is_ready")),
             "staffing_ready": False,
+            "return_package_requirements": return_package_requirements_for_session(session_record),
+            "staff_member_id_requirements": staff_member_id_requirements_for_session(session_record),
+            "status_events": package_status_track_events(session_record, staff_member_id_requirements_for_session(session_record)),
+            "inclusion_final_items": inclusion_final_items_for_session(session_record),
         },
         "shipments": shipments or {
             "contract": session_shipment_contract(session_record),
@@ -11132,18 +12233,68 @@ def incidents_control_redirect(session_record, status_filter="", incident_id=Non
     return redirect(url_for("staff.pre_session_control_tower", **args))
 
 
-def package_control_redirect(session_record, status_filter="", unit_id=None):
+def package_control_redirect(session_record, status_filter="", unit_id=None, target="packages"):
     args = {
         "session_year": session_record.session_date.year,
         "view": request.form.get("view", "sessions") or "sessions",
         "open_schedule_modal": session_record.id,
-        "open_modal_target": "packages",
+        "open_modal_target": target or "packages",
+        "packages_only": "1",
     }
     if status_filter in SCHEDULE_WORKFLOW_STATUSES:
         args["schedule_status"] = status_filter
     if unit_id:
         args["package_unit"] = unit_id
     return redirect(url_for("staff.pre_session_control_tower", **args))
+
+
+PACKAGE_LABEL_VERIFICATION_ACTIONS = {
+    "mark_in_progress": "in_progress",
+    "mark_complete": "completed",
+    "mark_incident": "incident",
+    "reopen": "not_started",
+}
+
+
+def package_label_verification_status_label(status):
+    return {
+        "not_started": "Not started yet",
+        "in_progress": "In progress",
+        "completed": "Completed",
+        "incident": "With incident",
+    }.get(status or "not_started", "Not started yet")
+
+
+def apply_package_stage_status_update(session_record, action, status_attr, updated_at_attr, updated_by_attr, stage_label):
+    new_status = PACKAGE_LABEL_VERIFICATION_ACTIONS.get(action)
+    if not new_status:
+        return "Please select a valid package preparation action."
+    current_status = getattr(session_record, status_attr, None) or "not_started"
+    if current_status == "completed" and action != "reopen":
+        return f"{stage_label} is completed. Reopen it before making changes."
+    setattr(session_record, status_attr, new_status)
+    setattr(session_record, updated_at_attr, datetime.now(timezone.utc))
+    actor = current_note_actor()
+    setattr(session_record, updated_by_attr, actor["full_name"] or session.get("user"))
+    return ""
+
+
+def session_box_sealing_prerequisites_completed(session_record):
+    required_statuses = (
+        session_record.package_label_verification_status,
+        session_record.package_label_printing_status,
+        session_record.room_package_sealing_status,
+        session_record.return_packages_status,
+        session_record.inclusion_final_items_status,
+    )
+    if any((status or "not_started") != "completed" for status in required_statuses):
+        return False
+    if (
+        staff_member_id_requirements_for_session(session_record)
+        and (session_record.staff_member_ids_status or "not_started") != "completed"
+    ):
+        return False
+    return True
 
 
 def shipment_control_redirect(session_record, status_filter="", bundle_id=None, assisted_action_key=""):
@@ -11155,6 +12306,7 @@ def shipment_control_redirect(session_record, status_filter="", bundle_id=None, 
         "view": requested_view,
         "open_schedule_modal": session_record.id,
         "open_modal_target": "shipments",
+        "shipments_only": "1",
     }
     if status_filter in SCHEDULE_WORKFLOW_STATUSES:
         args["schedule_status"] = status_filter
@@ -12250,6 +13402,7 @@ def apply_form(member, form):
     member.title = form.get("title", "").strip()
     member.full_name = form.get("full_name", "").strip()
     member.seniority = form.get("seniority") == "on"
+    member.id_issued = form.get("id_issued") == "on"
     member.roles = ",".join(form.getlist("roles"))
     member.phone = form.get("phone", "").strip()
     member.email = form.get("email", "").strip()
@@ -12281,6 +13434,7 @@ def member_draft_payload(form):
         "title": form.get("title", "").strip(),
         "full_name": form.get("full_name", "").strip(),
         "seniority": form.get("seniority") == "on",
+        "id_issued": form.get("id_issued") == "on",
         "roles": ",".join(form.getlist("roles")),
         "phone": form.get("phone", "").strip(),
         "email": form.get("email", "").strip(),
@@ -13636,6 +14790,7 @@ def pre_session_control_tower():
             supervisor_assignments,
             examiner_assignments,
             intern_assignments,
+            session_record=session_record,
         )
         schedule_gate = schedule_gate_status(workflows_by_session.get(session_record.id))
         staffing_deadlines_changed = (
@@ -13709,10 +14864,10 @@ def pre_session_control_tower():
             staffing=staffing_presentation,
             logistics=logistics_presentation,
         )
-        packages_contract = packages_contracts_by_session[session_record.id]
+        base_packages_contract = packages_contracts_by_session[session_record.id]
         packages_action = packages_action_contract(
             session_record,
-            packages_contract,
+            base_packages_contract,
             schedule_gate=schedule_gate,
             staffing_contract=staffing_contract,
             package_units=package_units,
@@ -13720,6 +14875,7 @@ def pre_session_control_tower():
         shipment_link = shipment_links_by_session.get(session_record.id)
         shipment_contract = session_shipment_contract(session_record, shipment_link)
         shipment_bundle = shipment_contract.get("bundle")
+        shipment_bundle_presentation = shipment_bundle_view(shipment_bundle)
         shipment_planning = shipment_planning_contract(
             session_record,
             all_year_sessions=sessions,
@@ -13732,7 +14888,7 @@ def pre_session_control_tower():
         shipments_action = shipments_action_contract(
             session_record,
             shipment_contract,
-            packages_contract,
+            base_packages_contract,
         )
         shipment_planning_action = shipment_planning_action_contract(
             session_record,
@@ -13764,15 +14920,6 @@ def pre_session_control_tower():
             today=today,
         )
         communications_events = communications_events_by_control.get(communications_control.id, []) if communications_control else []
-        operational_readiness = operational_readiness_contract(
-            schedule_gate,
-            staffing_contract,
-            logistics_contract,
-            packages_contract,
-            shipment_contract,
-            staffing=staffing_presentation,
-            logistics=logistics_presentation,
-        )
         incidents_contract = incidents_readiness_contract(
             session_record,
             incidents=incidents_by_session.get(session_record.id, []),
@@ -13781,6 +14928,21 @@ def pre_session_control_tower():
             impact_reviews_by_incident=incident_impact_reviews_by_incident,
             review_flags_by_incident=incident_review_flags_by_incident,
             today=today,
+        )
+        packages_contract = dict(base_packages_contract)
+        packages_contract["blockers"] = packages_modal_blocker_messages(
+            base_packages_contract,
+            staffing_contract=staffing_contract,
+            incidents_contract=incidents_contract,
+        )
+        operational_readiness = operational_readiness_contract(
+            schedule_gate,
+            staffing_contract,
+            logistics_contract,
+            base_packages_contract,
+            shipment_contract,
+            staffing=staffing_presentation,
+            logistics=logistics_presentation,
         )
         review_flags_contract = incident_review_flags_contract(
             session_record,
@@ -13829,6 +14991,7 @@ def pre_session_control_tower():
             incidents=incidents_by_session.get(session_record.id, []),
             incident_events_by_incident=incident_events_by_incident,
         )
+        staff_member_id_requirements = staff_member_id_requirements_for_session(session_record, session_assignments)
         schedule_views.append(schedule_workflow_view(
             session_record,
             workflows_by_session.get(session_record.id),
@@ -13847,12 +15010,17 @@ def pre_session_control_tower():
             communications_events=communications_events,
             packages={
                 "contract": packages_contract,
+                "preparation_status": package_preparation_status_contract(session_record, staff_member_id_requirements),
                 "action": packages_action,
                 "unit_views": [package_unit_view(unit, today=today) for unit in package_units],
                 "session_pre_packing_items": package_session_item_views(package_session_items, PACKAGE_PRE_PACKING_PHASE),
                 "session_final_assembly_items": package_session_item_views(package_session_items, PACKAGE_FINAL_ASSEMBLY_PHASE),
                 "schedule_ready": bool(schedule_gate.get("is_ready")),
                 "staffing_ready": bool(staffing_contract.get("ready")),
+                "return_package_requirements": return_package_requirements_for_session(session_record),
+                "staff_member_id_requirements": staff_member_id_requirements,
+                "status_events": package_status_track_events(session_record, staff_member_id_requirements),
+                "inclusion_final_items": inclusion_final_items_for_session(session_record, supervisor_assignments),
             },
             shipments={
                 "contract": shipment_contract,
@@ -13860,9 +15028,13 @@ def pre_session_control_tower():
                 "planning_action": shipment_planning_action,
                 "assisted_action": shipment_planning_assisted_action,
                 "action": shipments_action,
-                "bundle_view": shipment_bundle_view(shipment_bundle),
+                "bundle_view": shipment_bundle_presentation,
+                "operational_status": (shipment_bundle_presentation or {}).get("operational_status") or shipment_contract,
+                "status_events": shipment_status_track_events(shipment_bundle),
                 "available_supervisors": confirmed_supervisors,
                 "available_sessions": shipment_available_sessions,
+                "delivery_options": SHIPMENT_DELIVERY_OPTION_CHOICES,
+                "default_delivery_option": SHIPMENT_DEFAULT_DELIVERY_OPTION,
             },
             core_readiness=core_readiness,
             operational_readiness=operational_readiness,
@@ -13880,6 +15052,15 @@ def pre_session_control_tower():
                 intern_assignments,
             ),
             staffing_events=staffing_events_by_session.get(session_record.id, []),
+            bundle_detail_actions=bundle_detail_action_items(
+                schedule_status,
+                schedule_gate,
+                priority_action.get("label") if priority_action.get("source") == "schedule" else schedule_workflow_next_action(status=schedule_status),
+                schedule_workflow_responsible(schedule_status),
+                staffing_contract=staffing_contract,
+                staffing_control=staffing_control_presentation,
+                packages_action=packages_action,
+            ),
             schedule_locked_by_staffing=schedule_status == "Approved" and any(
                 normalize_participation_status(assignment.participation_status) != "Pending"
                 for assignment in session_assignments
@@ -14212,22 +15393,33 @@ def add_staffing_note(session_id):
     status_filter = request.form.get("schedule_status", "").strip()
     if status_filter not in SCHEDULE_WORKFLOW_STATUSES:
         status_filter = ""
+    note_modal_context = request.form.get("note_modal_context", "").strip()
+    shipment_notes_context = note_modal_context == "shipments"
+    package_notes_context = note_modal_context == "packages"
     if not validate_csrf():
         flash("Security token expired. Please try again.", "error")
         return staffing_control_redirect(session_record, status_filter)
     note = request.form.get("note", "").strip()
     if not note:
-        flash("Staffing note cannot be empty.", "error")
+        if shipment_notes_context:
+            flash("Shipment note cannot be empty.", "error")
+        else:
+            flash("Package note cannot be empty." if package_notes_context else "Staffing note cannot be empty.", "error")
         return staffing_control_redirect(session_record, status_filter)
     create_staffing_note(session_record, note, request.form)
     db.session.commit()
-    flash("Staffing note added successfully.", "success")
+    if shipment_notes_context:
+        flash("Shipment note added successfully.", "success")
+    else:
+        flash("Package note added successfully." if package_notes_context else "Staffing note added successfully.", "success")
     return redirect(url_for(
         "staff.pre_session_control_tower",
         **pre_session_control_tower_return_args(session_record),
         open_schedule_modal=session_record.id,
-        open_modal_target="staffing-notes",
-        staffing_only="1",
+        open_modal_target="shipments-notes" if shipment_notes_context else "packages-notes" if package_notes_context else "staffing-notes",
+        packages_only="1" if package_notes_context else None,
+        shipments_only="1" if shipment_notes_context else None,
+        staffing_only=None if package_notes_context or shipment_notes_context else "1",
     ))
 
 
@@ -14251,12 +15443,17 @@ def mark_staffing_note_read(mention_id):
         flash("Note marked as read.", "success")
 
     session_record = ExamSession.query.get_or_404(mention.exam_session_id)
+    note_modal_context = request.form.get("note_modal_context", "").strip()
+    shipment_notes_context = note_modal_context == "shipments"
+    package_notes_context = note_modal_context == "packages"
     return redirect(url_for(
         "staff.pre_session_control_tower",
         **pre_session_control_tower_return_args(session_record),
         open_schedule_modal=session_record.id,
-        open_modal_target="staffing-notes",
-        staffing_only="1",
+        open_modal_target="shipments-notes" if shipment_notes_context else "packages-notes" if package_notes_context else "staffing-notes",
+        packages_only="1" if package_notes_context else None,
+        shipments_only="1" if shipment_notes_context else None,
+        staffing_only=None if package_notes_context or shipment_notes_context else "1",
         highlight_note=(request.form.get("highlight_note") or mention.note_id).strip(),
     ))
 
@@ -14371,6 +15568,39 @@ def clear_staffing_assignment_for_decline(assignment):
     assignment.fee_frozen_on = None
 
 
+def record_emergency_contact_status_change(session_record, previous_status, new_status, note=None):
+    previous_label = staffing_participation_status_label(previous_status)
+    new_label = staffing_participation_status_label(new_status)
+    if previous_label == new_label:
+        return None
+    event = ExamSessionStaffingEvent(
+        exam_session_id=session_record.id,
+        assignment_type="emergency_contact",
+        assignment_id=session_record.id,
+        role="Emergency contact",
+        staff_member_name=session_record.emergency_contact_member.full_name if session_record.emergency_contact_member else "Emergency contact",
+        previous_status=previous_label,
+        new_status=new_label,
+        note=(note or "").strip() or None,
+        created_by=session.get("user") if has_request_context() else None,
+    )
+    db.session.add(event)
+    return event
+
+
+def set_emergency_contact_deadline(session_record, business_days, start_at=None, stage=""):
+    started_at = start_at or datetime.now(timezone.utc)
+    session_record.emergency_contact_status_due_started_at = started_at
+    session_record.emergency_contact_status_due_at = argentina_add_business_days(staffing_deadline_start_date(started_at), business_days)
+    session_record.emergency_contact_status_due_stage = stage or None
+
+
+def clear_emergency_contact_deadline(session_record):
+    session_record.emergency_contact_status_due_started_at = None
+    session_record.emergency_contact_status_due_at = None
+    session_record.emergency_contact_status_due_stage = None
+
+
 @staff_bp.route("/pre-session-control-tower/sessions/<int:session_id>/staffing-assignments/<assignment_type>/<int:assignment_id>/status", methods=["POST"])
 @login_required
 def update_staffing_assignment_status(session_id, assignment_type, assignment_id):
@@ -14380,6 +15610,37 @@ def update_staffing_assignment_status(session_id, assignment_type, assignment_id
         status_filter = ""
     if not validate_csrf():
         flash("Security token expired. Please try again.", "error")
+        return staffing_control_redirect(session_record, status_filter)
+    next_status = request.form.get("participation_status", "").strip()
+    allowed_statuses = {"Pending", "Official confirmation sent", "Confirmed", "Declined", "Cancelled"}
+    if next_status not in allowed_statuses:
+        flash("Please select a valid participation status.", "error")
+        return staffing_control_redirect(session_record, status_filter)
+    if assignment_type == "emergency_contact":
+        if assignment_id != session_record.id or not session_record.emergency_contact_member_id:
+            flash("Staffing assignment not found.", "error")
+            return staffing_control_redirect(session_record, status_filter)
+        if (
+            next_status in {"Pending", "Cancelled"}
+            and package_staffing_sensitive_stages_started(session_record)
+            and request.form.get("confirmation_password", "").strip() != "EditOK"
+        ):
+            flash("Password authorisation is required to update this staffing status.", "error")
+            return staffing_control_redirect(session_record, status_filter)
+        workflow = ExamSessionScheduleWorkflow.query.filter_by(exam_session_id=session_record.id).first()
+        schedule_unlocked = workflow and workflow.status == "Approved"
+        previous_status = session_record.emergency_contact_participation_status
+        record_emergency_contact_status_change(session_record, previous_status, next_status)
+        session_record.emergency_contact_participation_status = next_status
+        now = datetime.now(timezone.utc)
+        if next_status == "Official confirmation sent":
+            set_emergency_contact_deadline(session_record, 3, now, stage="Official confirmation sent")
+        elif next_status == "Pending" and schedule_unlocked:
+            set_emergency_contact_deadline(session_record, 2, now, stage="Pending")
+        else:
+            clear_emergency_contact_deadline(session_record)
+        db.session.commit()
+        flash("Staffing participation status updated successfully.", "success")
         return staffing_control_redirect(session_record, status_filter)
     assignment_model = staffing_assignment_model(assignment_type)
     if not assignment_model:
@@ -14395,10 +15656,12 @@ def update_staffing_assignment_status(session_id, assignment_type, assignment_id
     if not (assignment.team_member_id or assignment.potential_entry_id):
         flash("Assign a staff member before updating participation status.", "error")
         return staffing_control_redirect(session_record, status_filter)
-    next_status = request.form.get("participation_status", "").strip()
-    allowed_statuses = {"Pending", "Official confirmation sent", "Confirmed", "Declined", "Cancelled"}
-    if next_status not in allowed_statuses:
-        flash("Please select a valid participation status.", "error")
+    if (
+        next_status in {"Pending", "Cancelled"}
+        and package_staffing_sensitive_stages_started(session_record)
+        and request.form.get("confirmation_password", "").strip() != "EditOK"
+    ):
+        flash("Password authorisation is required to update this staffing status.", "error")
         return staffing_control_redirect(session_record, status_filter)
     workflow = ExamSessionScheduleWorkflow.query.filter_by(exam_session_id=session_record.id).first()
     schedule_unlocked = workflow and workflow.status == "Approved"
@@ -15382,7 +16645,7 @@ def package_session_dependency_context(session_record):
     supervisor_assignments = ExamSessionSupervisorAssignment.query.filter_by(exam_session_id=session_record.id).all()
     examiner_assignments = ExamSessionExaminerAssignment.query.filter_by(exam_session_id=session_record.id).all()
     intern_assignments = ExamSessionInternAssignment.query.filter_by(exam_session_id=session_record.id).all()
-    staffing_contract = staffing_readiness_contract(supervisor_assignments, examiner_assignments, intern_assignments)
+    staffing_contract = staffing_readiness_contract(supervisor_assignments, examiner_assignments, intern_assignments, session_record=session_record)
     return schedule_gate, staffing_contract
 
 
@@ -15519,6 +16782,7 @@ def shipment_planning_contract_for_submit(session_record):
             supervisor_assignments_by_session.get(item.id, []),
             examiner_assignments_by_session.get(item.id, []),
             intern_assignments_by_session.get(item.id, []),
+            session_record=item,
         )
         packages_contracts_by_session[item.id] = packages_readiness_contract(
             item,
@@ -15602,12 +16866,17 @@ def create_shipment_bundle(session_id):
     delivery_address = normalize_package_text(request.form.get("delivery_address", ""))
     delivery_city = normalize_package_text(request.form.get("delivery_city", ""))
     delivery_province = normalize_package_text(request.form.get("delivery_province", ""))
+    delivery_option = request.form.get("delivery_option", "").strip()
     courier = normalize_package_text(request.form.get("courier", "")) or SHIPMENT_DEFAULT_COURIER
+    shipping_label_url = request.form.get("shipping_label_url", "").strip()
     note = request.form.get("note", "").strip()
+    if delivery_option not in SHIPMENT_DELIVERY_OPTION_VALUES:
+        flash("Please select a valid shipment delivery option.", "error")
+        return shipment_control_redirect(session_record, status_filter, assisted_action_key=assisted_action_key)
     if not delivery_address:
         flash("Delivery address is required.", "error")
         return shipment_control_redirect(session_record, status_filter, assisted_action_key=assisted_action_key)
-    if len(delivery_address) > 500 or len(delivery_city) > 120 or len(delivery_province) > 120 or len(courier) > 120:
+    if len(delivery_address) > 500 or len(delivery_city) > 120 or len(delivery_province) > 120 or len(courier) > 120 or len(shipping_label_url) > 500:
         flash("Shipment delivery details are too long.", "error")
         return shipment_control_redirect(session_record, status_filter, assisted_action_key=assisted_action_key)
     if len(note) > 2000:
@@ -15640,7 +16909,9 @@ def create_shipment_bundle(session_id):
             delivery_address=delivery_address,
             delivery_city=delivery_city or None,
             delivery_province=delivery_province or None,
+            delivery_option=delivery_option,
             courier=courier,
+            shipping_label_url=shipping_label_url or None,
             dispatch_due_at=dispatch_due_at,
             responsible_department="LOGISTICS",
             note=note or None,
@@ -15689,9 +16960,6 @@ def update_shipment_bundle(bundle_id):
     if not validate_csrf():
         flash("Security token expired. Please try again.", "error")
         return shipment_control_redirect(session_record, status_filter, bundle.id)
-    if bundle.status != "Preparing bundle":
-        flash("Shipment bundle details can only be edited while the bundle is being prepared.", "error")
-        return shipment_control_redirect(session_record, status_filter, bundle.id)
     try:
         supervisor_id = int(request.form.get("supervisor_staff_id", ""))
     except (TypeError, ValueError):
@@ -15703,14 +16971,61 @@ def update_shipment_bundle(bundle_id):
     delivery_address = normalize_package_text(request.form.get("delivery_address", ""))
     delivery_city = normalize_package_text(request.form.get("delivery_city", ""))
     delivery_province = normalize_package_text(request.form.get("delivery_province", ""))
+    delivery_option = request.form.get("delivery_option", "").strip()
     courier = normalize_package_text(request.form.get("courier", "")) or SHIPMENT_DEFAULT_COURIER
     tracking_number = normalize_package_text(request.form.get("tracking_number", ""))
+    shipping_label_url = request.form.get("shipping_label_url", "").strip()
     note = request.form.get("note", "").strip()
+    if delivery_option not in SHIPMENT_DELIVERY_OPTION_VALUES:
+        flash("Please select a valid shipment delivery option.", "error")
+        return shipment_control_redirect(session_record, status_filter, bundle.id)
+    if request.form.get("reset_delivery_address") == "1":
+        if delivery_option not in {"different_address", "meeting_point"}:
+            flash("Delivery address reset is only available for alternate delivery options.", "error")
+            return shipment_control_redirect(session_record, status_filter, bundle.id)
+        if request.form.get("confirmation_password", "").strip() != "EditOK":
+            flash("Management password authorisation is required to reset the delivery address.", "error")
+            return shipment_control_redirect(session_record, status_filter, bundle.id)
+        try:
+            shipment_event(bundle, "ADDRESS_CHANGED", bundle.status, bundle.status, "Delivery address reset.")
+            bundle.delivery_address = supervisor_delivery_address(supervisor)
+            bundle.delivery_city = normalize_package_text(supervisor.city or "") or None
+            bundle.delivery_province = normalize_package_text(supervisor.province or "") or None
+            bundle.updated_by = session.get("user")
+            db.session.commit()
+            flash("Delivery address reset successfully.", "success")
+        except Exception:
+            db.session.rollback()
+            current_app.logger.exception("Shipment delivery address reset failed")
+            flash("The delivery address could not be reset. Please try again.", "error")
+        return shipment_control_redirect(session_record, status_filter, bundle.id)
+    if not delivery_option:
+        delivery_address = supervisor_delivery_address(supervisor)
+        delivery_city = normalize_package_text(supervisor.city or "")
+        delivery_province = normalize_package_text(supervisor.province or "")
     if not delivery_address:
         flash("Delivery address is required.", "error")
         return shipment_control_redirect(session_record, status_filter, bundle.id)
-    if len(delivery_address) > 500 or len(delivery_city) > 120 or len(delivery_province) > 120 or len(courier) > 120 or len(tracking_number) > 160:
+    if len(delivery_address) > 500 or len(delivery_city) > 120 or len(delivery_province) > 120 or len(courier) > 120 or len(tracking_number) > 160 or len(shipping_label_url) > 500:
         flash("Shipment details are too long.", "error")
+        return shipment_control_redirect(session_record, status_filter, bundle.id)
+    if request.form.get("shipping_label_update") == "1" and (not shipping_label_url or not tracking_number):
+        flash("Shipping label link and tracking number are required.", "error")
+        return shipment_control_redirect(session_record, status_filter, bundle.id)
+    if (
+        shipping_label_url
+        and (bundle.shipping_label_url or "")
+        and shipping_label_url != (bundle.shipping_label_url or "")
+        and request.form.get("confirmation_password", "").strip() != "EditOK"
+    ):
+        flash("Management password authorisation is required to replace the shipping label.", "error")
+        return shipment_control_redirect(session_record, status_filter, bundle.id)
+    if (
+        (bundle.delivery_option or "") != delivery_option
+        and shipment_bundle_final_checklist_completed(bundle)
+        and request.form.get("confirmation_password", "").strip() != "EditOK"
+    ):
+        flash("Changing the delivery option at this stage may affect the entire process. Management password authorisation is required to continue.", "error")
         return shipment_control_redirect(session_record, status_filter, bundle.id)
     if len(note) > 2000:
         flash("Shipment note must be 2000 characters or fewer.", "error")
@@ -15728,23 +17043,113 @@ def update_shipment_bundle(bundle_id):
     if error:
         flash(error, "error")
         return shipment_control_redirect(session_record, status_filter, bundle.id)
+    selected_ids = {session_record.id for session_record in selected_sessions}
+    existing_ids = {link.exam_session_id for link in bundle.session_links}
+    delivery_option_changed = (bundle.delivery_option or "") != delivery_option
+    bundle_gate = shipment_bundle_gate_contract(shipment_bundle_sessions(bundle))
+    if delivery_option_changed and bundle_gate.get("blocked"):
+        flash("Shipment delivery option can only be selected once bundle preparation is unblocked.", "error")
+        return shipment_control_redirect(session_record, status_filter, bundle.id)
+    delivery_address_update = request.form.get("delivery_address_update") == "1"
+    delivery_details_changed = (
+        bundle.supervisor_staff_id != supervisor_id
+        or (bundle.delivery_address or "") != delivery_address
+        or (bundle.delivery_city or "") != delivery_city
+        or (bundle.delivery_province or "") != delivery_province
+        or (bundle.courier or SHIPMENT_DEFAULT_COURIER) != courier
+        or (bundle.tracking_number or "") != tracking_number
+        or (bundle.shipping_label_url or "") != shipping_label_url
+        or bundle.dispatch_due_at != dispatch_due_at
+        or (bundle.note or "") != note
+        or existing_ids != selected_ids
+    )
+    alternate_delivery_address_changed = (
+        not delivery_option_changed
+        and delivery_option in {"different_address", "meeting_point"}
+        and (
+            delivery_address_update
+            or (bundle.delivery_address or "") != delivery_address
+            or (bundle.delivery_city or "") != delivery_city
+            or (bundle.delivery_province or "") != delivery_province
+        )
+    )
+    alternate_delivery_address_save_only = (
+        alternate_delivery_address_changed
+        and bundle.supervisor_staff_id == supervisor_id
+        and (
+            (bundle.delivery_address or "") != delivery_address
+            or (bundle.delivery_city or "") != delivery_city
+            or (bundle.delivery_province or "") != delivery_province
+        )
+        and (bundle.courier or SHIPMENT_DEFAULT_COURIER) == courier
+        and (bundle.tracking_number or "") == tracking_number
+        and (bundle.shipping_label_url or "") == shipping_label_url
+        and bundle.dispatch_due_at == dispatch_due_at
+        and (bundle.note or "") == note
+        and existing_ids == selected_ids
+    )
+    if (
+        alternate_delivery_address_save_only
+        and delivery_address_update
+        and shipment_bundle_has_alternate_delivery_address(bundle)
+        and request.form.get("confirmation_password", "").strip() != "EditOK"
+    ):
+        flash("Management password authorisation is required to reset the delivery address.", "error")
+        return shipment_control_redirect(session_record, status_filter, bundle.id)
+    if bundle.status != "Preparing bundle":
+        if alternate_delivery_address_save_only:
+            try:
+                shipment_event(bundle, "ADDRESS_CHANGED", bundle.status, bundle.status, note)
+                bundle.delivery_address = delivery_address
+                bundle.delivery_city = delivery_city or None
+                bundle.delivery_province = delivery_province or None
+                bundle.updated_by = session.get("user")
+                db.session.commit()
+                flash("Shipment delivery address updated successfully.", "success")
+            except Exception:
+                db.session.rollback()
+                current_app.logger.exception("Shipment delivery address update failed")
+                flash("The shipment delivery address could not be updated. Please try again.", "error")
+            return shipment_control_redirect(session_record, status_filter, bundle.id)
+        if not delivery_option_changed:
+            flash("Shipment bundle details can only be edited while the bundle is being prepared.", "error")
+            return shipment_control_redirect(session_record, status_filter, bundle.id)
+        if request.form.get("confirmation_password", "").strip() != "EditOK":
+            flash("Changing the delivery option at this stage may affect the entire process. Management password authorisation is required to continue.", "error")
+            return shipment_control_redirect(session_record, status_filter, bundle.id)
+        try:
+            shipment_event(bundle, "DELIVERY_OPTION_CHANGED", bundle.status, bundle.status, note)
+            bundle.delivery_option = delivery_option
+            bundle.updated_by = session.get("user")
+            db.session.commit()
+            flash("Shipment delivery option updated successfully.", "success")
+        except Exception:
+            db.session.rollback()
+            current_app.logger.exception("Shipment delivery option update failed")
+            flash("The shipment delivery option could not be updated. Please try again.", "error")
+        return shipment_control_redirect(session_record, status_filter, bundle.id)
     try:
         if bundle.delivery_address != delivery_address or (bundle.delivery_city or "") != delivery_city or (bundle.delivery_province or "") != delivery_province:
             shipment_event(bundle, "ADDRESS_CHANGED", bundle.status, bundle.status, note)
+        if delivery_option_changed:
+            shipment_event(bundle, "DELIVERY_OPTION_CHANGED", bundle.status, bundle.status, note)
         if (bundle.courier or SHIPMENT_DEFAULT_COURIER) != courier:
             shipment_event(bundle, "COURIER_CHANGED", bundle.status, bundle.status, note)
         if (bundle.tracking_number or "") != tracking_number:
             shipment_event(bundle, "TRACKING_UPDATED", bundle.status, bundle.status, note, tracking_number)
+        if (bundle.shipping_label_url or "") != shipping_label_url:
+            shipment_event(bundle, "SHIPPING_LABEL_LINK_UPDATED", bundle.status, bundle.status, note)
         bundle.supervisor_staff_id = supervisor_id
         bundle.delivery_address = delivery_address
         bundle.delivery_city = delivery_city or None
         bundle.delivery_province = delivery_province or None
+        bundle.delivery_option = delivery_option
         bundle.courier = courier
         bundle.tracking_number = tracking_number or None
+        bundle.shipping_label_url = shipping_label_url or None
         bundle.dispatch_due_at = dispatch_due_at
         bundle.note = note or None
         bundle.updated_by = session.get("user")
-        selected_ids = {session_record.id for session_record in selected_sessions}
         existing_links = {link.exam_session_id: link for link in list(bundle.session_links)}
         for session_id, link in existing_links.items():
             if session_id not in selected_ids:
@@ -15786,6 +17191,19 @@ def update_shipment_checklist_item(item_id):
         return shipment_control_redirect(session_record, status_filter, bundle.id)
     try:
         checked = request.form.get("is_checked") == "1"
+        if item.is_checked and not checked and request.form.get("confirmation_password", "").strip() != "EditOK":
+            flash("Management password authorisation is required to reopen this stage:", "error")
+            return shipment_control_redirect(session_record, status_filter, bundle.id)
+        if checked and not item.is_checked:
+            ensure_shipment_checklist_items(bundle)
+            checklist_by_key = {checklist_item.item_key: checklist_item for checklist_item in bundle.checklist_items}
+            definition = next(
+                (template for template in shipment_pre_dispatch_cards(bundle) if template.get("item_key") == item.item_key),
+                None,
+            )
+            if definition and not shipment_pre_dispatch_card_can_complete(bundle, item, definition, checklist_by_key):
+                flash("Complete the shipment planning requirements before marking this stage as complete.", "error")
+                return shipment_control_redirect(session_record, status_filter, bundle.id)
         item.is_checked = checked
         item.checked_at = datetime.now(timezone.utc) if checked else None
         item.checked_by = session.get("user") if checked else None
@@ -15820,6 +17238,10 @@ def update_shipment_bundle_status(bundle_id):
     tracking_number = normalize_package_text(request.form.get("tracking_number", ""))
     if len(note) > 2000 or len(tracking_number) > 160:
         flash("Shipment status details are too long.", "error")
+        return shipment_control_redirect(session_record, status_filter, bundle.id)
+    dispatch_reopen_requested = request.form.get("dispatch_reopen_authorized", "").strip() == "1"
+    if dispatch_reopen_requested and request.form.get("confirmation_password", "").strip() != "EditOK":
+        flash("Management password authorisation is required to reopen dispatch stages.", "error")
         return shipment_control_redirect(session_record, status_filter, bundle.id)
     error = shipment_transition_allowed(bundle, new_status, note=note, tracking_number=tracking_number)
     if error:
@@ -15862,64 +17284,392 @@ def create_package_unit(session_id):
         flash("Security token expired. Please try again.", "error")
         return package_control_redirect(session_record, status_filter)
 
-    room_name = normalize_package_text(request.form.get("room_name"))
-    module_name = normalize_package_text(request.form.get("module_name"))
-    expected_count, expected_error = parse_optional_non_negative_int(request.form.get("expected_candidate_count"), "Expected candidate count")
-    actual_count, actual_error = parse_optional_non_negative_int(request.form.get("actual_label_count"), "Actual label count")
-    deadline = parse_schedule_deadline(request.form.get("package_deadline", ""))
+    row_count_raw = request.form.get("package_row_count", "").strip()
+    if row_count_raw:
+        try:
+            row_count = int(row_count_raw)
+        except ValueError:
+            row_count = 0
+        if row_count < 1 or row_count > 20:
+            flash("You can add between 1 and 20 room package lines.", "error")
+            return package_control_redirect(session_record, status_filter)
+        package_rows = []
+        for index in range(row_count):
+            package_rows.append({
+                "room_name": normalize_package_text(request.form.get(f"room_name_{index}")),
+                "module_name": normalize_package_text(request.form.get(f"module_name_{index}")),
+                "expected_candidate_count": request.form.get(f"expected_candidate_count_{index}"),
+                "actual_label_count": request.form.get(f"actual_label_count_{index}"),
+                "has_nep_candidates": request.form.get(f"has_nep_candidates_{index}") == "1",
+                "deadline": None,
+            })
+    else:
+        deadline = parse_schedule_deadline(request.form.get("package_deadline", ""))
+        if request.form.get("package_deadline", "").strip() and deadline is None:
+            flash("Please enter a valid package deadline.", "error")
+            return package_control_redirect(session_record, status_filter)
+        package_rows = [{
+            "room_name": normalize_package_text(request.form.get("room_name")),
+            "module_name": normalize_package_text(request.form.get("module_name")),
+            "expected_candidate_count": request.form.get("expected_candidate_count"),
+            "actual_label_count": request.form.get("actual_label_count"),
+            "has_nep_candidates": request.form.get("has_nep_candidates") == "1",
+            "deadline": deadline,
+        }]
     note = request.form.get("note", "").strip()
-    if not room_name:
-        flash("Room name is required.", "error")
-        return package_control_redirect(session_record, status_filter)
-    if not module_name:
-        flash("Module name is required.", "error")
-        return package_control_redirect(session_record, status_filter)
-    if expected_error or actual_error:
-        flash(expected_error or actual_error, "error")
-        return package_control_redirect(session_record, status_filter)
-    if request.form.get("package_deadline", "").strip() and deadline is None:
-        flash("Please enter a valid package deadline.", "error")
-        return package_control_redirect(session_record, status_filter)
     if len(note) > 2000:
         flash("Package note must be 2000 characters or fewer.", "error")
         return package_control_redirect(session_record, status_filter)
 
-    duplicate = ExamSessionPackageUnit.query.filter_by(
-        exam_session_id=session_record.id,
-        room_name=room_name,
-        module_name=module_name,
-    ).first()
-    if duplicate:
-        flash("A package unit for this room and module already exists.", "error")
-        return package_control_redirect(session_record, status_filter, duplicate.id)
-
-    try:
-        ensure_package_session_checklist_items(session_record.id)
-        package_unit = ExamSessionPackageUnit(
+    seen_batch_keys = set()
+    prepared_rows = []
+    for row in package_rows:
+        room_name = row["room_name"]
+        module_name = row["module_name"]
+        expected_count, expected_error = parse_optional_non_negative_int(row["expected_candidate_count"], "Expected candidate count")
+        actual_count, actual_error = parse_optional_non_negative_int(row["actual_label_count"], "Actual label count")
+        if not room_name:
+            flash("Room name is required.", "error")
+            return package_control_redirect(session_record, status_filter)
+        if not module_name:
+            flash("Module name is required.", "error")
+            return package_control_redirect(session_record, status_filter)
+        if expected_error or actual_error:
+            flash(expected_error or actual_error, "error")
+            return package_control_redirect(session_record, status_filter)
+        batch_key = (room_name.lower(), module_name.lower())
+        if batch_key in seen_batch_keys:
+            flash("Each room package line must use a unique room and module.", "error")
+            return package_control_redirect(session_record, status_filter)
+        seen_batch_keys.add(batch_key)
+        duplicate = ExamSessionPackageUnit.query.filter_by(
             exam_session_id=session_record.id,
             room_name=room_name,
             module_name=module_name,
-            expected_candidate_count=expected_count,
-            actual_label_count=actual_count,
-            has_nep_candidates=request.form.get("has_nep_candidates") == "1",
-            package_deadline=deadline,
-            note=note or None,
-        )
-        db.session.add(package_unit)
-        db.session.flush()
-        ensure_package_unit_checklist_items(package_unit)
-        package_event(package_unit, "PACKAGE_UNIT_CREATED", None, package_unit.status, "Package unit created.")
-        if package_unit_has_label_mismatch(package_unit):
-            package_unit.status = "Pre-packing blocked"
-            package_event(package_unit, "DISCREPANCY_DETECTED", "Not started", package_unit.status, "Label count mismatch.")
+        ).first()
+        if duplicate:
+            flash("A package unit for this room and module already exists.", "error")
+            return package_control_redirect(session_record, status_filter, duplicate.id)
+        prepared_rows.append({
+            "room_name": room_name,
+            "module_name": module_name,
+            "expected_count": expected_count,
+            "actual_count": actual_count,
+            "has_nep_candidates": row["has_nep_candidates"],
+            "deadline": row["deadline"],
+        })
+
+    try:
+        ensure_package_session_checklist_items(session_record.id)
+        created_units = []
+        for row in prepared_rows:
+            package_unit = ExamSessionPackageUnit(
+                exam_session_id=session_record.id,
+                room_name=row["room_name"],
+                module_name=row["module_name"],
+                expected_candidate_count=row["expected_count"],
+                actual_label_count=row["actual_count"],
+                has_nep_candidates=row["has_nep_candidates"],
+                package_deadline=row["deadline"],
+                note=note or None,
+            )
+            db.session.add(package_unit)
+            db.session.flush()
+            ensure_package_unit_checklist_items(package_unit)
+            package_event(package_unit, "PACKAGE_UNIT_CREATED", None, package_unit.status, "Package unit created.")
+            if package_unit_has_label_mismatch(package_unit):
+                package_unit.status = "Pre-packing blocked"
+                package_event(package_unit, "DISCREPANCY_DETECTED", "Not started", package_unit.status, "Label count mismatch.")
+            created_units.append(package_unit)
         db.session.commit()
-        flash("Package unit created successfully.", "success")
-        return package_control_redirect(session_record, status_filter, package_unit.id)
+        flash(
+            "Package unit created successfully." if len(created_units) == 1 else f"{len(created_units)} package units created successfully.",
+            "success",
+        )
+        return package_control_redirect(session_record, status_filter, created_units[0].id if created_units else None)
     except Exception:
         db.session.rollback()
         current_app.logger.exception("Package unit creation failed")
         flash("The package unit could not be created. Please try again.", "error")
         return package_control_redirect(session_record, status_filter)
+
+
+@staff_bp.route("/pre-session-control-tower/sessions/<int:session_id>/packages/label-verification", methods=["POST"])
+@login_required
+def update_package_label_verification(session_id):
+    package_focus_target = "package-label-verification"
+    session_record = ExamSession.query.get_or_404(session_id)
+    status_filter = request.form.get("schedule_status", "").strip()
+    if status_filter not in SCHEDULE_WORKFLOW_STATUSES:
+        status_filter = ""
+    if not validate_csrf():
+        flash("Security token expired. Please try again.", "error")
+        return package_control_redirect(session_record, status_filter, target=package_focus_target)
+
+    action = request.form.get("action", "").strip()
+    if action == "reopen" and request.form.get("confirmation_password", request.form.get("deletion_password", "")) != "EditOK":
+        flash("Password authorisation is required to reopen Candidate label verification.", "error")
+        return package_control_redirect(session_record, status_filter, target=package_focus_target)
+
+    error = apply_package_stage_status_update(
+        session_record,
+        action,
+        "package_label_verification_status",
+        "package_label_verification_updated_at",
+        "package_label_verification_updated_by",
+        "Candidate label verification",
+    )
+    if error:
+        flash(error, "error")
+        return package_control_redirect(session_record, status_filter, target=package_focus_target)
+    db.session.commit()
+    flash(f"Candidate label verification marked as {package_label_verification_status_label(session_record.package_label_verification_status)}.", "success")
+    return package_control_redirect(session_record, status_filter, target=package_focus_target)
+
+
+@staff_bp.route("/pre-session-control-tower/sessions/<int:session_id>/packages/label-printing", methods=["POST"])
+@login_required
+def update_package_label_printing(session_id):
+    package_focus_target = "package-label-printing"
+    session_record = ExamSession.query.get_or_404(session_id)
+    status_filter = request.form.get("schedule_status", "").strip()
+    if status_filter not in SCHEDULE_WORKFLOW_STATUSES:
+        status_filter = ""
+    if not validate_csrf():
+        flash("Security token expired. Please try again.", "error")
+        return package_control_redirect(session_record, status_filter, target=package_focus_target)
+
+    action = request.form.get("action", "").strip()
+    if action == "reopen" and request.form.get("confirmation_password", request.form.get("deletion_password", "")) != "EditOK":
+        flash("Password authorisation is required to reopen Candidate label printing and affixing.", "error")
+        return package_control_redirect(session_record, status_filter, target=package_focus_target)
+    if action != "reopen" and (session_record.package_label_verification_status or "not_started") != "completed":
+        flash("Candidate label verification must be completed before Candidate label printing and affixing can begin.", "error")
+        return package_control_redirect(session_record, status_filter, target=package_focus_target)
+
+    error = apply_package_stage_status_update(
+        session_record,
+        action,
+        "package_label_printing_status",
+        "package_label_printing_updated_at",
+        "package_label_printing_updated_by",
+        "Candidate label printing",
+    )
+    if error:
+        flash(error, "error")
+        return package_control_redirect(session_record, status_filter, target=package_focus_target)
+    db.session.commit()
+    flash(f"Candidate label printing marked as {package_label_verification_status_label(session_record.package_label_printing_status)}.", "success")
+    return package_control_redirect(session_record, status_filter, target=package_focus_target)
+
+
+@staff_bp.route("/pre-session-control-tower/sessions/<int:session_id>/packages/room-package-sealing", methods=["POST"])
+@login_required
+def update_room_package_sealing(session_id):
+    package_focus_target = "package-room-package-sealing"
+    session_record = ExamSession.query.get_or_404(session_id)
+    status_filter = request.form.get("schedule_status", "").strip()
+    if status_filter not in SCHEDULE_WORKFLOW_STATUSES:
+        status_filter = ""
+    if not validate_csrf():
+        flash("Security token expired. Please try again.", "error")
+        return package_control_redirect(session_record, status_filter, target=package_focus_target)
+
+    action = request.form.get("action", "").strip()
+    if action == "reopen" and request.form.get("confirmation_password", request.form.get("deletion_password", "")) != "EditOK":
+        flash("Password authorisation is required to reopen Room package sealing.", "error")
+        return package_control_redirect(session_record, status_filter, target=package_focus_target)
+    if action != "reopen" and (session_record.package_label_printing_status or "not_started") != "completed":
+        flash("Candidate label printing and affixing must be completed before Room package sealing can begin.", "error")
+        return package_control_redirect(session_record, status_filter, target=package_focus_target)
+
+    error = apply_package_stage_status_update(
+        session_record,
+        action,
+        "room_package_sealing_status",
+        "room_package_sealing_updated_at",
+        "room_package_sealing_updated_by",
+        "Room package sealing",
+    )
+    if error:
+        flash(error, "error")
+        return package_control_redirect(session_record, status_filter, target=package_focus_target)
+    db.session.commit()
+    flash(f"Room package sealing marked as {package_label_verification_status_label(session_record.room_package_sealing_status)}.", "success")
+    return package_control_redirect(session_record, status_filter, target=package_focus_target)
+
+
+@staff_bp.route("/pre-session-control-tower/sessions/<int:session_id>/packages/return-packages", methods=["POST"])
+@login_required
+def update_return_packages(session_id):
+    package_focus_target = "package-return-packages"
+    session_record = ExamSession.query.get_or_404(session_id)
+    status_filter = request.form.get("schedule_status", "").strip()
+    if status_filter not in SCHEDULE_WORKFLOW_STATUSES:
+        status_filter = ""
+    if not validate_csrf():
+        flash("Security token expired. Please try again.", "error")
+        return package_control_redirect(session_record, status_filter, target=package_focus_target)
+
+    action = request.form.get("action", "").strip()
+    if action == "reopen" and request.form.get("confirmation_password", request.form.get("deletion_password", "")) != "EditOK":
+        flash("Password authorisation is required to reopen Return packages.", "error")
+        return package_control_redirect(session_record, status_filter, target=package_focus_target)
+
+    error = apply_package_stage_status_update(
+        session_record,
+        action,
+        "return_packages_status",
+        "return_packages_updated_at",
+        "return_packages_updated_by",
+        "Return packages",
+    )
+    if error:
+        flash(error, "error")
+        return package_control_redirect(session_record, status_filter, target=package_focus_target)
+    db.session.commit()
+    flash(f"Return packages marked as {package_label_verification_status_label(session_record.return_packages_status)}.", "success")
+    return package_control_redirect(session_record, status_filter, target=package_focus_target)
+
+
+@staff_bp.route("/pre-session-control-tower/sessions/<int:session_id>/packages/staff-member-ids", methods=["POST"])
+@login_required
+def update_staff_member_ids(session_id):
+    package_focus_target = "package-staff-member-ids"
+    session_record = ExamSession.query.get_or_404(session_id)
+    status_filter = request.form.get("schedule_status", "").strip()
+    if status_filter not in SCHEDULE_WORKFLOW_STATUSES:
+        status_filter = ""
+    if not validate_csrf():
+        flash("Security token expired. Please try again.", "error")
+        return package_control_redirect(session_record, status_filter, target=package_focus_target)
+
+    action = request.form.get("action", "").strip()
+    if action == "reopen" and request.form.get("confirmation_password", request.form.get("deletion_password", "")) != "EditOK":
+        flash("Password authorisation is required to reopen Staff member IDs.", "error")
+        return package_control_redirect(session_record, status_filter, target=package_focus_target)
+
+    error = apply_package_stage_status_update(
+        session_record,
+        action,
+        "staff_member_ids_status",
+        "staff_member_ids_updated_at",
+        "staff_member_ids_updated_by",
+        "Staff member IDs",
+    )
+    if error:
+        flash(error, "error")
+        return package_control_redirect(session_record, status_filter, target=package_focus_target)
+    if action == "mark_complete":
+        session_assignments = (
+            list(session_record.supervisor_assignments)
+            + list(session_record.examiner_assignments)
+            + list(session_record.intern_assignments)
+        )
+        pending_requirements = staff_member_id_requirements_for_session(session_record, session_assignments)
+        if pending_requirements:
+            session_record.staff_member_ids_snapshot = json.dumps(pending_requirements)
+        for staff_member in staff_members_pending_id_for_session(session_record, session_assignments):
+            staff_member.id_issued = True
+    db.session.commit()
+    flash(f"Staff member IDs marked as {package_label_verification_status_label(session_record.staff_member_ids_status)}.", "success")
+    return package_control_redirect(session_record, status_filter, target=package_focus_target)
+
+
+@staff_bp.route("/pre-session-control-tower/sessions/<int:session_id>/packages/inclusion-final-items", methods=["POST"])
+@login_required
+def update_inclusion_final_items(session_id):
+    package_focus_target = "package-inclusion-final-items"
+    session_record = ExamSession.query.get_or_404(session_id)
+    status_filter = request.form.get("schedule_status", "").strip()
+    if status_filter not in SCHEDULE_WORKFLOW_STATUSES:
+        status_filter = ""
+    if not validate_csrf():
+        flash("Security token expired. Please try again.", "error")
+        return package_control_redirect(session_record, status_filter, target=package_focus_target)
+
+    action = request.form.get("action", "").strip()
+    if action == "reopen" and request.form.get("confirmation_password", request.form.get("deletion_password", "")) != "EditOK":
+        flash("Password authorisation is required to reopen Inclusion of final items.", "error")
+        return package_control_redirect(session_record, status_filter, target=package_focus_target)
+
+    error = apply_package_stage_status_update(
+        session_record,
+        action,
+        "inclusion_final_items_status",
+        "inclusion_final_items_updated_at",
+        "inclusion_final_items_updated_by",
+        "Inclusion of final items",
+    )
+    if error:
+        flash(error, "error")
+        return package_control_redirect(session_record, status_filter, target=package_focus_target)
+    db.session.commit()
+    flash(f"Inclusion of final items marked as {package_label_verification_status_label(session_record.inclusion_final_items_status)}.", "success")
+    return package_control_redirect(session_record, status_filter, target=package_focus_target)
+
+
+@staff_bp.route("/pre-session-control-tower/sessions/<int:session_id>/session-identification-label.pdf")
+@login_required
+def session_identification_label_pdf(session_id):
+    session_record = ExamSession.query.get_or_404(session_id)
+    fields, error = session_identification_label_payload(session_record)
+    if error:
+        return Response(error, status=400, mimetype="text/plain")
+    pdf_bytes = build_session_identification_label_pdf(fields)
+    response = Response(pdf_bytes, mimetype="application/pdf")
+    response.headers["Content-Disposition"] = f"inline; filename=session-identification-label-{session_record.id}.pdf"
+    return response
+
+
+@staff_bp.route("/pre-session-control-tower/bundles/<int:bundle_id>/bundle-label.pdf")
+@login_required
+def bundle_label_pdf(bundle_id):
+    require_menu_view("pre_session_control_tower")
+    bundle = ExamSessionShipmentBundle.query.get_or_404(bundle_id)
+    payload, error = bundle_label_payload(bundle)
+    if error:
+        return Response(error, status=400, mimetype="text/plain")
+    pdf_bytes = build_bundle_label_pdf(payload)
+    response = Response(pdf_bytes, mimetype="application/pdf")
+    response.headers["Content-Disposition"] = f"inline; filename=bundle-label-{bundle.id}.pdf"
+    return response
+
+
+@staff_bp.route("/pre-session-control-tower/sessions/<int:session_id>/packages/session-box-sealing", methods=["POST"])
+@login_required
+def update_session_box_sealing(session_id):
+    package_focus_target = "package-session-box-sealing"
+    session_record = ExamSession.query.get_or_404(session_id)
+    status_filter = request.form.get("schedule_status", "").strip()
+    if status_filter not in SCHEDULE_WORKFLOW_STATUSES:
+        status_filter = ""
+    if not validate_csrf():
+        flash("Security token expired. Please try again.", "error")
+        return package_control_redirect(session_record, status_filter, target=package_focus_target)
+
+    action = request.form.get("action", "").strip()
+    if action == "reopen" and request.form.get("confirmation_password", request.form.get("deletion_password", "")) != "EditOK":
+        flash("Password authorisation is required to reopen Session box sealing.", "error")
+        return package_control_redirect(session_record, status_filter, target=package_focus_target)
+    if action != "reopen" and not session_box_sealing_prerequisites_completed(session_record):
+        flash("All previous package preparation stages must be completed before Session box sealing can begin.", "error")
+        return package_control_redirect(session_record, status_filter, target=package_focus_target)
+
+    error = apply_package_stage_status_update(
+        session_record,
+        action,
+        "session_box_sealing_status",
+        "session_box_sealing_updated_at",
+        "session_box_sealing_updated_by",
+        "Session box sealing",
+    )
+    if error:
+        flash(error, "error")
+        return package_control_redirect(session_record, status_filter, target=package_focus_target)
+    db.session.commit()
+    flash(f"Session box sealing marked as {package_label_verification_status_label(session_record.session_box_sealing_status)}.", "success")
+    return package_control_redirect(session_record, status_filter, target=package_focus_target)
 
 
 @staff_bp.route("/pre-session-control-tower/packages/units/<int:unit_id>", methods=["POST"])
@@ -16133,6 +17883,7 @@ def exam_session_planner():
     fuel_fee = fee_by_exact_description("Fuel")
     vehicle_dep_fee = fee_by_exact_description("Vehicle dep.")
     session_ids = [session_record.id for session_record in sessions]
+    sessions_by_id = {session_record.id: session_record for session_record in sessions}
     module_registration_counts = latest_monthly_registration_counts(session_ids)
     year_session_ids = [
         item.id
@@ -16269,6 +18020,7 @@ def exam_session_planner():
             session_supervisor_assignments,
             session_examiner_assignments,
             session_intern_assignments,
+            session_record=sessions_by_id.get(session_id),
         )
         staffing_contract["email_blocker_message"] = staffing_email_blocker_message(staffing_contract)
         staffing_readiness_by_session[session_id] = staffing_contract
@@ -16500,6 +18252,10 @@ def monthly_exam_session_registrations():
         session_record.id: monthly_registration_status(session_record)
         for session_record in sessions
     }
+    monthly_reopen_affects_schedule = {
+        session_record.id: monthly_registration_reopen_affects_schedule(session_record)
+        for session_record in sessions
+    }
     return render_template(
         "monthly_registrations/index.html",
         sessions=sessions,
@@ -16509,6 +18265,7 @@ def monthly_exam_session_registrations():
         candidate_totals=candidate_totals,
         candidate_total_trends=monthly_candidate_total_trends(candidate_totals),
         monthly_statuses=monthly_statuses,
+        monthly_reopen_affects_schedule=monthly_reopen_affects_schedule,
         monthly_totals=monthly_totals,
         session_years=session_years,
         archived_session_years=(
@@ -16650,6 +18407,14 @@ def toggle_monthly_exam_session_registration_closed(session_id):
         flash("Invalid monthly registration action.", "error")
         return redirect(url_for("staff.monthly_exam_session_registrations"))
 
+    if (
+        action == "reopen"
+        and monthly_registration_reopen_affects_schedule(session_record)
+        and request.form.get("confirmation_password", "").strip() != "EditOK"
+    ):
+        flash("Password authorisation is required to reopen monthly registrations.", "error")
+        return redirect(url_for("staff.monthly_exam_session_registrations"))
+
     if action == "close":
         requirement = monthly_registration_close_requirement(session_record)
         if not requirement["ready"]:
@@ -16666,7 +18431,12 @@ def toggle_monthly_exam_session_registration_closed(session_id):
                 )
             return redirect(url_for("staff.monthly_exam_session_registrations"))
 
-    session_record.monthly_registrations_closed = action == "close"
+    if action == "close":
+        session_record.monthly_registrations_closed = True
+        session_record.monthly_registrations_closed_at = session_record.monthly_registrations_closed_at or datetime.now(timezone.utc)
+    else:
+        session_record.monthly_registrations_closed = False
+        session_record.monthly_registrations_closed_at = None
     db.session.commit()
     flash(
         "Monthly registrations closed." if session_record.monthly_registrations_closed else "Monthly registrations reopened.",
@@ -17336,6 +19106,7 @@ def exam_session_overall_statuses_by_session_ids(session_ids):
             supervisor_assignments,
             examiner_assignments,
             intern_assignments,
+            session_record=session_record,
         )
         logistics_contract = logistics_readiness_contract(
             all_assignments,
@@ -17460,9 +19231,13 @@ def update_exam_session_members(session_id):
         if not AcademicStaff.query.filter_by(id=emergency_contact_member_id, status="Active").first():
             flash("Please select an active emergency contact.", "error")
             return session_members_redirect(keep_open=True)
+    previous_emergency_contact_member_id = session_record.emergency_contact_member_id
     session_record.emergency_contact_required = emergency_contact_required
     session_record.emergency_contact_not_required = emergency_contact_not_required
     session_record.emergency_contact_member_id = emergency_contact_member_id
+    if previous_emergency_contact_member_id != emergency_contact_member_id:
+        session_record.emergency_contact_participation_status = "Pending"
+        clear_emergency_contact_deadline(session_record)
 
     keep_modal_open_on_success = modal_action == "save"
     selected_shipment_recipient_value = request.form.get("shipment_recipient_assignment", "").strip()

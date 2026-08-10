@@ -402,6 +402,10 @@ def create_app():
                 db.session.execute(text("ALTER TABLE exam_session_shipment_bundle ADD COLUMN split_from_bundle_id INTEGER"))
             if "auto_split_at" not in shipment_bundle_columns:
                 db.session.execute(text("ALTER TABLE exam_session_shipment_bundle ADD COLUMN auto_split_at DATETIME"))
+            if "delivery_option" not in shipment_bundle_columns:
+                db.session.execute(text("ALTER TABLE exam_session_shipment_bundle ADD COLUMN delivery_option VARCHAR(60) NOT NULL DEFAULT ''"))
+            if "shipping_label_url" not in shipment_bundle_columns:
+                db.session.execute(text("ALTER TABLE exam_session_shipment_bundle ADD COLUMN shipping_label_url VARCHAR(500)"))
             db.session.execute(text("CREATE UNIQUE INDEX IF NOT EXISTS uq_shipment_bundle_number_idx ON exam_session_shipment_bundle (bundle_number)"))
             db.session.execute(text("CREATE UNIQUE INDEX IF NOT EXISTS uq_shipment_bundle_year_sequence_idx ON exam_session_shipment_bundle (bundle_year, bundle_sequence)"))
             db.session.execute(text("CREATE INDEX IF NOT EXISTS ix_shipment_bundle_auto_supervisor_deadline ON exam_session_shipment_bundle (auto_managed, supervisor_staff_id, dispatch_due_at)"))
@@ -512,6 +516,9 @@ def create_app():
         if "seniority" not in existing_columns:
             db.session.execute(text("ALTER TABLE academic_staff ADD COLUMN seniority BOOLEAN NOT NULL DEFAULT 0"))
             db.session.commit()
+        if "id_issued" not in existing_columns:
+            db.session.execute(text("ALTER TABLE academic_staff ADD COLUMN id_issued BOOLEAN NOT NULL DEFAULT 0"))
+            db.session.commit()
         if "fut_checked" not in existing_columns:
             db.session.execute(text("ALTER TABLE academic_staff ADD COLUMN fut_checked BOOLEAN NOT NULL DEFAULT 0"))
             db.session.commit()
@@ -609,8 +616,89 @@ def create_app():
         if exam_session_columns and "emergency_contact_member_id" not in exam_session_columns:
             db.session.execute(text("ALTER TABLE exam_session ADD COLUMN emergency_contact_member_id INTEGER"))
             db.session.commit()
+        if exam_session_columns and "emergency_contact_participation_status" not in exam_session_columns:
+            db.session.execute(text("ALTER TABLE exam_session ADD COLUMN emergency_contact_participation_status VARCHAR(40) NOT NULL DEFAULT 'Pending'"))
+            db.session.commit()
+        if exam_session_columns and "emergency_contact_status_due_at" not in exam_session_columns:
+            db.session.execute(text("ALTER TABLE exam_session ADD COLUMN emergency_contact_status_due_at DATE"))
+            db.session.commit()
+        if exam_session_columns and "emergency_contact_status_due_stage" not in exam_session_columns:
+            db.session.execute(text("ALTER TABLE exam_session ADD COLUMN emergency_contact_status_due_stage VARCHAR(40)"))
+            db.session.commit()
+        if exam_session_columns and "emergency_contact_status_due_started_at" not in exam_session_columns:
+            db.session.execute(text("ALTER TABLE exam_session ADD COLUMN emergency_contact_status_due_started_at DATETIME"))
+            db.session.commit()
         if exam_session_columns and "monthly_registrations_closed" not in exam_session_columns:
             db.session.execute(text("ALTER TABLE exam_session ADD COLUMN monthly_registrations_closed BOOLEAN NOT NULL DEFAULT 0"))
+            db.session.commit()
+        if exam_session_columns and "monthly_registrations_closed_at" not in exam_session_columns:
+            db.session.execute(text("ALTER TABLE exam_session ADD COLUMN monthly_registrations_closed_at DATETIME"))
+            db.session.commit()
+        if exam_session_columns and "package_label_verification_status" not in exam_session_columns:
+            db.session.execute(text("ALTER TABLE exam_session ADD COLUMN package_label_verification_status VARCHAR(30) NOT NULL DEFAULT 'not_started'"))
+            db.session.commit()
+        if exam_session_columns and "package_label_verification_updated_at" not in exam_session_columns:
+            db.session.execute(text("ALTER TABLE exam_session ADD COLUMN package_label_verification_updated_at DATETIME"))
+            db.session.commit()
+        if exam_session_columns and "package_label_verification_updated_by" not in exam_session_columns:
+            db.session.execute(text("ALTER TABLE exam_session ADD COLUMN package_label_verification_updated_by VARCHAR(120)"))
+            db.session.commit()
+        if exam_session_columns and "package_label_printing_status" not in exam_session_columns:
+            db.session.execute(text("ALTER TABLE exam_session ADD COLUMN package_label_printing_status VARCHAR(30) NOT NULL DEFAULT 'not_started'"))
+            db.session.commit()
+        if exam_session_columns and "package_label_printing_updated_at" not in exam_session_columns:
+            db.session.execute(text("ALTER TABLE exam_session ADD COLUMN package_label_printing_updated_at DATETIME"))
+            db.session.commit()
+        if exam_session_columns and "package_label_printing_updated_by" not in exam_session_columns:
+            db.session.execute(text("ALTER TABLE exam_session ADD COLUMN package_label_printing_updated_by VARCHAR(120)"))
+            db.session.commit()
+        if exam_session_columns and "room_package_sealing_status" not in exam_session_columns:
+            db.session.execute(text("ALTER TABLE exam_session ADD COLUMN room_package_sealing_status VARCHAR(30) NOT NULL DEFAULT 'not_started'"))
+            db.session.commit()
+        if exam_session_columns and "room_package_sealing_updated_at" not in exam_session_columns:
+            db.session.execute(text("ALTER TABLE exam_session ADD COLUMN room_package_sealing_updated_at DATETIME"))
+            db.session.commit()
+        if exam_session_columns and "room_package_sealing_updated_by" not in exam_session_columns:
+            db.session.execute(text("ALTER TABLE exam_session ADD COLUMN room_package_sealing_updated_by VARCHAR(120)"))
+            db.session.commit()
+        if exam_session_columns and "return_packages_status" not in exam_session_columns:
+            db.session.execute(text("ALTER TABLE exam_session ADD COLUMN return_packages_status VARCHAR(30) NOT NULL DEFAULT 'not_started'"))
+            db.session.commit()
+        if exam_session_columns and "return_packages_updated_at" not in exam_session_columns:
+            db.session.execute(text("ALTER TABLE exam_session ADD COLUMN return_packages_updated_at DATETIME"))
+            db.session.commit()
+        if exam_session_columns and "return_packages_updated_by" not in exam_session_columns:
+            db.session.execute(text("ALTER TABLE exam_session ADD COLUMN return_packages_updated_by VARCHAR(120)"))
+            db.session.commit()
+        if exam_session_columns and "staff_member_ids_status" not in exam_session_columns:
+            db.session.execute(text("ALTER TABLE exam_session ADD COLUMN staff_member_ids_status VARCHAR(30) NOT NULL DEFAULT 'not_started'"))
+            db.session.commit()
+        if exam_session_columns and "staff_member_ids_updated_at" not in exam_session_columns:
+            db.session.execute(text("ALTER TABLE exam_session ADD COLUMN staff_member_ids_updated_at DATETIME"))
+            db.session.commit()
+        if exam_session_columns and "staff_member_ids_updated_by" not in exam_session_columns:
+            db.session.execute(text("ALTER TABLE exam_session ADD COLUMN staff_member_ids_updated_by VARCHAR(120)"))
+            db.session.commit()
+        if exam_session_columns and "staff_member_ids_snapshot" not in exam_session_columns:
+            db.session.execute(text("ALTER TABLE exam_session ADD COLUMN staff_member_ids_snapshot TEXT NOT NULL DEFAULT '[]'"))
+            db.session.commit()
+        if exam_session_columns and "inclusion_final_items_status" not in exam_session_columns:
+            db.session.execute(text("ALTER TABLE exam_session ADD COLUMN inclusion_final_items_status VARCHAR(30) NOT NULL DEFAULT 'not_started'"))
+            db.session.commit()
+        if exam_session_columns and "inclusion_final_items_updated_at" not in exam_session_columns:
+            db.session.execute(text("ALTER TABLE exam_session ADD COLUMN inclusion_final_items_updated_at DATETIME"))
+            db.session.commit()
+        if exam_session_columns and "inclusion_final_items_updated_by" not in exam_session_columns:
+            db.session.execute(text("ALTER TABLE exam_session ADD COLUMN inclusion_final_items_updated_by VARCHAR(120)"))
+            db.session.commit()
+        if exam_session_columns and "session_box_sealing_status" not in exam_session_columns:
+            db.session.execute(text("ALTER TABLE exam_session ADD COLUMN session_box_sealing_status VARCHAR(30) NOT NULL DEFAULT 'not_started'"))
+            db.session.commit()
+        if exam_session_columns and "session_box_sealing_updated_at" not in exam_session_columns:
+            db.session.execute(text("ALTER TABLE exam_session ADD COLUMN session_box_sealing_updated_at DATETIME"))
+            db.session.commit()
+        if exam_session_columns and "session_box_sealing_updated_by" not in exam_session_columns:
+            db.session.execute(text("ALTER TABLE exam_session ADD COLUMN session_box_sealing_updated_by VARCHAR(120)"))
             db.session.commit()
         if exam_session_columns and "status" in exam_session_columns:
             db.session.execute(text("UPDATE exam_session SET status = 'Pending' WHERE status IN ('Active', 'Inactive')"))

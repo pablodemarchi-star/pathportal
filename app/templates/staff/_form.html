@@ -54,6 +54,10 @@
     Started in{% if require_complete %} *{% endif %}
     <input name="started_in" type="text" inputmode="numeric" pattern="\d{4}" value="{{ member.started_in if member else '' }}" placeholder="2026" maxlength="4" {% if require_complete %}required{% endif %}>
   </label>
+  <label class="checkbox-field id-issued-field">
+    <input name="id_issued" type="checkbox" {% if member and member.id_issued %}checked{% endif %}>
+    <span>ID issued</span>
+  </label>
   <label class="full-span">
     Full address copied from Google Maps{% if require_complete %} *{% endif %}
     <input name="full_address_google_maps" value="{{ member.full_address_google_maps if member else '' }}" maxlength="500" {% if require_complete %}required{% endif %}>

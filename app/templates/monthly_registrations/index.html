@@ -91,6 +91,7 @@
         {% set session_candidate_trends = candidate_total_trends.get(session.id, {}) %}
         {% set monthly_closed = session.monthly_registrations_closed %}
         {% set monthly_status = monthly_statuses.get(session.id, 'Pending') %}
+        {% set reopen_affects_schedule = monthly_reopen_affects_schedule.get(session.id, false) %}
         <tr data-monthly-session-row data-session-id="{{ session.id }}" class="{% if monthly_closed %}is-monthly-closed{% endif %}">
           <td class="sticky-registration-col status-col">
             <span class="badge exam-status-{{ monthly_status|lower|replace(' ', '-') }}" data-monthly-session-status>{{ monthly_status }}</span>
@@ -175,9 +176,13 @@
           {% endfor %}
           <td>
             <div class="monthly-actions">
-              <form method="post" action="{{ url_for('staff.toggle_monthly_exam_session_registration_closed', session_id=session.id) }}">
+              <form method="post" action="{{ url_for('staff.toggle_monthly_exam_session_registration_closed', session_id=session.id) }}"{% if monthly_closed and reopen_affects_schedule %} data-confirm-password-submit="Password authorisation required
+Editing the monthly session registration of the session may affect the Schedule stage, as schedule preparation has already started. Password authorisation is required to continue." data-confirm-password-value="EditOK"{% endif %}>
                 <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
                 <input type="hidden" name="action" value="{% if monthly_closed %}reopen{% else %}close{% endif %}">
+                {% if monthly_closed and reopen_affects_schedule %}
+                  <input type="hidden" name="confirmation_password" value="">
+                {% endif %}
                 <button class="monthly-close-chip {% if monthly_closed %}is-reopen{% endif %}" type="submit">{% if monthly_closed %}Reopen{% else %}Close{% endif %}</button>
               </form>
               <form method="post" action="{{ url_for('staff.reset_monthly_exam_session_registration', session_id=session.id) }}" data-reset-monthly-form>

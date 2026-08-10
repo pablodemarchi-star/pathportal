@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% from "staff/_badges.html" import role_badge %}
 
 {% macro schedule_status_badge(status) -%}
   <span class="badge schedule-status-{{ status|lower|replace(' ', '-') }}">{{ status }}</span>
@@ -38,11 +39,23 @@
   </span>
 {%- endmacro %}
 
-{% macro contextual_cell_trigger(session, target, label, schedule_only=false, staffing_only=false) -%}
+{% macro contextual_cell_trigger(session, target, label, schedule_only=false, staffing_only=false, packages_only=false, shipments_only=false) -%}
   {% set scroll_target = 'schedule-notes' if schedule_only and target == 'schedule-actions' else target %}
-  <button class="contextual-cell-trigger" type="button" data-open-modal="schedule-workflow-{{ session.id }}" data-modal-scroll-target="{{ scroll_target }}-{{ session.id }}" data-modal-target-label="{{ label }}"{% if schedule_only %} data-modal-schedule-only="true"{% endif %}{% if staffing_only %} data-modal-staffing-only="true"{% endif %} aria-label="{{ label }} for {{ session.exam_session_name }}">
+  <button class="contextual-cell-trigger" type="button" data-open-modal="schedule-workflow-{{ session.id }}" data-modal-scroll-target="{{ scroll_target }}-{{ session.id }}" data-modal-target-label="{{ label }}"{% if schedule_only %} data-modal-schedule-only="true"{% endif %}{% if staffing_only %} data-modal-staffing-only="true"{% endif %}{% if packages_only %} data-modal-packages-only="true"{% endif %}{% if shipments_only %} data-modal-shipments-only="true"{% endif %} aria-label="{{ label }} for {{ session.exam_session_name }}">
     {{ caller() }}
   </button>
+{%- endmacro %}
+
+{% macro shipment_delivery_options_field(options, selected_value='', auto_save=false, disabled=false) -%}
+  <fieldset class="shipment-delivery-options{% if disabled %} is-disabled{% endif %}" aria-label="Shipment delivery options"{% if auto_save %} data-shipment-delivery-auto-save="true"{% endif %}{% if disabled %} disabled aria-disabled="true"{% endif %}>
+    <legend>Confirm with the bundle recipient which delivery option they prefer:</legend>
+    {% for option in options %}
+      <label{% if disabled %} class="is-disabled"{% endif %}>
+        <input type="checkbox" name="delivery_option" value="{{ option.value }}" {% if option.value == selected_value %}checked{% endif %}{% if disabled %} disabled{% endif %}>
+        <span><strong>{{ option.label }}</strong>{% if option.description %}, {{ option.description }}{% endif %}</span>
+      </label>
+    {% endfor %}
+  </fieldset>
 {%- endmacro %}
 
 {% macro section_status_summary(label, detail='') -%}
@@ -105,15 +118,48 @@
 {%- endmacro %}
 
 {% macro packages_status_badge(packages, focusable=true) -%}
-  <span class="badge packages-status-{{ packages.status|replace('_', '-') }}" title="{{ packages.summary }}" aria-label="Packages {{ packages.label }}: {{ packages.summary }}"{% if focusable %} tabindex="0"{% endif %}>{{ packages.label }}</span>
+  <span class="badge packages-status-{{ packages.status|replace('_', '-') }}" title="{{ packages.tooltip or packages.summary }}" aria-label="Packages {{ packages.label }}: {{ packages.tooltip or packages.summary }}"{% if focusable %} tabindex="0"{% endif %}>{{ packages.label }}</span>
 {%- endmacro %}
 
-{% macro packages_table_cell(packages, focusable=true) -%}
+{% macro packages_gate_chip(schedule_ready, staffing_ready) -%}
+  {% if schedule_ready and staffing_ready %}
+    <span class="packages-gate-chip packages-gate-unblocked" aria-label="Packages gate unblocked">
+      <svg viewBox="0 0 24 24" aria-hidden="true">
+        <rect x="5" y="10" width="14" height="10" rx="2"></rect>
+        <path d="M8 10V7a4 4 0 0 1 7.4-2.1"></path>
+      </svg>
+      UNBLOCKED
+    </span>
+  {% elif schedule_ready %}
+    <span class="packages-gate-chip packages-gate-semi-unblocked" aria-label="Packages gate semi-unblocked">
+      <svg viewBox="0 0 24 24" aria-hidden="true">
+        <rect x="5" y="10" width="14" height="10" rx="2"></rect>
+        <path d="M8 10V7a4 4 0 0 1 7.4-2.1"></path>
+        <path d="M16 7v3"></path>
+      </svg>
+      SEMI-UNBLOCKED
+    </span>
+  {% else %}
+    <span class="packages-gate-chip packages-gate-blocked" aria-label="Packages gate blocked">
+      <svg viewBox="0 0 24 24" aria-hidden="true">
+        <rect x="5" y="10" width="14" height="10" rx="2"></rect>
+        <path d="M8 10V7a4 4 0 0 1 8 0v3"></path>
+      </svg>
+      BLOCKED
+    </span>
+  {% endif %}
+{%- endmacro %}
+
+{% macro packages_table_cell(packages, schedule_ready, staffing_ready, focusable=true, preparation_status=none) -%}
   <span class="packages-summary-cell">
-    {{ packages_status_badge(packages, focusable) }}
-    <span>{{ packages.summary }}</span>
-    {% for blocker in packages.blockers[:1] %}
-      <small>{{ blocker }}</small>
+    {{ packages_gate_chip(schedule_ready, staffing_ready) }}
+    {% set package_status = preparation_status or packages %}
+    {{ packages_status_badge(package_status, focusable) }}
+    {% if package_status.table_summary %}
+      <span title="{{ package_status.tooltip }}">{{ package_status.table_summary }}</span>
+    {% endif %}
+    {% for line in package_status.secondary_lines %}
+      <small title="{{ line.tooltip }}">{{ line.text }}</small>
     {% endfor %}
   </span>
 {%- endmacro %}
@@ -328,6 +374,30 @@
 
 {% macro my_action_source_tag(action) -%}
   <span class="my-action-source-tag my-action-source-{{ action.source|replace('_', '-') }}">{{ action.source_label }}</span>
+{%- endmacro %}
+
+{% macro bundle_detail_departments_cell(actions) -%}
+  {% if actions %}
+    <span class="bundle-action-stack">
+      {% for action in actions %}
+        <span class="responsible-chip users-department-chip">{{ action.department }}</span>
+      {% endfor %}
+    </span>
+  {% else %}
+    <span class="muted">-</span>
+  {% endif %}
+{%- endmacro %}
+
+{% macro bundle_detail_action_descriptions_cell(actions) -%}
+  {% if actions %}
+    <span class="bundle-action-stack bundle-action-description-stack">
+      {% for action in actions %}
+        <span>{{ action.description }}</span>
+      {% endfor %}
+    </span>
+  {% else %}
+    <span class="muted">No action required.</span>
+  {% endif %}
 {%- endmacro %}
 
 {% macro review_flags_block(flags, session, selected_schedule_status, selected_view, csrf_token) -%}
@@ -558,7 +628,11 @@
     {% if action.key == 'reopen' and view and view.schedule_locked_by_staffing %}
       <div class="schedule-authorisation-warning" role="alert">
         <strong>Password authorisation required</strong>
-        <p>Editing the schedule may affect the Staffing stage, as official confirmations have already been sent. Password authorisation is required to continue.</p>
+        {% if view.schedule_reopen_affects_packages %}
+          <p>Editing the schedule may affect the Staffing and Package stage, as official confirmations have already been sent and package preparation has started. Password authorisation is required to continue.</p>
+        {% else %}
+          <p>Editing the schedule may affect the Staffing stage, as official confirmations have already been sent. Password authorisation is required to continue.</p>
+        {% endif %}
       </div>
       <label for="schedule-reopen-password-{{ session.id }}">
         Password <span class="required-marker">*</span>
@@ -643,6 +717,58 @@
         </div>
       {% else %}
         <p class="status-track-empty">No staffing status changes recorded yet.</p>
+      {% endif %}
+    </div>
+  </section>
+{%- endmacro %}
+
+{% macro package_status_track_panel(session, events) -%}
+  <section class="status-track-panel package-status-track-panel" aria-label="Package status track">
+    <button
+      class="status-track-toggle"
+      type="button"
+      aria-expanded="false"
+      aria-controls="package-status-track-{{ session.id }}"
+      data-status-track-toggle
+    >Status track</button>
+    <div id="package-status-track-{{ session.id }}" class="status-track-content" hidden>
+      {% if events %}
+        <div class="status-track-list">
+          {% for event in events %}
+            <article class="status-track-item">
+              <strong>{{ event.stage }}: {{ event.previous_status }} → {{ event.new_status }}</strong>
+              <span>{{ event.created_at|status_track_dt }} · {{ event.created_by or 'Unknown user' }}</span>
+            </article>
+          {% endfor %}
+        </div>
+      {% else %}
+        <p class="status-track-empty">No package status changes recorded yet.</p>
+      {% endif %}
+    </div>
+  </section>
+{%- endmacro %}
+
+{% macro shipment_status_track_panel(session, events) -%}
+  <section class="status-track-panel shipment-status-track-panel" aria-label="Shipment status track">
+    <button
+      class="status-track-toggle"
+      type="button"
+      aria-expanded="false"
+      aria-controls="shipment-status-track-{{ session.id }}"
+      data-status-track-toggle
+    >Status track</button>
+    <div id="shipment-status-track-{{ session.id }}" class="status-track-content" hidden>
+      {% if events %}
+        <div class="status-track-list">
+          {% for event in events %}
+            <article class="status-track-item">
+              <strong>{{ event.stage }}: {{ event.previous_status }} → {{ event.new_status }}</strong>
+              <span>{{ event.created_at|status_track_dt }} · {{ event.created_by or 'Unknown user' }}</span>
+            </article>
+          {% endfor %}
+        </div>
+      {% else %}
+        <p class="status-track-empty">No shipment status changes recorded yet.</p>
       {% endif %}
     </div>
   </section>
@@ -777,6 +903,166 @@
   </section>
 {%- endmacro %}
 
+{% macro package_notes_panel(session, notes, csrf_token, selected_schedule_status, selected_view='sessions', selected_bundle=none) -%}
+  <section class="package-notes-section staffing-control-section" id="packages-notes-{{ session.id }}" aria-labelledby="packages-notes-title-{{ session.id }}">
+    <div class="staffing-control-header">
+      <div>
+        <h3 id="packages-notes-title-{{ session.id }}" tabindex="-1">Notes</h3>
+        <p>Package notes and read tracking.</p>
+      </div>
+      <strong class="responsible-chip">{{ notes|length }} notes</strong>
+    </div>
+    <form method="post" action="{{ url_for('staff.add_staffing_note', session_id=session.id) }}" class="staffing-control-form schedule-action-form staffing-note-form" data-disable-on-submit>
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+      <input type="hidden" name="schedule_status" value="{{ selected_schedule_status }}">
+      <input type="hidden" name="note_modal_context" value="packages">
+      {{ pre_session_return_fields(selected_view, selected_bundle) }}
+      <label for="packages-note-text-{{ session.id }}">
+        Note <span class="required-marker">*</span>
+      </label>
+      <textarea id="packages-note-text-{{ session.id }}" name="note" rows="3" required placeholder="Add a package note"></textarea>
+      <div class="cv-review-note-actions schedule-note-routing">
+        <div class="note-from-field">
+          <span>From</span>
+          <strong>{{ note_actor_label() }}</strong>
+        </div>
+        <label class="note-recipient-field">
+          To
+          <select name="note_to_user_id" multiple data-note-recipient-select>
+            {% for user_option in note_to_user_options() %}
+              <option value="{{ user_option.id }}">{{ user_option.full_name }}, {{ user_option.department }}</option>
+            {% endfor %}
+          </select>
+          <span class="note-recipient-selected-chips" data-note-recipient-chips></span>
+        </label>
+      </div>
+      <div class="form-actions">
+        <button class="primary-button compact-action" type="submit">Add note</button>
+      </div>
+    </form>
+    {% if notes %}
+      <div class="history-list compact-history">
+        {% for note in notes %}
+          {% set note_status = staffing_note_status(note) %}
+          <article class="history-entry potential-note-entry" id="packages-note-{{ note.note_id }}" data-note-id="{{ note.note_id }}">
+            <div class="potential-note-header">
+              <time>Created on: {{ note.date }}</time>
+              <span class="responsible-chip potential-note-department-chip">From: {{ history_from_label(note) }}</span>
+              {% set note_to_labels = history_to_labels(note) %}
+              {% if note_to_labels %}
+                <span class="responsible-chip potential-note-department-chip note-recipient-history">To:
+                  {% for to_label in note_to_labels %}
+                    <span class="note-recipient-history-chip">{{ to_label }}</span>
+                  {% endfor %}
+                </span>
+              {% endif %}
+              {% if note_status.has_recipient %}
+                <span class="note-read-chip {% if note_status.is_read %}is-read{% else %}is-unread{% endif %}" {% if note_status.tooltip %}title="{{ note_status.tooltip }}" aria-label="{{ note_status.tooltip }}"{% endif %}>{{ note_status.label }}</span>
+                {% if note_status.can_mark_read %}
+                  <form method="post" action="{{ url_for('staff.mark_staffing_note_read', mention_id=note_status.mention_id) }}" class="note-read-form" data-note-read-form>
+                    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                    <input type="hidden" name="return_session_id" value="{{ session.id }}">
+                    <input type="hidden" name="highlight_note" value="{{ note.note_id }}">
+                    <input type="hidden" name="note_modal_context" value="packages">
+                    {{ pre_session_return_fields(selected_view, selected_bundle) }}
+                    <label class="note-read-checkbox">
+                      <input type="checkbox" name="read" value="1" data-note-read-checkbox>
+                      <span>Read</span>
+                    </label>
+                  </form>
+                {% endif %}
+              {% endif %}
+            </div>
+            <p>{{ note.note }}</p>
+          </article>
+        {% endfor %}
+      </div>
+    {% else %}
+      <p class="empty-history">No package notes yet.</p>
+    {% endif %}
+  </section>
+{%- endmacro %}
+
+{% macro shipment_notes_panel(session, notes, csrf_token, selected_schedule_status, selected_view='sessions', selected_bundle=none) -%}
+  <section class="shipment-notes-section staffing-control-section" id="shipments-notes-{{ session.id }}" aria-labelledby="shipments-notes-title-{{ session.id }}">
+    <div class="staffing-control-header">
+      <div>
+        <h3 id="shipments-notes-title-{{ session.id }}" tabindex="-1">Notes</h3>
+        <p>Shipment notes and read tracking.</p>
+      </div>
+      <strong class="responsible-chip">{{ notes|length }} notes</strong>
+    </div>
+    <form method="post" action="{{ url_for('staff.add_staffing_note', session_id=session.id) }}" class="staffing-control-form schedule-action-form staffing-note-form" data-disable-on-submit>
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+      <input type="hidden" name="schedule_status" value="{{ selected_schedule_status }}">
+      <input type="hidden" name="note_modal_context" value="shipments">
+      {{ pre_session_return_fields(selected_view, selected_bundle) }}
+      <label for="shipments-note-text-{{ session.id }}">
+        Note <span class="required-marker">*</span>
+      </label>
+      <textarea id="shipments-note-text-{{ session.id }}" name="note" rows="3" required placeholder="Add a shipment note"></textarea>
+      <div class="cv-review-note-actions schedule-note-routing">
+        <div class="note-from-field">
+          <span>From</span>
+          <strong>{{ note_actor_label() }}</strong>
+        </div>
+        <label class="note-recipient-field">
+          To
+          <select name="note_to_user_id" multiple data-note-recipient-select>
+            {% for user_option in note_to_user_options() %}
+              <option value="{{ user_option.id }}">{{ user_option.full_name }}, {{ user_option.department }}</option>
+            {% endfor %}
+          </select>
+          <span class="note-recipient-selected-chips" data-note-recipient-chips></span>
+        </label>
+      </div>
+      <div class="form-actions">
+        <button class="primary-button compact-action" type="submit">Add note</button>
+      </div>
+    </form>
+    {% if notes %}
+      <div class="history-list compact-history">
+        {% for note in notes %}
+          {% set note_status = staffing_note_status(note) %}
+          <article class="history-entry potential-note-entry" id="shipments-note-{{ note.note_id }}" data-note-id="{{ note.note_id }}">
+            <div class="potential-note-header">
+              <time>Created on: {{ note.date }}</time>
+              <span class="responsible-chip potential-note-department-chip">From: {{ history_from_label(note) }}</span>
+              {% set note_to_labels = history_to_labels(note) %}
+              {% if note_to_labels %}
+                <span class="responsible-chip potential-note-department-chip note-recipient-history">To:
+                  {% for to_label in note_to_labels %}
+                    <span class="note-recipient-history-chip">{{ to_label }}</span>
+                  {% endfor %}
+                </span>
+              {% endif %}
+              {% if note_status.has_recipient %}
+                <span class="note-read-chip {% if note_status.is_read %}is-read{% else %}is-unread{% endif %}" {% if note_status.tooltip %}title="{{ note_status.tooltip }}" aria-label="{{ note_status.tooltip }}"{% endif %}>{{ note_status.label }}</span>
+                {% if note_status.can_mark_read %}
+                  <form method="post" action="{{ url_for('staff.mark_staffing_note_read', mention_id=note_status.mention_id) }}" class="note-read-form" data-note-read-form>
+                    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                    <input type="hidden" name="return_session_id" value="{{ session.id }}">
+                    <input type="hidden" name="highlight_note" value="{{ note.note_id }}">
+                    <input type="hidden" name="note_modal_context" value="shipments">
+                    {{ pre_session_return_fields(selected_view, selected_bundle) }}
+                    <label class="note-read-checkbox">
+                      <input type="checkbox" name="read" value="1" data-note-read-checkbox>
+                      <span>Read</span>
+                    </label>
+                  </form>
+                {% endif %}
+              {% endif %}
+            </div>
+            <p>{{ note.note }}</p>
+          </article>
+        {% endfor %}
+      </div>
+    {% else %}
+      <p class="empty-history">No shipment notes yet.</p>
+    {% endif %}
+  </section>
+{%- endmacro %}
+
 {% block title %}Pre-session Control Tower | Path Examinations{% endblock %}
 
 {% block content %}
@@ -850,9 +1136,10 @@
         <th>Deadline</th>
         <th>Exam sessions</th>
         <th>Supervisor</th>
-        <th>Packages</th>
+        <th>Package</th>
         <th>Shipment</th>
-        <th>Action</th>
+        <th>Department</th>
+        <th>Action description</th>
       </tr>
     </thead>
     <tbody>
@@ -880,12 +1167,18 @@
               <small>Shipment recipient missing</small>
             </span>
           </td>
-          <td><span class="muted">-</span></td>
+          <td><span class="bundle-action-stack"><span class="responsible-chip users-department-chip">LOGISTICS</span></span></td>
+          <td><span class="potential-action-text">Configure shipment bundle.</span></td>
         </tr>
       {% endif %}
       {% for bundle in bundle_views %}
         <tr>
-          <td><strong>Bundle {{ bundle.number }}</strong></td>
+          <td>
+            <span class="shipment-summary-cell bundle-number-cell">
+              <strong>Bundle {{ bundle.number }}</strong>
+              <a class="secondary-button compact-action" href="{{ url_for('staff.pre_session_control_tower', session_year=selected_session_year, view='bundle', bundle_id=bundle.id) }}">Open bundle</a>
+            </span>
+          </td>
           <td>
             {% if bundle.dispatch_due_at %}
               {{ bundle.dispatch_due_at|session_date }}
@@ -900,7 +1193,7 @@
               {% endfor %}
             </div>
           </td>
-          <td><span class="responsible-chip">{{ bundle.supervisor_name }}</span></td>
+          <td><span class="responsible-chip bundle-supervisor-chip">{{ bundle.supervisor_name }}</span></td>
           <td>
             <span class="shipment-summary-cell">
               <strong>{{ bundle.packages_label }}</strong>
@@ -912,21 +1205,59 @@
             </span>
           </td>
           <td>
-            <span class="shipment-summary-cell">
-              <span class="badge shipment-status-{{ bundle.display_status|lower|replace(' ', '-')|replace('_', '-') }}">{{ bundle.display_status }}</span>
-              {% if bundle.blocked %}
-                <small>Blocked until all packages are confirmed.</small>
-              {% else %}
-                <small>{{ bundle.status }}</small>
-              {% endif %}
-            </span>
+            {% set bundle_modal_session = bundle.included_sessions[0] if bundle.included_sessions else none %}
+            {% if bundle_modal_session %}
+              <button class="contextual-cell-trigger" type="button" data-open-modal="schedule-workflow-{{ bundle_modal_session.id }}" data-modal-scroll-target="shipments-{{ bundle_modal_session.id }}" data-modal-target-label="Track shipment" data-modal-shipments-only="true" aria-label="Track shipment for Bundle {{ bundle.number }}">
+                <span class="shipment-summary-cell">
+                  {% if bundle.blocked %}
+                    <span class="shipment-gate-chip shipment-gate-blocked" aria-label="Shipment bundle blocked">
+                      <svg viewBox="0 0 24 24" aria-hidden="true">
+                        <rect x="5" y="10" width="14" height="10" rx="2"></rect>
+                        <path d="M8 10V7a4 4 0 0 1 8 0v3"></path>
+                      </svg>
+                      BLOCKED
+                    </span>
+                  {% elif bundle.semi_unblocked %}
+                    <span class="shipment-gate-chip shipment-gate-semi-unblocked" aria-label="Shipment bundle semi-unblocked">
+                      <svg viewBox="0 0 24 24" aria-hidden="true">
+                        <rect x="5" y="10" width="14" height="10" rx="2"></rect>
+                        <path d="M8 10V7a4 4 0 0 1 7.4-2.1"></path>
+                      </svg>
+                      SEMI-UNBLOCKED
+                    </span>
+                  {% elif bundle.completed %}
+                    <span class="badge shipment-status-{{ bundle.display_status|lower|replace(' ', '-')|replace('_', '-') }}">{{ bundle.display_status }}</span>
+	                  {% else %}
+	                    <span class="shipment-gate-chip shipment-gate-unblocked" aria-label="Shipment bundle unblocked">
+	                      <svg viewBox="0 0 24 24" aria-hidden="true">
+	                        <rect x="5" y="10" width="14" height="10" rx="2"></rect>
+	                        <path d="M8 10V7a4 4 0 0 1 8 0"></path>
+	                      </svg>
+	                      UNBLOCKED
+	                    </span>
+	                  {% endif %}
+	                  {{ shipment_status_badge(bundle.operational_status) }}
+		                  {% if bundle.blocked or bundle.semi_unblocked %}
+		                    <small>{{ bundle.gate.sessions_completed_count }}/{{ bundle.gate.sessions_count }} sessions completed</small>
+	                  {% else %}
+                    <small>{{ bundle.status }}</small>
+                  {% endif %}
+                </span>
+              </button>
+            {% else %}
+              <span class="shipment-summary-cell">
+                <span class="badge shipment-status-not-bundled">Not configured</span>
+                <small>No sessions assigned</small>
+              </span>
+            {% endif %}
           </td>
-          <td><a class="secondary-button compact-action" href="{{ url_for('staff.pre_session_control_tower', session_year=selected_session_year, view='bundle', bundle_id=bundle.id) }}">Open bundle</a></td>
+          <td>{{ bundle_detail_departments_cell(bundle.action_items) }}</td>
+          <td>{{ bundle_detail_action_descriptions_cell(bundle.action_items) }}</td>
         </tr>
       {% endfor %}
       {% if not bundle_views and not pending_shipment_bundle %}
         <tr>
-          <td colspan="7" class="empty-state">
+          <td colspan="8" class="empty-state">
             <strong>No pending shipment bundles.</strong>
             <span>All current shipment bundles are either completed or not yet available.</span>
           </td>
@@ -987,29 +1318,43 @@
   <table class="control-tower-table">
     <thead>
       <tr>
-        <th>Action</th>
+        {% if selected_view != 'bundle' %}
+          <th>Action</th>
+        {% endif %}
         <th>Session</th>
         <th>Date</th>
+        {% if selected_view == 'bundle' %}
+          <th>Department</th>
+          <th>Action description</th>
+        {% endif %}
         <th>Schedule</th>
         <th>Staffing</th>
-        <th>Logistics</th>
-        <th>Packages</th>
-        <th>Shipment</th>
-        <th>Finance</th>
-        <th>Sinapsis</th>
-        <th>Communications</th>
-        <th>Session readiness</th>
-        <th>Incidents</th>
-        <th>Priority action</th>
+        <th>Package</th>
+        {% if selected_view != 'bundle' %}
+          <th>Logistics</th>
+          <th>Shipment</th>
+          <th>Finance</th>
+          <th>Sinapsis</th>
+          <th>Communications</th>
+          <th>Session readiness</th>
+          <th>Incidents</th>
+          <th>Priority action</th>
+        {% endif %}
       </tr>
     </thead>
     <tbody>
       {% for view in schedule_views %}
         {% set session = view.session %}
         <tr>
-          <td><button class="secondary-button compact-action" type="button" data-open-modal="schedule-workflow-{{ session.id }}" data-modal-scroll-target="overview-{{ session.id }}" data-modal-mode="overview">Session overview</button></td>
+          {% if selected_view != 'bundle' %}
+            <td><button class="secondary-button compact-action" type="button" data-open-modal="schedule-workflow-{{ session.id }}" data-modal-scroll-target="overview-{{ session.id }}" data-modal-mode="overview">Session overview</button></td>
+          {% endif %}
           <td>{{ session.exam_session_name }}</td>
           <td>{{ session.session_date|session_date }}</td>
+          {% if selected_view == 'bundle' %}
+            <td>{{ bundle_detail_departments_cell(view.bundle_detail_actions) }}</td>
+            <td>{{ bundle_detail_action_descriptions_cell(view.bundle_detail_actions) }}</td>
+          {% endif %}
           <td>
             {% call contextual_cell_trigger(session, 'schedule-actions', 'Review schedule', selected_view == 'bundle') %}
               {{ schedule_table_cell(view.status, view.schedule_gate, view.review_round, view.monthly_registrations_closed) }}
@@ -1021,68 +1366,70 @@
             {% endcall %}
           </td>
           <td>
-            {% call contextual_cell_trigger(session, 'logistics', 'Review logistics') %}
-              {{ logistics_table_cell(view.logistics, false) }}
+            {% call contextual_cell_trigger(session, 'packages', 'Manage packages', packages_only=true) %}
+              {{ packages_table_cell(view.packages.contract, view.packages.schedule_ready, view.packages.staffing_ready, false, view.packages.preparation_status) }}
             {% endcall %}
           </td>
-          <td>
-            {% call contextual_cell_trigger(session, 'packages', 'Manage packages') %}
-              {{ packages_table_cell(view.packages.contract, false) }}
-            {% endcall %}
-          </td>
-          <td>
-            {% call contextual_cell_trigger(session, 'shipments', 'Track shipment') %}
-              {{ shipment_table_cell(view.shipments.contract, view.shipments.planning) }}
-            {% endcall %}
-          </td>
-          <td>
-            {% call contextual_cell_trigger(session, 'finance', 'Review finance') %}
-              {{ finance_table_cell(view.finance, false) }}
-            {% endcall %}
-          </td>
-          <td>
-            <div class="sinapsis-table-cell-with-link">
-              {% call contextual_cell_trigger(session, 'sinapsis', 'Check Sinapsis') %}
-                {{ sinapsis_table_cell(view.sinapsis, false) }}
+          {% if selected_view != 'bundle' %}
+            <td>
+              {% call contextual_cell_trigger(session, 'logistics', 'Review logistics') %}
+                {{ logistics_table_cell(view.logistics, false) }}
               {% endcall %}
-              {% if view.sinapsis_available %}
-                <a class="sinapsis-chip-link" href="{{ view.sinapsis_url }}" target="_blank" rel="noopener noreferrer">Open link</a>
+            </td>
+            <td>
+              {% call contextual_cell_trigger(session, 'shipments', 'Track shipment', shipments_only=true) %}
+                {{ shipment_table_cell(view.shipments.contract, view.shipments.planning) }}
+              {% endcall %}
+            </td>
+            <td>
+              {% call contextual_cell_trigger(session, 'finance', 'Review finance') %}
+                {{ finance_table_cell(view.finance, false) }}
+              {% endcall %}
+            </td>
+            <td>
+              <div class="sinapsis-table-cell-with-link">
+                {% call contextual_cell_trigger(session, 'sinapsis', 'Check Sinapsis') %}
+                  {{ sinapsis_table_cell(view.sinapsis, false) }}
+                {% endcall %}
+                {% if view.sinapsis_available %}
+                  <a class="sinapsis-chip-link" href="{{ view.sinapsis_url }}" target="_blank" rel="noopener noreferrer">Open link</a>
+                {% endif %}
+              </div>
+            </td>
+            <td>
+              {% call contextual_cell_trigger(session, 'communications', 'Review communications') %}
+                {{ communications_table_cell(view.communications, false) }}
+              {% endcall %}
+            </td>
+            <td>
+              {% call contextual_cell_trigger(session, 'readiness', 'View readiness') %}
+                {{ session_readiness_table_cell(view.session_readiness, false) }}
+              {% endcall %}
+            </td>
+            <td>
+              {% call contextual_cell_trigger(session, 'incidents', 'Open incidents') %}
+                {{ incidents_table_cell(view.incidents, false) }}
+              {% endcall %}
+            </td>
+            <td>
+              {% set priority_target = view.priority_action.target if view.priority_action.target is defined and view.priority_action.target else 'priority-action' %}
+              {% if priority_target == 'schedule' %}
+                {% set priority_target = 'schedule-actions' %}
+              {% elif priority_target in ['core_readiness', 'core-readiness', 'operational_readiness', 'operational-readiness', 'session_readiness', 'session-readiness'] %}
+                {% set priority_target = 'readiness' %}
+              {% elif priority_target == 'incident-review' %}
+                {% set priority_target = 'incidents' %}
               {% endif %}
-            </div>
-          </td>
-          <td>
-            {% call contextual_cell_trigger(session, 'communications', 'Review communications') %}
-              {{ communications_table_cell(view.communications, false) }}
-            {% endcall %}
-          </td>
-          <td>
-            {% call contextual_cell_trigger(session, 'readiness', 'View readiness') %}
-              {{ session_readiness_table_cell(view.session_readiness, false) }}
-            {% endcall %}
-          </td>
-          <td>
-            {% call contextual_cell_trigger(session, 'incidents', 'Open incidents') %}
-              {{ incidents_table_cell(view.incidents, false) }}
-            {% endcall %}
-          </td>
-          <td>
-            {% set priority_target = view.priority_action.target if view.priority_action.target is defined and view.priority_action.target else 'priority-action' %}
-            {% if priority_target == 'schedule' %}
-              {% set priority_target = 'schedule-actions' %}
-            {% elif priority_target in ['core_readiness', 'core-readiness', 'operational_readiness', 'operational-readiness', 'session_readiness', 'session-readiness'] %}
-              {% set priority_target = 'readiness' %}
-            {% elif priority_target == 'incident-review' %}
-              {% set priority_target = 'incidents' %}
-            {% endif %}
-            {% call contextual_cell_trigger(session, priority_target, view.priority_action.label or 'View priority action') %}
-              {{ priority_action_table_cell(view.priority_action) }}
-              <small>{{ '—' if view.priority_action.is_complete else (view.priority_action.responsible or 'Not assigned') }} · {{ priority_action_deadline_text(view.priority_action) }}</small>
-            {% endcall %}
-          </td>
+              {% call contextual_cell_trigger(session, priority_target, view.priority_action.label or 'View priority action') %}
+                {{ priority_action_table_cell(view.priority_action) }}
+                <small>{{ '—' if view.priority_action.is_complete else (view.priority_action.responsible or 'Not assigned') }} · {{ priority_action_deadline_text(view.priority_action) }}</small>
+              {% endcall %}
+            </td>
+          {% endif %}
         </tr>
       {% else %}
         <tr>
-          <td colspan="14" class="empty-state">No exam sessions found.</td>
+          <td colspan="{{ 7 if selected_view == 'bundle' else 14 }}" class="empty-state">No exam sessions found.</td>
         </tr>
       {% endfor %}
     </tbody>
@@ -1203,8 +1550,14 @@
           <p class="eyebrow">
             <span class="modal-title-schedule">Schedule preparation and approval</span>
             <span class="modal-title-staffing">STAFF PARTICIPATION AND CONFIRMATION</span>
+            <span class="modal-title-packages">SESSION PACKAGE PREPARATION</span>
+            <span class="modal-title-shipments">BUNDLE SHIPMENT</span>
           </p>
           <h2 id="schedule-workflow-title-{{ session.id }}" tabindex="-1">{{ session.exam_session_name }}</h2>
+          <div class="modal-session-header-actions" aria-label="Session quick links">
+            <a class="secondary-button compact-action link-button" href="{{ url_for('staff.exam_session_planner', session_year=session.session_date.year if session.session_date else selected_session_year, open_session_modal=session.id, session_fullscreen=1) }}" target="_blank" rel="noopener noreferrer">View session planner</a>
+            <a class="secondary-button compact-action link-button{% if not view.sinapsis_available %} is-disabled{% endif %}" href="{{ view.sinapsis_url if view.sinapsis_available else '#' }}" target="_blank" rel="noopener noreferrer"{% if not view.sinapsis_available %} aria-disabled="true" tabindex="-1"{% endif %}>View in Sinapsis</a>
+          </div>
           <p class="modal-focused-context" data-focused-context hidden></p>
           <p class="modal-subtitle">{{ session.session_date|long_session_date }}</p>
         </div>
@@ -1243,6 +1596,8 @@
 
       {{ schedule_notes_panel(session, schedule_notes, csrf_token, selected_view, selected_bundle) }}
       {% set staffing_notes = staffing_note_views(staffing_notes_by_session.get(session.id, []), staffing_note_mentions_by_note_id) %}
+      {{ package_notes_panel(session, staffing_notes, csrf_token, selected_schedule_status, selected_view, selected_bundle) }}
+      {{ shipment_notes_panel(session, staffing_notes, csrf_token, selected_schedule_status, selected_view, selected_bundle) }}
       {{ staffing_notes_panel(session, staffing_notes, csrf_token, selected_schedule_status, selected_view, selected_bundle) }}
 
       <nav class="modal-section-nav" aria-label="Manage modal sections">
@@ -1250,8 +1605,8 @@
         <a href="#schedule-overview-{{ session.id }}">Schedule</a>
         <a href="#staffing-notes-{{ session.id }}">Staffing notes</a>
         <a href="#staffing-{{ session.id }}">Staffing</a>
-        <a href="#logistics-{{ session.id }}">Logistics</a>
         <a href="#packages-{{ session.id }}">Packages</a>
+        <a href="#logistics-{{ session.id }}">Logistics</a>
         <a href="#shipments-{{ session.id }}">Shipments</a>
         <a href="#finance-{{ session.id }}">Finance</a>
         <a href="#sinapsis-{{ session.id }}">Sinapsis</a>
@@ -1419,6 +1774,12 @@
         {{ staffing_status_track_panel(session, view.staffing_events) }}
         {% if view.staffing_rows %}
           {% set staffing_actions_disabled = not view.schedule_gate.is_ready %}
+          {% if view.staffing_status_change_affects_packages %}
+            <div class="schedule-authorisation-warning staffing-authorisation-warning" role="alert">
+              <strong>Password authorisation required</strong>
+              <p>Editing the staff and staff satus may affect the Package stage, as package preparation has started. Password authorisation is required to continue.</p>
+            </div>
+          {% endif %}
           <div class="staffing-role-table-wrap">
             <table class="staffing-role-table">
               <thead>
@@ -1502,17 +1863,23 @@
                         </div>
                       {% elif row.updatable and row.status == 'Confirmed' %}
                         <div class="staffing-inline-actions">
-                          <form method="post" action="{{ url_for('staff.update_staffing_assignment_status', session_id=session.id, assignment_type=row.assignment_type, assignment_id=row.assignment_id) }}" data-disable-on-submit>
+                          <form method="post" action="{{ url_for('staff.update_staffing_assignment_status', session_id=session.id, assignment_type=row.assignment_type, assignment_id=row.assignment_id) }}"{% if view.staffing_status_change_affects_packages %} data-confirm-password-submit="Editing the staff and staff satus may affect the Package stage, as package preparation has started. Password authorisation is required to continue." data-confirm-password-value="EditOK"{% endif %} data-disable-on-submit>
                             <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
                             <input type="hidden" name="schedule_status" value="{{ selected_schedule_status }}">
                             <input type="hidden" name="participation_status" value="Pending">
+                            {% if view.staffing_status_change_affects_packages %}
+                              <input type="hidden" name="confirmation_password" value="">
+                            {% endif %}
                             {{ pre_session_return_fields(selected_view, selected_bundle) }}
                             <button class="staffing-action-chip staffing-action-chip-grey" type="submit">Force Pending</button>
                           </form>
-                          <form method="post" action="{{ url_for('staff.update_staffing_assignment_status', session_id=session.id, assignment_type=row.assignment_type, assignment_id=row.assignment_id) }}" data-disable-on-submit>
+                          <form method="post" action="{{ url_for('staff.update_staffing_assignment_status', session_id=session.id, assignment_type=row.assignment_type, assignment_id=row.assignment_id) }}"{% if view.staffing_status_change_affects_packages %} data-confirm-password-submit="Editing the staff and staff satus may affect the Package stage, as package preparation has started. Password authorisation is required to continue." data-confirm-password-value="EditOK"{% endif %} data-disable-on-submit>
                             <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
                             <input type="hidden" name="schedule_status" value="{{ selected_schedule_status }}">
                             <input type="hidden" name="participation_status" value="Cancelled">
+                            {% if view.staffing_status_change_affects_packages %}
+                              <input type="hidden" name="confirmation_password" value="">
+                            {% endif %}
                             {{ pre_session_return_fields(selected_view, selected_bundle) }}
                             <button class="staffing-action-chip staffing-action-chip-grey" type="submit">Cancelled</button>
                           </form>
@@ -1556,7 +1923,6 @@
             {{ logistics_status_badge(view.logistics) }}
             <p>{{ view.logistics.description }}</p>
           </div>
-          <a class="secondary-button compact-action link-button" href="{{ url_for('staff.exam_session_planner', session_year=session.session_date.year, open_session_modal=session.id) }}">Open in Exam session planner</a>
         </div>
         {% if not view.schedule_gate.is_ready %}
           <p class="staffing-schedule-notice">Schedule approval is required before proceeding with the operational logistics stage.</p>
@@ -1694,262 +2060,590 @@
       <section class="staffing-control-section packages-control-section" id="packages-{{ session.id }}" data-control-section data-default-collapsed="true" aria-labelledby="packages-title-{{ session.id }}">
         <div class="staffing-control-header">
           <div>
-            <h3 id="packages-title-{{ session.id }}" tabindex="-1">Packages</h3>
-            {{ packages_status_badge(view.packages.contract) }}
-            <p>{{ view.packages.contract.summary }}</p>
+            <h3 class="package-actions-title" id="packages-title-{{ session.id }}" tabindex="-1">Package actions</h3>
+            <div class="packages-status-stack">
+              {{ packages_status_badge(view.packages.preparation_status) }}
+            </div>
           </div>
-          <strong class="core-readiness-count">{{ view.packages.contract.quality_checked_units }} of {{ view.packages.contract.total_package_units }} packages checked.</strong>
+          <strong class="responsible-chip">LOGISTICS</strong>
         </div>
-        {% if not view.packages.schedule_ready %}
-          <p class="staffing-schedule-notice">Schedule approval is required before package pre-packing can begin.</p>
-        {% endif %}
-        {% if view.packages.schedule_ready and not view.packages.staffing_ready %}
-          <p class="staffing-schedule-notice">Staffing must be ready before final package assembly can begin.</p>
-        {% endif %}
+        <section class="staffing-control-metadata" aria-label="Package ownership and deadline">
+          {% set package_next = namespace(label='Start session package preparation') %}
+          {% set package_status_value = view.packages.preparation_status.status %}
+          {% if not view.packages.schedule_ready %}
+            {% set package_next.label = 'Wait for schedule approval' %}
+          {% elif package_status_value == 'completed' %}
+            {% set package_next.label = 'Package preparation completed' %}
+          {% elif package_status_value == 'incident' %}
+            {% set package_next.label = 'Review package incident' %}
+          {% elif package_status_value == 'in_progress' %}
+            {% set package_next.label = 'Continue package preparation' %}
+          {% endif %}
+          <div>
+            <span>Current status</span>
+            <strong>{{ packages_status_badge(view.packages.preparation_status) }}</strong>
+          </div>
+          <div>
+            <span>Recommended next action</span>
+            <strong>{{ package_next.label }}</strong>
+          </div>
+          <div>
+            <span>Responsible</span>
+            <strong>LOGISTICS</strong>
+          </div>
+          <div>
+            <span>Nearest deadline</span>
+            <strong>-</strong>
+          </div>
+        </section>
+        {{ package_status_track_panel(session, view.packages.status_events or []) }}
         {{ review_flags_block(view.review_flags.by_area.get('packages', []), session, selected_schedule_status, selected_view, csrf_token) }}
-        {% if view.packages.contract.blockers %}
+        {% set visible_package_blockers = view.packages.contract.blockers|reject('equalto', 'Schedule approval is required before package pre-packing can begin.')|list %}
+        {% if visible_package_blockers %}
           <div class="staffing-blockers">
             <h4>Blockers</h4>
             <ul>
-              {% for blocker in view.packages.contract.blockers %}
+              {% for blocker in visible_package_blockers %}
                 <li>{{ blocker }}</li>
               {% endfor %}
             </ul>
           </div>
         {% endif %}
 
-        <details class="packages-add-panel">
-          <summary class="secondary-button compact-action">Add package unit</summary>
-          <form method="post" action="{{ url_for('staff.create_package_unit', session_id=session.id) }}" class="staffing-control-form package-unit-form" data-disable-on-submit>
-            <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-            <input type="hidden" name="schedule_status" value="{{ selected_schedule_status }}">
-            <input type="hidden" name="view" value="{{ selected_view }}">
-            <label>
-              Room
-              <input name="room_name" maxlength="160" required placeholder="Room 1">
-            </label>
-            <label>
-              Module
-              <select name="module_name" required>
-                <option value="">Select module</option>
-                {% for module in session.modules_list() %}
-                  <option value="{{ module }}">{{ module }}</option>
-                {% endfor %}
-              </select>
-            </label>
-            <label>
-              Expected candidates
-              <input type="number" name="expected_candidate_count" min="0" step="1" inputmode="numeric">
-            </label>
-            <label>
-              Actual labels
-              <input type="number" name="actual_label_count" min="0" step="1" inputmode="numeric">
-            </label>
-            <label>
-              Package deadline
-              <input type="date" name="package_deadline">
-            </label>
-            <label class="package-checkbox-field">
-              <input type="checkbox" name="has_nep_candidates" value="1">
-              <span>NEP adaptations required</span>
-            </label>
-            <label class="package-note-field">
-              Note
-              <textarea name="note" rows="2" maxlength="2000" placeholder="Add package note"></textarea>
-            </label>
-            <div class="form-actions">
-              <button class="primary-button compact-action" type="submit">Create package unit</button>
-            </div>
-          </form>
-        </details>
-
-        <section class="packages-session-checklists" aria-label="Session-level package checklists">
-          <article>
-            <h4>Session pre-packing checklist</h4>
-            {% for item in view.packages.session_pre_packing_items %}
-              <form method="post" action="{{ url_for('staff.update_package_checklist_item', item_id=item.id) }}" class="package-checklist-row" data-disable-on-submit>
-                <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-                <input type="hidden" name="schedule_status" value="{{ selected_schedule_status }}">
-                <input type="hidden" name="view" value="{{ selected_view }}">
-                <label>
-                  <input type="checkbox" name="is_checked" value="1" {% if item.is_checked %}checked{% endif %} onchange="this.form.requestSubmit()">
-                  <span>{{ item.label }}</span>
-                </label>
-                {% if item.description %}<small>{{ item.description }}</small>{% endif %}
-              </form>
-            {% else %}
-              <p class="empty-history">Session pre-packing checklist will be created with the first package unit.</p>
-            {% endfor %}
-          </article>
-          <article>
-            <h4>Session final assembly checklist</h4>
-            {% for item in view.packages.session_final_assembly_items %}
-              <form method="post" action="{{ url_for('staff.update_package_checklist_item', item_id=item.id) }}" class="package-checklist-row" data-disable-on-submit>
-                <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-                <input type="hidden" name="schedule_status" value="{{ selected_schedule_status }}">
-                <input type="hidden" name="view" value="{{ selected_view }}">
-                <label>
-                  <input type="checkbox" name="is_checked" value="1" {% if item.is_checked %}checked{% endif %} onchange="this.form.requestSubmit()">
-                  <span>{{ item.label }}</span>
-                </label>
-                {% if item.description %}<small>{{ item.description }}</small>{% endif %}
-              </form>
-            {% else %}
-              <p class="empty-history">Session final assembly checklist will be created with the first package unit.</p>
-            {% endfor %}
-          </article>
-        </section>
-
-        <div class="packages-unit-list">
-          {% for package in view.packages.unit_views %}
-            <article class="package-unit-card" id="package-unit-{{ package.id }}">
-              <div class="package-unit-header">
-                <div>
-                  <h4>{{ package.room_name }} · {{ package.module_name }}</h4>
-                  <span class="badge package-unit-status-{{ package.status|lower|replace(' ', '-') }}">{{ package.status }}</span>
-                  {% if package.has_nep_candidates %}
-                    <span class="badge package-nep-badge">NEP adaptations required</span>
-                  {% endif %}
-                  {% if package.has_label_mismatch %}
-                    <p class="staffing-schedule-notice">Label count mismatch. Report the issue to MANAGEMENT/ADMIN before continuing.</p>
-                  {% endif %}
-                </div>
-                <strong>{{ package.deadline_label }}</strong>
-              </div>
-              <form method="post" action="{{ url_for('staff.update_package_unit', unit_id=package.id) }}" class="package-unit-form" data-disable-on-submit>
-                <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-                <input type="hidden" name="schedule_status" value="{{ selected_schedule_status }}">
-                <input type="hidden" name="view" value="{{ selected_view }}">
-                <label>
-                  Room
-                  <input name="room_name" value="{{ package.room_name }}" maxlength="160" required>
-                </label>
-                <label>
-                  Module
-                  <select name="module_name" required>
-                    {% for module in session.modules_list() %}
-                      <option value="{{ module }}" {% if package.module_name == module %}selected{% endif %}>{{ module }}</option>
-                    {% endfor %}
-                    {% if package.module_name not in session.modules_list() %}
-                      <option value="{{ package.module_name }}" selected>{{ package.module_name }}</option>
-                    {% endif %}
-                  </select>
-                </label>
-                <label>
-                  Expected candidates
-                  <input type="number" name="expected_candidate_count" value="{{ package.expected_candidate_count if package.expected_candidate_count is not none else '' }}" min="0" step="1" inputmode="numeric">
-                </label>
-                <label>
-                  Actual labels
-                  <input type="number" name="actual_label_count" value="{{ package.actual_label_count if package.actual_label_count is not none else '' }}" min="0" step="1" inputmode="numeric">
-                </label>
-                <label>
-                  Package deadline
-                  <input type="date" name="package_deadline" value="{{ package.deadline.isoformat() if package.deadline else '' }}">
-                </label>
-                <label class="package-checkbox-field">
-                  <input type="checkbox" name="has_nep_candidates" value="1" {% if package.has_nep_candidates %}checked{% endif %}>
-                  <span>NEP adaptations required</span>
-                </label>
-                <label class="package-note-field">
-                  Note
-                  <textarea name="note" rows="2" maxlength="2000">{{ package.note }}</textarea>
-                </label>
-                <div class="form-actions">
-                  <button class="secondary-button compact-action" type="submit">Save package unit</button>
-                </div>
-              </form>
-
-              <form method="post" action="{{ url_for('staff.update_package_unit_status', unit_id=package.id) }}" class="package-status-form" data-disable-on-submit>
-                <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-                <input type="hidden" name="schedule_status" value="{{ selected_schedule_status }}">
-                <input type="hidden" name="view" value="{{ selected_view }}">
-                <label>
-                  Change status
-                  <select name="new_status">
-                    {% for status in package_unit_status_options %}
-                      <option value="{{ status }}" {% if package.status == status %}selected{% endif %}>{{ status }}</option>
-                    {% endfor %}
-                  </select>
-                </label>
-                <label>
-                  Transition note
-                  <input name="note" maxlength="500" placeholder="Required when reopening">
-                </label>
-                <button class="secondary-button compact-action" type="submit">Update status</button>
-              </form>
-
-              <section class="package-checklist-grid" aria-label="Package checklist">
-                <div>
-                  <h5>Pre-packing</h5>
-                  {% for item in package.pre_packing_items %}
-                    <form method="post" action="{{ url_for('staff.update_package_checklist_item', item_id=item.id) }}" class="package-checklist-row" data-disable-on-submit>
-                      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-                      <input type="hidden" name="schedule_status" value="{{ selected_schedule_status }}">
-                      <input type="hidden" name="view" value="{{ selected_view }}">
-                      <label>
-                        <input type="checkbox" name="is_checked" value="1" {% if item.is_checked %}checked{% endif %} onchange="this.form.requestSubmit()">
-                        <span>{{ item.label }}</span>
-                      </label>
-                      {% if item.description %}<small>{{ item.description }}</small>{% endif %}
-                    </form>
-                  {% endfor %}
-                </div>
-                <div>
-                  <h5>Final assembly</h5>
-                  {% for item in package.final_assembly_items %}
-                    <form method="post" action="{{ url_for('staff.update_package_checklist_item', item_id=item.id) }}" class="package-checklist-row {% if item.item_key == 'add_nep_label' and not package.has_nep_candidates %}is-not-applicable{% endif %}" data-disable-on-submit>
-                      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-                      <input type="hidden" name="schedule_status" value="{{ selected_schedule_status }}">
-                      <input type="hidden" name="view" value="{{ selected_view }}">
-                      <label>
-                        <input type="checkbox" name="is_checked" value="1" {% if item.is_checked %}checked{% endif %} {% if item.item_key == 'add_nep_label' and not package.has_nep_candidates %}disabled{% endif %} onchange="this.form.requestSubmit()">
-                        <span>{{ item.label }}{% if item.item_key == 'add_nep_label' and not package.has_nep_candidates %} — Not applicable{% endif %}</span>
-                      </label>
-                      {% if item.description %}<small>{{ item.description }}</small>{% endif %}
-                    </form>
-                  {% endfor %}
-                </div>
-              </section>
-
-              <details class="package-history-panel">
-                <summary class="secondary-button compact-action">History</summary>
-                {% if package.events %}
-                  <div class="history-list">
-                    {% for event in package.events %}
-                      <article class="history-entry">
-                        <time>{{ event.created_at|localdt }}{% if event.created_by %} | {{ event.created_by }}{% endif %}</time>
-                        <p>{{ event.event_type|replace('_', ' ') }}{% if event.previous_status or event.new_status %}: {{ event.previous_status or '-' }} → {{ event.new_status or '-' }}{% endif %}{% if event.note %} · {{ event.note }}{% endif %}</p>
-                      </article>
-                    {% endfor %}
-                  </div>
-                {% else %}
-                  <p class="empty-history">No package history recorded.</p>
-                {% endif %}
-              </details>
-
-              <form method="post" action="{{ url_for('staff.delete_package_unit', unit_id=package.id) }}" data-confirm-submit="Delete this package unit? This is only allowed before checklist progress or meaningful history exists.">
-                <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-                <input type="hidden" name="schedule_status" value="{{ selected_schedule_status }}">
-                <input type="hidden" name="view" value="{{ selected_view }}">
-                <button class="danger-button compact-action" type="submit">Delete package unit</button>
-              </form>
-            </article>
-          {% else %}
-            <p class="empty-history">No package units configured.</p>
-          {% endfor %}
+        {% set package_preparation_started = (
+          (session.package_label_verification_status or "not_started") != "not_started"
+          or (session.package_label_printing_status or "not_started") != "not_started"
+          or (session.room_package_sealing_status or "not_started") != "not_started"
+          or (session.return_packages_status or "not_started") != "not_started"
+          or (session.staff_member_ids_status or "not_started") != "not_started"
+          or (session.inclusion_final_items_status or "not_started") != "not_started"
+          or (session.session_box_sealing_status or "not_started") != "not_started"
+        ) %}
+        {% set package_preparation_forced_open = request.args.get('open_modal_target', '').startswith('package-') %}
+        {% set package_preparation_open = package_preparation_started or package_preparation_forced_open %}
+        <div class="packages-preparation-start">
+          <button class="primary-button compact-action packages-preparation-start-button" type="button" data-start-package-preparation="package-preparation-panel-{{ session.id }}" aria-controls="package-preparation-panel-{{ session.id }}" aria-expanded="{{ 'true' if package_preparation_open else 'false' }}" {% if not view.packages.schedule_ready %}disabled{% endif %}>
+            Start session package preparation
+          </button>
+          {% if not view.packages.schedule_ready %}
+            <p class="staffing-schedule-notice">The schedule must be approved before package preparation can begin.</p>
+          {% endif %}
         </div>
+
+        <div class="package-preparation-panel" id="package-preparation-panel-{{ session.id }}" data-package-preparation-panel{% if not package_preparation_open %} hidden{% endif %}>
+	          <div class="package-preparation-guidance" id="package-label-verification-{{ session.id }}">
+            <div>
+              {% set label_verification_status = session.package_label_verification_status or "not_started" %}
+              <div class="package-preparation-guidance-title">
+                <strong>Candidate label verification</strong>
+                <span class="package-preparation-state package-preparation-state-{{ label_verification_status|replace('_', '-') }}">
+                  {% if label_verification_status == "in_progress" %}
+                    In progress
+                  {% elif label_verification_status == "completed" %}
+                    Completed
+                  {% elif label_verification_status == "incident" %}
+                    With incident
+                  {% else %}
+                    Not started yet
+                  {% endif %}
+                </span>
+              </div>
+              <ol>
+                <li>Enter the exam session in Sinapsis and download the candidate labels for each exam room.</li>
+                <li>Verify that the label count matches the number of candidates in each room on the {% if session.details_url %}<a href="{{ session.details_url }}" target="_blank" rel="noopener noreferrer" aria-label="Open approved schedule folder">approved schedule in this folder</a>{% else %}approved schedule in this folder{% endif %}.</li>
+              </ol>
+            </div>
+            <div class="package-preparation-actions" aria-label="Candidate label verification actions">
+              <form method="post" action="{{ url_for('staff.update_package_label_verification', session_id=session.id) }}" data-disable-on-submit>
+                <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                <input type="hidden" name="schedule_status" value="{{ selected_schedule_status }}">
+                <input type="hidden" name="view" value="{{ selected_view }}">
+                <input type="hidden" name="action" value="mark_in_progress">
+                <button class="package-preparation-chip package-preparation-chip-progress" type="submit" {% if label_verification_status in ["in_progress", "completed"] %}disabled{% endif %}>Mark as in progress</button>
+              </form>
+              <form method="post" action="{{ url_for('staff.update_package_label_verification', session_id=session.id) }}" data-disable-on-submit>
+                <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                <input type="hidden" name="schedule_status" value="{{ selected_schedule_status }}">
+                <input type="hidden" name="view" value="{{ selected_view }}">
+                <input type="hidden" name="action" value="mark_complete">
+                <button class="package-preparation-chip package-preparation-chip-complete" type="submit" {% if label_verification_status == "completed" %}disabled{% endif %}>Mark as complete</button>
+              </form>
+              <form method="post" action="{{ url_for('staff.update_package_label_verification', session_id=session.id) }}" data-disable-on-submit>
+                <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                <input type="hidden" name="schedule_status" value="{{ selected_schedule_status }}">
+                <input type="hidden" name="view" value="{{ selected_view }}">
+                <input type="hidden" name="action" value="mark_incident">
+                <button class="package-preparation-chip package-preparation-chip-incident" type="submit" {% if label_verification_status in ["completed", "incident"] %}disabled{% endif %}>Mark incident</button>
+              </form>
+              {% if label_verification_status == "completed" %}
+                <form method="post" action="{{ url_for('staff.update_package_label_verification', session_id=session.id) }}" data-confirm-password-submit="Are you sure you want to reopen editing for Candidate label verification?
+This stage has already been marked as complete. Reopening it may affect package preparation records and any previously confirmed label checks. Please continue only if changes are required." data-confirm-password-value="EditOK" data-disable-on-submit>
+                  <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                  <input type="hidden" name="schedule_status" value="{{ selected_schedule_status }}">
+                  <input type="hidden" name="view" value="{{ selected_view }}">
+                  <input type="hidden" name="action" value="reopen">
+                  <input type="hidden" name="confirmation_password" value="">
+                  <button class="package-preparation-chip package-preparation-chip-reopen" type="submit">Reopen</button>
+                </form>
+              {% endif %}
+            </div>
+	          </div>
+		          <div class="package-preparation-guidance" id="package-label-printing-{{ session.id }}">
+	            <div>
+	              {% set label_printing_status = session.package_label_printing_status or "not_started" %}
+	              {% set label_printing_unlocked = label_verification_status == "completed" %}
+              <div class="package-preparation-guidance-title">
+                <strong>Candidate label printing and affixing</strong>
+                <span class="package-preparation-state package-preparation-state-{{ label_printing_status|replace('_', '-') }}">
+                  {% if label_printing_status == "in_progress" %}
+                    In progress
+                  {% elif label_printing_status == "completed" %}
+                    Completed
+                  {% elif label_printing_status == "incident" %}
+                    With incident
+                  {% else %}
+                    Not started yet
+                  {% endif %}
+                </span>
+              </div>
+              <ol>
+                <li>Prepare the exam papers required for each module and exam room, arranging them in the exact order shown on the approved schedule.</li>
+                <li>Check whether any listed candidates have EN and require adapted exam papers.</li>
+                <li>Affix each candidate label to the corresponding exam paper.</li>
+              </ol>
+            </div>
+            <div class="package-preparation-actions" aria-label="Candidate label printing actions">
+              <form method="post" action="{{ url_for('staff.update_package_label_printing', session_id=session.id) }}" data-disable-on-submit>
+                <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                <input type="hidden" name="schedule_status" value="{{ selected_schedule_status }}">
+                <input type="hidden" name="view" value="{{ selected_view }}">
+                <input type="hidden" name="action" value="mark_in_progress">
+	                <button class="package-preparation-chip package-preparation-chip-progress" type="submit" {% if not label_printing_unlocked or label_printing_status in ["in_progress", "completed"] %}disabled{% endif %}>Mark as in progress</button>
+              </form>
+              <form method="post" action="{{ url_for('staff.update_package_label_printing', session_id=session.id) }}" data-disable-on-submit>
+                <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                <input type="hidden" name="schedule_status" value="{{ selected_schedule_status }}">
+                <input type="hidden" name="view" value="{{ selected_view }}">
+                <input type="hidden" name="action" value="mark_complete">
+	                <button class="package-preparation-chip package-preparation-chip-complete" type="submit" {% if not label_printing_unlocked or label_printing_status == "completed" %}disabled{% endif %}>Mark as complete</button>
+              </form>
+              <form method="post" action="{{ url_for('staff.update_package_label_printing', session_id=session.id) }}" data-disable-on-submit>
+                <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                <input type="hidden" name="schedule_status" value="{{ selected_schedule_status }}">
+                <input type="hidden" name="view" value="{{ selected_view }}">
+                <input type="hidden" name="action" value="mark_incident">
+	                <button class="package-preparation-chip package-preparation-chip-incident" type="submit" {% if not label_printing_unlocked or label_printing_status in ["completed", "incident"] %}disabled{% endif %}>Mark incident</button>
+              </form>
+              {% if label_printing_status == "completed" %}
+                <form method="post" action="{{ url_for('staff.update_package_label_printing', session_id=session.id) }}" data-confirm-password-submit="Are you sure you want to reopen editing for Candidate label printing and affixing?
+This stage has already been marked as complete. Reopening it may affect package preparation records and any previously confirmed label checks. Please continue only if changes are required." data-confirm-password-value="EditOK" data-disable-on-submit>
+                  <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                  <input type="hidden" name="schedule_status" value="{{ selected_schedule_status }}">
+                  <input type="hidden" name="view" value="{{ selected_view }}">
+                  <input type="hidden" name="action" value="reopen">
+                  <input type="hidden" name="confirmation_password" value="">
+                  <button class="package-preparation-chip package-preparation-chip-reopen" type="submit">Reopen</button>
+                </form>
+              {% endif %}
+            </div>
+          </div>
+		          <div class="package-preparation-guidance" id="package-room-package-sealing-{{ session.id }}">
+	            <div>
+	              {% set room_package_sealing_status = session.room_package_sealing_status or "not_started" %}
+	              {% set room_package_sealing_unlocked = label_printing_status == "completed" %}
+              <div class="package-preparation-guidance-title">
+                <strong>Room package sealing</strong>
+                <span class="package-preparation-state package-preparation-state-{{ room_package_sealing_status|replace('_', '-') }}">
+                  {% if room_package_sealing_status == "in_progress" %}
+                    In progress
+                  {% elif room_package_sealing_status == "completed" %}
+                    Completed
+                  {% elif room_package_sealing_status == "incident" %}
+                    With incident
+                  {% else %}
+                    Not started yet
+                  {% endif %}
+                </span>
+              </div>
+              {% if view.packages.schedule_ready and not view.packages.staffing_ready %}
+                <p class="staffing-schedule-notice">Staffing must be ready before the exam room records can be printed and affixed to the packages.</p>
+              {% endif %}
+              <ol>
+                <li>Seal each exam room package with transparent plastic wrap.</li>
+                <li class="{% if not view.packages.staffing_ready %}package-preparation-blocked-step{% endif %}">
+                  <span>Print each exam room record on an A4 adhesive label.</span>
+                  {% if not view.packages.staffing_ready %}
+                    <span class="package-preparation-blocked-chip">Do not proceed with this stage. Staff members have not been confirmed yet</span>
+                  {% endif %}
+                </li>
+                <li class="{% if not view.packages.staffing_ready %}package-preparation-blocked-step{% endif %}">
+                  <span>Affix each label to the corresponding exam room package.</span>
+                  {% if not view.packages.staffing_ready %}
+                    <span class="package-preparation-blocked-chip">Do not proceed with this stage. Staff members have not been confirmed yet</span>
+                  {% endif %}
+                </li>
+                {% if session.pen_enabled %}
+                  <li>Add the EN identification label to any exam room package that includes candidates with EN.</li>
+                {% endif %}
+              </ol>
+            </div>
+            <div class="package-preparation-actions" aria-label="Room package sealing actions">
+              <form method="post" action="{{ url_for('staff.update_room_package_sealing', session_id=session.id) }}" data-disable-on-submit>
+                <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                <input type="hidden" name="schedule_status" value="{{ selected_schedule_status }}">
+                <input type="hidden" name="view" value="{{ selected_view }}">
+                <input type="hidden" name="action" value="mark_in_progress">
+	                <button class="package-preparation-chip package-preparation-chip-progress" type="submit" {% if not room_package_sealing_unlocked or room_package_sealing_status in ["in_progress", "completed"] %}disabled{% endif %}>Mark as in progress</button>
+              </form>
+              <form method="post" action="{{ url_for('staff.update_room_package_sealing', session_id=session.id) }}" data-disable-on-submit>
+                <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                <input type="hidden" name="schedule_status" value="{{ selected_schedule_status }}">
+                <input type="hidden" name="view" value="{{ selected_view }}">
+                <input type="hidden" name="action" value="mark_complete">
+	                <button class="package-preparation-chip package-preparation-chip-complete" type="submit" {% if not room_package_sealing_unlocked or room_package_sealing_status == "completed" or not view.packages.staffing_ready %}disabled{% endif %}>Mark as complete</button>
+              </form>
+              <form method="post" action="{{ url_for('staff.update_room_package_sealing', session_id=session.id) }}" data-disable-on-submit>
+                <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                <input type="hidden" name="schedule_status" value="{{ selected_schedule_status }}">
+                <input type="hidden" name="view" value="{{ selected_view }}">
+                <input type="hidden" name="action" value="mark_incident">
+	                <button class="package-preparation-chip package-preparation-chip-incident" type="submit" {% if not room_package_sealing_unlocked or room_package_sealing_status in ["completed", "incident"] %}disabled{% endif %}>Mark incident</button>
+              </form>
+              {% if room_package_sealing_status == "completed" %}
+                <form method="post" action="{{ url_for('staff.update_room_package_sealing', session_id=session.id) }}" data-confirm-password-submit="Are you sure you want to reopen editing for Room package sealing?
+This stage has already been marked as complete. Reopening it may affect package preparation records and any previously confirmed package sealing checks. Please continue only if changes are required." data-confirm-password-value="EditOK" data-disable-on-submit>
+                  <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                  <input type="hidden" name="schedule_status" value="{{ selected_schedule_status }}">
+                  <input type="hidden" name="view" value="{{ selected_view }}">
+                  <input type="hidden" name="action" value="reopen">
+                  <input type="hidden" name="confirmation_password" value="">
+                  <button class="package-preparation-chip package-preparation-chip-reopen" type="submit">Reopen</button>
+                </form>
+              {% endif %}
+            </div>
+          </div>
+	          <div class="package-preparation-guidance package-return-guidance" id="package-return-packages-{{ session.id }}">
+            <div>
+              {% set return_packages_status = session.return_packages_status or "not_started" %}
+              <div class="package-preparation-guidance-title">
+                <strong>Return packages</strong>
+                <span class="package-preparation-state package-preparation-state-{{ return_packages_status|replace('_', '-') }}">
+                  {% if return_packages_status == "in_progress" %}
+                    In progress
+                  {% elif return_packages_status == "completed" %}
+                    Completed
+                  {% elif return_packages_status == "incident" %}
+                    With incident
+                  {% else %}
+                    Not started yet
+                  {% endif %}
+                </span>
+              </div>
+              <p>Include the following return packages:</p>
+              {% if view.packages.return_package_requirements %}
+                <ul>
+                  {% for requirement in view.packages.return_package_requirements %}
+                    <li>{{ requirement }}</li>
+                  {% endfor %}
+                </ul>
+              {% endif %}
+            </div>
+            <div class="package-preparation-actions" aria-label="Return packages actions">
+              <form method="post" action="{{ url_for('staff.update_return_packages', session_id=session.id) }}" data-disable-on-submit>
+                <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                <input type="hidden" name="schedule_status" value="{{ selected_schedule_status }}">
+                <input type="hidden" name="view" value="{{ selected_view }}">
+                <input type="hidden" name="action" value="mark_in_progress">
+                <button class="package-preparation-chip package-preparation-chip-progress" type="submit" {% if return_packages_status in ["in_progress", "completed"] %}disabled{% endif %}>Mark as in progress</button>
+              </form>
+              <form method="post" action="{{ url_for('staff.update_return_packages', session_id=session.id) }}" data-disable-on-submit>
+                <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                <input type="hidden" name="schedule_status" value="{{ selected_schedule_status }}">
+                <input type="hidden" name="view" value="{{ selected_view }}">
+                <input type="hidden" name="action" value="mark_complete">
+                <button class="package-preparation-chip package-preparation-chip-complete" type="submit" {% if return_packages_status == "completed" %}disabled{% endif %}>Mark as complete</button>
+              </form>
+              <form method="post" action="{{ url_for('staff.update_return_packages', session_id=session.id) }}" data-disable-on-submit>
+                <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                <input type="hidden" name="schedule_status" value="{{ selected_schedule_status }}">
+                <input type="hidden" name="view" value="{{ selected_view }}">
+                <input type="hidden" name="action" value="mark_incident">
+                <button class="package-preparation-chip package-preparation-chip-incident" type="submit" {% if return_packages_status in ["completed", "incident"] %}disabled{% endif %}>Mark incident</button>
+              </form>
+              {% if return_packages_status == "completed" %}
+                <form method="post" action="{{ url_for('staff.update_return_packages', session_id=session.id) }}" data-confirm-password-submit="Are you sure you want to reopen editing for Return packages?
+This stage has already been marked as complete. Reopening it may affect package preparation records and any previously confirmed return package checks. Please continue only if changes are required." data-confirm-password-value="EditOK" data-disable-on-submit>
+                  <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                  <input type="hidden" name="schedule_status" value="{{ selected_schedule_status }}">
+                  <input type="hidden" name="view" value="{{ selected_view }}">
+                  <input type="hidden" name="action" value="reopen">
+                  <input type="hidden" name="confirmation_password" value="">
+                  <button class="package-preparation-chip package-preparation-chip-reopen" type="submit">Reopen</button>
+                </form>
+              {% endif %}
+            </div>
+          </div>
+          {% if view.packages.staff_member_id_requirements %}
+	            <div class="package-preparation-guidance package-return-guidance" id="package-staff-member-ids-{{ session.id }}">
+              <div>
+                {% set staff_member_ids_status = session.staff_member_ids_status or "not_started" %}
+                <div class="package-preparation-guidance-title">
+                  <strong>Staff member IDs</strong>
+                  <span class="package-preparation-state package-preparation-state-{{ staff_member_ids_status|replace('_', '-') }}">
+                    {% if staff_member_ids_status == "in_progress" %}
+                      In progress
+                    {% elif staff_member_ids_status == "completed" %}
+                      Completed
+                    {% elif staff_member_ids_status == "incident" %}
+                      With incident
+                    {% else %}
+                      Not started yet
+                    {% endif %}
+                  </span>
+                </div>
+                {% if not view.packages.staffing_ready %}
+                  <p class="staffing-schedule-notice">Staffing must be ready before staff member IDs can be issued.</p>
+                {% endif %}
+                <p>Include a lanyard, rigid ID card, and card holder for each of the following staff members:</p>
+                <ul class="package-staff-id-list">
+                  {% for staff_member in view.packages.staff_member_id_requirements %}
+                    <li>
+                      <span class="package-staff-id-name">
+                        <span>{{ (staff_member.title ~ ' ' if staff_member.title else '') ~ staff_member.name }}</span>
+                        {% if staff_member.roles %}
+                          <span class="role-badges package-staff-id-roles">
+                            {% for role in staff_member.roles %}
+                              {{ role_badge(role) }}
+                            {% endfor %}
+                          </span>
+                        {% endif %}
+                        {% if not staff_member.is_confirmed %}
+                          <span class="package-preparation-blocked-chip">Do not proceed with printing this ID. The staff member has not been confirmed yet</span>
+                        {% endif %}
+                      </span>
+                    </li>
+                  {% endfor %}
+                </ul>
+              </div>
+              <div class="package-preparation-actions" aria-label="Staff member IDs actions">
+                <form method="post" action="{{ url_for('staff.update_staff_member_ids', session_id=session.id) }}" data-disable-on-submit>
+                  <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                  <input type="hidden" name="schedule_status" value="{{ selected_schedule_status }}">
+                  <input type="hidden" name="view" value="{{ selected_view }}">
+                  <input type="hidden" name="action" value="mark_in_progress">
+                  <button class="package-preparation-chip package-preparation-chip-progress" type="submit" {% if staff_member_ids_status in ["in_progress", "completed"] %}disabled{% endif %}>Mark as in progress</button>
+                </form>
+                <form method="post" action="{{ url_for('staff.update_staff_member_ids', session_id=session.id) }}" data-disable-on-submit>
+                  <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                  <input type="hidden" name="schedule_status" value="{{ selected_schedule_status }}">
+                  <input type="hidden" name="view" value="{{ selected_view }}">
+                  <input type="hidden" name="action" value="mark_complete">
+                  <button class="package-preparation-chip package-preparation-chip-complete" type="submit" {% if staff_member_ids_status == "completed" or not view.packages.staffing_ready %}disabled{% endif %}>Mark as complete</button>
+                </form>
+                <form method="post" action="{{ url_for('staff.update_staff_member_ids', session_id=session.id) }}" data-disable-on-submit>
+                  <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                  <input type="hidden" name="schedule_status" value="{{ selected_schedule_status }}">
+                  <input type="hidden" name="view" value="{{ selected_view }}">
+                  <input type="hidden" name="action" value="mark_incident">
+                  <button class="package-preparation-chip package-preparation-chip-incident" type="submit" {% if staff_member_ids_status in ["completed", "incident"] %}disabled{% endif %}>Mark incident</button>
+                </form>
+                {% if staff_member_ids_status == "completed" %}
+                  <form method="post" action="{{ url_for('staff.update_staff_member_ids', session_id=session.id) }}" data-confirm-password-submit="Are you sure you want to reopen editing for Staff member IDs?
+This stage has already been marked as complete. Reopening it may affect package preparation records and any previously confirmed staff ID checks. Please continue only if changes are required." data-confirm-password-value="EditOK" data-disable-on-submit>
+                    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                    <input type="hidden" name="schedule_status" value="{{ selected_schedule_status }}">
+                    <input type="hidden" name="view" value="{{ selected_view }}">
+                    <input type="hidden" name="action" value="reopen">
+                    <input type="hidden" name="confirmation_password" value="">
+                    <button class="package-preparation-chip package-preparation-chip-reopen" type="submit">Reopen</button>
+                  </form>
+                {% endif %}
+              </div>
+            </div>
+          {% endif %}
+	          <div class="package-preparation-guidance package-return-guidance" id="package-inclusion-final-items-{{ session.id }}">
+            <div>
+              {% set inclusion_final_items_status = session.inclusion_final_items_status or "not_started" %}
+              <div class="package-preparation-guidance-title">
+                <strong>Inclusion of final items</strong>
+                <span class="package-preparation-state package-preparation-state-{{ inclusion_final_items_status|replace('_', '-') }}">
+                  {% if inclusion_final_items_status == "in_progress" %}
+                    In progress
+                  {% elif inclusion_final_items_status == "completed" %}
+                    Completed
+                  {% elif inclusion_final_items_status == "incident" %}
+                    With incident
+                  {% else %}
+                    Not started yet
+                  {% endif %}
+	                </span>
+	              </div>
+	              {% if not view.packages.staffing_ready %}
+	                <p class="staffing-schedule-notice">Staffing must be ready before adding full schedule for each room for the Supervisor.</p>
+	              {% endif %}
+	              <ol>
+	                <li>Add {{ view.packages.inclusion_final_items.total_candidates }} Path Examinations wristbands. Do not include any extras.</li>
+	                <li>
+	                  <span>Add {{ view.packages.inclusion_final_items.supervisor_count }} stapled {{ view.packages.inclusion_final_items.schedule_copy_label }} of the full session schedule for each room for the Supervisor.</span>
+	                  {% if not view.packages.staffing_ready %}
+	                    <span class="package-preparation-blocked-chip">Do not proceed with printing full schedule. Staff members have not been confirmed yet</span>
+	                  {% endif %}
+	                </li>
+	                <li>Add a Path Examinations bag with the gift inside.</li>
+	              </ol>
+            </div>
+            <div class="package-preparation-actions" aria-label="Inclusion of final items actions">
+              <form method="post" action="{{ url_for('staff.update_inclusion_final_items', session_id=session.id) }}" data-disable-on-submit>
+                <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                <input type="hidden" name="schedule_status" value="{{ selected_schedule_status }}">
+                <input type="hidden" name="view" value="{{ selected_view }}">
+                <input type="hidden" name="action" value="mark_in_progress">
+                <button class="package-preparation-chip package-preparation-chip-progress" type="submit" {% if inclusion_final_items_status in ["in_progress", "completed"] %}disabled{% endif %}>Mark as in progress</button>
+              </form>
+              <form method="post" action="{{ url_for('staff.update_inclusion_final_items', session_id=session.id) }}" data-disable-on-submit>
+                <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                <input type="hidden" name="schedule_status" value="{{ selected_schedule_status }}">
+                <input type="hidden" name="view" value="{{ selected_view }}">
+                <input type="hidden" name="action" value="mark_complete">
+                <button class="package-preparation-chip package-preparation-chip-complete" type="submit" {% if inclusion_final_items_status == "completed" %}disabled{% endif %}>Mark as complete</button>
+              </form>
+              <form method="post" action="{{ url_for('staff.update_inclusion_final_items', session_id=session.id) }}" data-disable-on-submit>
+                <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                <input type="hidden" name="schedule_status" value="{{ selected_schedule_status }}">
+                <input type="hidden" name="view" value="{{ selected_view }}">
+                <input type="hidden" name="action" value="mark_incident">
+                <button class="package-preparation-chip package-preparation-chip-incident" type="submit" {% if inclusion_final_items_status in ["completed", "incident"] %}disabled{% endif %}>Mark incident</button>
+              </form>
+              {% if inclusion_final_items_status == "completed" %}
+                <form method="post" action="{{ url_for('staff.update_inclusion_final_items', session_id=session.id) }}" data-confirm-password-submit="Are you sure you want to reopen editing for Inclusion of final items?
+This stage has already been marked as complete. Reopening it may affect package preparation records and any previously confirmed final item checks. Please continue only if changes are required." data-confirm-password-value="EditOK" data-disable-on-submit>
+                  <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                  <input type="hidden" name="schedule_status" value="{{ selected_schedule_status }}">
+                  <input type="hidden" name="view" value="{{ selected_view }}">
+                  <input type="hidden" name="action" value="reopen">
+                  <input type="hidden" name="confirmation_password" value="">
+                  <button class="package-preparation-chip package-preparation-chip-reopen" type="submit">Reopen</button>
+                </form>
+              {% endif %}
+            </div>
+          </div>
+	          <div class="package-preparation-guidance package-return-guidance" id="package-session-box-sealing-{{ session.id }}">
+            <div>
+              {% set session_box_sealing_status = session.session_box_sealing_status or "not_started" %}
+              {% set session_box_sealing_prerequisites_complete = label_verification_status == "completed" and label_printing_status == "completed" and room_package_sealing_status == "completed" and return_packages_status == "completed" and inclusion_final_items_status == "completed" and (not view.packages.staff_member_id_requirements or staff_member_ids_status == "completed") %}
+              <div class="package-preparation-guidance-title">
+                <strong>Session box sealing</strong>
+                <span class="package-preparation-state package-preparation-state-{{ session_box_sealing_status|replace('_', '-') }}">
+                  {% if session_box_sealing_status == "in_progress" %}
+                    In progress
+                  {% elif session_box_sealing_status == "completed" %}
+                    Completed
+                  {% elif session_box_sealing_status == "incident" %}
+                    With incident
+                  {% else %}
+                    Not started yet
+                  {% endif %}
+                </span>
+              </div>
+              <ol>
+                <li>Ensure all previous items are included in the session box.</li>
+                <li>Close the box, wrap it securely with black plastic wrap, and heat-seal it.</li>
+                <li>Print the <a href="{{ url_for('staff.session_identification_label_pdf', session_id=session.id) }}" target="_blank" rel="noopener noreferrer" aria-label="Open session identification label PDF">session identification label</a> and affix it to the top of the sealed box.</li>
+              </ol>
+            </div>
+            <div class="package-preparation-actions" aria-label="Session box sealing actions">
+              <form method="post" action="{{ url_for('staff.update_session_box_sealing', session_id=session.id) }}" data-disable-on-submit>
+                <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                <input type="hidden" name="schedule_status" value="{{ selected_schedule_status }}">
+                <input type="hidden" name="view" value="{{ selected_view }}">
+                <input type="hidden" name="action" value="mark_in_progress">
+                <button class="package-preparation-chip package-preparation-chip-progress" type="submit" {% if not session_box_sealing_prerequisites_complete or session_box_sealing_status in ["in_progress", "completed"] %}disabled{% endif %}>Mark as in progress</button>
+              </form>
+              <form method="post" action="{{ url_for('staff.update_session_box_sealing', session_id=session.id) }}" data-disable-on-submit>
+                <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                <input type="hidden" name="schedule_status" value="{{ selected_schedule_status }}">
+                <input type="hidden" name="view" value="{{ selected_view }}">
+                <input type="hidden" name="action" value="mark_complete">
+                <button class="package-preparation-chip package-preparation-chip-complete" type="submit" {% if not session_box_sealing_prerequisites_complete or session_box_sealing_status == "completed" %}disabled{% endif %}>Mark as complete</button>
+              </form>
+              <form method="post" action="{{ url_for('staff.update_session_box_sealing', session_id=session.id) }}" data-disable-on-submit>
+                <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                <input type="hidden" name="schedule_status" value="{{ selected_schedule_status }}">
+                <input type="hidden" name="view" value="{{ selected_view }}">
+                <input type="hidden" name="action" value="mark_incident">
+                <button class="package-preparation-chip package-preparation-chip-incident" type="submit" {% if not session_box_sealing_prerequisites_complete or session_box_sealing_status in ["completed", "incident"] %}disabled{% endif %}>Mark incident</button>
+              </form>
+              {% if session_box_sealing_status == "completed" %}
+                <form method="post" action="{{ url_for('staff.update_session_box_sealing', session_id=session.id) }}" data-confirm-password-submit="Are you sure you want to reopen editing for Session box sealing?
+This stage has already been marked as complete. Reopening it may affect package preparation records and any previously confirmed session box sealing checks. Please continue only if changes are required." data-confirm-password-value="EditOK" data-disable-on-submit>
+                  <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                  <input type="hidden" name="schedule_status" value="{{ selected_schedule_status }}">
+                  <input type="hidden" name="view" value="{{ selected_view }}">
+                  <input type="hidden" name="action" value="reopen">
+                  <input type="hidden" name="confirmation_password" value="">
+                  <button class="package-preparation-chip package-preparation-chip-reopen" type="submit">Reopen</button>
+                </form>
+              {% endif %}
+            </div>
+          </div>
+        </div>
+
       </section>
 
       <section class="staffing-control-section shipments-control-section" id="shipments-{{ session.id }}" data-control-section data-default-collapsed="true" aria-labelledby="shipments-title-{{ session.id }}">
         <div class="staffing-control-header">
           <div>
-            <h3 id="shipments-title-{{ session.id }}" tabindex="-1">Shipments</h3>
-            {{ shipment_status_badge(view.shipments.contract) }}
+            <h3 id="shipments-title-{{ session.id }}" tabindex="-1">Shipment actions</h3>
+            {{ shipment_status_badge(view.shipments.operational_status) }}
             <p>{{ view.shipments.contract.summary }}</p>
           </div>
-          <strong class="core-readiness-count">LOGISTICS</strong>
+          <strong class="responsible-chip">LOGISTICS</strong>
         </div>
+        <section class="staffing-control-metadata" aria-label="Shipment ownership and deadline">
+          {% set shipment_next = namespace(label='Review shipment data') %}
+          {% if view.shipments.action %}
+            {% set shipment_next.label = view.shipments.action.label %}
+          {% elif view.shipments.contract.status == 'not_bundled' %}
+            {% set shipment_next.label = 'Create shipment bundle' %}
+          {% elif view.shipments.contract.completed %}
+            {% set shipment_next.label = 'Shipment completed' %}
+          {% elif view.shipments.contract.status == 'Preparing bundle' %}
+            {% set shipment_next.label = 'Complete shipment bundle preparation' %}
+          {% elif view.shipments.contract.status == 'Ready to dispatch' %}
+            {% set shipment_next.label = 'Dispatch shipment bundle' %}
+          {% elif view.shipments.contract.status == 'Dispatched' %}
+            {% set shipment_next.label = 'Notify recipient' %}
+          {% elif view.shipments.contract.status == 'Recipient notified' %}
+            {% set shipment_next.label = 'Confirm delivery' %}
+          {% endif %}
+          <div>
+            <span>Current status</span>
+            <strong>{{ shipment_status_badge(view.shipments.operational_status) }}</strong>
+          </div>
+          <div>
+            <span>Recommended next action</span>
+            <strong>{{ shipment_next.label }}</strong>
+          </div>
+          <div>
+            <span>Responsible</span>
+            <strong>LOGISTICS</strong>
+          </div>
+          <div>
+            <span>Current deadline</span>
+            <strong>{{ view.shipments.bundle_view.dispatch_due_at|session_date if view.shipments.bundle_view and view.shipments.bundle_view.dispatch_due_at else '-' }}</strong>
+          </div>
+        </section>
+        {{ shipment_status_track_panel(session, view.shipments.status_events or []) }}
+        {% if view.shipments.bundle_view and view.shipments.bundle_view.readiness.blockers %}
+          <div class="staffing-blockers">
+            <h4>Blockers</h4>
+            <ul>
+              {% for blocker in view.shipments.bundle_view.readiness.blockers %}
+                <li>{{ blocker.message }}</li>
+              {% endfor %}
+            </ul>
+          </div>
+        {% endif %}
         {{ review_flags_block(view.review_flags.by_area.get('shipments', []), session, selected_schedule_status, selected_view, csrf_token) }}
 
         {% if view.shipments.planning %}
@@ -1958,40 +2652,232 @@
             <div class="shipment-planning-header">
               <div>
                 <h4>Shipment planning</h4>
-                {{ shipment_planning_badge(planning) }}
               </div>
-              <p>{{ planning.reason }}</p>
             </div>
-            <div class="shipment-detail-grid">
-              <article><span>Supervisor</span><strong>{{ planning.supervisor.name or 'Not set' }}</strong></article>
-              <article><span>Delivery address</span><strong>{{ planning.delivery_address or 'Not set' }}</strong></article>
-              <article><span>Earliest session</span><strong>{{ planning.earliest_session_date|session_date if planning.earliest_session_date else 'Not set' }}</strong></article>
-              <article><span>Dispatch deadline</span><strong>{{ planning.dispatch_deadline|session_date if planning.dispatch_deadline else 'Not set' }}</strong></article>
-            </div>
+            {% if view.shipments.bundle_view %}
+              {% set planning_shipment = view.shipments.bundle_view %}
+              <form method="post" action="{{ url_for('staff.update_shipment_bundle', bundle_id=planning_shipment.id) }}" class="staffing-control-form shipment-bundle-form shipment-delivery-option-form"{% if planning_shipment.final_checklist_completed %} data-confirm-password-submit="Changing the delivery option at this stage may affect the entire process. Management password authorisation is required to continue." data-confirm-password-value="EditOK"{% endif %} data-disable-on-submit>
+                <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                <input type="hidden" name="schedule_status" value="{{ selected_schedule_status }}">
+                <input type="hidden" name="view" value="{{ selected_view }}">
+                <input type="hidden" name="current_session_id" value="{{ session.id }}">
+                {% if planning_shipment.final_checklist_completed %}
+                  <input type="hidden" name="confirmation_password" value="">
+                {% endif %}
+                <input type="hidden" name="supervisor_staff_id" value="{{ planning_shipment.record.supervisor_staff_id }}">
+                <input type="hidden" name="delivery_address" value="{{ planning_shipment.delivery_address }}">
+                <input type="hidden" name="delivery_city" value="{{ planning_shipment.delivery_city }}">
+                <input type="hidden" name="delivery_province" value="{{ planning_shipment.delivery_province }}">
+                <input type="hidden" name="courier" value="{{ planning_shipment.courier }}">
+                <input type="hidden" name="tracking_number" value="{{ planning_shipment.tracking_number }}">
+                <input type="hidden" name="shipping_label_url" value="{{ planning_shipment.shipping_label_url }}">
+                <input type="hidden" name="dispatch_due_at" value="{{ planning_shipment.dispatch_due_at.isoformat() if planning_shipment.dispatch_due_at else '' }}">
+                <input type="hidden" name="note" value="{{ planning_shipment.note }}">
+                {% for included_session in planning_shipment.included_sessions %}
+                  <input type="hidden" name="included_session_ids" value="{{ included_session.id }}">
+                {% endfor %}
+                {{ shipment_delivery_options_field(planning_shipment.delivery_options, planning_shipment.delivery_option, true, planning_shipment.blocked) }}
+              </form>
+            {% endif %}
+          </section>
+          <div class="shipment-planning-details">
+            {% if planning.reason %}
+              <p class="shipment-planning-note">{{ planning.reason }}</p>
+            {% endif %}
+            {% set shipment_process_delivery_option = view.shipments.bundle_view.delivery_option if view.shipments.bundle_view else view.shipments.default_delivery_option %}
+            {% set shipment_process_bundle = view.shipments.bundle_view %}
+            <section class="shipment-process-section" aria-label="Shipment process">
+              <div class="shipment-detail-grid">
+                <article><span>Supervisor</span><strong>{{ planning.supervisor.name or 'Not set' }}</strong></article>
+                {% if shipment_process_delivery_option %}
+                  <article>
+                    <span class="shipment-process-card-title">
+                      Delivery address
+                      {% if shipment_process_delivery_option == 'store_pickup' %}
+                        <span class="shipment-process-warning-chip">Ship to nearby store</span>
+                      {% endif %}
+                    </span>
+                    {% if shipment_process_delivery_option in ['different_address', 'meeting_point'] and shipment_process_bundle and not shipment_process_bundle.has_alternate_delivery_address %}
+                      <details class="shipment-address-entry">
+                        <summary class="secondary-button compact-action">Enter new delivery address</summary>
+                        <form method="post" action="{{ url_for('staff.update_shipment_bundle', bundle_id=shipment_process_bundle.id) }}" class="staffing-control-form shipment-address-entry-form"{% if shipment_process_bundle.shipping_label_url %} data-confirm-password-submit="Adding a new shipping label will replace the previously uploaded file. Management password authorisation is required to continue." data-confirm-password-value="EditOK"{% endif %} data-disable-on-submit>
+                          <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                          <input type="hidden" name="schedule_status" value="{{ selected_schedule_status }}">
+                          <input type="hidden" name="view" value="{{ selected_view }}">
+                          <input type="hidden" name="current_session_id" value="{{ session.id }}">
+                          <input type="hidden" name="supervisor_staff_id" value="{{ shipment_process_bundle.record.supervisor_staff_id }}">
+                          <input type="hidden" name="delivery_option" value="{{ shipment_process_delivery_option }}">
+                          <input type="hidden" name="delivery_address_update" value="1">
+                          <input type="hidden" name="courier" value="{{ shipment_process_bundle.courier }}">
+                          <input type="hidden" name="tracking_number" value="{{ shipment_process_bundle.tracking_number or '' }}">
+                          <input type="hidden" name="shipping_label_url" value="{{ shipment_process_bundle.shipping_label_url or '' }}">
+                          <input type="hidden" name="dispatch_due_at" value="{{ shipment_process_bundle.dispatch_due_at.isoformat() if shipment_process_bundle.dispatch_due_at else '' }}">
+                          <input type="hidden" name="note" value="{{ shipment_process_bundle.note or '' }}">
+                          {% for included_session in shipment_process_bundle.included_sessions %}
+                            <input type="hidden" name="included_session_ids" value="{{ included_session.id }}">
+                          {% endfor %}
+                          <label>
+                            Full address
+                            <input name="delivery_address" maxlength="500" required>
+                          </label>
+                          <label>
+                            City
+                            <input name="delivery_city" maxlength="120">
+                          </label>
+                          <label>
+                            Province
+                            <input name="delivery_province" maxlength="120">
+                          </label>
+                          <div class="form-actions">
+                            <button class="primary-button compact-action" type="submit">Save delivery address</button>
+                          </div>
+                        </form>
+                      </details>
+                    {% else %}
+                      <span class="shipment-delivery-address-row">
+                        <strong>{{ shipment_process_bundle.delivery_address if shipment_process_bundle else (planning.delivery_address or 'Not set') }}</strong>
+                        {% if shipment_process_delivery_option in ['different_address', 'meeting_point'] and shipment_process_bundle and shipment_process_bundle.has_alternate_delivery_address %}
+                          <details class="shipment-address-entry shipment-reset-address-entry">
+                            <summary class="secondary-button compact-action shipment-reset-address-button">Reset</summary>
+                            <form method="post" action="{{ url_for('staff.update_shipment_bundle', bundle_id=shipment_process_bundle.id) }}" class="staffing-control-form shipment-address-entry-form" data-confirm-password-submit="Management password authorisation is required to reset the delivery address." data-confirm-password-value="EditOK" data-disable-on-submit>
+                              <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                              <input type="hidden" name="schedule_status" value="{{ selected_schedule_status }}">
+                              <input type="hidden" name="view" value="{{ selected_view }}">
+                              <input type="hidden" name="current_session_id" value="{{ session.id }}">
+                              <input type="hidden" name="supervisor_staff_id" value="{{ shipment_process_bundle.record.supervisor_staff_id }}">
+                              <input type="hidden" name="delivery_option" value="{{ shipment_process_delivery_option }}">
+                              <input type="hidden" name="delivery_address_update" value="1">
+                              <input type="hidden" name="courier" value="{{ shipment_process_bundle.courier }}">
+                              <input type="hidden" name="tracking_number" value="{{ shipment_process_bundle.tracking_number or '' }}">
+                              <input type="hidden" name="shipping_label_url" value="{{ shipment_process_bundle.shipping_label_url or '' }}">
+                              <input type="hidden" name="dispatch_due_at" value="{{ shipment_process_bundle.dispatch_due_at.isoformat() if shipment_process_bundle.dispatch_due_at else '' }}">
+                              <input type="hidden" name="note" value="{{ shipment_process_bundle.note or '' }}">
+                              <input type="hidden" name="confirmation_password" value="">
+                              {% for included_session in shipment_process_bundle.included_sessions %}
+                                <input type="hidden" name="included_session_ids" value="{{ included_session.id }}">
+                              {% endfor %}
+                              <label>
+                                Full address
+                                <input name="delivery_address" maxlength="500" value="{{ shipment_process_bundle.delivery_address }}" required>
+                              </label>
+                              <label>
+                                City
+                                <input name="delivery_city" maxlength="120" value="{{ shipment_process_bundle.delivery_city }}">
+                              </label>
+                              <label>
+                                Province
+                                <input name="delivery_province" maxlength="120" value="{{ shipment_process_bundle.delivery_province }}">
+                              </label>
+                              <div class="form-actions">
+                                <button class="primary-button compact-action" type="submit">Save delivery address</button>
+                              </div>
+                            </form>
+                          </details>
+                        {% endif %}
+                      </span>
+                    {% endif %}
+                  </article>
+                {% endif %}
+                <article><span>Dispatch deadline</span><strong>{{ planning.dispatch_deadline|session_date if planning.dispatch_deadline else 'Not set' }}</strong></article>
+                {% if shipment_process_delivery_option in ['store_pickup', 'listed_address', 'different_address'] %}
+                  {% set shipping_session_count = (shipment_process_bundle.included_sessions|length) if shipment_process_bundle else (planning.candidate_sessions|length) %}
+                  {% set shipping_height = shipping_session_count * 10 %}
+                  {% if shipping_session_count <= 3 %}
+                    {% set shipping_weight = 1 %}
+                  {% elif shipping_session_count <= 6 %}
+                    {% set shipping_weight = 2 %}
+                  {% elif shipping_session_count <= 10 %}
+                    {% set shipping_weight = 3 %}
+                  {% else %}
+                    {% set shipping_weight = 4 %}
+                  {% endif %}
+                  <article>
+                    <span>Shipping label information</span>
+                    <strong>Length: 26cm</strong>
+                    <strong>Width: 30cm</strong>
+                    <strong>Height: {{ shipping_height }}cm</strong>
+                    <strong>Weight: {{ shipping_weight }}kg</strong>
+                  </article>
+                  {% if shipment_process_bundle %}
+                    <article class="shipment-label-card">
+                      <span>Shipping label</span>
+                      {% if shipment_process_bundle.shipping_label_url %}
+                        <div class="shipment-label-actions">
+                          <a class="shipment-label-link" href="{{ shipment_process_bundle.shipping_label_url }}" target="_blank" rel="noopener noreferrer">Open shipping label</a>
+                          {% if shipment_process_bundle.tracking_number %}
+                            <span class="shipment-tracking-chip">{{ shipment_process_bundle.tracking_number }}</span>
+                            <button class="copy-icon-button shipment-tracking-copy-button" type="button" data-copy-text="{{ shipment_process_bundle.tracking_number }}" aria-label="Copy tracking number" title="Copy tracking number">
+                              <svg viewBox="0 0 24 24" aria-hidden="true">
+                                <rect x="9" y="9" width="10" height="10" rx="2"></rect>
+                                <path d="M5 15V7a2 2 0 0 1 2-2h8"></path>
+                              </svg>
+                              <span class="copy-button-feedback">Copied</span>
+                            </button>
+                          {% endif %}
+                        </div>
+                      {% endif %}
+                      <details class="shipment-address-entry">
+                        <summary class="secondary-button compact-action">Insert link to shipping label and tracking number</summary>
+                        <form method="post" action="{{ url_for('staff.update_shipment_bundle', bundle_id=shipment_process_bundle.id) }}" class="staffing-control-form shipment-address-entry-form"{% if shipment_process_bundle.shipping_label_url %} data-confirm-password-submit="Adding a new shipping label will replace the previously uploaded file. Management password authorisation is required to continue." data-confirm-password-value="EditOK"{% endif %} data-disable-on-submit>
+                          <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                          <input type="hidden" name="schedule_status" value="{{ selected_schedule_status }}">
+                          <input type="hidden" name="view" value="{{ selected_view }}">
+                          <input type="hidden" name="current_session_id" value="{{ session.id }}">
+                          <input type="hidden" name="supervisor_staff_id" value="{{ shipment_process_bundle.record.supervisor_staff_id }}">
+                          <input type="hidden" name="delivery_address" value="{{ shipment_process_bundle.delivery_address }}">
+                          <input type="hidden" name="delivery_city" value="{{ shipment_process_bundle.delivery_city }}">
+                          <input type="hidden" name="delivery_province" value="{{ shipment_process_bundle.delivery_province }}">
+                          <input type="hidden" name="delivery_option" value="{{ shipment_process_delivery_option }}">
+                          <input type="hidden" name="courier" value="{{ shipment_process_bundle.courier }}">
+                          <input type="hidden" name="shipping_label_update" value="1">
+                          {% if shipment_process_bundle.shipping_label_url %}
+                            <input type="hidden" name="confirmation_password" value="">
+                          {% endif %}
+                          <input type="hidden" name="dispatch_due_at" value="{{ shipment_process_bundle.dispatch_due_at.isoformat() if shipment_process_bundle.dispatch_due_at else '' }}">
+                          <input type="hidden" name="note" value="{{ shipment_process_bundle.note }}">
+                          {% for included_session in shipment_process_bundle.included_sessions %}
+                            <input type="hidden" name="included_session_ids" value="{{ included_session.id }}">
+                          {% endfor %}
+                          <label>
+                            Shipping label link
+                            <input type="url" name="shipping_label_url" maxlength="500" value="{{ shipment_process_bundle.shipping_label_url }}" required>
+                          </label>
+                          <label>
+                            Tracking number
+                            <input name="tracking_number" maxlength="160" value="{{ shipment_process_bundle.tracking_number }}" required>
+                          </label>
+                          <div class="form-actions">
+                            <button class="primary-button compact-action" type="submit">Save shipping label and tracking number</button>
+                          </div>
+                        </form>
+                      </details>
+                    </article>
+                  {% endif %}
+                {% endif %}
+              </div>
+            </section>
             {% if planning.candidate_sessions %}
               <div class="shipment-planning-sessions">
-                <h5>Related sessions</h5>
+                <h5>Sessions included in this bundle</h5>
                 <ul>
                   {% for candidate in planning.candidate_sessions %}
                     <li>
-                      <strong>{{ candidate.name }}</strong>
-                      <span>{{ candidate.date|session_date }} · {% if candidate.packages_ready %}Packages ready{% else %}Waiting for packages{% endif %}</span>
+                      <div>
+                        <strong>{{ candidate.name }}</strong>
+                        <span>{{ candidate.date|session_date }}</span>
+                      </div>
                     </li>
                   {% endfor %}
                 </ul>
               </div>
             {% endif %}
-            {% if planning.current_bundle %}
-              <p class="shipment-planning-note">Current bundle: #{{ planning.current_bundle.id }} · {{ planning.current_bundle.status }}</p>
-            {% endif %}
-            {% if planning.suggested_action %}
-              <p class="shipment-planning-note"><strong>Suggested action</strong>: {{ planning.suggested_action }}</p>
-            {% endif %}
             {% if view.shipments.assisted_action %}
               {% set assisted = view.shipments.assisted_action %}
               {% if assisted.action_key == 'assisted_waiting_for_packages' %}
-                <p class="shipment-assisted-info">{{ assisted.blocker or assisted.description }}</p>
-              {% else %}
+                {% if assisted.blocker or assisted.description %}
+                  <p class="shipment-assisted-info">{{ assisted.blocker or assisted.description }}</p>
+                {% endif %}
+              {% elif not assisted.focus_bundle %}
                 <section class="shipment-assisted-action" aria-label="Shipment planning assisted action">
                   <div class="shipment-assisted-action-header">
                     <span>Suggested assisted action</span>
@@ -2031,6 +2917,7 @@
                             {% endif %}
                           </select>
                         </label>
+                        {{ shipment_delivery_options_field(assisted.delivery_options, assisted.delivery_option) }}
                         <label>
                           Delivery address
                           <input name="delivery_address" maxlength="500" required value="{{ assisted.delivery_address }}">
@@ -2088,20 +2975,11 @@
                         </div>
                       </form>
                     </details>
-                  {% elif assisted.focus_bundle and view.shipments.bundle_view %}
-                    {% set followup = view.shipments.bundle_view %}
-                    <div class="shipment-assisted-followup">
-                      <article><span>Bundle</span><strong>#{{ followup.id }} · {{ followup.status }}</strong></article>
-                      <article><span>Courier</span><strong>{{ followup.courier }}</strong></article>
-                      <article><span>Tracking</span><strong>{{ followup.tracking_number or 'Not set' }}</strong></article>
-                      <article><span>Earliest session</span><strong>{{ planning.earliest_session_date|session_date if planning.earliest_session_date else 'Not set' }}</strong></article>
-                    </div>
-                    <p class="shipment-planning-note">Use the shipment actions below to continue without changing status automatically.</p>
                   {% endif %}
                 </section>
               {% endif %}
             {% endif %}
-          </section>
+          </div>
         {% endif %}
 
         {% if not view.shipments.bundle_view %}
@@ -2121,6 +2999,7 @@
                     {% endfor %}
                   </select>
                 </label>
+                {{ shipment_delivery_options_field(view.shipments.delivery_options, view.shipments.default_delivery_option) }}
                 <label>
                   Delivery address
                   <input name="delivery_address" maxlength="500" required value="{{ view.shipments.available_supervisors[0].address }}">
@@ -2164,180 +3043,118 @@
           </details>
         {% else %}
           {% set shipment = view.shipments.bundle_view %}
-          <div class="shipment-detail-grid">
-            <article><span>Bundle</span><strong>#{{ shipment.id }}</strong></article>
-            <article><span>Supervisor recipient</span><strong>{{ shipment.supervisor_name }}</strong></article>
-            <article><span>Address</span><strong>{{ shipment.delivery_address }}</strong><small>{{ shipment.delivery_city }}{% if shipment.delivery_city and shipment.delivery_province %}, {% endif %}{{ shipment.delivery_province }}</small></article>
-            <article><span>Courier</span><strong>{{ shipment.courier }}</strong></article>
-            <article><span>Tracking</span><strong>{{ shipment.tracking_number or 'Not set' }}</strong></article>
-            <article><span>Dispatch due date</span><strong>{{ shipment.dispatch_due_at|session_date if shipment.dispatch_due_at else 'Not set' }}</strong></article>
-          </div>
-
-          {% if shipment.readiness.blockers %}
-            <div class="staffing-blockers">
-              <h4>Blockers</h4>
-              <ul>
-                {% for blocker in shipment.readiness.blockers %}
-                  <li>{{ blocker.message }}</li>
-                {% endfor %}
-              </ul>
-            </div>
-          {% endif %}
-
-          <details class="packages-add-panel">
-            <summary class="secondary-button compact-action">Edit shipment bundle</summary>
-            <form method="post" action="{{ url_for('staff.update_shipment_bundle', bundle_id=shipment.id) }}" class="staffing-control-form shipment-bundle-form" data-disable-on-submit>
-              <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-              <input type="hidden" name="schedule_status" value="{{ selected_schedule_status }}">
-              <input type="hidden" name="view" value="{{ selected_view }}">
-              <input type="hidden" name="current_session_id" value="{{ session.id }}">
-              <label>
-                Supervisor
-                <select name="supervisor_staff_id" required>
-                  {% for supervisor in view.shipments.available_supervisors %}
-                    <option value="{{ supervisor.id }}" {% if shipment.record.supervisor_staff_id == supervisor.id %}selected{% endif %}>{{ supervisor.name }}</option>
-                  {% endfor %}
-                  {% if shipment.record.supervisor_staff_id not in view.shipments.available_supervisors|map(attribute='id')|list %}
-                    <option value="{{ shipment.record.supervisor_staff_id }}" selected>{{ shipment.supervisor_name }}</option>
-                  {% endif %}
-                </select>
-              </label>
-              <label>
-                Delivery address
-                <input name="delivery_address" maxlength="500" required value="{{ shipment.delivery_address }}">
-              </label>
-              <label>
-                Delivery city
-                <input name="delivery_city" maxlength="120" value="{{ shipment.delivery_city }}">
-              </label>
-              <label>
-                Delivery province
-                <input name="delivery_province" maxlength="120" value="{{ shipment.delivery_province }}">
-              </label>
-              <label>
-                Courier
-                <input name="courier" maxlength="120" value="{{ shipment.courier }}">
-              </label>
-              <label>
-                Tracking number
-                <input name="tracking_number" maxlength="160" value="{{ shipment.tracking_number }}">
-              </label>
-              <label>
-                Dispatch due date
-                <input type="date" name="dispatch_due_at" value="{{ shipment.dispatch_due_at.isoformat() if shipment.dispatch_due_at else '' }}">
-              </label>
-              <label class="package-note-field">
-                Note
-                <textarea name="note" rows="2" maxlength="2000">{{ shipment.note }}</textarea>
-              </label>
-              <fieldset class="shipment-session-picker">
-                <legend>Included sessions</legend>
-                {% for option_session in view.shipments.available_sessions %}
-                  <label>
-                    <input type="checkbox" name="included_session_ids" value="{{ option_session.id }}" {% if option_session.id in shipment.included_session_ids %}checked{% endif %}>
-                    <span>{{ option_session.date|session_date }} · {{ option_session.name }}</span>
-                  </label>
-                {% endfor %}
-              </fieldset>
-              <div class="form-actions">
-                <button class="secondary-button compact-action" type="submit">Save shipment bundle</button>
-              </div>
-            </form>
-          </details>
-
-          <section class="shipment-included-sessions" aria-label="Shipment included sessions">
-            <h4>Included sessions</h4>
-            {% for included_session in shipment.included_sessions %}
-              <article>
-                <strong>{{ included_session.exam_session_name }}</strong>
-                <span>{{ included_session.session_date|session_date }}</span>
-              </article>
-            {% endfor %}
-          </section>
-
           <section class="shipment-checklist" aria-label="Shipment pre-dispatch checklist">
-            <h4>Pre-dispatch checklist</h4>
-            {% for item in shipment.checklist_items %}
-              <form method="post" action="{{ url_for('staff.update_shipment_checklist_item', item_id=item.id) }}" class="package-checklist-row" data-disable-on-submit>
+            <h4>Shipment pre-dispatch</h4>
+            {% for card in shipment.pre_dispatch_cards %}
+            <div class="package-preparation-guidance shipment-pre-dispatch-guidance has-action">
+              <div>
+                <div class="package-preparation-guidance-title">
+                  <strong>{{ card.title }}</strong>
+                  <span class="package-preparation-state package-preparation-state-{{ card.status|replace('_', '-') }}">{{ card.status_label }}</span>
+                </div>
+                {% if card.steps %}
+                  <ol>
+                    {% if card.item_key == 'correo_label' %}
+                      <li>{{ card.steps[0] }}</li>
+                      {% if card.delivery_option == 'meeting_point' %}
+                      <li>Print the <a href="{{ card.bundle_label_url }}" target="_blank" rel="noopener noreferrer" aria-label="Open bundle label PDF">bundle label</a> and affix it to the top of the bundle.</li>
+                      {% else %}
+                      <li>Print the {% if card.shipping_label_url %}<a href="{{ card.shipping_label_url }}" target="_blank" rel="noopener noreferrer" aria-label="Open shipping label">shipping label</a>{% else %}shipping label{% endif %} and affix it to the top of the bundle.</li>
+                      {% endif %}
+                    {% else %}
+                      {% for step in card.steps %}
+                        <li>{{ step }}</li>
+                      {% endfor %}
+                    {% endif %}
+                  </ol>
+                {% elif card.count is defined %}
+                  <p>{{ card.description }} <span class="shipment-pack-count-chip">{{ card.count }}</span> {{ card.suffix }}</p>
+                {% else %}
+                  <p>{{ card.description }}</p>
+                {% endif %}
+              </div>
+              <form method="post" action="{{ url_for('staff.update_shipment_checklist_item', item_id=card.item.id) }}"{% if card.status == "completed" %} data-confirm-password-submit="Management password authorisation is required to reopen this stage:" data-confirm-password-value="EditOK"{% endif %} data-disable-on-submit>
                 <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
                 <input type="hidden" name="schedule_status" value="{{ selected_schedule_status }}">
                 <input type="hidden" name="view" value="{{ selected_view }}">
                 <input type="hidden" name="current_session_id" value="{{ session.id }}">
-                <label>
-                  <input type="checkbox" name="is_checked" value="1" {% if item.is_checked %}checked{% endif %} onchange="this.form.requestSubmit()">
-                  <span>{{ item.label }}</span>
-                </label>
-                {% if item.description %}<small>{{ item.description }}</small>{% endif %}
+                <input type="hidden" name="is_checked" value="{% if card.status == "completed" %}0{% else %}1{% endif %}">
+                {% if card.status == "completed" %}
+                  <input type="hidden" name="confirmation_password" value="">
+                {% endif %}
+                <button type="submit" class="shipment-pre-dispatch-complete-chip{% if card.status == "completed" %} shipment-pre-dispatch-reopen-chip{% endif %}" {% if not card.can_complete %}disabled{% endif %}>{% if card.status == "completed" %}Reopen{% else %}Mark as complete{% endif %}</button>
               </form>
+            </div>
             {% endfor %}
           </section>
 
           <section class="shipment-actions" aria-label="Shipment actions">
-            <h4>Shipment actions</h4>
-            {% for action in shipment.transition_options.primary %}
-              <details class="shipment-action-panel">
-                <summary class="primary-button compact-action">{{ action.label }}</summary>
-                <form method="post" action="{{ url_for('staff.update_shipment_bundle_status', bundle_id=shipment.id) }}" class="staffing-control-form" data-disable-on-submit>
-                  <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-                  <input type="hidden" name="schedule_status" value="{{ selected_schedule_status }}">
-                  <input type="hidden" name="view" value="{{ selected_view }}">
-                  <input type="hidden" name="current_session_id" value="{{ session.id }}">
-                  <input type="hidden" name="new_status" value="{{ action.status }}">
-                  {% if action.status == 'Dispatched' %}
-                    <label>
-                      Tracking number <span class="required-marker">*</span>
-                      <input name="tracking_number" maxlength="160" required value="{{ shipment.tracking_number }}">
-                    </label>
+            <h4>Shipment dispatch</h4>
+            {% set primary_statuses = shipment.transition_options.primary|map(attribute='status')|list %}
+            {% set ready_to_dispatch_disabled = 'Ready to dispatch' in primary_statuses and shipment.readiness.checklist_checked < shipment.readiness.checklist_total %}
+            {% set shipment_step_index = {
+              'Preparing bundle': -1,
+              'Ready to dispatch': 0,
+              'In transit to post office': 1,
+              'Dispatched': 2,
+              'Recipient notified': 3,
+              'Delivered successfully': 4
+            } %}
+            {% set current_shipment_step = shipment_step_index.get(shipment.status, -1) %}
+            <div class="shipment-dispatch-status-panel">
+              <strong>Mark shipment as:</strong>
+              <div class="shipment-dispatch-checkboxes">
+                {% set dispatch_options = [
+                  {'status': 'Ready to dispatch', 'label': 'ready to dispatch', 'step': 0, 'unchecked_status': 'Preparing bundle'},
+                  {'status': 'In transit to post office', 'label': 'in transit to meeting point' if shipment.delivery_option == 'meeting_point' else 'in transit to post office', 'step': 1, 'unchecked_status': 'Ready to dispatch'},
+                  {'status': 'Dispatched', 'label': 'dispatched', 'step': 2, 'unchecked_status': 'In transit to post office'},
+                  {'status': 'Recipient notified', 'label': 'dispatched and recipient notified', 'step': 3, 'unchecked_status': 'Dispatched'},
+                  {'status': 'Delivered successfully', 'label': 'delivered successfully', 'step': 4, 'unchecked_status': 'Recipient notified'}
+                ] %}
+                {% for option in dispatch_options %}
+                  {% set is_meeting_transit = option.status == 'In transit to post office' and shipment.delivery_option == 'meeting_point' %}
+                  {% set is_courier_transit = option.status == 'In transit to post office' and shipment.delivery_option in ['store_pickup', 'listed_address', 'different_address'] %}
+                  {% set show_option = option.status != 'In transit to post office' or is_meeting_transit or is_courier_transit %}
+                  {% set is_checked = option.step <= current_shipment_step %}
+                  {% set is_enabled = option.status in primary_statuses and not (option.status == 'Ready to dispatch' and ready_to_dispatch_disabled) %}
+                  {% if show_option %}
+                    <div class="shipment-dispatch-checkbox-row{% if not is_enabled and not is_checked %} is-disabled{% endif %}">
+                      <form method="post" action="{{ url_for('staff.update_shipment_bundle_status', bundle_id=shipment.id) }}" class="shipment-dispatch-checkbox-form" data-disable-on-submit>
+                        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                        <input type="hidden" name="schedule_status" value="{{ selected_schedule_status }}">
+                        <input type="hidden" name="view" value="{{ selected_view }}">
+                        <input type="hidden" name="current_session_id" value="{{ session.id }}">
+                        <input type="hidden" name="new_status" value="{{ option.status }}">
+                        <input type="hidden" name="confirmation_password" value="">
+                        <input type="hidden" name="dispatch_reopen_authorized" value="">
+                        <label>
+                          <input type="checkbox" data-shipment-dispatch-checkbox data-checked-status="{{ option.status }}" data-unchecked-status="{{ option.unchecked_status }}" {% if is_checked %}checked{% endif %} {% if not is_enabled %}disabled{% endif %}>
+                          <span>{{ option.label }}</span>
+                        </label>
+                      </form>
+                      {% if option.status == 'Recipient notified' %}
+                        <div class="shipment-dispatch-notify-tools">
+                          {% if is_enabled and shipment.supervisor_whatsapp_phone %}
+                            <a class="shipment-notify-recipient-link" href="https://wa.me/{{ shipment.supervisor_whatsapp_phone }}" target="_blank" rel="noopener noreferrer" aria-label="Notify shipment recipient on WhatsApp">Notify recipient</a>
+                          {% else %}
+                            <span class="shipment-notify-recipient-link is-disabled" aria-disabled="true" title="No phone number available">Notify recipient</span>
+                          {% endif %}
+                          <button class="copy-icon-button shipment-action-copy-button" type="button" data-copy-text="{{ shipment.delivery_address }}" aria-label="Copy delivery address" title="Copy delivery address" {% if not is_enabled or not shipment.delivery_address %}disabled{% endif %}>
+                            <svg viewBox="0 0 24 24" aria-hidden="true">
+                              <rect x="9" y="9" width="10" height="10" rx="2"></rect>
+                              <path d="M5 15V7a2 2 0 0 1 2-2h8"></path>
+                            </svg>
+                            <span class="copy-button-feedback">Copied</span>
+                          </button>
+                        </div>
+                      {% endif %}
+                    </div>
                   {% endif %}
-                  <label>
-                    Note{% if action.status == 'Recipient review with discrepancy' %} <span class="required-marker">*</span>{% endif %}
-                    <textarea name="note" rows="2" maxlength="2000" {% if action.status == 'Recipient review with discrepancy' %}required{% endif %}></textarea>
-                  </label>
-                  <div class="form-actions">
-                    <button class="primary-button compact-action" type="submit">Confirm</button>
-                  </div>
-                </form>
-              </details>
-            {% else %}
-              <p class="empty-history">No primary shipment action available.</p>
-            {% endfor %}
-
-            {% if shipment.transition_options.other %}
-              <details class="package-history-panel">
-                <summary class="secondary-button compact-action">Other actions</summary>
-                {% for action in shipment.transition_options.other %}
-                  <form method="post" action="{{ url_for('staff.update_shipment_bundle_status', bundle_id=shipment.id) }}" class="staffing-control-form" data-disable-on-submit>
-                    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-                    <input type="hidden" name="schedule_status" value="{{ selected_schedule_status }}">
-                    <input type="hidden" name="view" value="{{ selected_view }}">
-                    <input type="hidden" name="current_session_id" value="{{ session.id }}">
-                    <input type="hidden" name="new_status" value="{{ action.status }}">
-                    <label>
-                      {{ action.label }} note <span class="required-marker">*</span>
-                      <textarea name="note" rows="2" maxlength="2000" required></textarea>
-                    </label>
-                    <button class="secondary-button compact-action" type="submit">{{ action.label }}</button>
-                  </form>
-                {% endfor %}
-              </details>
-            {% endif %}
-          </section>
-
-          <details class="package-history-panel">
-            <summary class="secondary-button compact-action">Shipment history</summary>
-            {% if shipment.events %}
-              <div class="history-list">
-                {% for event in shipment.events %}
-                  <article class="history-entry">
-                    <time>{{ event.created_at|localdt }}{% if event.created_by %} | {{ event.created_by }}{% endif %}</time>
-                    <p>{{ event.event_type|replace('_', ' ') }}{% if event.previous_status or event.new_status %}: {{ event.previous_status or '-' }} → {{ event.new_status or '-' }}{% endif %}{% if event.tracking_number %} · Tracking: {{ event.tracking_number }}{% endif %}{% if event.note %} · {{ event.note }}{% endif %}</p>
-                  </article>
                 {% endfor %}
               </div>
-            {% else %}
-              <p class="empty-history">No shipment history recorded.</p>
-            {% endif %}
-          </details>
+              <button class="secondary-button compact-action shipment-reopen-dispatch-button" type="button" data-reopen-dispatch-stage data-confirm-message="Management password authorisation is required to reopen dispatch stages." data-confirm-password-value="EditOK">Reopen dispatch stage</button>
+            </div>
+          </section>
         {% endif %}
       </section>
 
