@@ -10,6 +10,8 @@ from werkzeug.security import check_password_hash, generate_password_hash
 
 db = SQLAlchemy()
 DEPLOY_SUPERADMIN_EMAIL = "pablo.demarchi@pathexaminations.com"
+REMEMBER_LOGIN_COOKIE = "path_remember_login_email"
+REMEMBER_LOGIN_MAX_AGE = 60 * 60 * 24 * 365
 
 
 def create_app():
@@ -131,22 +133,36 @@ def create_app():
             return redirect(url_for("staff.dashboard"))
 
         error = None
+        remembered_email = request.cookies.get(REMEMBER_LOGIN_COOKIE, "")
         if request.method == "POST":
             email_or_username = request.form.get("email", request.form.get("username", "")).strip()
             password = request.form.get("password", "")
+            remember_login = request.form.get("remember") == "1"
             normalized_email = email_or_username.lower()
 
             if User.query.count():
                 user = User.query.filter_by(email=normalized_email).first()
                 if user and user.is_active and check_password_hash(user.password_hash, password):
                     session.clear()
+                    session.permanent = remember_login
                     session["user"] = user.full_name
                     session["user_id"] = user.id
                     session["user_full_name"] = user.full_name
                     session["user_email"] = user.email
                     session["user_department"] = user.department
                     session["csrf_token"] = secrets.token_urlsafe(32)
-                    return redirect(url_for("staff.dashboard"))
+                    response = redirect(url_for("staff.dashboard"))
+                    if remember_login:
+                        response.set_cookie(
+                            REMEMBER_LOGIN_COOKIE,
+                            user.email,
+                            max_age=REMEMBER_LOGIN_MAX_AGE,
+                            httponly=True,
+                            samesite="Lax",
+                        )
+                    else:
+                        response.delete_cookie(REMEMBER_LOGIN_COOKIE, samesite="Lax")
+                    return response
                 error = "Invalid email or password."
             else:
                 expected_username = os.getenv("ADMIN_USERNAME", "admin")
@@ -157,16 +173,29 @@ def create_app():
 
                 if email_or_username == expected_username and check_password_hash(password_hash, password):
                     session.clear()
+                    session.permanent = remember_login
                     session["user"] = expected_username
                     session["user_full_name"] = expected_username
                     session["user_email"] = ""
                     session["user_department"] = "Admin"
                     session["csrf_token"] = secrets.token_urlsafe(32)
-                    return redirect(url_for("staff.dashboard"))
+                    response = redirect(url_for("staff.dashboard"))
+                    if remember_login:
+                        response.set_cookie(
+                            REMEMBER_LOGIN_COOKIE,
+                            expected_username,
+                            max_age=REMEMBER_LOGIN_MAX_AGE,
+                            httponly=True,
+                            samesite="Lax",
+                        )
+                    else:
+                        response.delete_cookie(REMEMBER_LOGIN_COOKIE, samesite="Lax")
+                    return response
 
                 error = "Invalid email or password."
+            remembered_email = email_or_username if remember_login else remembered_email
 
-        return render_template("login.html", error=error)
+        return render_template("login.html", error=error, remembered_email=remembered_email)
 
     @app.route("/logout", methods=["POST"])
     def logout():

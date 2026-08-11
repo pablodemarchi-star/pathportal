@@ -1092,13 +1092,13 @@
   </section>
 {%- endmacro %}
 
-{% block title %}Pre-session Control Tower | Path Examinations{% endblock %}
+{% block title %}Pre onsite session control tower | Path Examinations{% endblock %}
 
 {% block content %}
 <header class="page-header">
   <div>
-    <p class="eyebrow">Pre-session Control Tower</p>
-    <h1>Pre-session Control Tower</h1>
+    <p class="eyebrow">Pre onsite session control tower</p>
+    <h1>Pre onsite session control tower</h1>
     <p>Control schedule preparation, review and approval for each exam session.</p>
   </div>
 </header>
@@ -1109,7 +1109,7 @@
     <p class="archived-year-copy">Use the active year selector to manage schedule workflows by year.</p>
   </div>
   {% if archived_session_years %}
-    <section class="archived-year-panel" aria-label="Archived Pre-session Control Tower years">
+    <section class="archived-year-panel" aria-label="Archived Pre onsite session control tower years">
       <div>
         <p class="archived-year-title">Archived years</p>
         <p class="archived-year-copy">Archived years are hidden from the active selector, but their records are preserved.</p>
@@ -1136,7 +1136,7 @@
 </section>
 
 {% if session_years %}
-<section class="year-toolbar" aria-label="Pre-session Control Tower years">
+<section class="year-toolbar" aria-label="Pre onsite session control tower years">
   <div class="year-tabs">
     {% for year_item in session_years %}
       <a class="year-tab {% if year_item.year == selected_session_year %}active{% endif %}" href="{{ url_for('staff.pre_session_control_tower', session_year=year_item.year, view=selected_view, schedule_status=selected_schedule_status, action_source=selected_my_action_source, action_responsible=selected_my_action_responsible, action_status=selected_my_action_status) }}">{{ year_item.year }}</a>
@@ -1150,7 +1150,7 @@
 </section>
 {% endif %}
 
-<nav class="control-tower-view-tabs" aria-label="Pre-session Control Tower views">
+<nav class="control-tower-view-tabs" aria-label="Pre onsite session control tower views">
   <a class="control-tower-view-tab {% if selected_view == 'bundles' %}active{% endif %}" href="{{ url_for('staff.pre_session_control_tower', session_year=selected_session_year, view='bundles') }}">Bundles</a>
   <a class="control-tower-view-tab {% if selected_view == 'sessions' %}active{% endif %}" href="{{ url_for('staff.pre_session_control_tower', session_year=selected_session_year, view='sessions', schedule_status=selected_schedule_status) }}">Sessions</a>
 </nav>
@@ -1172,8 +1172,8 @@
       {% if pending_shipment_bundle %}
         <tr>
           <td><strong>Pending bundles</strong></td>
-          <td><span class="bundle-action-stack"><span class="bundle-action-department-slot"><span class="responsible-chip users-department-chip">LOGISTICS</span></span></span></td>
-          <td><span class="potential-action-text">Configure shipment bundle</span></td>
+          <td><span class="bundle-action-stack"><span class="bundle-action-department-slot"><span class="responsible-chip users-department-chip">MANAGEMENT</span></span></span></td>
+          <td><span class="potential-action-text">Assign recipient to these exam sessions</span></td>
           <td>
             <span class="shipment-summary-cell">
               <span class="badge shipment-status-not-bundled">Not configured</span>
@@ -4248,7 +4248,7 @@ This stage has already been marked as complete. Reopening it may affect package 
         <div class="staffing-control-header">
           <div>
             <h3 id="activity-title-{{ session.id }}" tabindex="-1">Session activity timeline</h3>
-            <p>Operational changes recorded across Pre-session Control Tower lanes.</p>
+            <p>Operational changes recorded across Pre onsite session control tower lanes.</p>
           </div>
           <strong class="responsible-chip">{{ view.activity_timeline.total_events }} events</strong>
         </div>
@@ -4304,7 +4304,7 @@ This stage has already been marked as complete. Reopening it may affect package 
           {% endif %}
         {% else %}
           <p class="empty-history"><strong>No activity recorded for this session yet.</strong></p>
-          <p class="empty-history">Activity will appear here as changes are recorded in Pre-session Control Tower.</p>
+          <p class="empty-history">Activity will appear here as changes are recorded in Pre onsite session control tower.</p>
         {% endif %}
       </section>
     </div>

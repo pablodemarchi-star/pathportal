@@ -5,7 +5,7 @@ os.environ["DATABASE_URL"] = "sqlite:///:memory:"
 
 from sqlalchemy.exc import IntegrityError
 
-from app import create_app, db
+from app import REMEMBER_LOGIN_COOKIE, create_app, db
 from app.models import MENU_PERMISSIONS, User, UserMenuPermission, USER_DEPARTMENTS, VALID_MENU_PERMISSION_KEYS
 
 
@@ -241,6 +241,36 @@ class UsersTest(unittest.TestCase):
             self.assertEqual(user_session["user_full_name"], "Person Example")
             self.assertEqual(user_session["user_department"], "Logistics")
 
+    def test_remember_me_makes_login_session_permanent(self):
+        self.create_user_record(email="remember@example.com", password="secret123")
+        response = self.client.post(
+            "/login",
+            data={"email": "remember@example.com", "password": "secret123", "remember": "1"},
+            follow_redirects=False,
+        )
+
+        self.assertEqual(response.status_code, 302)
+        with self.client.session_transaction() as user_session:
+            self.assertTrue(user_session.permanent)
+
+    def test_remember_me_prefills_login_email(self):
+        self.create_user_record(email="saved@example.com", password="secret123")
+        response = self.client.post(
+            "/login",
+            data={"email": "saved@example.com", "password": "secret123", "remember": "1"},
+            follow_redirects=False,
+        )
+        set_cookie_header = response.headers.get("Set-Cookie", "")
+
+        self.assertIn(f"{REMEMBER_LOGIN_COOKIE}=saved@example.com", set_cookie_header)
+
+        self.client.post("/logout")
+        response = self.client.get("/login")
+        body = response.get_data(as_text=True)
+
+        self.assertIn('value="saved@example.com"', body)
+        self.assertIn('name="remember" value="1" checked', body)
+
     def test_login_page_has_password_visibility_toggle_and_no_greeting(self):
         response = self.client.get("/login")
         body = response.get_data(as_text=True)
@@ -250,6 +280,9 @@ class UsersTest(unittest.TestCase):
         self.assertIn('data-password-toggle', body)
         self.assertIn('data-password-input="login-password"', body)
         self.assertIn('aria-label="Show password"', body)
+        self.assertIn('<input type="checkbox" name="remember" value="1">', body)
+        self.assertIn("<span>Remember me</span>", body)
+        self.assertNotIn('name="remember" disabled', body)
         self.assertNotIn("Hello,", body)
 
     def test_logged_in_layout_hides_full_name_greeting(self):
@@ -663,7 +696,7 @@ class UsersTest(unittest.TestCase):
         self.assertIn("Permission management scope", body)
         self.assertIn("You can only manage permissions for the menus assigned to your permission management scope.", body)
         self.assertIn("Exam session planner", body)
-        self.assertIn("Pre-session Control Tower", body)
+        self.assertIn("Pre onsite session control tower", body)
         self.assertNotIn("Staff members", body)
         self.assertNotIn("Fees", body)
         self.assertNotIn("Providers", body)
@@ -947,7 +980,7 @@ class UsersTest(unittest.TestCase):
         self.assertIn("Staff members", body)
         self.assertIn("Fees", body)
         self.assertNotIn("Exam session planner", body)
-        self.assertNotIn("Pre-session Control Tower", body)
+        self.assertNotIn("Pre onsite session control tower", body)
         self.assertNotIn(">Users<", body)
 
     def test_view_only_banner_repeats_on_key_menus_and_not_for_edit(self):

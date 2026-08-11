@@ -11821,17 +11821,21 @@ span.session-marker-chip {
   gap: 14px;
 }
 
-.remember-option {
+.login-form .remember-option {
   display: inline-flex;
   align-items: center;
+  flex-direction: row;
   gap: 9px;
   color: var(--color-primary-dark);
   font-weight: 700;
+  width: auto;
+  white-space: nowrap;
 }
 
-.remember-option input {
+.login-form .remember-option input {
   width: 18px;
   height: 18px;
+  flex: 0 0 auto;
 }
 
 .login-submit {

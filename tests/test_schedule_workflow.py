@@ -8488,6 +8488,10 @@ class ScheduleWorkflowTest(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertIn("Pending bundles", html)
         self.assertIn("Shipment not configured", html)
+        pending_row_index = html.index("Pending bundles")
+        pending_row = html[html.rfind("<tr", 0, pending_row_index):html.index("</tr>", pending_row_index)]
+        self.assertIn('<span class="responsible-chip users-department-chip">MANAGEMENT</span>', pending_row)
+        self.assertIn("Assign recipient to these exam sessions", pending_row)
         self.assertIn("Shipment recipient missing", html)
         self.assertNotIn("No pending shipment bundles.", html)
 
@@ -12850,7 +12854,7 @@ class ScheduleWorkflowTest(unittest.TestCase):
         table_start = html.index('aria-label="My actions"')
         table_end = html.index('<div class="modal"', table_start)
         actions_table = html[table_start:table_end]
-        tabs_start = html.index('aria-label="Pre-session Control Tower views"')
+        tabs_start = html.index('aria-label="Pre onsite session control tower views"')
         tabs_end = html.index("</nav>", tabs_start)
         view_tabs = html[tabs_start:tabs_end]
 
