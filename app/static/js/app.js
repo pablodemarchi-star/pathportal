@@ -1099,14 +1099,16 @@ const highlightModalTarget = (target) => {
   });
 };
 
-const focusModalTarget = (targetId) => {
+const focusModalTarget = (targetId, { scroll = true } = {}) => {
   const target = resolveModalTarget(targetId);
   if (!target) return false;
   const section = target.closest("[data-control-section]");
   expandControlSection(section);
   const targetKey = modalTargetKey(targetId);
-  const scrollBehavior = targetKey.startsWith("package-") ? "auto" : "smooth";
-  target.scrollIntoView({ block: "start", behavior: scrollBehavior });
+  if (scroll) {
+    const scrollBehavior = targetKey.startsWith("package-") ? "auto" : "smooth";
+    target.scrollIntoView({ block: "start", behavior: scrollBehavior });
+  }
   target.setAttribute("tabindex", "-1");
   target.focus({ preventScroll: true });
   highlightModalTarget(target);
@@ -1262,7 +1264,7 @@ const openRequestedScheduleModal = () => {
         modal.classList.toggle("is-packages-only", packagesOnly);
         modal.classList.toggle("is-shipments-only", shipmentsOnly);
       }
-      if (!focusModalTarget(targetId)) {
+      if (!focusModalTarget(targetId, { scroll: !modalTarget.startsWith("package-") })) {
         focusModalHeading(modal);
       }
     });

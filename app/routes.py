@@ -5590,6 +5590,79 @@ def schedule_workflow_current_deadline(workflow):
     return workflow.next_action_due_at if workflow else None
 
 
+def local_date(value):
+    if not value:
+        return None
+    if isinstance(value, datetime):
+        if value.tzinfo is None:
+            value = value.replace(tzinfo=timezone.utc)
+        return value.astimezone(LOCAL_TZ).date()
+    return value
+
+
+def schedule_workflow_latest_recorded_deadline(workflow):
+    if not workflow:
+        return None
+    if workflow.next_action_due_at:
+        return workflow.next_action_due_at
+    events = sorted(
+        (event for event in workflow.events if event.due_at),
+        key=lambda event: (event.created_at or datetime.min.replace(tzinfo=timezone.utc), event.id or 0),
+        reverse=True,
+    )
+    return events[0].due_at if events else None
+
+
+def schedule_workflow_completed_date(workflow):
+    if not workflow:
+        return None
+    if workflow.approved_at:
+        return local_date(workflow.approved_at)
+    approved_events = sorted(
+        (event for event in workflow.events if event.new_status == "Approved"),
+        key=lambda event: (event.created_at or datetime.min.replace(tzinfo=timezone.utc), event.id or 0),
+        reverse=True,
+    )
+    if approved_events:
+        return local_date(approved_events[0].created_at)
+    return local_date(workflow.updated_at)
+
+
+def deadline_badge_contract(deadline, completed=False, completed_date=None, today=None):
+    today = today or datetime.now(LOCAL_TZ).date()
+    if not deadline:
+        return None
+    if completed:
+        met_deadline = bool(completed_date and completed_date <= deadline)
+        completed_label = completed_date.strftime("%d/%m/%Y") if completed_date else ""
+        label = "Deadline met" if met_deadline else "Deadline not met"
+        if completed_label:
+            label = f"{label} on {completed_label}"
+        return {
+            "date": deadline,
+            "status": "met" if met_deadline else "missed",
+            "completed_date": completed_date,
+            "label": label,
+        }
+    overdue = deadline < today
+    return {
+        "date": deadline,
+        "status": "overdue" if overdue else "on-track",
+        "label": "Deadline overdue" if overdue else "Deadline on track",
+    }
+
+
+def schedule_deadline_badge_contract(workflow, status=None, today=None):
+    status = status or schedule_workflow_status(workflow)
+    deadline = schedule_workflow_latest_recorded_deadline(workflow) if status == "Approved" else schedule_workflow_current_deadline(workflow)
+    return deadline_badge_contract(
+        deadline,
+        completed=status == "Approved",
+        completed_date=schedule_workflow_completed_date(workflow) if status == "Approved" else None,
+        today=today,
+    )
+
+
 def schedule_workflow_health(status, deadline, today=None):
     if status == "Approved":
         return "Completed"
@@ -5934,9 +6007,46 @@ def sync_staffing_assignment_deadlines_for_session(session_record, workflow=None
                     assignment.updated_on or today,
                     stage="Official confirmation sent",
                 ) or changed
+        elif status == "Confirmed":
+            continue
         else:
             if status not in {"Pending", "Official confirmation sent"}:
                 changed = clear_staffing_assignment_deadline(assignment) or changed
+    emergency_status = staffing_participation_status_label(getattr(session_record, "emergency_contact_participation_status", "Pending"))
+    if not schedule_unlocked or not getattr(session_record, "emergency_contact_member_id", None):
+        if getattr(session_record, "emergency_contact_status_due_at", None):
+            clear_emergency_contact_deadline(session_record)
+            changed = True
+    elif emergency_status == "Pending":
+        if (
+            getattr(session_record, "emergency_contact_status_due_stage", None) != "Pending"
+            or not getattr(session_record, "emergency_contact_status_due_at", None)
+        ):
+            set_emergency_contact_deadline(
+                session_record,
+                2,
+                workflow.approved_at or today,
+                stage="Pending",
+            )
+            changed = True
+    elif emergency_status == "Official confirmation sent":
+        if (
+            getattr(session_record, "emergency_contact_status_due_stage", None) != "Official confirmation sent"
+            or not getattr(session_record, "emergency_contact_status_due_at", None)
+        ):
+            set_emergency_contact_deadline(
+                session_record,
+                3,
+                getattr(session_record, "emergency_contact_status_due_started_at", None) or today,
+                stage="Official confirmation sent",
+            )
+            changed = True
+    elif emergency_status == "Confirmed":
+        pass
+    else:
+        if getattr(session_record, "emergency_contact_status_due_at", None):
+            clear_emergency_contact_deadline(session_record)
+            changed = True
     return changed
 
 
@@ -6053,6 +6163,94 @@ def staffing_control_contract(staffing_control=None, staffing_contract=None, tod
         "updated_by": staffing_control.updated_by if staffing_control else "",
         "is_overdue": is_overdue,
     }
+
+
+def staffing_deadline_badge_contract(staffing_control=None, staffing_contract=None, assignments=None, staffing_events=None, session_record=None, today=None):
+    deadline = staffing_control.staffing_due_at if staffing_control else None
+    completed = bool((staffing_contract or {}).get("ready"))
+    if not deadline:
+        assignment_deadlines = []
+        for assignment in assignments or []:
+            due_at = getattr(assignment, "staffing_status_due_at", None)
+            if not due_at:
+                continue
+            if completed or staffing_assignment_deadline_status(
+                due_at,
+                getattr(assignment, "participation_status", "Pending"),
+                today=today,
+            ) not in {"completed", "not-set"}:
+                assignment_deadlines.append(due_at)
+        if session_record and getattr(session_record, "emergency_contact_status_due_at", None):
+            emergency_due_at = session_record.emergency_contact_status_due_at
+            if completed or staffing_assignment_deadline_status(
+                emergency_due_at,
+                getattr(session_record, "emergency_contact_participation_status", "Pending"),
+                today=today,
+            ) not in {"completed", "not-set"}:
+                assignment_deadlines.append(emergency_due_at)
+        if completed and not assignment_deadlines:
+            assignment_deadlines.extend(staffing_inferred_deadlines_from_events(
+                staffing_events,
+                assignments=assignments,
+                session_record=session_record,
+            ))
+        deadline = min(assignment_deadlines) if assignment_deadlines else None
+    completed_dates = []
+    for event in staffing_events or []:
+        if staffing_participation_status_label(event.new_status) == "Confirmed":
+            event_date = local_date(event.created_at)
+            if event_date:
+                completed_dates.append(event_date)
+    for assignment in assignments or []:
+        if staffing_participation_status_label(getattr(assignment, "participation_status", "")) == "Confirmed":
+            assignment_date = local_date(getattr(assignment, "updated_on", None) or getattr(assignment, "created_on", None))
+            if assignment_date:
+                completed_dates.append(assignment_date)
+    if session_record and staffing_participation_status_label(getattr(session_record, "emergency_contact_participation_status", "")) == "Confirmed":
+        emergency_date = local_date(getattr(session_record, "updated_on", None) or getattr(session_record, "created_on", None))
+        if emergency_date:
+            completed_dates.append(emergency_date)
+    return deadline_badge_contract(
+        deadline,
+        completed=completed,
+        completed_date=max(completed_dates) if completed_dates else None,
+        today=today,
+    )
+
+
+def staffing_inferred_deadlines_from_events(staffing_events=None, assignments=None, session_record=None):
+    confirmed_refs = {
+        (assignment_type, assignment.id)
+        for assignment_type, assignment_list in (
+            ("supervisor", [assignment for assignment in assignments or [] if isinstance(assignment, ExamSessionSupervisorAssignment)]),
+            ("examiner", [assignment for assignment in assignments or [] if isinstance(assignment, ExamSessionExaminerAssignment)]),
+            ("intern", [assignment for assignment in assignments or [] if isinstance(assignment, ExamSessionInternAssignment)]),
+        )
+        for assignment in assignment_list
+        if staffing_participation_status_label(getattr(assignment, "participation_status", "")) == "Confirmed"
+    }
+    if (
+        session_record
+        and staffing_participation_status_label(getattr(session_record, "emergency_contact_participation_status", "")) == "Confirmed"
+    ):
+        confirmed_refs.add(("emergency_contact", session_record.id))
+    deadlines = []
+    for event in sorted(staffing_events or [], key=lambda item: (item.created_at or datetime.min.replace(tzinfo=timezone.utc), item.id or 0), reverse=True):
+        ref = (event.assignment_type, event.assignment_id)
+        if ref not in confirmed_refs:
+            continue
+        if staffing_participation_status_label(event.new_status) != "Confirmed":
+            continue
+        previous_status = staffing_participation_status_label(event.previous_status)
+        if previous_status == "Official confirmation sent":
+            deadline_start = local_date(event.created_at)
+            if deadline_start:
+                deadlines.append(argentina_add_business_days(deadline_start, 3))
+        elif previous_status == "Pending":
+            deadline_start = local_date(event.created_at)
+            if deadline_start:
+                deadlines.append(argentina_add_business_days(deadline_start, 2))
+    return deadlines
 
 
 def logistics_control_contract(logistics_control=None, logistics_contract=None, today=None):
@@ -7785,6 +7983,103 @@ def earliest_package_unit_deadline(package_units, predicate=None):
     return min(relevant_deadlines)
 
 
+def package_unit_completed_date(package_unit):
+    completed_events = sorted(
+        (event for event in package_unit.events or [] if event.new_status == "Quality checked"),
+        key=lambda event: (event.created_at or datetime.min.replace(tzinfo=timezone.utc), event.id or 0),
+        reverse=True,
+    )
+    if completed_events:
+        return local_date(completed_events[0].created_at)
+    if package_unit.status == "Quality checked":
+        return local_date(package_unit.updated_at or package_unit.created_at)
+    return None
+
+
+def package_stage_activity_dates(session_record, preparation_status=None):
+    if not session_record:
+        return []
+    dates = []
+    visible_stage_labels = {label for label, _status in package_preparation_stage_statuses(session_record)}
+    for label, status_attr, updated_at_attr, _updated_by_attr in PACKAGE_STATUS_TRACK_FIELDS:
+        if label not in visible_stage_labels:
+            continue
+        status = getattr(session_record, status_attr, None) or "not_started"
+        updated_at = getattr(session_record, updated_at_attr, None)
+        if status != "not_started" and updated_at:
+            dates.append(local_date(updated_at))
+    return [value for value in dates if value]
+
+
+def staffing_completed_date(staffing_events=None, assignments=None, session_record=None):
+    completed_dates = []
+    for event in staffing_events or []:
+        if staffing_participation_status_label(event.new_status) == "Confirmed":
+            event_date = local_date(event.created_at)
+            if event_date:
+                completed_dates.append(event_date)
+    for assignment in assignments or []:
+        if staffing_participation_status_label(getattr(assignment, "participation_status", "")) == "Confirmed":
+            assignment_date = local_date(getattr(assignment, "updated_on", None) or getattr(assignment, "created_on", None))
+            if assignment_date:
+                completed_dates.append(assignment_date)
+    if session_record and staffing_participation_status_label(getattr(session_record, "emergency_contact_participation_status", "")) == "Confirmed":
+        emergency_date = local_date(getattr(session_record, "updated_on", None) or getattr(session_record, "created_on", None))
+        if emergency_date:
+            completed_dates.append(emergency_date)
+    return max(completed_dates) if completed_dates else None
+
+
+def package_gate_deadline(schedule_workflow=None, staffing_completed_at=None):
+    if schedule_workflow_status(schedule_workflow) != "Approved":
+        return None
+    semi_unblocked_date = schedule_workflow_completed_date(schedule_workflow)
+    if not semi_unblocked_date:
+        return None
+    original_deadline = add_weekdays(semi_unblocked_date, 3)
+    if not staffing_completed_at:
+        return original_deadline
+    if staffing_completed_at <= original_deadline:
+        return add_weekdays(original_deadline, 1)
+    return add_weekdays(staffing_completed_at, 1)
+
+
+def add_weekdays(value, days):
+    current = value
+    remaining = days
+    while remaining > 0:
+        current += timedelta(days=1)
+        if current.weekday() < 5:
+            remaining -= 1
+    return current
+
+
+def package_deadline_badge_contract(package_units=None, preparation_status=None, today=None, session_record=None, schedule_workflow=None, staffing_completed_at=None):
+    package_units = list(package_units or [])
+    completed = (preparation_status or {}).get("status") == "completed"
+    stage_dates = package_stage_activity_dates(session_record, preparation_status=preparation_status)
+    deadline = package_gate_deadline(schedule_workflow=schedule_workflow, staffing_completed_at=staffing_completed_at)
+    if not deadline:
+        return None
+    completed_dates = [
+        completed_date
+        for completed_date in (package_unit_completed_date(unit) for unit in package_units)
+        if completed_date
+    ]
+    if completed and stage_dates:
+        completed_dates.append(max(stage_dates))
+    return deadline_badge_contract(
+        deadline,
+        completed=completed,
+        completed_date=max(completed_dates) if completed_dates else None,
+        today=today,
+    )
+
+
+def deadline_badge_is_red(deadline_badge):
+    return (deadline_badge or {}).get("status") in {"overdue", "missed"}
+
+
 def package_status_label(status):
     return {
         "not_configured": "Not configured",
@@ -8051,14 +8346,15 @@ def packages_readiness_contract(session_record=None, package_units=None, session
     }
 
 
-def packages_action_contract(session_record, packages_contract=None, schedule_gate=None, staffing_contract=None, package_units=None):
+def packages_action_contract(session_record, packages_contract=None, schedule_gate=None, staffing_contract=None, package_units=None, preparation_status=None):
     packages_contract = packages_contract or {}
     package_units = list(package_units or [])
     status = packages_contract.get("status")
+    preparation_status_value = (preparation_status or {}).get("status")
     schedule_ready = bool((schedule_gate or {}).get("is_ready"))
     staffing_ready = bool((staffing_contract or {}).get("ready"))
 
-    def action(action_key, label, description, deadline=None):
+    def action(action_key, label, description, deadline=None, responsible="LOGISTICS"):
         return {
             "action_key": action_key,
             "label": label,
@@ -8066,7 +8362,7 @@ def packages_action_contract(session_record, packages_contract=None, schedule_ga
             "source_label": "Packages",
             "status": "action_required",
             "description": description,
-            "responsible": "LOGISTICS",
+            "responsible": responsible,
             "deadline": deadline,
             "deadline_label": None,
             "deadline_status": "not_set" if not deadline else None,
@@ -8077,6 +8373,21 @@ def packages_action_contract(session_record, packages_contract=None, schedule_ga
 
     if status == "blocked_schedule" or not schedule_ready:
         return None
+    if preparation_status_value == "incident":
+        return action(
+            "solve_package_incident",
+            "Solve Package incident with Logistics",
+            "Solve Package incident with Logistics",
+            responsible="MANAGEMENT",
+        )
+    if preparation_status_value == "completed":
+        return None
+    if preparation_status_value == "in_progress":
+        return action(
+            "continue_session_package_preparation",
+            "Continue session package preparation",
+            "Continue with session package preparation",
+        )
     if status in {"needs_review"}:
         return action(
             "review_package_data",
@@ -8084,10 +8395,13 @@ def packages_action_contract(session_record, packages_contract=None, schedule_ga
             "Package data is inconsistent and needs to be reviewed.",
         )
     if status == "not_configured":
+        description = "Session package preparation has not started yet."
+        if schedule_ready and not staffing_ready:
+            description = "Start session package preparation"
         return action(
             "start_session_package_preparation",
             "Start session package preparation",
-            "Session package preparation has not started yet.",
+            description,
         )
     if status == "blocked_discrepancy":
         return action(
@@ -8097,10 +8411,13 @@ def packages_action_contract(session_record, packages_contract=None, schedule_ga
             earliest_package_unit_deadline(package_units, package_unit_has_label_mismatch),
         )
     if status == "pre_packing_not_started":
+        description = "Session package preparation has not started yet."
+        if schedule_ready and not staffing_ready:
+            description = "Start session package preparation"
         return action(
             "start_package_pre_packing",
             "Start package pre-packing",
-            "Session package preparation has not started yet.",
+            description,
             earliest_package_unit_deadline(package_units, lambda unit: unit.status != "Quality checked"),
         )
     if status == "pre_packing_in_progress":
@@ -8148,34 +8465,93 @@ def packages_action_contract(session_record, packages_contract=None, schedule_ga
     )
 
 
+def staffing_open_position_action_items(staffing_contract, overdue=False):
+    role_counts = defaultdict(int)
+    for detail in (staffing_contract or {}).get("open_position_details", []):
+        role = detail.get("role") or "Staff"
+        role_counts[role] += 1
+    actions = []
+    for role in ("Examiner", "Supervisor", "Intern", "Emergency contact", "Staff"):
+        count = role_counts.get(role, 0)
+        if not count:
+            continue
+        noun = "position" if count == 1 else "positions"
+        verb = "needs" if count == 1 else "need"
+        actions.append({
+            "department": "MANAGEMENT",
+            "description": f"{count} {role} {noun} still {verb} to be filled.",
+            "overdue": bool(overdue),
+        })
+    return actions
+
+
 def bundle_detail_action_items(
     schedule_status,
     schedule_gate,
     schedule_next_action,
     schedule_responsible,
+    monthly_registrations_closed=True,
     staffing_contract=None,
     staffing_control=None,
     packages_action=None,
+    package_preparation_status=None,
+    schedule_deadline_badge=None,
+    staffing_deadline_badge=None,
+    package_deadline_badge=None,
 ):
     actions = []
-    if not (schedule_gate or {}).get("is_ready"):
+    schedule_overdue = deadline_badge_is_red(schedule_deadline_badge)
+    staffing_overdue = deadline_badge_is_red(staffing_deadline_badge)
+    package_overdue = deadline_badge_is_red(package_deadline_badge)
+    if not monthly_registrations_closed:
+        actions.append({
+            "department": "ADMIN",
+            "description": "Close exam registrations to begin pre-session preparation",
+        })
+
+    if monthly_registrations_closed and not (schedule_gate or {}).get("is_ready"):
         actions.append({
             "department": schedule_responsible or "MANAGEMENT",
             "description": schedule_next_action or "Complete schedule preparation and approval.",
+            "overdue": schedule_overdue,
         })
 
     staffing_contract = staffing_contract or {}
-    if staffing_contract.get("status") != "confirmed":
-        staffing_messages = staffing_contract_blocker_messages(staffing_contract)
-        actions.append({
-            "department": (staffing_control or {}).get("responsible_label", "ADMIN"),
-            "description": staffing_messages[0] if staffing_messages else "Complete staff participation and confirmation.",
-        })
+    open_position_actions = staffing_open_position_action_items(staffing_contract, overdue=staffing_overdue)
+    actions.extend(open_position_actions)
+
+    staffing_status = staffing_contract.get("status")
+    if monthly_registrations_closed and staffing_status != "confirmed":
+        schedule_approved = schedule_status == "Approved"
+        staffing_messages = []
+        if staffing_status in {"not_configured", "invalid"}:
+            staffing_messages.extend(staffing_contract_blocker_messages(staffing_contract))
+        totals = staffing_contract.get("totals", {})
+        pending_confirmations = totals.get("pending_assigned", 0)
+        sent_confirmations = totals.get("sent", 0)
+        if schedule_approved and pending_confirmations:
+            staffing_messages.append(f"{pluralize_phrase(pending_confirmations, 'confirmation')} to be sent.")
+        if schedule_approved and sent_confirmations:
+            staffing_messages.append(f"{pluralize_phrase(sent_confirmations, 'confirmation')} to be updated.")
+        if staffing_messages or (not open_position_actions and staffing_status not in {"awaiting_confirmations", "open_positions"}):
+            actions.append({
+                "department": (staffing_control or {}).get("responsible_label", "ADMIN"),
+                "description": staffing_messages[0] if staffing_messages else "Complete staff participation and confirmation.",
+                "overdue": staffing_overdue,
+            })
 
     if packages_action and not packages_action.get("is_complete"):
         actions.append({
             "department": packages_action.get("responsible") or "LOGISTICS",
             "description": packages_action.get("description") or packages_action.get("label") or "Continue session package preparation.",
+            "overdue": package_overdue,
+        })
+
+    package_completed = (package_preparation_status or {}).get("status") == "completed"
+    if not actions and schedule_status == "Approved" and staffing_status == "confirmed" and package_completed:
+        actions.append({
+            "department": "",
+            "description": "Session preparation finalised",
         })
 
     return actions
@@ -11707,7 +12083,7 @@ def render_journey_unavailable(status_code=404):
     ), status_code
 
 
-def schedule_workflow_view(session_record, workflow=None, today=None, staffing=None, logistics=None, core_readiness=None, operational_readiness=None, session_readiness=None, incidents=None, review_flags=None, priority_action=None, staffing_control=None, logistics_control=None, finance=None, finance_events=None, sinapsis=None, sinapsis_checklist_items=None, sinapsis_events=None, communications=None, communications_checklist_items=None, communications_events=None, schedule_gate=None, packages=None, shipments=None, activity_timeline=None, journey_shares=None, staffing_rows=None, staffing_events=None, bundle_detail_actions=None, schedule_locked_by_staffing=False):
+def schedule_workflow_view(session_record, workflow=None, today=None, staffing=None, logistics=None, core_readiness=None, operational_readiness=None, session_readiness=None, incidents=None, review_flags=None, priority_action=None, staffing_control=None, staffing_deadline_badge=None, logistics_control=None, finance=None, finance_events=None, sinapsis=None, sinapsis_checklist_items=None, sinapsis_events=None, communications=None, communications_checklist_items=None, communications_events=None, schedule_gate=None, packages=None, shipments=None, activity_timeline=None, journey_shares=None, staffing_rows=None, staffing_events=None, bundle_detail_actions=None, schedule_locked_by_staffing=False):
     status = schedule_workflow_status(workflow)
     deadline = schedule_workflow_current_deadline(workflow)
     sinapsis_url = (session_record.details_url or "").strip()
@@ -11736,6 +12112,7 @@ def schedule_workflow_view(session_record, workflow=None, today=None, staffing=N
         "next_action": schedule_workflow_next_action(status),
         "responsible": schedule_workflow_responsible(status),
         "deadline": deadline,
+        "deadline_badge": schedule_deadline_badge_contract(workflow, status=status, today=today),
         "review_round": schedule_workflow_review_round(workflow),
         "health": schedule_workflow_health(status, deadline, today=today),
         "schedule_gate": gate,
@@ -11744,6 +12121,7 @@ def schedule_workflow_view(session_record, workflow=None, today=None, staffing=N
         "schedule_reopen_affects_packages": package_preparation_started(session_record),
         "staffing_status_change_affects_packages": package_staffing_sensitive_stages_started(session_record),
         "staffing": staffing,
+        "staffing_deadline_badge": staffing_deadline_badge,
         "staffing_rows": staffing_rows or [],
         "staffing_events": staffing_events or [],
         "bundle_detail_actions": bundle_detail_actions or [],
@@ -11771,6 +12149,7 @@ def schedule_workflow_view(session_record, workflow=None, today=None, staffing=N
             "staff_member_id_requirements": staff_member_id_requirements_for_session(session_record),
             "status_events": package_status_track_events(session_record, staff_member_id_requirements_for_session(session_record)),
             "inclusion_final_items": inclusion_final_items_for_session(session_record),
+            "deadline_badge": None,
         },
         "shipments": shipments or {
             "contract": session_shipment_contract(session_record),
@@ -12235,8 +12614,7 @@ def incidents_control_redirect(session_record, status_filter="", incident_id=Non
 
 def package_control_redirect(session_record, status_filter="", unit_id=None, target="packages"):
     args = {
-        "session_year": session_record.session_date.year,
-        "view": request.form.get("view", "sessions") or "sessions",
+        **pre_session_control_tower_return_args(session_record),
         "open_schedule_modal": session_record.id,
         "open_modal_target": target or "packages",
         "packages_only": "1",
@@ -14834,6 +15212,14 @@ def pre_session_control_tower():
             staffing_contract,
             today=today,
         )
+        staffing_deadline_badge = staffing_deadline_badge_contract(
+            staffing_controls_by_session.get(session_record.id),
+            staffing_contract,
+            assignments=session_assignments,
+            staffing_events=staffing_events_by_session.get(session_record.id, []),
+            session_record=session_record,
+            today=today,
+        )
         logistics_contract = logistics_readiness_contract(
             session_assignments,
             logistics_concepts_by_session.get(session_record.id, []),
@@ -14856,6 +15242,7 @@ def pre_session_control_tower():
         )
         package_units = package_units_by_session.get(session_record.id, [])
         package_session_items = package_session_items_by_session.get(session_record.id, [])
+        staff_member_id_requirements = staff_member_id_requirements_for_session(session_record, session_assignments)
         schedule_gate = schedule_gates_by_session[session_record.id]
         core_readiness = core_readiness_contract(
             schedule_gate,
@@ -14865,12 +15252,26 @@ def pre_session_control_tower():
             logistics=logistics_presentation,
         )
         base_packages_contract = packages_contracts_by_session[session_record.id]
+        package_preparation_status = package_preparation_status_contract(session_record, staff_member_id_requirements)
+        package_deadline_badge = package_deadline_badge_contract(
+            package_units,
+            preparation_status=package_preparation_status,
+            today=today,
+            session_record=session_record,
+            schedule_workflow=workflows_by_session.get(session_record.id),
+            staffing_completed_at=staffing_completed_date(
+                staffing_events=staffing_events_by_session.get(session_record.id, []),
+                assignments=session_assignments,
+                session_record=session_record,
+            ),
+        )
         packages_action = packages_action_contract(
             session_record,
             base_packages_contract,
             schedule_gate=schedule_gate,
             staffing_contract=staffing_contract,
             package_units=package_units,
+            preparation_status=package_preparation_status,
         )
         shipment_link = shipment_links_by_session.get(session_record.id)
         shipment_contract = session_shipment_contract(session_record, shipment_link)
@@ -14969,6 +15370,11 @@ def pre_session_control_tower():
         ]
         schedule_status = schedule_workflow_status(workflows_by_session.get(session_record.id))
         schedule_deadline = schedule_workflow_current_deadline(workflows_by_session.get(session_record.id))
+        schedule_deadline_badge = schedule_deadline_badge_contract(
+            workflows_by_session.get(session_record.id),
+            status=schedule_status,
+            today=today,
+        )
         priority_action = priority_action_contract(
             schedule_status=schedule_status,
             schedule_gate=schedule_gate,
@@ -14991,13 +15397,13 @@ def pre_session_control_tower():
             incidents=incidents_by_session.get(session_record.id, []),
             incident_events_by_incident=incident_events_by_incident,
         )
-        staff_member_id_requirements = staff_member_id_requirements_for_session(session_record, session_assignments)
         schedule_views.append(schedule_workflow_view(
             session_record,
             workflows_by_session.get(session_record.id),
             today=today,
             staffing=staffing_presentation,
             staffing_control=staffing_control_presentation,
+            staffing_deadline_badge=staffing_deadline_badge,
             logistics=logistics_presentation,
             logistics_control=logistics_control_presentation,
             finance=finance_contract,
@@ -15010,7 +15416,7 @@ def pre_session_control_tower():
             communications_events=communications_events,
             packages={
                 "contract": packages_contract,
-                "preparation_status": package_preparation_status_contract(session_record, staff_member_id_requirements),
+                "preparation_status": package_preparation_status,
                 "action": packages_action,
                 "unit_views": [package_unit_view(unit, today=today) for unit in package_units],
                 "session_pre_packing_items": package_session_item_views(package_session_items, PACKAGE_PRE_PACKING_PHASE),
@@ -15021,6 +15427,7 @@ def pre_session_control_tower():
                 "staff_member_id_requirements": staff_member_id_requirements,
                 "status_events": package_status_track_events(session_record, staff_member_id_requirements),
                 "inclusion_final_items": inclusion_final_items_for_session(session_record, supervisor_assignments),
+                "deadline_badge": package_deadline_badge,
             },
             shipments={
                 "contract": shipment_contract,
@@ -15057,9 +15464,14 @@ def pre_session_control_tower():
                 schedule_gate,
                 priority_action.get("label") if priority_action.get("source") == "schedule" else schedule_workflow_next_action(status=schedule_status),
                 schedule_workflow_responsible(schedule_status),
+                monthly_registrations_closed=bool(getattr(session_record, "monthly_registrations_closed", False)),
                 staffing_contract=staffing_contract,
                 staffing_control=staffing_control_presentation,
                 packages_action=packages_action,
+                package_preparation_status=package_preparation_status,
+                schedule_deadline_badge=schedule_deadline_badge,
+                staffing_deadline_badge=staffing_deadline_badge,
+                package_deadline_badge=package_deadline_badge,
             ),
             schedule_locked_by_staffing=schedule_status == "Approved" and any(
                 normalize_participation_status(assignment.participation_status) != "Pending"
@@ -15637,6 +16049,8 @@ def update_staffing_assignment_status(session_id, assignment_type, assignment_id
             set_emergency_contact_deadline(session_record, 3, now, stage="Official confirmation sent")
         elif next_status == "Pending" and schedule_unlocked:
             set_emergency_contact_deadline(session_record, 2, now, stage="Pending")
+        elif next_status == "Confirmed":
+            pass
         else:
             clear_emergency_contact_deadline(session_record)
         db.session.commit()
@@ -15684,6 +16098,8 @@ def update_staffing_assignment_status(session_id, assignment_type, assignment_id
             set_staffing_assignment_deadline(assignment, 3, now, stage="Official confirmation sent")
         elif next_status == "Pending" and schedule_unlocked:
             set_staffing_assignment_deadline(assignment, 2, now, stage="Pending")
+        elif next_status == "Confirmed":
+            pass
         else:
             clear_staffing_assignment_deadline(assignment)
     db.session.commit()

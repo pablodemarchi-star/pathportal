@@ -2429,6 +2429,562 @@ class ScheduleWorkflowTest(unittest.TestCase):
         self.assertIn("operations", track_panel)
         self.assertNotIn("In progress → In progress", track_panel)
 
+    def test_schedule_column_shows_deadline_chip_status(self):
+        on_track_session = ExamSession(
+            exam_session_name="Deadline on track schedule",
+            category="Path School",
+            status="Pending",
+            session_date=date(2026, 12, 10),
+            shifts="Morning",
+            modules="Speaking",
+            format="Online",
+        )
+        overdue_session = ExamSession(
+            exam_session_name="Deadline overdue schedule",
+            category="Path School",
+            status="Pending",
+            session_date=date(2026, 12, 11),
+            shifts="Morning",
+            modules="Speaking",
+            format="Online",
+        )
+        approved_met_session = ExamSession(
+            exam_session_name="Deadline met schedule",
+            category="Path School",
+            status="Pending",
+            session_date=date(2026, 12, 12),
+            shifts="Morning",
+            modules="Speaking",
+            format="Online",
+        )
+        approved_missed_session = ExamSession(
+            exam_session_name="Deadline missed schedule",
+            category="Path School",
+            status="Pending",
+            session_date=date(2026, 12, 13),
+            shifts="Morning",
+            modules="Speaking",
+            format="Online",
+        )
+        db.session.add_all([on_track_session, overdue_session, approved_met_session, approved_missed_session])
+        db.session.flush()
+        approved_met_workflow = ExamSessionScheduleWorkflow(
+            exam_session_id=approved_met_session.id,
+            status="Approved",
+            approved_at=datetime(2026, 12, 20, 12, 0, tzinfo=timezone.utc),
+        )
+        approved_missed_workflow = ExamSessionScheduleWorkflow(
+            exam_session_id=approved_missed_session.id,
+            status="Approved",
+            approved_at=datetime(2026, 12, 22, 12, 0, tzinfo=timezone.utc),
+        )
+        db.session.add_all([
+            ExamSessionScheduleWorkflow(
+                exam_session_id=on_track_session.id,
+                status="In progress",
+                review_round=2,
+                next_action_due_at=date(2026, 12, 30),
+            ),
+            ExamSessionScheduleWorkflow(
+                exam_session_id=overdue_session.id,
+                status="In progress",
+                review_round=1,
+                next_action_due_at=date(2026, 6, 30),
+            ),
+            approved_met_workflow,
+            approved_missed_workflow,
+        ])
+        db.session.flush()
+        db.session.add_all([
+            ExamSessionScheduleEvent(
+                workflow_id=approved_met_workflow.id,
+                previous_status="Ready to send",
+                new_status="Sent for review",
+                due_at=date(2026, 12, 20),
+                created_at=datetime(2026, 12, 18, 12, 0, tzinfo=timezone.utc),
+            ),
+            ExamSessionScheduleEvent(
+                workflow_id=approved_missed_workflow.id,
+                previous_status="Ready to send",
+                new_status="Sent for review",
+                due_at=date(2026, 12, 20),
+                created_at=datetime(2026, 12, 18, 12, 0, tzinfo=timezone.utc),
+            ),
+        ])
+        db.session.commit()
+        client = self.login_client()
+
+        response = client.get("/pre-session-control-tower?session_year=2026&view=sessions")
+        html = response.get_data(as_text=True)
+        table = html[html.index('aria-label="Schedule preparation and approval"'):html.index('<div class="modal"', html.index('aria-label="Schedule preparation and approval"'))]
+
+        def row_for(session_name):
+            row_index = table.index(session_name)
+            return table[table.rfind("<tr", 0, row_index):table.index("</tr>", row_index)]
+
+        on_track_row = row_for("Deadline on track schedule")
+        overdue_row = row_for("Deadline overdue schedule")
+        met_row = row_for("Deadline met schedule")
+        missed_row = row_for("Deadline missed schedule")
+
+        self.assertLess(on_track_row.index("Rounds: 2"), on_track_row.index("Deadline 30/12/2026"))
+        self.assertIn("schedule-deadline-chip schedule-deadline-on-track", on_track_row)
+        self.assertIn("Deadline 30/12/2026", on_track_row)
+        self.assertIn("Deadline on track: 30/12/2026", on_track_row)
+        self.assertIn("schedule-deadline-chip schedule-deadline-overdue", overdue_row)
+        self.assertIn("Deadline 30/06/2026", overdue_row)
+        self.assertIn("Deadline overdue: 30/06/2026", overdue_row)
+        self.assertIn("schedule-deadline-chip schedule-deadline-met", met_row)
+        self.assertIn("Deadline 20/12/2026", met_row)
+        self.assertIn("Deadline met on 20/12/2026: 20/12/2026", met_row)
+        self.assertIn("schedule-deadline-chip schedule-deadline-missed", missed_row)
+        self.assertIn("Deadline 20/12/2026", missed_row)
+        self.assertIn("Deadline not met on 22/12/2026: 20/12/2026", missed_row)
+
+    def test_package_gate_deadline_uses_semi_and_unblocked_rules(self):
+        from app.routes import package_gate_deadline
+
+        workflow = ExamSessionScheduleWorkflow(
+            exam_session_id=self.session_record.id,
+            status="Approved",
+            approved_at=datetime(2026, 8, 10, 12, 0, tzinfo=timezone.utc),
+        )
+
+        self.assertEqual(package_gate_deadline(schedule_workflow=workflow), date(2026, 8, 13))
+        self.assertEqual(
+            package_gate_deadline(schedule_workflow=workflow, staffing_completed_at=date(2026, 8, 12)),
+            date(2026, 8, 14),
+        )
+        self.assertEqual(
+            package_gate_deadline(schedule_workflow=workflow, staffing_completed_at=date(2026, 8, 16)),
+            date(2026, 8, 17),
+        )
+
+    def test_staffing_and_package_columns_show_deadline_chip_status(self):
+        self.create_supervisor(staff_id=101, name="Staffing On Track")
+        self.create_supervisor(staff_id=102, name="Staffing Overdue")
+        self.create_supervisor(staff_id=103, name="Staffing Met")
+        self.create_supervisor(staff_id=104, name="Staffing Missed")
+        client = self.login_client()
+
+        def add_session(name, session_day):
+            session_record = ExamSession(
+                exam_session_name=name,
+                category="Path School",
+                status="Pending",
+                session_date=date(2026, 12, session_day),
+                shifts="Morning",
+                modules="Speaking",
+                format="Online",
+                monthly_registrations_closed=True,
+                monthly_registrations_closed_at=datetime(2026, 8, 1, 12, 0, tzinfo=timezone.utc),
+            )
+            db.session.add(session_record)
+            db.session.flush()
+            db.session.add(ExamSessionScheduleWorkflow(
+                exam_session_id=session_record.id,
+                status="Approved",
+                approved_at=datetime(2026, 8, 1, 12, 0, tzinfo=timezone.utc),
+            ))
+            return session_record
+
+        staffing_on_track = add_session("Staffing deadline on track", 14)
+        staffing_overdue = add_session("Staffing deadline overdue", 15)
+        staffing_met = add_session("Staffing deadline met", 16)
+        staffing_missed = add_session("Staffing deadline missed", 17)
+        package_on_track = add_session("Package deadline on track", 18)
+        package_overdue = add_session("Package deadline overdue", 19)
+        package_met = add_session("Package deadline met", 20)
+        package_missed = add_session("Package deadline missed", 21)
+        ExamSessionScheduleWorkflow.query.filter_by(exam_session_id=package_on_track.id).one().approved_at = datetime(2026, 12, 1, 12, 0, tzinfo=timezone.utc)
+        ExamSessionScheduleWorkflow.query.filter_by(exam_session_id=package_overdue.id).one().approved_at = datetime(2026, 6, 25, 12, 0, tzinfo=timezone.utc)
+        ExamSessionScheduleWorkflow.query.filter_by(exam_session_id=package_met.id).one().approved_at = datetime(2026, 12, 16, 12, 0, tzinfo=timezone.utc)
+        ExamSessionScheduleWorkflow.query.filter_by(exam_session_id=package_missed.id).one().approved_at = datetime(2026, 12, 16, 12, 0, tzinfo=timezone.utc)
+
+        db.session.add_all([
+            ExamSessionStaffingControl(exam_session_id=staffing_on_track.id, staffing_due_at=date(2026, 12, 30)),
+            ExamSessionStaffingControl(exam_session_id=staffing_overdue.id, staffing_due_at=date(2026, 6, 30)),
+            ExamSessionStaffingControl(exam_session_id=staffing_met.id, staffing_due_at=date(2026, 12, 20)),
+            ExamSessionStaffingControl(exam_session_id=staffing_missed.id, staffing_due_at=date(2026, 12, 20)),
+            ExamSessionSupervisorAssignment(
+                exam_session_id=staffing_on_track.id,
+                team_member_id=101,
+                participation_status="Pending",
+            ),
+            ExamSessionSupervisorAssignment(
+                exam_session_id=staffing_overdue.id,
+                team_member_id=102,
+                participation_status="Pending",
+            ),
+            ExamSessionSupervisorAssignment(
+                exam_session_id=staffing_met.id,
+                team_member_id=103,
+                participation_status="Confirmed",
+                updated_on=datetime(2026, 12, 19, 12, 0, tzinfo=timezone.utc),
+            ),
+            ExamSessionSupervisorAssignment(
+                exam_session_id=staffing_missed.id,
+                team_member_id=104,
+                participation_status="Confirmed",
+                updated_on=datetime(2026, 12, 22, 12, 0, tzinfo=timezone.utc),
+            ),
+        ])
+        db.session.commit()
+
+        open_package_unit = self.create_package_unit_record(status="Pre-packing", expected=10, actual=10, session_record=package_on_track)
+        open_package_unit.package_deadline = date(2026, 12, 30)
+        overdue_package_unit = self.create_package_unit_record(status="Pre-packing", expected=10, actual=10, session_record=package_overdue)
+        overdue_package_unit.package_deadline = date(2026, 6, 30)
+        met_package_unit = self.mark_session_packages_quality_checked(package_met)
+        met_package_unit.package_deadline = date(2026, 12, 20)
+        met_package_unit.updated_on = datetime(2026, 12, 19, 12, 0, tzinfo=timezone.utc)
+        db.session.add(ExamSessionPackageEvent(
+            package_unit_id=met_package_unit.id,
+            event_type="status",
+            previous_status="Personalized",
+            new_status="Quality checked",
+            created_at=datetime(2026, 12, 19, 12, 0, tzinfo=timezone.utc),
+        ))
+        missed_package_unit = self.mark_session_packages_quality_checked(package_missed)
+        missed_package_unit.package_deadline = date(2026, 12, 20)
+        missed_package_unit.updated_on = datetime(2026, 12, 22, 12, 0, tzinfo=timezone.utc)
+        db.session.add(ExamSessionPackageEvent(
+            package_unit_id=missed_package_unit.id,
+            event_type="status",
+            previous_status="Personalized",
+            new_status="Quality checked",
+            created_at=datetime(2026, 12, 22, 12, 0, tzinfo=timezone.utc),
+        ))
+        db.session.commit()
+
+        response = client.get("/pre-session-control-tower?session_year=2026&view=sessions")
+        html = response.get_data(as_text=True)
+        table = html[html.index('aria-label="Schedule preparation and approval"'):html.index('<div class="modal"', html.index('aria-label="Schedule preparation and approval"'))]
+
+        def row_for(session_name):
+            row_index = table.index(session_name)
+            return table[table.rfind("<tr", 0, row_index):table.index("</tr>", row_index)]
+
+        self.assertIn("staffing-column-deadline-chip", row_for("Staffing deadline on track"))
+        self.assertIn("workflow-deadline-on-track", row_for("Staffing deadline on track"))
+        self.assertIn("Deadline 30/12/2026", row_for("Staffing deadline on track"))
+        self.assertIn("Deadline on track: 30/12/2026", row_for("Staffing deadline on track"))
+        self.assertIn("workflow-deadline-overdue", row_for("Staffing deadline overdue"))
+        self.assertIn("Deadline 30/06/2026", row_for("Staffing deadline overdue"))
+        self.assertIn("Deadline overdue: 30/06/2026", row_for("Staffing deadline overdue"))
+        self.assertIn("workflow-deadline-met", row_for("Staffing deadline met"))
+        self.assertIn("Deadline 20/12/2026", row_for("Staffing deadline met"))
+        self.assertIn("Deadline met on 19/12/2026: 20/12/2026", row_for("Staffing deadline met"))
+        self.assertIn("workflow-deadline-missed", row_for("Staffing deadline missed"))
+        self.assertIn("Deadline 20/12/2026", row_for("Staffing deadline missed"))
+        self.assertIn("Deadline not met on 22/12/2026: 20/12/2026", row_for("Staffing deadline missed"))
+
+        self.assertIn("package-column-deadline-chip", row_for("Package deadline on track"))
+        self.assertIn("workflow-deadline-on-track", row_for("Package deadline on track"))
+        self.assertIn("Deadline 04/12/2026", row_for("Package deadline on track"))
+        self.assertIn("Deadline on track: 04/12/2026", row_for("Package deadline on track"))
+        self.assertIn("workflow-deadline-overdue", row_for("Package deadline overdue"))
+        self.assertIn("Deadline 30/06/2026", row_for("Package deadline overdue"))
+        self.assertIn("Deadline overdue: 30/06/2026", row_for("Package deadline overdue"))
+        self.assertIn("workflow-deadline-met", row_for("Package deadline met"))
+        self.assertIn("Deadline 21/12/2026", row_for("Package deadline met"))
+        self.assertIn("Deadline met on 19/12/2026: 21/12/2026", row_for("Package deadline met"))
+        self.assertIn("workflow-deadline-missed", row_for("Package deadline missed"))
+        self.assertIn("Deadline 21/12/2026", row_for("Package deadline missed"))
+        self.assertIn("Deadline not met on 22/12/2026: 21/12/2026", row_for("Package deadline missed"))
+
+    def test_package_column_uses_stage_dates_when_package_units_have_no_deadline(self):
+        session_record = ExamSession(
+            exam_session_name="Package stage deadline only",
+            category="Path School",
+            status="Pending",
+            session_date=date(2026, 12, 22),
+            shifts="Morning",
+            modules="Speaking",
+            format="Online",
+            monthly_registrations_closed=True,
+            monthly_registrations_closed_at=datetime(2026, 8, 1, 12, 0, tzinfo=timezone.utc),
+            package_label_verification_status="completed",
+            package_label_verification_updated_at=datetime(2026, 12, 1, 12, 0, tzinfo=timezone.utc),
+            package_label_printing_status="completed",
+            package_label_printing_updated_at=datetime(2026, 12, 2, 12, 0, tzinfo=timezone.utc),
+            room_package_sealing_status="completed",
+            room_package_sealing_updated_at=datetime(2026, 12, 3, 12, 0, tzinfo=timezone.utc),
+            return_packages_status="completed",
+            return_packages_updated_at=datetime(2026, 12, 4, 12, 0, tzinfo=timezone.utc),
+            inclusion_final_items_status="completed",
+            inclusion_final_items_updated_at=datetime(2026, 12, 4, 12, 30, tzinfo=timezone.utc),
+            session_box_sealing_status="completed",
+            session_box_sealing_updated_at=datetime(2026, 12, 4, 13, 0, tzinfo=timezone.utc),
+        )
+        db.session.add(session_record)
+        db.session.flush()
+        db.session.add(ExamSessionScheduleWorkflow(
+            exam_session_id=session_record.id,
+            status="Approved",
+            approved_at=datetime(2026, 12, 1, 12, 0, tzinfo=timezone.utc),
+        ))
+        db.session.commit()
+        client = self.login_client()
+
+        response = client.get("/pre-session-control-tower?session_year=2026&view=sessions")
+        html = response.get_data(as_text=True)
+        table = html[html.index('aria-label="Schedule preparation and approval"'):html.index('<div class="modal"', html.index('aria-label="Schedule preparation and approval"'))]
+        row_index = table.index("Package stage deadline only")
+        row = table[table.rfind("<tr", 0, row_index):table.index("</tr>", row_index)]
+
+        self.assertIn("package-column-deadline-chip", row)
+        self.assertIn("workflow-deadline-met", row)
+        self.assertIn("Deadline 04/12/2026", row)
+        self.assertIn("Deadline met on 04/12/2026: 04/12/2026", row)
+
+    def test_staffing_column_uses_assignment_deadline_when_control_deadline_is_missing(self):
+        staff_member = AcademicStaff(id=107, status="Active", full_name="Assignment Deadline Staff", roles="Examiner", email="assignment-deadline@example.com")
+        session_record = ExamSession(
+            exam_session_name="Staffing assignment deadline only",
+            category="Path School",
+            status="Pending",
+            session_date=date(2026, 12, 22),
+            shifts="Morning",
+            modules="Speaking",
+            format="Online",
+            monthly_registrations_closed=True,
+            monthly_registrations_closed_at=datetime(2026, 8, 1, 12, 0, tzinfo=timezone.utc),
+        )
+        db.session.add_all([staff_member, session_record])
+        db.session.flush()
+        db.session.add_all([
+            ExamSessionScheduleWorkflow(
+                exam_session_id=session_record.id,
+                status="Approved",
+                approved_at=datetime(2026, 8, 1, 12, 0, tzinfo=timezone.utc),
+            ),
+            ExamSessionExaminerAssignment(
+                exam_session_id=session_record.id,
+                team_member_id=staff_member.id,
+                participation_status="Pending",
+                staffing_status_due_at=date(2026, 12, 30),
+                staffing_status_due_stage="Pending",
+            ),
+        ])
+        db.session.commit()
+        client = self.login_client()
+
+        response = client.get("/pre-session-control-tower?session_year=2026&view=sessions")
+        html = response.get_data(as_text=True)
+        table = html[html.index('aria-label="Schedule preparation and approval"'):html.index('<div class="modal"', html.index('aria-label="Schedule preparation and approval"'))]
+        row_index = table.index("Staffing assignment deadline only")
+        row = table[table.rfind("<tr", 0, row_index):table.index("</tr>", row_index)]
+
+        self.assertIn("staffing-column-deadline-chip", row)
+        self.assertIn("workflow-deadline-on-track", row)
+        self.assertIn("Deadline 30/12/2026", row)
+
+    def test_staffing_column_sets_deadline_for_pending_emergency_contact(self):
+        emergency_contact = AcademicStaff(id=111, status="Active", full_name="Pending Emergency Contact", roles="Supervisor", email="pending-emergency@example.com")
+        session_record = ExamSession(
+            exam_session_name="Emergency contact deadline only",
+            category="Path School",
+            status="Pending",
+            session_date=date(2026, 12, 23),
+            shifts="Morning",
+            modules="Speaking",
+            format="Online",
+            monthly_registrations_closed=True,
+            monthly_registrations_closed_at=datetime(2026, 8, 1, 12, 0, tzinfo=timezone.utc),
+            emergency_contact_member_id=emergency_contact.id,
+            emergency_contact_participation_status="Pending",
+        )
+        db.session.add_all([emergency_contact, session_record])
+        db.session.flush()
+        db.session.add(ExamSessionScheduleWorkflow(
+            exam_session_id=session_record.id,
+            status="Approved",
+            approved_at=datetime(2026, 8, 10, 12, 0, tzinfo=timezone.utc),
+        ))
+        db.session.commit()
+        client = self.login_client()
+
+        response = client.get("/pre-session-control-tower?session_year=2026&view=sessions")
+        html = response.get_data(as_text=True)
+        table = html[html.index('aria-label="Schedule preparation and approval"'):html.index('<div class="modal"', html.index('aria-label="Schedule preparation and approval"'))]
+        row_index = table.index("Emergency contact deadline only")
+        row = table[table.rfind("<tr", 0, row_index):table.index("</tr>", row_index)]
+        db.session.refresh(session_record)
+
+        self.assertEqual(session_record.emergency_contact_status_due_at, date(2026, 8, 12))
+        self.assertEqual(session_record.emergency_contact_status_due_stage, "Pending")
+        self.assertIn("staffing-column-deadline-chip", row)
+        self.assertIn("workflow-deadline-on-track", row)
+        self.assertIn("Deadline 12/08/2026", row)
+
+    def test_staffing_column_keeps_assignment_deadline_after_staffing_is_confirmed(self):
+        staff_member = AcademicStaff(id=108, status="Active", full_name="Confirmed Deadline Staff", roles="Examiner", email="confirmed-deadline@example.com")
+        session_record = ExamSession(
+            exam_session_name="Staffing confirmed deadline only",
+            category="Path School",
+            status="Pending",
+            session_date=date(2026, 12, 23),
+            shifts="Morning",
+            modules="Speaking",
+            format="Online",
+            monthly_registrations_closed=True,
+            monthly_registrations_closed_at=datetime(2026, 8, 1, 12, 0, tzinfo=timezone.utc),
+        )
+        db.session.add_all([staff_member, session_record])
+        db.session.flush()
+        db.session.add_all([
+            ExamSessionScheduleWorkflow(
+                exam_session_id=session_record.id,
+                status="Approved",
+                approved_at=datetime(2026, 8, 1, 12, 0, tzinfo=timezone.utc),
+            ),
+            ExamSessionExaminerAssignment(
+                exam_session_id=session_record.id,
+                team_member_id=staff_member.id,
+                participation_status="Confirmed",
+                staffing_status_due_at=date(2026, 12, 30),
+                staffing_status_due_stage="Pending",
+                updated_on=datetime(2026, 12, 29, 12, 0, tzinfo=timezone.utc),
+            ),
+        ])
+        db.session.commit()
+        client = self.login_client()
+
+        response = client.get("/pre-session-control-tower?session_year=2026&view=sessions")
+        html = response.get_data(as_text=True)
+        table = html[html.index('aria-label="Schedule preparation and approval"'):html.index('<div class="modal"', html.index('aria-label="Schedule preparation and approval"'))]
+        row_index = table.index("Staffing confirmed deadline only")
+        row = table[table.rfind("<tr", 0, row_index):table.index("</tr>", row_index)]
+
+        self.assertIn("staffing-column-deadline-chip", row)
+        self.assertIn("workflow-deadline-met", row)
+        self.assertIn("Deadline 30/12/2026", row)
+        self.assertIn("Deadline met on 29/12/2026: 30/12/2026", row)
+
+    def test_confirming_staffing_assignment_preserves_deadline_chip(self):
+        staff_member = AcademicStaff(id=109, status="Active", full_name="Posted Confirmed Staff", roles="Examiner", email="posted-confirmed@example.com")
+        session_record = ExamSession(
+            exam_session_name="Posted confirmed staffing deadline",
+            category="Path School",
+            status="Pending",
+            session_date=date(2026, 12, 24),
+            shifts="Morning",
+            modules="Speaking",
+            format="Online",
+            monthly_registrations_closed=True,
+            monthly_registrations_closed_at=datetime(2026, 8, 1, 12, 0, tzinfo=timezone.utc),
+        )
+        db.session.add_all([staff_member, session_record])
+        db.session.flush()
+        assignment = ExamSessionExaminerAssignment(
+            exam_session_id=session_record.id,
+            team_member_id=staff_member.id,
+            participation_status="Pending",
+            staffing_status_due_at=date(2026, 12, 30),
+            staffing_status_due_stage="Pending",
+        )
+        db.session.add_all([
+            ExamSessionScheduleWorkflow(
+                exam_session_id=session_record.id,
+                status="Approved",
+                approved_at=datetime(2026, 8, 1, 12, 0, tzinfo=timezone.utc),
+            ),
+            assignment,
+        ])
+        db.session.commit()
+        client = self.login_client()
+
+        response = client.post(
+            f"/pre-session-control-tower/sessions/{session_record.id}/staffing-assignments/examiner/{assignment.id}/status",
+            data={
+                "csrf_token": "token",
+                "participation_status": "Confirmed",
+            },
+            follow_redirects=False,
+        )
+
+        self.assertEqual(response.status_code, 302)
+        db.session.refresh(assignment)
+        self.assertEqual(assignment.participation_status, "Confirmed")
+        self.assertEqual(assignment.staffing_status_due_at, date(2026, 12, 30))
+
+        response = client.get("/pre-session-control-tower?session_year=2026&view=sessions")
+        html = response.get_data(as_text=True)
+        table = html[html.index('aria-label="Schedule preparation and approval"'):html.index('<div class="modal"', html.index('aria-label="Schedule preparation and approval"'))]
+        row_index = table.index("Posted confirmed staffing deadline")
+        row = table[table.rfind("<tr", 0, row_index):table.index("</tr>", row_index)]
+
+        self.assertIn("staffing-column-deadline-chip", row)
+        self.assertIn("workflow-deadline-met", row)
+        self.assertIn("Deadline 30/12/2026", row)
+
+    def test_staffing_column_rebuilds_confirmed_deadline_from_staffing_events(self):
+        staff_member = AcademicStaff(id=110, status="Active", full_name="Historical Confirmed Staff", roles="Examiner", email="historical-confirmed@example.com")
+        session_record = ExamSession(
+            exam_session_name="Historical confirmed staffing deadline",
+            category="Path School",
+            status="Pending",
+            session_date=date(2026, 12, 25),
+            shifts="Morning",
+            modules="Speaking",
+            format="Online",
+            monthly_registrations_closed=True,
+            monthly_registrations_closed_at=datetime(2026, 8, 1, 12, 0, tzinfo=timezone.utc),
+        )
+        db.session.add_all([staff_member, session_record])
+        db.session.flush()
+        assignment = ExamSessionExaminerAssignment(
+            exam_session_id=session_record.id,
+            team_member_id=staff_member.id,
+            participation_status="Confirmed",
+            staffing_status_due_at=None,
+        )
+        db.session.add_all([
+            ExamSessionScheduleWorkflow(
+                exam_session_id=session_record.id,
+                status="Approved",
+                approved_at=datetime(2026, 8, 1, 12, 0, tzinfo=timezone.utc),
+            ),
+            assignment,
+        ])
+        db.session.flush()
+        db.session.add_all([
+            ExamSessionStaffingEvent(
+                exam_session_id=session_record.id,
+                assignment_type="examiner",
+                assignment_id=assignment.id,
+                role="Examiner",
+                staff_member_name=staff_member.full_name,
+                previous_status="Pending",
+                new_status="Official confirmation sent",
+                created_at=datetime(2026, 12, 1, 12, 0, tzinfo=timezone.utc),
+            ),
+            ExamSessionStaffingEvent(
+                exam_session_id=session_record.id,
+                assignment_type="examiner",
+                assignment_id=assignment.id,
+                role="Examiner",
+                staff_member_name=staff_member.full_name,
+                previous_status="Official confirmation sent",
+                new_status="Confirmed",
+                created_at=datetime(2026, 12, 2, 12, 0, tzinfo=timezone.utc),
+            ),
+        ])
+        db.session.commit()
+        client = self.login_client()
+
+        response = client.get("/pre-session-control-tower?session_year=2026&view=sessions")
+        html = response.get_data(as_text=True)
+        table = html[html.index('aria-label="Schedule preparation and approval"'):html.index('<div class="modal"', html.index('aria-label="Schedule preparation and approval"'))]
+        row_index = table.index("Historical confirmed staffing deadline")
+        row = table[table.rfind("<tr", 0, row_index):table.index("</tr>", row_index)]
+
+        self.assertIn("staffing-column-deadline-chip", row)
+        self.assertIn("workflow-deadline-met", row)
+        self.assertIn("Deadline 07/12/2026", row)
+        self.assertIn("Deadline met on 02/12/2026: 07/12/2026", row)
+
     def test_schedule_action_notes_show_from_and_to_fields(self):
         actor = User(full_name="Admin User", email="admin-user@example.com", department="Admin", is_active=True)
         recipient = User(full_name="Schedule Reviewer", email="reviewer@example.com", department="Management", is_active=True)
@@ -3601,6 +4157,7 @@ class ScheduleWorkflowTest(unittest.TestCase):
         self.assertIn("Staffing must be ready before adding full schedule for each room for the Supervisor.", final_items_section)
         self.assertIn("package-preparation-blocked-chip", final_items_section)
         self.assertIn("Do not proceed with printing full schedule. Staff members have not been confirmed yet", final_items_section)
+        self.assertIn("disabled>Mark as complete", final_items_section)
 
     def test_packages_modal_inclusion_final_items_uses_latest_total_and_supervisors(self):
         db.session.add_all([
@@ -3648,6 +4205,7 @@ class ScheduleWorkflowTest(unittest.TestCase):
         self.assertIn("Mark as in progress", final_items_section)
         self.assertIn("Mark as complete", final_items_section)
         self.assertIn("Mark incident", final_items_section)
+        self.assertNotIn("disabled>Mark as complete", final_items_section)
         self.assertNotIn("Staffing must be ready before adding full schedule for each room for the Supervisor.", final_items_section)
         self.assertNotIn("Do not proceed with printing full schedule. Staff members have not been confirmed yet", final_items_section)
 
@@ -4282,6 +4840,46 @@ class ScheduleWorkflowTest(unittest.TestCase):
         )
         self.assertEqual(action["action_key"], "start_session_package_preparation")
         self.assertEqual(action["responsible"], "LOGISTICS")
+        self.assertEqual(action["description"], "Start session package preparation")
+
+        action = packages_action_contract(
+            self.session_record,
+            {"status": "not_configured"},
+            schedule_gate={"is_ready": True},
+            staffing_contract={"ready": False},
+            package_units=[],
+            preparation_status={"status": "in_progress"},
+        )
+        self.assertEqual(action["description"], "Continue with session package preparation")
+
+        action = packages_action_contract(
+            self.session_record,
+            {"status": "not_configured"},
+            schedule_gate={"is_ready": True},
+            staffing_contract={"ready": True},
+            package_units=[],
+            preparation_status={"status": "in_progress"},
+        )
+        self.assertEqual(action["description"], "Continue with session package preparation")
+
+        action = packages_action_contract(
+            self.session_record,
+            {"status": "not_configured"},
+            schedule_gate={"is_ready": True},
+            staffing_contract={"ready": True},
+            package_units=[],
+        )
+        self.assertEqual(action["description"], "Session package preparation has not started yet.")
+
+        action = packages_action_contract(
+            self.session_record,
+            {"status": "pre_packing_not_started"},
+            schedule_gate={"is_ready": True},
+            staffing_contract={"ready": True},
+            package_units=[],
+            preparation_status={"status": "completed"},
+        )
+        self.assertIsNone(action)
 
         unit = self.create_package_unit_record(status="Pre-packing", expected=10, actual=9)
         unit.package_deadline = date(2026, 6, 20)
@@ -4401,7 +4999,7 @@ class ScheduleWorkflowTest(unittest.TestCase):
         self.assertIn("Current status", packages_summary)
         self.assertIn("Recommended next action", packages_summary)
         self.assertIn("Responsible", packages_summary)
-        self.assertIn("Nearest deadline", packages_summary)
+        self.assertIn("Current deadline", packages_summary)
         self.assertIn("Start session package preparation", packages_summary)
         self.assertIn("LOGISTICS", packages_summary)
         self.assertIn("Start session package preparation", start_button)
@@ -4655,6 +5253,39 @@ class ScheduleWorkflowTest(unittest.TestCase):
         self.assertIn("data-confirm-password-value=\"EditOK\"", packages_section)
         self.assertIn("Are you sure you want to reopen editing for Candidate label verification?", packages_section)
 
+    def test_completed_staffing_and_package_modal_deadlines_show_completed(self):
+        self.approve_schedule()
+        self.confirm_staffing()
+        self.session_record.package_label_verification_status = "completed"
+        self.session_record.package_label_printing_status = "completed"
+        self.session_record.room_package_sealing_status = "completed"
+        self.session_record.return_packages_status = "completed"
+        self.session_record.inclusion_final_items_status = "completed"
+        self.session_record.session_box_sealing_status = "completed"
+        db.session.commit()
+        client = self.login_client()
+
+        response = client.get("/pre-session-control-tower?session_year=2026&view=sessions")
+        html = response.get_data(as_text=True)
+        modal_start = html.index(f'id="schedule-workflow-{self.session_record.id}"')
+        next_modal = html.find('<div class="modal"', modal_start + 1)
+        modal = html[modal_start:next_modal if next_modal != -1 else len(html)]
+        staffing_start = modal.index(f'id="staffing-{self.session_record.id}"')
+        staffing_end = modal.index(f'id="packages-{self.session_record.id}"')
+        staffing_section = modal[staffing_start:staffing_end]
+        staffing_summary = staffing_section[:staffing_section.index('<form method="post"')]
+        package_start = modal.index(f'id="packages-{self.session_record.id}"')
+        package_end = modal.index(f'id="shipments-{self.session_record.id}"')
+        package_section = modal[package_start:package_end]
+        package_summary = package_section[:package_section.index(f'id="package-status-track-{self.session_record.id}"')]
+
+        self.assertIn("Nearest deadline", staffing_summary)
+        self.assertIn('<span class="muted">Completed</span>', staffing_summary)
+        self.assertNotIn("<strong>-</strong>", staffing_summary)
+        self.assertIn("Current deadline", package_summary)
+        self.assertIn('<span class="muted">Completed</span>', package_summary)
+        self.assertNotIn("<strong>-</strong>", package_summary)
+
     def test_packages_column_opens_packages_only_modal_context(self):
         self.session_record.package_label_verification_status = "in_progress"
         self.session_record.package_label_verification_updated_at = datetime(2026, 6, 20, 14, 30, tzinfo=timezone.utc)
@@ -4703,11 +5334,11 @@ class ScheduleWorkflowTest(unittest.TestCase):
         self.assertIn('const packagesOnly = params.get("packages_only") === "1";', js)
         self.assertIn('modal.classList.toggle("is-packages-only", packagesOnly);', js)
         self.assertIn('const isPackagesOnlyMode = opener.dataset.modalPackagesOnly === "true";', js)
+        self.assertIn('focusModalTarget(targetId, { scroll: !modalTarget.startsWith("package-") })', js)
         self.assertIn('"package-label-verification": "Candidate label verification"', js)
         self.assertIn('"package-label-verification": ["packages", "package-label-verification"]', js)
         self.assertIn('"package-session-box-sealing": "Session box sealing"', js)
         self.assertIn('"package-session-box-sealing": ["packages", "package-session-box-sealing"]', js)
-        self.assertIn('const scrollBehavior = targetKey.startsWith("package-") ? "auto" : "smooth";', js)
         self.assertIn('const packagePreparationTrigger = event.target.closest("[data-start-package-preparation]");', js)
         self.assertIn("panel.hidden = false;", js)
 
@@ -6734,6 +7365,7 @@ class ScheduleWorkflowTest(unittest.TestCase):
         )
         db.session.add(blocked_session)
         ready_bundle = self.create_shipment_bundle_record(status="Preparing bundle", session_record=ready_first)
+        ready_bundle.dispatch_due_at = date(2026, 6, 29)
         db.session.add(ExamSessionShipmentBundleSession(bundle_id=ready_bundle.id, exam_session_id=ready_second.id))
         self.create_shipment_bundle_record(status="Preparing bundle", session_record=schedule_pending_ready_package_session)
         self.create_shipment_bundle_record(status="Preparing bundle", session_record=package_pending_session)
@@ -6744,8 +7376,15 @@ class ScheduleWorkflowTest(unittest.TestCase):
         response = client.get("/pre-session-control-tower?session_year=2026&view=bundles")
         html = response.get_data(as_text=True)
         table = html[html.index('aria-label="Shipment bundles"'):html.index('<div class="modal"', html.index('aria-label="Shipment bundles"'))]
-        self.assertLess(table.index("<th>Shipment</th>"), table.index("<th>Department</th>"))
+        self.assertNotIn("<th>Deadline</th>", table)
+        self.assertNotIn("<th>Package</th>", table)
+        self.assertIn("<th>Recipient</th>", table)
+        self.assertNotIn("<th>Supervisor</th>", table)
+        self.assertLess(table.index("<th>Bundle number</th>"), table.index("<th>Department</th>"))
         self.assertLess(table.index("<th>Department</th>"), table.index("<th>Action description</th>"))
+        self.assertLess(table.index("<th>Action description</th>"), table.index("<th>Shipment</th>"))
+        self.assertLess(table.index("<th>Shipment</th>"), table.index("<th>Exam sessions</th>"))
+        self.assertLess(table.index("<th>Exam sessions</th>"), table.index("<th>Recipient</th>"))
         self.assertNotIn("<th>Action</th>", table)
         ready_row_index = table.index("Ready A")
         ready_row = table[table.rfind("<tr", 0, ready_row_index):table.index("</tr>", ready_row_index)]
@@ -6764,8 +7403,14 @@ class ScheduleWorkflowTest(unittest.TestCase):
         self.assertIn("UNBLOCKED", ready_row)
         self.assertIn("Bundle preparation ready", ready_row)
         self.assertIn("shipment-status-bundle-preparation-ready", ready_row)
+        shipment_cell_start = ready_row.index('data-modal-target-label="Track shipment"')
+        shipment_cell = ready_row[ready_row.rfind("<td>", 0, shipment_cell_start):ready_row.index("</td>", shipment_cell_start)]
+        self.assertIn("<strong>2/2 confirmed</strong>", shipment_cell)
+        self.assertLess(shipment_cell.index("Bundle preparation ready"), shipment_cell.index("<strong>2/2 confirmed</strong>"))
+        self.assertIn('<span class="shipment-deadline-chip">Deadline 29/06/2026</span>', shipment_cell)
         self.assertIn('<span class="responsible-chip users-department-chip">LOGISTICS</span>', ready_row)
-        self.assertIn("Complete shipment bundle preparation.", ready_row)
+        self.assertIn("Complete shipment bundle preparation", ready_row)
+        self.assertNotIn("Complete shipment bundle preparation.", ready_row)
         self.assertIn('class="responsible-chip bundle-supervisor-chip"', ready_row)
         self.assertIn('aria-label="Shipment bundle unblocked"', ready_row)
         self.assertIn('<path d="M8 10V7a4 4 0 0 1 8 0"></path>', ready_row)
@@ -6778,7 +7423,7 @@ class ScheduleWorkflowTest(unittest.TestCase):
         self.assertIn("shipment-status-bundle-preparation-not-finished", package_pending_row)
         self.assertIn("0/1 sessions completed", package_pending_row)
         self.assertIn('<span class="responsible-chip users-department-chip">LOGISTICS</span>', package_pending_row)
-        self.assertIn("Complete package preparation for all sessions included in this bundle.", package_pending_row)
+        self.assertIn("Complete package preparation for all sessions included in this bundle", package_pending_row)
         self.assertNotIn("shipment-gate-unblocked", package_pending_row)
         self.assertIn("shipment-gate-blocked", blocked_row)
         self.assertIn("BLOCKED", blocked_row)
@@ -6786,12 +7431,15 @@ class ScheduleWorkflowTest(unittest.TestCase):
         self.assertIn("shipment-status-bundle-preparation-not-finished", blocked_row)
         self.assertIn("0/1 sessions completed", blocked_row)
         self.assertIn('<span class="responsible-chip users-department-chip">ADMIN</span>', blocked_row)
-        self.assertIn("Confirm staffing for all sessions included in this bundle.", blocked_row)
+        self.assertIn("Confirm staffing for all sessions included in this bundle", blocked_row)
         self.assertIn('aria-label="Shipment bundle blocked"', blocked_row)
         self.assertIn('<path d="M8 10V7a4 4 0 0 1 8 0v3"></path>', blocked_row)
         with open("app/static/css/styles.css", encoding="utf-8") as css_file:
             css = css_file.read()
         self.assertIn(".bundle-supervisor-chip {\n  font-weight: 700;\n}", css)
+        self.assertIn("max-width: calc(360px - 10mm);", css)
+        self.assertIn(".bundles-table td:nth-child(3) .bundle-action-description-stack > span > span:first-child", css)
+        self.assertIn("overflow-wrap: anywhere;", css)
 
     def test_auto_shipment_bundle_overdue_split_is_idempotent_and_keeps_confirmed_unblocked(self):
         self.create_supervisor(staff_id=1, name="Laura Mendez")
@@ -7024,13 +7672,13 @@ class ScheduleWorkflowTest(unittest.TestCase):
         self.assertIn("Back to Bundles", detail_html)
         self.assertNotIn("<th>Action</th>", detail_table)
         self.assertIn("<th>Session</th>", detail_table)
-        self.assertIn("<th>Date</th>", detail_table)
+        self.assertNotIn("<th>Date</th>", detail_table)
         self.assertIn("<th>Department</th>", detail_table)
         self.assertIn("<th>Action description</th>", detail_table)
         self.assertIn("<th>Schedule</th>", detail_table)
         self.assertIn("<th>Staffing</th>", detail_table)
         self.assertIn("<th>Package</th>", detail_table)
-        self.assertLess(detail_table.index("<th>Date</th>"), detail_table.index("<th>Department</th>"))
+        self.assertLess(detail_table.index("<th>Session</th>"), detail_table.index("<th>Department</th>"))
         self.assertLess(detail_table.index("<th>Department</th>"), detail_table.index("<th>Action description</th>"))
         self.assertLess(detail_table.index("<th>Action description</th>"), detail_table.index("<th>Schedule</th>"))
         self.assertNotIn("<th>Logistics</th>", detail_table)
@@ -7043,6 +7691,14 @@ class ScheduleWorkflowTest(unittest.TestCase):
         self.assertNotIn("<th>Priority action</th>", detail_table)
         self.assertIn("Axis English", detail_html)
         self.assertIn("Lincoln", detail_html)
+        self.assertIn('<span class="shipment-summary-cell bundle-session-name-cell">', detail_table)
+        self.assertIn("<strong>Axis English</strong>", detail_table)
+        self.assertIn('<small class="bundle-session-date">09/07/2026</small>', detail_table)
+        self.assertIn("<strong>Lincoln</strong>", detail_table)
+        self.assertIn('<small class="bundle-session-date">12/07/2026</small>', detail_table)
+        with open("app/static/css/styles.css", encoding="utf-8") as css_file:
+            css = css_file.read()
+        self.assertIn(".shipment-summary-cell .bundle-session-date {\n  font-size: inherit;\n  font-weight: 400;\n}", css)
         self.assertLess(detail_html.index("Axis English"), detail_html.index("Lincoln"))
 
     def test_bundle_detail_lists_parallel_departments_and_action_descriptions(self):
@@ -7067,6 +7723,8 @@ class ScheduleWorkflowTest(unittest.TestCase):
                 participation_status="Pending",
             ),
         ])
+        session_record.monthly_registrations_closed = True
+        session_record.monthly_registrations_closed_at = datetime.now(timezone.utc)
         db.session.flush()
         bundle = self.create_shipment_bundle_record(status="Preparing", session_record=session_record)
         db.session.commit()
@@ -7080,8 +7738,347 @@ class ScheduleWorkflowTest(unittest.TestCase):
 
         self.assertIn("ADMIN", row)
         self.assertIn("LOGISTICS", row)
-        self.assertIn("1 confirmation to be sent.", row)
-        self.assertIn("Session package preparation has not started yet.", row)
+        self.assertIn("1 confirmation to be sent", row)
+        self.assertNotIn("1 confirmation to be sent.", row)
+        self.assertIn("Start session package preparation", row)
+        self.assertNotIn("Session package preparation has not started yet.", row)
+        with open("app/static/css/styles.css", encoding="utf-8") as css_file:
+            css = css_file.read()
+        self.assertIn(".bundle-action-department-slot,\n.bundle-action-description-stack > span", css)
+        self.assertNotIn(".bundle-action-stack > .responsible-chip", css)
+        self.assertIn("min-height: 34px;", css)
+
+    def test_bundle_detail_hides_staffing_confirmation_action_until_schedule_approved(self):
+        self.create_supervisor(staff_id=1, name="Laura Mendez")
+        session_record = ExamSession(
+            exam_session_name="Schedule not approved confirmations",
+            category="Path School",
+            status="Pending",
+            session_date=date(2026, 7, 9),
+            shifts="Morning",
+            modules="Speaking",
+            format="Online",
+        )
+        staff_member = AcademicStaff(id=29, status="Active", full_name="Pending Examiner", roles="Examiner", email="pending-examiner@example.com")
+        db.session.add_all([session_record, staff_member])
+        db.session.flush()
+        db.session.add_all([
+            ExamSessionScheduleWorkflow(exam_session_id=session_record.id, status="In progress"),
+            ExamSessionExaminerAssignment(
+                exam_session_id=session_record.id,
+                team_member_id=staff_member.id,
+                participation_status="Pending",
+            ),
+        ])
+        session_record.monthly_registrations_closed = True
+        session_record.monthly_registrations_closed_at = datetime.now(timezone.utc)
+        db.session.flush()
+        bundle = self.create_shipment_bundle_record(status="Preparing", session_record=session_record)
+        db.session.commit()
+        client = self.login_client()
+
+        response = client.get(f"/pre-session-control-tower?session_year=2026&view=bundle&bundle_id={bundle.id}")
+        html = response.get_data(as_text=True)
+        table = html[html.index('aria-label="Schedule preparation and approval"'):html.index('<div class="modal"', html.index('aria-label="Schedule preparation and approval"'))]
+        row_index = table.index("Schedule not approved confirmations")
+        row = table[table.rfind("<tr", 0, row_index):table.index("</tr>", row_index)]
+        action_cells = row[:row.index('data-modal-target-label="Review schedule"')]
+
+        self.assertIn("Complete schedules in Sinapsis", action_cells)
+        self.assertNotIn("confirmation to be sent", action_cells)
+        self.assertNotIn("confirmations to be sent", action_cells)
+
+    def test_bundle_detail_package_in_progress_shows_continue_package_action(self):
+        self.create_supervisor(staff_id=1, name="Laura Mendez")
+        session_record = ExamSession(
+            exam_session_name="Package in progress action",
+            category="Path School",
+            status="Pending",
+            session_date=date(2026, 7, 9),
+            shifts="Morning",
+            modules="Speaking",
+            format="Online",
+            package_label_verification_status="in_progress",
+        )
+        staff_member = AcademicStaff(id=30, status="Active", full_name="Pending Staff", roles="Examiner", email="pending-staff-2@example.com")
+        db.session.add_all([session_record, staff_member])
+        db.session.flush()
+        db.session.add_all([
+            ExamSessionScheduleWorkflow(exam_session_id=session_record.id, status="Approved"),
+            ExamSessionExaminerAssignment(
+                exam_session_id=session_record.id,
+                team_member_id=staff_member.id,
+                participation_status="Pending",
+            ),
+        ])
+        session_record.monthly_registrations_closed = True
+        session_record.monthly_registrations_closed_at = datetime.now(timezone.utc)
+        db.session.flush()
+        bundle = self.create_shipment_bundle_record(status="Preparing", session_record=session_record)
+        db.session.commit()
+        client = self.login_client()
+
+        response = client.get(f"/pre-session-control-tower?session_year=2026&view=bundle&bundle_id={bundle.id}")
+        html = response.get_data(as_text=True)
+        table = html[html.index('aria-label="Schedule preparation and approval"'):html.index('<div class="modal"', html.index('aria-label="Schedule preparation and approval"'))]
+        row_index = table.index("Package in progress action")
+        row = table[table.rfind("<tr", 0, row_index):table.index("</tr>", row_index)]
+
+        self.assertIn("SEMI-UNBLOCKED", row)
+        self.assertIn("packages-status-in-progress", row)
+        self.assertIn("In progress", row)
+        self.assertIn("Continue with session package preparation", row)
+        self.assertNotIn("Start session package preparation", row)
+
+        confirmed_session = ExamSession(
+            exam_session_name="Package in progress unblocked action",
+            category="Path School",
+            status="Pending",
+            session_date=date(2026, 7, 10),
+            shifts="Morning",
+            modules="Speaking",
+            format="Online",
+            package_label_verification_status="in_progress",
+            monthly_registrations_closed=True,
+            monthly_registrations_closed_at=datetime.now(timezone.utc),
+        )
+        confirmed_staff = AcademicStaff(id=31, status="Active", full_name="Confirmed Staff", roles="Examiner", email="confirmed-staff-2@example.com")
+        db.session.add_all([confirmed_session, confirmed_staff])
+        db.session.flush()
+        db.session.add_all([
+            ExamSessionScheduleWorkflow(exam_session_id=confirmed_session.id, status="Approved"),
+            ExamSessionExaminerAssignment(
+                exam_session_id=confirmed_session.id,
+                team_member_id=confirmed_staff.id,
+                participation_status="Confirmed",
+            ),
+        ])
+        confirmed_bundle = self.create_shipment_bundle_record(status="Preparing", session_record=confirmed_session)
+        db.session.commit()
+
+        response = client.get(f"/pre-session-control-tower?session_year=2026&view=bundle&bundle_id={confirmed_bundle.id}")
+        html = response.get_data(as_text=True)
+        table = html[html.index('aria-label="Schedule preparation and approval"'):html.index('<div class="modal"', html.index('aria-label="Schedule preparation and approval"'))]
+        row_index = table.index("Package in progress unblocked action")
+        row = table[table.rfind("<tr", 0, row_index):table.index("</tr>", row_index)]
+
+        self.assertIn("UNBLOCKED", row)
+        self.assertIn("packages-status-in-progress", row)
+        self.assertIn("In progress", row)
+        self.assertIn("Continue with session package preparation", row)
+        self.assertNotIn("Start session package preparation", row)
+
+    def test_bundle_detail_package_incident_shows_management_action(self):
+        self.create_supervisor(staff_id=1, name="Laura Mendez")
+        session_record = ExamSession(
+            exam_session_name="Package incident action",
+            category="Path School",
+            status="Pending",
+            session_date=date(2026, 7, 9),
+            shifts="Morning",
+            modules="Speaking",
+            format="Online",
+            package_label_verification_status="incident",
+        )
+        staff_member = AcademicStaff(id=32, status="Active", full_name="Pending Incident Staff", roles="Examiner", email="pending-incident@example.com")
+        db.session.add_all([session_record, staff_member])
+        db.session.flush()
+        db.session.add_all([
+            ExamSessionScheduleWorkflow(exam_session_id=session_record.id, status="Approved"),
+            ExamSessionExaminerAssignment(
+                exam_session_id=session_record.id,
+                team_member_id=staff_member.id,
+                participation_status="Pending",
+            ),
+        ])
+        session_record.monthly_registrations_closed = True
+        session_record.monthly_registrations_closed_at = datetime.now(timezone.utc)
+        db.session.flush()
+        bundle = self.create_shipment_bundle_record(status="Preparing", session_record=session_record)
+        db.session.commit()
+        client = self.login_client()
+
+        response = client.get(f"/pre-session-control-tower?session_year=2026&view=bundle&bundle_id={bundle.id}")
+        html = response.get_data(as_text=True)
+        table = html[html.index('aria-label="Schedule preparation and approval"'):html.index('<div class="modal"', html.index('aria-label="Schedule preparation and approval"'))]
+        row_index = table.index("Package incident action")
+        row = table[table.rfind("<tr", 0, row_index):table.index("</tr>", row_index)]
+        action_cells = row[:row.index('data-modal-target-label="Review schedule"')]
+
+        self.assertIn("packages-status-incident", row)
+        self.assertIn("With incident", row)
+        self.assertIn('<span class="responsible-chip users-department-chip">MANAGEMENT</span>', action_cells)
+        self.assertIn("Solve Package incident with Logistics", action_cells)
+        self.assertNotIn('<span class="responsible-chip users-department-chip">LOGISTICS</span>', action_cells)
+        self.assertNotIn("Start session package preparation", action_cells)
+
+    def test_bundle_detail_schedule_blocked_shows_registration_close_action(self):
+        self.create_supervisor(staff_id=1, name="Laura Mendez")
+        session_record = self.create_planning_ready_session(
+            "Registrations still open",
+            date(2026, 7, 9),
+            supervisor_id=1,
+            packages_ready=True,
+        )
+        db.session.add_all([
+            ExamSessionExaminerAssignment(
+                exam_session_id=session_record.id,
+                team_member_id=None,
+                participation_status="Pending",
+            ),
+            ExamSessionExaminerAssignment(
+                exam_session_id=session_record.id,
+                team_member_id=None,
+                participation_status="Pending",
+            ),
+        ])
+        bundle = self.create_shipment_bundle_record(status="Preparing bundle", session_record=session_record)
+        db.session.commit()
+        client = self.login_client()
+
+        response = client.get(f"/pre-session-control-tower?session_year=2026&view=bundle&bundle_id={bundle.id}")
+        html = response.get_data(as_text=True)
+        table = html[html.index('aria-label="Schedule preparation and approval"'):html.index('<div class="modal"', html.index('aria-label="Schedule preparation and approval"'))]
+        row_index = table.index("Registrations still open")
+        row = table[table.rfind("<tr", 0, row_index):table.index("</tr>", row_index)]
+
+        self.assertIn("workflow-gate-blocked", row)
+        self.assertIn("BLOCKED", row)
+        self.assertIn("Roles to cover", row)
+        self.assertIn('<span class="responsible-chip users-department-chip">ADMIN</span>', row)
+        self.assertIn("Close exam registrations to begin pre-session preparation", row)
+        self.assertIn('<span class="responsible-chip users-department-chip">MANAGEMENT</span>', row)
+        self.assertIn("2 Examiner positions still need to be filled", row)
+        self.assertNotIn("2 Examiner positions still need to be filled.", row)
+
+    def test_bundle_detail_action_description_marks_overdue_deadline_actions(self):
+        self.create_supervisor(staff_id=1, name="Laura Mendez")
+        self.create_supervisor(staff_id=2, name="Mateo Silva")
+        pending_staff = AcademicStaff(id=33, status="Active", full_name="Pending Examiner", roles="Examiner", email="pending-overdue@example.com")
+        db.session.add(pending_staff)
+        schedule_session = ExamSession(
+            exam_session_name="Schedule overdue bundle action",
+            category="Path School",
+            status="Pending",
+            session_date=date(2026, 7, 9),
+            shifts="Morning",
+            modules="Speaking",
+            format="Online",
+            monthly_registrations_closed=True,
+            monthly_registrations_closed_at=datetime(2026, 6, 1, 12, 0, tzinfo=timezone.utc),
+        )
+        staffing_session = ExamSession(
+            exam_session_name="Staffing overdue bundle action",
+            category="Path School",
+            status="Pending",
+            session_date=date(2026, 7, 10),
+            shifts="Morning",
+            modules="Speaking",
+            format="Online",
+            monthly_registrations_closed=True,
+            monthly_registrations_closed_at=datetime(2026, 6, 1, 12, 0, tzinfo=timezone.utc),
+        )
+        package_session = ExamSession(
+            exam_session_name="Package overdue bundle action",
+            category="Path School",
+            status="Pending",
+            session_date=date(2026, 7, 11),
+            shifts="Morning",
+            modules="Speaking",
+            format="Online",
+            monthly_registrations_closed=True,
+            monthly_registrations_closed_at=datetime(2026, 6, 1, 12, 0, tzinfo=timezone.utc),
+        )
+        db.session.add_all([schedule_session, staffing_session, package_session])
+        db.session.flush()
+        db.session.add_all([
+            ExamSessionScheduleWorkflow(
+                exam_session_id=schedule_session.id,
+                status="In progress",
+                next_action_due_at=date(2026, 6, 30),
+            ),
+            ExamSessionScheduleWorkflow(exam_session_id=staffing_session.id, status="Approved"),
+            ExamSessionScheduleWorkflow(
+                exam_session_id=package_session.id,
+                status="Approved",
+                approved_at=datetime(2026, 6, 20, 12, 0, tzinfo=timezone.utc),
+            ),
+            ExamSessionStaffingControl(exam_session_id=staffing_session.id, staffing_due_at=date(2026, 6, 30)),
+            ExamSessionExaminerAssignment(
+                exam_session_id=staffing_session.id,
+                team_member_id=pending_staff.id,
+                participation_status="Pending",
+            ),
+            ExamSessionSupervisorAssignment(
+                exam_session_id=package_session.id,
+                team_member_id=2,
+                participation_status="Confirmed",
+                updated_on=datetime(2026, 6, 24, 12, 0, tzinfo=timezone.utc),
+            ),
+        ])
+        schedule_bundle = self.create_shipment_bundle_record(status="Preparing bundle", session_record=schedule_session)
+        staffing_bundle = self.create_shipment_bundle_record(status="Preparing bundle", session_record=staffing_session)
+        package_bundle = self.create_shipment_bundle_record(status="Preparing bundle", session_record=package_session)
+        db.session.commit()
+        package_unit = self.create_package_unit_record(status="Pre-packing", expected=10, actual=10, session_record=package_session)
+        package_unit.package_deadline = date(2026, 6, 30)
+        db.session.commit()
+        client = self.login_client()
+
+        def bundle_row(bundle, session_name):
+            response = client.get(f"/pre-session-control-tower?session_year=2026&view=bundle&bundle_id={bundle.id}")
+            html = response.get_data(as_text=True)
+            table = html[html.index('aria-label="Schedule preparation and approval"'):html.index('<div class="modal"', html.index('aria-label="Schedule preparation and approval"'))]
+            row_index = table.index(session_name)
+            return table[table.rfind("<tr", 0, row_index):table.index("</tr>", row_index)]
+
+        schedule_row = bundle_row(schedule_bundle, "Schedule overdue bundle action")
+        staffing_row = bundle_row(staffing_bundle, "Staffing overdue bundle action")
+        package_row = bundle_row(package_bundle, "Package overdue bundle action")
+        schedule_action_cells = schedule_row[:schedule_row.index('data-modal-target-label="Review schedule"')]
+        staffing_action_cells = staffing_row[:staffing_row.index('data-modal-target-label="Review schedule"')]
+        package_action_cells = package_row[:package_row.index('data-modal-target-label="Review schedule"')]
+
+        self.assertIn("workflow-deadline-overdue", schedule_row)
+        self.assertIn("Complete schedules in Sinapsis", schedule_action_cells)
+        self.assertIn('<span class="bundle-action-overdue-chip">Overdue</span>', schedule_action_cells)
+        self.assertIn("workflow-deadline-overdue", staffing_row)
+        self.assertIn("1 confirmation to be sent", staffing_action_cells)
+        self.assertIn('<span class="bundle-action-overdue-chip">Overdue</span>', staffing_action_cells)
+        self.assertIn("workflow-deadline-overdue", package_row)
+        self.assertIn("package units have completed pre-packing", package_action_cells)
+        self.assertIn('<span class="bundle-action-overdue-chip">Overdue</span>', package_action_cells)
+
+    def test_bundle_detail_finalised_session_shows_dash_department_and_finalised_action(self):
+        self.create_supervisor(staff_id=1, name="Laura Mendez")
+        session_record = self.create_planning_ready_session(
+            "Finalised preparation session",
+            date(2026, 7, 9),
+            supervisor_id=1,
+            packages_ready=True,
+        )
+        session_record.monthly_registrations_closed = True
+        session_record.monthly_registrations_closed_at = datetime.now(timezone.utc)
+        bundle = self.create_shipment_bundle_record(status="Preparing bundle", session_record=session_record)
+        db.session.commit()
+        client = self.login_client()
+
+        response = client.get(f"/pre-session-control-tower?session_year=2026&view=bundle&bundle_id={bundle.id}")
+        html = response.get_data(as_text=True)
+        table = html[html.index('aria-label="Schedule preparation and approval"'):html.index('<div class="modal"', html.index('aria-label="Schedule preparation and approval"'))]
+        row_index = table.index("Finalised preparation session")
+        row = table[table.rfind("<tr", 0, row_index):table.index("</tr>", row_index)]
+        action_cells = row[:row.index('data-modal-target-label="Review schedule"')]
+
+        self.assertIn("schedule-status-approved", row)
+        self.assertIn("packages-status-completed", row)
+        self.assertIn('<span class="muted">-</span>', action_cells)
+        self.assertIn("Session preparation finalised", action_cells)
+        self.assertNotIn("No action required.", action_cells)
+        self.assertNotIn("No action required</span>.", action_cells)
+        self.assertNotIn('<span class="responsible-chip users-department-chip">LOGISTICS</span>', action_cells)
+        self.assertNotIn('<span class="responsible-chip users-department-chip">ADMIN</span>', action_cells)
+        self.assertNotIn('<span class="responsible-chip users-department-chip">MANAGEMENT</span>', action_cells)
 
     def test_bundle_detail_only_shows_sessions_for_selected_bundle(self):
         self.create_supervisor(staff_id=1, name="Laura Mendez")
@@ -7163,13 +8160,13 @@ class ScheduleWorkflowTest(unittest.TestCase):
         modal_start = bundle_html.index(f'id="schedule-workflow-{first.id}"')
         next_modal = bundle_html.find('<div class="modal" id=', modal_start + 1)
         modal = bundle_html[modal_start:next_modal if next_modal != -1 else len(bundle_html)]
-        staffing_form_index = modal.index(f"/staffing-assignments/intern/{assignment.id}/status")
-        staffing_form = modal[modal.rfind("<form", 0, staffing_form_index):modal.index("</form>", staffing_form_index)]
+        package_form_index = modal.index(f"/pre-session-control-tower/sessions/{first.id}/packages/label-verification")
+        package_form = modal[modal.rfind("<form", 0, package_form_index):modal.index("</form>", package_form_index)]
 
         self.assertIn('name="view" value="bundle"', modal)
         self.assertIn(f'name="bundle_id" value="{selected_link.bundle_id}"', modal)
-        self.assertIn('name="view" value="bundle"', staffing_form)
-        self.assertIn(f'name="bundle_id" value="{selected_link.bundle_id}"', staffing_form)
+        self.assertIn('name="view" value="bundle"', package_form)
+        self.assertIn(f'name="bundle_id" value="{selected_link.bundle_id}"', package_form)
 
         schedule_response = client.post(
             f"/pre-session-control-tower/sessions/{first.id}/schedule",
@@ -7206,6 +8203,24 @@ class ScheduleWorkflowTest(unittest.TestCase):
         self.assertIn(f"bundle_id={selected_link.bundle_id}", staffing_location)
         self.assertIn("open_modal_target=staffing", staffing_location)
         self.assertIn("staffing_only=1", staffing_location)
+
+        package_response = client.post(
+            f"/pre-session-control-tower/sessions/{first.id}/packages/label-verification",
+            data={
+                "csrf_token": "token",
+                "action": "mark_in_progress",
+                "view": "bundle",
+                "bundle_id": str(selected_link.bundle_id),
+            },
+            follow_redirects=False,
+        )
+        package_location = package_response.headers["Location"]
+
+        self.assertEqual(package_response.status_code, 302)
+        self.assertIn("view=bundle", package_location)
+        self.assertIn(f"bundle_id={selected_link.bundle_id}", package_location)
+        self.assertIn("open_modal_target=package-label-verification", package_location)
+        self.assertIn("packages_only=1", package_location)
 
     def test_schedule_only_mode_keeps_schedule_notes_visible(self):
         with open("app/static/css/styles.css", encoding="utf-8") as css_file:

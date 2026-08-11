@@ -4840,6 +4840,39 @@ span.session-marker-chip {
   color: var(--badge-green-text);
 }
 
+.workflow-deadline-chip,
+.schedule-deadline-chip {
+  display: inline-flex;
+  align-items: center;
+  width: fit-content;
+  border-radius: 999px;
+  padding: 3px 8px;
+  font-size: 11px;
+  font-weight: 800;
+  line-height: 1.2;
+  white-space: nowrap;
+}
+
+.workflow-deadline-on-track,
+.schedule-deadline-on-track {
+  background: var(--badge-grey-bg);
+  color: var(--badge-grey-text);
+}
+
+.workflow-deadline-chip.workflow-deadline-overdue,
+.workflow-deadline-chip.workflow-deadline-missed,
+.schedule-deadline-chip.schedule-deadline-overdue,
+.schedule-deadline-chip.schedule-deadline-missed {
+  background: var(--badge-red-bg);
+  color: var(--path-red);
+}
+
+.workflow-deadline-chip.workflow-deadline-met,
+.schedule-deadline-chip.schedule-deadline-met {
+  background: var(--badge-green-bg);
+  color: #2f7d32;
+}
+
 .schedule-gate-ready {
   background: var(--badge-green-bg);
   color: var(--badge-green-text);
@@ -5200,11 +5233,34 @@ span.session-marker-chip {
   align-items: start;
 }
 
+.bundle-action-department-slot,
+.bundle-action-description-stack > span {
+  min-height: 34px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
 .bundle-action-description-stack {
   max-width: 360px;
   color: var(--color-text);
   font-size: 12px;
   line-height: 1.35;
+}
+
+.bundle-action-overdue-chip {
+  display: inline-flex;
+  align-items: center;
+  width: fit-content;
+  border-radius: 999px;
+  padding: 3px 8px;
+  background: var(--badge-red-bg);
+  color: var(--badge-red-text);
+  font-size: 11px;
+  font-weight: 900;
+  line-height: 1.1;
+  white-space: nowrap;
 }
 
 .my-action-source-packages {
@@ -5372,6 +5428,27 @@ span.session-marker-chip {
   font-size: 12px;
   font-weight: 800;
   line-height: 1.3;
+}
+
+.schedule-summary-cell > .workflow-deadline-chip,
+.staffing-summary-cell > .workflow-deadline-chip,
+.packages-summary-cell > .workflow-deadline-chip {
+  font-size: 11px;
+}
+
+.schedule-summary-cell > .workflow-deadline-chip.workflow-deadline-met,
+.staffing-summary-cell > .workflow-deadline-chip.workflow-deadline-met,
+.packages-summary-cell > .workflow-deadline-chip.workflow-deadline-met {
+  color: #2f7d32;
+}
+
+.schedule-summary-cell > .workflow-deadline-chip.workflow-deadline-missed,
+.schedule-summary-cell > .workflow-deadline-chip.workflow-deadline-overdue,
+.staffing-summary-cell > .workflow-deadline-chip.workflow-deadline-missed,
+.staffing-summary-cell > .workflow-deadline-chip.workflow-deadline-overdue,
+.packages-summary-cell > .workflow-deadline-chip.workflow-deadline-missed,
+.packages-summary-cell > .workflow-deadline-chip.workflow-deadline-overdue {
+  color: var(--path-red);
 }
 
 .sinapsis-table-cell-with-link {
@@ -7399,6 +7476,16 @@ span.session-marker-chip {
   margin-top: var(--space-4);
 }
 
+.bundles-table td:nth-child(3) .bundle-action-description-stack {
+  max-width: calc(360px - 10mm);
+}
+
+.bundles-table td:nth-child(3) .bundle-action-description-stack > span > span:first-child {
+  min-width: 0;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
 .bundle-number-cell {
   width: max-content;
   min-width: 0;
@@ -7408,6 +7495,25 @@ span.session-marker-chip {
   width: 100%;
   justify-content: center;
   text-align: center;
+}
+
+.shipment-summary-cell .bundle-session-date {
+  font-size: inherit;
+  font-weight: 400;
+}
+
+.shipment-summary-cell > .shipment-deadline-chip {
+  display: inline-flex;
+  align-items: center;
+  width: fit-content;
+  border-radius: 999px;
+  padding: 3px 8px;
+  background: var(--badge-grey-bg);
+  color: var(--badge-grey-text);
+  font-size: 11px;
+  font-weight: 800;
+  line-height: 1.2;
+  white-space: nowrap;
 }
 
 .bundle-session-chip-list {

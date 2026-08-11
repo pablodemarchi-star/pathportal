@@ -9,11 +9,19 @@
   <span class="badge schedule-health-{{ health|lower|replace(' ', '-') }}">{{ health }}</span>
 {%- endmacro %}
 
+{% macro workflow_deadline_chip(deadline_badge, extra_class='') -%}
+  {% if deadline_badge %}
+    <span class="workflow-deadline-chip workflow-deadline-{{ deadline_badge.status }} {{ extra_class }}" title="{{ deadline_badge.label }}" aria-label="{{ deadline_badge.label }}: {{ deadline_badge.date|session_date }}">
+      Deadline {{ deadline_badge.date|session_date }}
+    </span>
+  {% endif %}
+{%- endmacro %}
+
 {% macro schedule_gate_badge(gate, focusable=true) -%}
   <span class="badge schedule-gate-{{ gate.status }}" title="{{ gate.message }}" aria-label="Schedule gate {{ gate.label }}: {{ gate.message }}"{% if focusable %} tabindex="0"{% endif %}>{{ gate.label }}</span>
 {%- endmacro %}
 
-{% macro schedule_table_cell(status, gate, review_round, monthly_registrations_closed=false) -%}
+{% macro schedule_table_cell(status, gate, review_round, monthly_registrations_closed=false, deadline_badge=none) -%}
   <span class="schedule-summary-cell">
     {% if monthly_registrations_closed %}
       <span class="workflow-gate-chip workflow-gate-unblocked" aria-label="Schedule gate unblocked">
@@ -35,6 +43,9 @@
     {{ schedule_status_badge(status) }}
     {% if review_round %}
       <small>Rounds: {{ review_round }}</small>
+    {% endif %}
+    {% if deadline_badge %}
+      {{ workflow_deadline_chip(deadline_badge, 'schedule-deadline-chip schedule-deadline-' ~ deadline_badge.status) }}
     {% endif %}
   </span>
 {%- endmacro %}
@@ -72,7 +83,7 @@
   </span>
 {%- endmacro %}
 
-{% macro staffing_table_cell(staffing, schedule_gate, focusable=true) -%}
+{% macro staffing_table_cell(staffing, schedule_gate, focusable=true, deadline_badge=none) -%}
   <span class="staffing-summary-cell">
     {% if schedule_gate.is_ready %}
       <span class="staffing-gate-chip staffing-gate-unblocked" aria-label="Staffing gate unblocked">
@@ -97,6 +108,7 @@
       {% for line in staffing.secondary_lines %}
         <small>{{ line }}</small>
       {% endfor %}
+      {{ workflow_deadline_chip(deadline_badge, 'staffing-column-deadline-chip') }}
     {% else %}
       <small>No staff roles configured</small>
     {% endif %}
@@ -150,7 +162,7 @@
   {% endif %}
 {%- endmacro %}
 
-{% macro packages_table_cell(packages, schedule_ready, staffing_ready, focusable=true, preparation_status=none) -%}
+{% macro packages_table_cell(packages, schedule_ready, staffing_ready, focusable=true, preparation_status=none, deadline_badge=none) -%}
   <span class="packages-summary-cell">
     {{ packages_gate_chip(schedule_ready, staffing_ready) }}
     {% set package_status = preparation_status or packages %}
@@ -161,6 +173,7 @@
     {% for line in package_status.secondary_lines %}
       <small title="{{ line.tooltip }}">{{ line.text }}</small>
     {% endfor %}
+    {{ workflow_deadline_chip(deadline_badge, 'package-column-deadline-chip') }}
   </span>
 {%- endmacro %}
 
@@ -380,7 +393,13 @@
   {% if actions %}
     <span class="bundle-action-stack">
       {% for action in actions %}
-        <span class="responsible-chip users-department-chip">{{ action.department }}</span>
+        <span class="bundle-action-department-slot">
+          {% if action.department %}
+            <span class="responsible-chip users-department-chip">{{ action.department }}</span>
+          {% else %}
+            <span class="muted">-</span>
+          {% endif %}
+        </span>
       {% endfor %}
     </span>
   {% else %}
@@ -392,11 +411,17 @@
   {% if actions %}
     <span class="bundle-action-stack bundle-action-description-stack">
       {% for action in actions %}
-        <span>{{ action.description }}</span>
+        {% set description = action.description|trim %}
+        <span>
+          <span>{{ description[:-1] if description.endswith('.') else description }}</span>
+          {% if action.overdue %}
+            <span class="bundle-action-overdue-chip">Overdue</span>
+          {% endif %}
+        </span>
       {% endfor %}
     </span>
   {% else %}
-    <span class="muted">No action required.</span>
+    <span class="muted">No action required</span>
   {% endif %}
 {%- endmacro %}
 
@@ -1133,20 +1158,25 @@
     <thead>
       <tr>
         <th>Bundle number</th>
-        <th>Deadline</th>
-        <th>Exam sessions</th>
-        <th>Supervisor</th>
-        <th>Package</th>
-        <th>Shipment</th>
         <th>Department</th>
         <th>Action description</th>
+        <th>Shipment</th>
+        <th>Exam sessions</th>
+        <th>Recipient</th>
       </tr>
     </thead>
     <tbody>
       {% if pending_shipment_bundle %}
         <tr>
           <td><strong>Pending bundles</strong></td>
-          <td><span class="muted">Not set</span></td>
+          <td><span class="bundle-action-stack"><span class="bundle-action-department-slot"><span class="responsible-chip users-department-chip">LOGISTICS</span></span></span></td>
+          <td><span class="potential-action-text">Configure shipment bundle</span></td>
+          <td>
+            <span class="shipment-summary-cell">
+              <span class="badge shipment-status-not-bundled">Not configured</span>
+              <small>Shipment recipient missing</small>
+            </span>
+          </td>
           <td>
             <div class="bundle-session-chip-list">
               {% for chip in pending_shipment_bundle.session_chips %}
@@ -1155,20 +1185,6 @@
             </div>
           </td>
           <td><span class="muted">Not configured</span></td>
-          <td>
-            <span class="shipment-summary-cell">
-              <strong>Pending configuration</strong>
-              <small>Shipment not configured</small>
-            </span>
-          </td>
-          <td>
-            <span class="shipment-summary-cell">
-              <span class="badge shipment-status-not-bundled">Not configured</span>
-              <small>Shipment recipient missing</small>
-            </span>
-          </td>
-          <td><span class="bundle-action-stack"><span class="responsible-chip users-department-chip">LOGISTICS</span></span></td>
-          <td><span class="potential-action-text">Configure shipment bundle.</span></td>
         </tr>
       {% endif %}
       {% for bundle in bundle_views %}
@@ -1179,31 +1195,8 @@
               <a class="secondary-button compact-action" href="{{ url_for('staff.pre_session_control_tower', session_year=selected_session_year, view='bundle', bundle_id=bundle.id) }}">Open bundle</a>
             </span>
           </td>
-          <td>
-            {% if bundle.dispatch_due_at %}
-              {{ bundle.dispatch_due_at|session_date }}
-            {% else %}
-              <span class="muted">Not set</span>
-            {% endif %}
-          </td>
-          <td>
-            <div class="bundle-session-chip-list">
-              {% for chip in bundle.session_chips %}
-                <span class="bundle-session-chip">{{ chip.date|session_date }} {{ chip.name }}</span>
-              {% endfor %}
-            </div>
-          </td>
-          <td><span class="responsible-chip bundle-supervisor-chip">{{ bundle.supervisor_name }}</span></td>
-          <td>
-            <span class="shipment-summary-cell">
-              <strong>{{ bundle.packages_label }}</strong>
-              {% if bundle.readiness.packages_missing_count %}
-                <small>Packages pending</small>
-              {% else %}
-                <small>All confirmed</small>
-              {% endif %}
-            </span>
-          </td>
+          <td>{{ bundle_detail_departments_cell(bundle.action_items) }}</td>
+          <td>{{ bundle_detail_action_descriptions_cell(bundle.action_items) }}</td>
           <td>
             {% set bundle_modal_session = bundle.included_sessions[0] if bundle.included_sessions else none %}
             {% if bundle_modal_session %}
@@ -1237,10 +1230,14 @@
 	                    </span>
 	                  {% endif %}
 	                  {{ shipment_status_badge(bundle.operational_status) }}
+                  <strong>{{ bundle.packages_label }}</strong>
 		                  {% if bundle.blocked or bundle.semi_unblocked %}
 		                    <small>{{ bundle.gate.sessions_completed_count }}/{{ bundle.gate.sessions_count }} sessions completed</small>
 	                  {% else %}
                     <small>{{ bundle.status }}</small>
+                  {% endif %}
+                  {% if bundle.dispatch_due_at %}
+                    <span class="shipment-deadline-chip">Deadline {{ bundle.dispatch_due_at|session_date }}</span>
                   {% endif %}
                 </span>
               </button>
@@ -1251,13 +1248,19 @@
               </span>
             {% endif %}
           </td>
-          <td>{{ bundle_detail_departments_cell(bundle.action_items) }}</td>
-          <td>{{ bundle_detail_action_descriptions_cell(bundle.action_items) }}</td>
+          <td>
+            <div class="bundle-session-chip-list">
+              {% for chip in bundle.session_chips %}
+                <span class="bundle-session-chip">{{ chip.date|session_date }} {{ chip.name }}</span>
+              {% endfor %}
+            </div>
+          </td>
+          <td><span class="responsible-chip bundle-supervisor-chip">{{ bundle.supervisor_name }}</span></td>
         </tr>
       {% endfor %}
       {% if not bundle_views and not pending_shipment_bundle %}
         <tr>
-          <td colspan="8" class="empty-state">
+          <td colspan="6" class="empty-state">
             <strong>No pending shipment bundles.</strong>
             <span>All current shipment bundles are either completed or not yet available.</span>
           </td>
@@ -1322,7 +1325,9 @@
           <th>Action</th>
         {% endif %}
         <th>Session</th>
-        <th>Date</th>
+        {% if selected_view != 'bundle' %}
+          <th>Date</th>
+        {% endif %}
         {% if selected_view == 'bundle' %}
           <th>Department</th>
           <th>Action description</th>
@@ -1349,25 +1354,36 @@
           {% if selected_view != 'bundle' %}
             <td><button class="secondary-button compact-action" type="button" data-open-modal="schedule-workflow-{{ session.id }}" data-modal-scroll-target="overview-{{ session.id }}" data-modal-mode="overview">Session overview</button></td>
           {% endif %}
-          <td>{{ session.exam_session_name }}</td>
-          <td>{{ session.session_date|session_date }}</td>
+          <td>
+            {% if selected_view == 'bundle' %}
+              <span class="shipment-summary-cell bundle-session-name-cell">
+                <strong>{{ session.exam_session_name }}</strong>
+                <small class="bundle-session-date">{{ session.session_date|session_date }}</small>
+              </span>
+            {% else %}
+              {{ session.exam_session_name }}
+            {% endif %}
+          </td>
+          {% if selected_view != 'bundle' %}
+            <td>{{ session.session_date|session_date }}</td>
+          {% endif %}
           {% if selected_view == 'bundle' %}
             <td>{{ bundle_detail_departments_cell(view.bundle_detail_actions) }}</td>
             <td>{{ bundle_detail_action_descriptions_cell(view.bundle_detail_actions) }}</td>
           {% endif %}
           <td>
             {% call contextual_cell_trigger(session, 'schedule-actions', 'Review schedule', selected_view == 'bundle') %}
-              {{ schedule_table_cell(view.status, view.schedule_gate, view.review_round, view.monthly_registrations_closed) }}
+              {{ schedule_table_cell(view.status, view.schedule_gate, view.review_round, view.monthly_registrations_closed, view.deadline_badge) }}
             {% endcall %}
           </td>
           <td>
             {% call contextual_cell_trigger(session, 'staffing', 'Manage staffing', staffing_only=true) %}
-              {{ staffing_table_cell(view.staffing, view.schedule_gate, false) }}
+              {{ staffing_table_cell(view.staffing, view.schedule_gate, false, view.staffing_deadline_badge) }}
             {% endcall %}
           </td>
           <td>
             {% call contextual_cell_trigger(session, 'packages', 'Manage packages', packages_only=true) %}
-              {{ packages_table_cell(view.packages.contract, view.packages.schedule_ready, view.packages.staffing_ready, false, view.packages.preparation_status) }}
+              {{ packages_table_cell(view.packages.contract, view.packages.schedule_ready, view.packages.staffing_ready, false, view.packages.preparation_status, view.packages.deadline_badge) }}
             {% endcall %}
           </td>
           {% if selected_view != 'bundle' %}
@@ -1746,7 +1762,13 @@
           </div>
           <div>
             <span>Nearest deadline</span>
-            <strong>{{ nearest_deadline.label }}</strong>
+            <strong>
+              {% if view.staffing.ready %}
+                <span class="muted">Completed</span>
+              {% else %}
+                {{ nearest_deadline.label }}
+              {% endif %}
+            </strong>
           </div>
         </section>
         <form method="post" action="{{ url_for('staff.update_staffing_control', session_id=session.id) }}" id="staffing-control-form-{{ session.id }}" class="staffing-control-form" data-staffing-control-form data-disable-on-submit hidden>
@@ -2092,8 +2114,14 @@
             <strong>LOGISTICS</strong>
           </div>
           <div>
-            <span>Nearest deadline</span>
-            <strong>-</strong>
+            <span>Current deadline</span>
+            <strong>
+              {% if package_status_value == 'completed' %}
+                <span class="muted">Completed</span>
+              {% else %}
+                -
+              {% endif %}
+            </strong>
           </div>
         </section>
         {{ package_status_track_panel(session, view.packages.status_events or []) }}
@@ -2157,21 +2185,21 @@
               <form method="post" action="{{ url_for('staff.update_package_label_verification', session_id=session.id) }}" data-disable-on-submit>
                 <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
                 <input type="hidden" name="schedule_status" value="{{ selected_schedule_status }}">
-                <input type="hidden" name="view" value="{{ selected_view }}">
+                {{ pre_session_return_fields(selected_view, selected_bundle) }}
                 <input type="hidden" name="action" value="mark_in_progress">
                 <button class="package-preparation-chip package-preparation-chip-progress" type="submit" {% if label_verification_status in ["in_progress", "completed"] %}disabled{% endif %}>Mark as in progress</button>
               </form>
               <form method="post" action="{{ url_for('staff.update_package_label_verification', session_id=session.id) }}" data-disable-on-submit>
                 <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
                 <input type="hidden" name="schedule_status" value="{{ selected_schedule_status }}">
-                <input type="hidden" name="view" value="{{ selected_view }}">
+                {{ pre_session_return_fields(selected_view, selected_bundle) }}
                 <input type="hidden" name="action" value="mark_complete">
                 <button class="package-preparation-chip package-preparation-chip-complete" type="submit" {% if label_verification_status == "completed" %}disabled{% endif %}>Mark as complete</button>
               </form>
               <form method="post" action="{{ url_for('staff.update_package_label_verification', session_id=session.id) }}" data-disable-on-submit>
                 <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
                 <input type="hidden" name="schedule_status" value="{{ selected_schedule_status }}">
-                <input type="hidden" name="view" value="{{ selected_view }}">
+                {{ pre_session_return_fields(selected_view, selected_bundle) }}
                 <input type="hidden" name="action" value="mark_incident">
                 <button class="package-preparation-chip package-preparation-chip-incident" type="submit" {% if label_verification_status in ["completed", "incident"] %}disabled{% endif %}>Mark incident</button>
               </form>
@@ -2180,7 +2208,7 @@
 This stage has already been marked as complete. Reopening it may affect package preparation records and any previously confirmed label checks. Please continue only if changes are required." data-confirm-password-value="EditOK" data-disable-on-submit>
                   <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
                   <input type="hidden" name="schedule_status" value="{{ selected_schedule_status }}">
-                  <input type="hidden" name="view" value="{{ selected_view }}">
+                  {{ pre_session_return_fields(selected_view, selected_bundle) }}
                   <input type="hidden" name="action" value="reopen">
                   <input type="hidden" name="confirmation_password" value="">
                   <button class="package-preparation-chip package-preparation-chip-reopen" type="submit">Reopen</button>
@@ -2216,21 +2244,21 @@ This stage has already been marked as complete. Reopening it may affect package 
               <form method="post" action="{{ url_for('staff.update_package_label_printing', session_id=session.id) }}" data-disable-on-submit>
                 <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
                 <input type="hidden" name="schedule_status" value="{{ selected_schedule_status }}">
-                <input type="hidden" name="view" value="{{ selected_view }}">
+                {{ pre_session_return_fields(selected_view, selected_bundle) }}
                 <input type="hidden" name="action" value="mark_in_progress">
 	                <button class="package-preparation-chip package-preparation-chip-progress" type="submit" {% if not label_printing_unlocked or label_printing_status in ["in_progress", "completed"] %}disabled{% endif %}>Mark as in progress</button>
               </form>
               <form method="post" action="{{ url_for('staff.update_package_label_printing', session_id=session.id) }}" data-disable-on-submit>
                 <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
                 <input type="hidden" name="schedule_status" value="{{ selected_schedule_status }}">
-                <input type="hidden" name="view" value="{{ selected_view }}">
+                {{ pre_session_return_fields(selected_view, selected_bundle) }}
                 <input type="hidden" name="action" value="mark_complete">
 	                <button class="package-preparation-chip package-preparation-chip-complete" type="submit" {% if not label_printing_unlocked or label_printing_status == "completed" %}disabled{% endif %}>Mark as complete</button>
               </form>
               <form method="post" action="{{ url_for('staff.update_package_label_printing', session_id=session.id) }}" data-disable-on-submit>
                 <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
                 <input type="hidden" name="schedule_status" value="{{ selected_schedule_status }}">
-                <input type="hidden" name="view" value="{{ selected_view }}">
+                {{ pre_session_return_fields(selected_view, selected_bundle) }}
                 <input type="hidden" name="action" value="mark_incident">
 	                <button class="package-preparation-chip package-preparation-chip-incident" type="submit" {% if not label_printing_unlocked or label_printing_status in ["completed", "incident"] %}disabled{% endif %}>Mark incident</button>
               </form>
@@ -2239,7 +2267,7 @@ This stage has already been marked as complete. Reopening it may affect package 
 This stage has already been marked as complete. Reopening it may affect package preparation records and any previously confirmed label checks. Please continue only if changes are required." data-confirm-password-value="EditOK" data-disable-on-submit>
                   <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
                   <input type="hidden" name="schedule_status" value="{{ selected_schedule_status }}">
-                  <input type="hidden" name="view" value="{{ selected_view }}">
+                  {{ pre_session_return_fields(selected_view, selected_bundle) }}
                   <input type="hidden" name="action" value="reopen">
                   <input type="hidden" name="confirmation_password" value="">
                   <button class="package-preparation-chip package-preparation-chip-reopen" type="submit">Reopen</button>
@@ -2291,21 +2319,21 @@ This stage has already been marked as complete. Reopening it may affect package 
               <form method="post" action="{{ url_for('staff.update_room_package_sealing', session_id=session.id) }}" data-disable-on-submit>
                 <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
                 <input type="hidden" name="schedule_status" value="{{ selected_schedule_status }}">
-                <input type="hidden" name="view" value="{{ selected_view }}">
+                {{ pre_session_return_fields(selected_view, selected_bundle) }}
                 <input type="hidden" name="action" value="mark_in_progress">
 	                <button class="package-preparation-chip package-preparation-chip-progress" type="submit" {% if not room_package_sealing_unlocked or room_package_sealing_status in ["in_progress", "completed"] %}disabled{% endif %}>Mark as in progress</button>
               </form>
               <form method="post" action="{{ url_for('staff.update_room_package_sealing', session_id=session.id) }}" data-disable-on-submit>
                 <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
                 <input type="hidden" name="schedule_status" value="{{ selected_schedule_status }}">
-                <input type="hidden" name="view" value="{{ selected_view }}">
+                {{ pre_session_return_fields(selected_view, selected_bundle) }}
                 <input type="hidden" name="action" value="mark_complete">
 	                <button class="package-preparation-chip package-preparation-chip-complete" type="submit" {% if not room_package_sealing_unlocked or room_package_sealing_status == "completed" or not view.packages.staffing_ready %}disabled{% endif %}>Mark as complete</button>
               </form>
               <form method="post" action="{{ url_for('staff.update_room_package_sealing', session_id=session.id) }}" data-disable-on-submit>
                 <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
                 <input type="hidden" name="schedule_status" value="{{ selected_schedule_status }}">
-                <input type="hidden" name="view" value="{{ selected_view }}">
+                {{ pre_session_return_fields(selected_view, selected_bundle) }}
                 <input type="hidden" name="action" value="mark_incident">
 	                <button class="package-preparation-chip package-preparation-chip-incident" type="submit" {% if not room_package_sealing_unlocked or room_package_sealing_status in ["completed", "incident"] %}disabled{% endif %}>Mark incident</button>
               </form>
@@ -2314,7 +2342,7 @@ This stage has already been marked as complete. Reopening it may affect package 
 This stage has already been marked as complete. Reopening it may affect package preparation records and any previously confirmed package sealing checks. Please continue only if changes are required." data-confirm-password-value="EditOK" data-disable-on-submit>
                   <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
                   <input type="hidden" name="schedule_status" value="{{ selected_schedule_status }}">
-                  <input type="hidden" name="view" value="{{ selected_view }}">
+                  {{ pre_session_return_fields(selected_view, selected_bundle) }}
                   <input type="hidden" name="action" value="reopen">
                   <input type="hidden" name="confirmation_password" value="">
                   <button class="package-preparation-chip package-preparation-chip-reopen" type="submit">Reopen</button>
@@ -2352,21 +2380,21 @@ This stage has already been marked as complete. Reopening it may affect package 
               <form method="post" action="{{ url_for('staff.update_return_packages', session_id=session.id) }}" data-disable-on-submit>
                 <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
                 <input type="hidden" name="schedule_status" value="{{ selected_schedule_status }}">
-                <input type="hidden" name="view" value="{{ selected_view }}">
+                {{ pre_session_return_fields(selected_view, selected_bundle) }}
                 <input type="hidden" name="action" value="mark_in_progress">
                 <button class="package-preparation-chip package-preparation-chip-progress" type="submit" {% if return_packages_status in ["in_progress", "completed"] %}disabled{% endif %}>Mark as in progress</button>
               </form>
               <form method="post" action="{{ url_for('staff.update_return_packages', session_id=session.id) }}" data-disable-on-submit>
                 <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
                 <input type="hidden" name="schedule_status" value="{{ selected_schedule_status }}">
-                <input type="hidden" name="view" value="{{ selected_view }}">
+                {{ pre_session_return_fields(selected_view, selected_bundle) }}
                 <input type="hidden" name="action" value="mark_complete">
                 <button class="package-preparation-chip package-preparation-chip-complete" type="submit" {% if return_packages_status == "completed" %}disabled{% endif %}>Mark as complete</button>
               </form>
               <form method="post" action="{{ url_for('staff.update_return_packages', session_id=session.id) }}" data-disable-on-submit>
                 <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
                 <input type="hidden" name="schedule_status" value="{{ selected_schedule_status }}">
-                <input type="hidden" name="view" value="{{ selected_view }}">
+                {{ pre_session_return_fields(selected_view, selected_bundle) }}
                 <input type="hidden" name="action" value="mark_incident">
                 <button class="package-preparation-chip package-preparation-chip-incident" type="submit" {% if return_packages_status in ["completed", "incident"] %}disabled{% endif %}>Mark incident</button>
               </form>
@@ -2375,7 +2403,7 @@ This stage has already been marked as complete. Reopening it may affect package 
 This stage has already been marked as complete. Reopening it may affect package preparation records and any previously confirmed return package checks. Please continue only if changes are required." data-confirm-password-value="EditOK" data-disable-on-submit>
                   <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
                   <input type="hidden" name="schedule_status" value="{{ selected_schedule_status }}">
-                  <input type="hidden" name="view" value="{{ selected_view }}">
+                  {{ pre_session_return_fields(selected_view, selected_bundle) }}
                   <input type="hidden" name="action" value="reopen">
                   <input type="hidden" name="confirmation_password" value="">
                   <button class="package-preparation-chip package-preparation-chip-reopen" type="submit">Reopen</button>
@@ -2429,21 +2457,21 @@ This stage has already been marked as complete. Reopening it may affect package 
                 <form method="post" action="{{ url_for('staff.update_staff_member_ids', session_id=session.id) }}" data-disable-on-submit>
                   <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
                   <input type="hidden" name="schedule_status" value="{{ selected_schedule_status }}">
-                  <input type="hidden" name="view" value="{{ selected_view }}">
+                  {{ pre_session_return_fields(selected_view, selected_bundle) }}
                   <input type="hidden" name="action" value="mark_in_progress">
                   <button class="package-preparation-chip package-preparation-chip-progress" type="submit" {% if staff_member_ids_status in ["in_progress", "completed"] %}disabled{% endif %}>Mark as in progress</button>
                 </form>
                 <form method="post" action="{{ url_for('staff.update_staff_member_ids', session_id=session.id) }}" data-disable-on-submit>
                   <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
                   <input type="hidden" name="schedule_status" value="{{ selected_schedule_status }}">
-                  <input type="hidden" name="view" value="{{ selected_view }}">
+                  {{ pre_session_return_fields(selected_view, selected_bundle) }}
                   <input type="hidden" name="action" value="mark_complete">
                   <button class="package-preparation-chip package-preparation-chip-complete" type="submit" {% if staff_member_ids_status == "completed" or not view.packages.staffing_ready %}disabled{% endif %}>Mark as complete</button>
                 </form>
                 <form method="post" action="{{ url_for('staff.update_staff_member_ids', session_id=session.id) }}" data-disable-on-submit>
                   <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
                   <input type="hidden" name="schedule_status" value="{{ selected_schedule_status }}">
-                  <input type="hidden" name="view" value="{{ selected_view }}">
+                  {{ pre_session_return_fields(selected_view, selected_bundle) }}
                   <input type="hidden" name="action" value="mark_incident">
                   <button class="package-preparation-chip package-preparation-chip-incident" type="submit" {% if staff_member_ids_status in ["completed", "incident"] %}disabled{% endif %}>Mark incident</button>
                 </form>
@@ -2452,7 +2480,7 @@ This stage has already been marked as complete. Reopening it may affect package 
 This stage has already been marked as complete. Reopening it may affect package preparation records and any previously confirmed staff ID checks. Please continue only if changes are required." data-confirm-password-value="EditOK" data-disable-on-submit>
                     <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
                     <input type="hidden" name="schedule_status" value="{{ selected_schedule_status }}">
-                    <input type="hidden" name="view" value="{{ selected_view }}">
+                    {{ pre_session_return_fields(selected_view, selected_bundle) }}
                     <input type="hidden" name="action" value="reopen">
                     <input type="hidden" name="confirmation_password" value="">
                     <button class="package-preparation-chip package-preparation-chip-reopen" type="submit">Reopen</button>
@@ -2496,21 +2524,21 @@ This stage has already been marked as complete. Reopening it may affect package 
               <form method="post" action="{{ url_for('staff.update_inclusion_final_items', session_id=session.id) }}" data-disable-on-submit>
                 <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
                 <input type="hidden" name="schedule_status" value="{{ selected_schedule_status }}">
-                <input type="hidden" name="view" value="{{ selected_view }}">
+                {{ pre_session_return_fields(selected_view, selected_bundle) }}
                 <input type="hidden" name="action" value="mark_in_progress">
                 <button class="package-preparation-chip package-preparation-chip-progress" type="submit" {% if inclusion_final_items_status in ["in_progress", "completed"] %}disabled{% endif %}>Mark as in progress</button>
               </form>
               <form method="post" action="{{ url_for('staff.update_inclusion_final_items', session_id=session.id) }}" data-disable-on-submit>
                 <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
                 <input type="hidden" name="schedule_status" value="{{ selected_schedule_status }}">
-                <input type="hidden" name="view" value="{{ selected_view }}">
+                {{ pre_session_return_fields(selected_view, selected_bundle) }}
                 <input type="hidden" name="action" value="mark_complete">
-                <button class="package-preparation-chip package-preparation-chip-complete" type="submit" {% if inclusion_final_items_status == "completed" %}disabled{% endif %}>Mark as complete</button>
+                <button class="package-preparation-chip package-preparation-chip-complete" type="submit" {% if inclusion_final_items_status == "completed" or not view.packages.staffing_ready %}disabled{% endif %}>Mark as complete</button>
               </form>
               <form method="post" action="{{ url_for('staff.update_inclusion_final_items', session_id=session.id) }}" data-disable-on-submit>
                 <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
                 <input type="hidden" name="schedule_status" value="{{ selected_schedule_status }}">
-                <input type="hidden" name="view" value="{{ selected_view }}">
+                {{ pre_session_return_fields(selected_view, selected_bundle) }}
                 <input type="hidden" name="action" value="mark_incident">
                 <button class="package-preparation-chip package-preparation-chip-incident" type="submit" {% if inclusion_final_items_status in ["completed", "incident"] %}disabled{% endif %}>Mark incident</button>
               </form>
@@ -2519,7 +2547,7 @@ This stage has already been marked as complete. Reopening it may affect package 
 This stage has already been marked as complete. Reopening it may affect package preparation records and any previously confirmed final item checks. Please continue only if changes are required." data-confirm-password-value="EditOK" data-disable-on-submit>
                   <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
                   <input type="hidden" name="schedule_status" value="{{ selected_schedule_status }}">
-                  <input type="hidden" name="view" value="{{ selected_view }}">
+                  {{ pre_session_return_fields(selected_view, selected_bundle) }}
                   <input type="hidden" name="action" value="reopen">
                   <input type="hidden" name="confirmation_password" value="">
                   <button class="package-preparation-chip package-preparation-chip-reopen" type="submit">Reopen</button>
@@ -2555,21 +2583,21 @@ This stage has already been marked as complete. Reopening it may affect package 
               <form method="post" action="{{ url_for('staff.update_session_box_sealing', session_id=session.id) }}" data-disable-on-submit>
                 <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
                 <input type="hidden" name="schedule_status" value="{{ selected_schedule_status }}">
-                <input type="hidden" name="view" value="{{ selected_view }}">
+                {{ pre_session_return_fields(selected_view, selected_bundle) }}
                 <input type="hidden" name="action" value="mark_in_progress">
                 <button class="package-preparation-chip package-preparation-chip-progress" type="submit" {% if not session_box_sealing_prerequisites_complete or session_box_sealing_status in ["in_progress", "completed"] %}disabled{% endif %}>Mark as in progress</button>
               </form>
               <form method="post" action="{{ url_for('staff.update_session_box_sealing', session_id=session.id) }}" data-disable-on-submit>
                 <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
                 <input type="hidden" name="schedule_status" value="{{ selected_schedule_status }}">
-                <input type="hidden" name="view" value="{{ selected_view }}">
+                {{ pre_session_return_fields(selected_view, selected_bundle) }}
                 <input type="hidden" name="action" value="mark_complete">
                 <button class="package-preparation-chip package-preparation-chip-complete" type="submit" {% if not session_box_sealing_prerequisites_complete or session_box_sealing_status == "completed" %}disabled{% endif %}>Mark as complete</button>
               </form>
               <form method="post" action="{{ url_for('staff.update_session_box_sealing', session_id=session.id) }}" data-disable-on-submit>
                 <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
                 <input type="hidden" name="schedule_status" value="{{ selected_schedule_status }}">
-                <input type="hidden" name="view" value="{{ selected_view }}">
+                {{ pre_session_return_fields(selected_view, selected_bundle) }}
                 <input type="hidden" name="action" value="mark_incident">
                 <button class="package-preparation-chip package-preparation-chip-incident" type="submit" {% if not session_box_sealing_prerequisites_complete or session_box_sealing_status in ["completed", "incident"] %}disabled{% endif %}>Mark incident</button>
               </form>
@@ -2578,7 +2606,7 @@ This stage has already been marked as complete. Reopening it may affect package 
 This stage has already been marked as complete. Reopening it may affect package preparation records and any previously confirmed session box sealing checks. Please continue only if changes are required." data-confirm-password-value="EditOK" data-disable-on-submit>
                   <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
                   <input type="hidden" name="schedule_status" value="{{ selected_schedule_status }}">
-                  <input type="hidden" name="view" value="{{ selected_view }}">
+                  {{ pre_session_return_fields(selected_view, selected_bundle) }}
                   <input type="hidden" name="action" value="reopen">
                   <input type="hidden" name="confirmation_password" value="">
                   <button class="package-preparation-chip package-preparation-chip-reopen" type="submit">Reopen</button>
