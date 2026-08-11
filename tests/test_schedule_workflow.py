@@ -103,6 +103,7 @@ from app.routes import (
     path_session_journey_contract,
     promote_potential_entry_exam_session_assignments,
     reconcile_auto_shipment_bundles,
+    shipment_bundle_action_items,
     shipment_bundle_readiness_contract,
     shipment_bundle_view,
     shipment_planning_action_contract,
@@ -140,7 +141,7 @@ class ScheduleWorkflowTest(unittest.TestCase):
             session_date=date(2026, 6, 25),
             shifts="Morning",
             modules="Speaking",
-            format="Online",
+            format="Onsite",
             details_url="https://example.com/sinapsis",
         )
         db.session.add(self.session_record)
@@ -7220,7 +7221,7 @@ class ScheduleWorkflowTest(unittest.TestCase):
         self.assertEqual(len(bundles), 1)
         bundle = bundles[0]
         self.assertTrue(bundle.auto_managed)
-        self.assertEqual(bundle.dispatch_due_at, date(2026, 6, 29))
+        self.assertEqual(bundle.dispatch_due_at, date(2026, 6, 27))
         self.assertRegex(bundle.bundle_number, r"^\d+-26$")
         self.assertEqual(ExamSessionShipmentBundleSession.query.count(), 2)
         self.assertEqual({link.exam_session_id for link in bundle.session_links}, {first.id, second.id})
@@ -7336,6 +7337,125 @@ class ScheduleWorkflowTest(unittest.TestCase):
         self.assertIn("Package pending", package_pending_contract["secondary_lines"])
         self.assertEqual(shipment_bundle_view(bundle)["display_status"], "SEMI-UNBLOCKED")
 
+    def test_shipment_bundle_action_items_follow_gate_and_current_status(self):
+        self.create_supervisor(staff_id=1, name="Laura Mendez")
+        risk_action = {
+            "department": "MANAGEMENT",
+            "description": "Review potential risk to bundle delivery date",
+            "risk": True,
+        }
+        semi_session = self.create_planning_ready_session("Semi package pending", date(2026, 7, 9), supervisor_id=1, packages_ready=False)
+        semi_bundle = self.create_shipment_bundle_record(status="Preparing bundle", session_record=semi_session)
+        self.assertEqual(
+            shipment_bundle_action_items(semi_bundle),
+            [{"department": "ADMIN", "description": "Complete shipment planning"}, risk_action],
+        )
+
+        ready_session = self.create_planning_ready_session("Ready shipment stages", date(2026, 7, 12), supervisor_id=1, packages_ready=True)
+        ready_bundle = self.create_shipment_bundle_record(status="Preparing bundle", session_record=ready_session)
+        self.assertTrue(shipment_bundle_view(ready_bundle)["deadline_badge"]["risky"])
+        html = self.login_client().get("/pre-session-control-tower?session_year=2026&view=bundles").get_data(as_text=True)
+        self.assertIn('<span class="responsible-chip users-department-chip">MANAGEMENT</span>', html)
+        self.assertIn('<span class="bundle-action-risk-chip">Review potential risk to bundle delivery date</span>', html)
+        self.assertIn('<span class="shipment-deadline-risk-chip">Risky</span>', html)
+        self.assertEqual(
+            shipment_bundle_action_items(ready_bundle),
+            [{"department": "ADMIN", "description": "Complete shipment planning"}, risk_action],
+        )
+        ready_bundle.delivery_option = "listed_address"
+        ready_bundle.shipping_label_url = "https://example.com/label.pdf"
+        ready_bundle.tracking_number = "TRACK-123"
+        db.session.commit()
+        self.assertEqual(
+            shipment_bundle_action_items(ready_bundle),
+            [{"department": "LOGISTICS", "description": "Complete shipment pre-dispatch and dispatch stages"}, risk_action],
+        )
+
+        first_item = ExamSessionShipmentChecklistItem.query.filter_by(bundle_id=ready_bundle.id).first()
+        first_item.is_checked = True
+        db.session.commit()
+        self.assertEqual(
+            shipment_bundle_action_items(ready_bundle),
+            [{"department": "LOGISTICS", "description": "Complete shipment pre-dispatch and dispatch stages"}, risk_action],
+        )
+
+        for item in ExamSessionShipmentChecklistItem.query.filter_by(bundle_id=ready_bundle.id).all():
+            item.is_checked = True
+        db.session.commit()
+        self.assertEqual(
+            shipment_bundle_action_items(ready_bundle),
+            [{"department": "LOGISTICS", "description": "Complete shipment dispatch"}, risk_action],
+        )
+
+        for status in ["Ready to dispatch", "In transit to post office", "Dispatched", "Recipient notified"]:
+            ready_bundle.status = status
+            db.session.commit()
+            expected_action = {"department": "LOGISTICS", "description": "Complete shipment dispatch"}
+            if ready_bundle.status == "Recipient notified":
+                expected_action["overdue"] = True
+            expected_actions = [expected_action]
+            if ready_bundle.status in {"Ready to dispatch", "In transit to post office"}:
+                expected_actions.append(risk_action)
+            self.assertEqual(
+                shipment_bundle_action_items(ready_bundle),
+                expected_actions,
+            )
+
+        ready_bundle.status = "Delivered successfully"
+        db.session.commit()
+        self.assertEqual(
+            shipment_bundle_action_items(ready_bundle),
+            [{"department": "", "description": "Bundle shipment delivered"}],
+        )
+
+    def test_shipment_bundle_deadline_badge_tracks_progress_overdue_and_delivery_result(self):
+        self.create_supervisor(staff_id=1, name="Laura Mendez")
+        session_record = self.create_planning_ready_session("Deadline shipment", date(2026, 7, 12), supervisor_id=1, packages_ready=True)
+        assignment = ExamSessionSupervisorAssignment.query.filter_by(
+            exam_session_id=session_record.id,
+            team_member_id=1,
+            is_shipment_recipient=True,
+        ).one()
+        bundle = self.create_shipment_bundle_record(
+            status="Preparing bundle",
+            dispatch_due_at=date(2026, 8, 20),
+            session_record=session_record,
+        )
+        self.assertEqual(shipment_bundle_view(bundle)["deadline_badge"]["status"], "on-track")
+
+        assignment.updated_on = datetime(2026, 6, 23, 12, 0, tzinfo=timezone.utc)
+        db.session.commit()
+        overdue_view = shipment_bundle_view(bundle)
+        self.assertEqual(overdue_view["deadline_badge"]["status"], "overdue")
+        self.assertEqual(overdue_view["deadline_badge"]["date"], date(2026, 6, 25))
+        self.assertTrue(overdue_view["action_items"][0]["overdue"])
+
+        bundle.status = "Recipient notified"
+        db.session.commit()
+        self.assertEqual(shipment_bundle_view(bundle)["deadline_badge"]["date"], date(2026, 7, 8))
+
+        bundle.status = "Delivered successfully"
+        bundle.delivered_at = datetime(2026, 6, 28, 12, 0, tzinfo=timezone.utc)
+        db.session.commit()
+        delivered_view = shipment_bundle_view(bundle)
+        self.assertEqual(delivered_view["modal_summary"]["current_deadline"], None)
+        self.assertEqual(delivered_view["deadline_badge"]["date"], date(2026, 7, 8))
+        self.assertEqual(delivered_view["deadline_badge"]["status"], "met")
+        self.assertEqual(delivered_view["deadline_badge"]["label"], "Deadline met on 28/06/2026")
+
+        late_session = self.create_planning_ready_session("Late delivered shipment", date(2026, 7, 12), supervisor_id=1, packages_ready=True)
+        late_bundle = self.create_shipment_bundle_record(
+            status="Delivered successfully",
+            session_record=late_session,
+        )
+        late_bundle.delivered_at = datetime(2026, 7, 9, 12, 0, tzinfo=timezone.utc)
+        db.session.commit()
+        late_delivered_view = shipment_bundle_view(late_bundle)
+        self.assertEqual(late_delivered_view["modal_summary"]["current_deadline"], None)
+        self.assertEqual(late_delivered_view["deadline_badge"]["date"], date(2026, 7, 8))
+        self.assertEqual(late_delivered_view["deadline_badge"]["status"], "missed")
+        self.assertEqual(late_delivered_view["deadline_badge"]["label"], "Deadline not met on 09/07/2026")
+
     def test_bundles_view_shipment_gate_uses_lock_and_unblocks_when_all_sessions_ready(self):
         self.create_supervisor(staff_id=1, name="Laura Mendez")
         ready_first = self.create_planning_ready_session("Ready A", date(2026, 7, 9), supervisor_id=1, packages_ready=True)
@@ -7354,6 +7474,14 @@ class ScheduleWorkflowTest(unittest.TestCase):
         self.assign_confirmed_supervisor(schedule_pending_ready_package_session, supervisor_id=1)
         self.mark_session_packages_quality_checked(schedule_pending_ready_package_session)
         package_pending_session = self.create_planning_ready_session("Package in progress", date(2026, 7, 16), supervisor_id=1, packages_ready=False)
+        pending_examiner = AcademicStaff(id=32, status="Active", full_name="Pending Bundle Examiner", roles="Examiner", email="pending-bundle-examiner@example.com")
+        db.session.add(pending_examiner)
+        db.session.flush()
+        db.session.add(ExamSessionExaminerAssignment(
+            exam_session_id=package_pending_session.id,
+            team_member_id=pending_examiner.id,
+            participation_status="Pending",
+        ))
         blocked_session = ExamSession(
             exam_session_name="Blocked session",
             category="Path School",
@@ -7367,6 +7495,11 @@ class ScheduleWorkflowTest(unittest.TestCase):
         ready_bundle = self.create_shipment_bundle_record(status="Preparing bundle", session_record=ready_first)
         ready_bundle.dispatch_due_at = date(2026, 6, 29)
         db.session.add(ExamSessionShipmentBundleSession(bundle_id=ready_bundle.id, exam_session_id=ready_second.id))
+        for assignment in ExamSessionSupervisorAssignment.query.filter(
+            ExamSessionSupervisorAssignment.exam_session_id.in_([ready_first.id, ready_second.id]),
+            ExamSessionSupervisorAssignment.is_shipment_recipient.is_(True),
+        ).all():
+            assignment.updated_on = datetime(2026, 6, 23, 12, 0, tzinfo=timezone.utc)
         self.create_shipment_bundle_record(status="Preparing bundle", session_record=schedule_pending_ready_package_session)
         self.create_shipment_bundle_record(status="Preparing bundle", session_record=package_pending_session)
         self.create_shipment_bundle_record(status="Preparing bundle", session_record=blocked_session)
@@ -7383,8 +7516,8 @@ class ScheduleWorkflowTest(unittest.TestCase):
         self.assertLess(table.index("<th>Bundle number</th>"), table.index("<th>Department</th>"))
         self.assertLess(table.index("<th>Department</th>"), table.index("<th>Action description</th>"))
         self.assertLess(table.index("<th>Action description</th>"), table.index("<th>Shipment</th>"))
-        self.assertLess(table.index("<th>Shipment</th>"), table.index("<th>Exam sessions</th>"))
-        self.assertLess(table.index("<th>Exam sessions</th>"), table.index("<th>Recipient</th>"))
+        self.assertLess(table.index("<th>Shipment</th>"), table.index("<th>Recipient</th>"))
+        self.assertLess(table.index("<th>Recipient</th>"), table.index("<th>Exam sessions</th>"))
         self.assertNotIn("<th>Action</th>", table)
         ready_row_index = table.index("Ready A")
         ready_row = table[table.rfind("<tr", 0, ready_row_index):table.index("</tr>", ready_row_index)]
@@ -7401,19 +7534,24 @@ class ScheduleWorkflowTest(unittest.TestCase):
 
         self.assertIn("shipment-gate-unblocked", ready_row)
         self.assertIn("UNBLOCKED", ready_row)
-        self.assertIn("Bundle preparation ready", ready_row)
-        self.assertIn("shipment-status-bundle-preparation-ready", ready_row)
+        self.assertIn("Session bundle ready", ready_row)
+        self.assertIn("shipment-status-session-bundle-ready", ready_row)
         shipment_cell_start = ready_row.index('data-modal-target-label="Track shipment"')
         shipment_cell = ready_row[ready_row.rfind("<td>", 0, shipment_cell_start):ready_row.index("</td>", shipment_cell_start)]
         self.assertIn("<strong>2/2 confirmed</strong>", shipment_cell)
-        self.assertLess(shipment_cell.index("Bundle preparation ready"), shipment_cell.index("<strong>2/2 confirmed</strong>"))
-        self.assertIn('<span class="shipment-deadline-chip">Deadline 29/06/2026</span>', shipment_cell)
-        self.assertIn('<span class="responsible-chip users-department-chip">LOGISTICS</span>', ready_row)
-        self.assertIn("Complete shipment bundle preparation", ready_row)
-        self.assertNotIn("Complete shipment bundle preparation.", ready_row)
+        self.assertLess(shipment_cell.index("Session bundle ready"), shipment_cell.index("<strong>2/2 confirmed</strong>"))
+        self.assertIn('<span class="shipment-deadline-chip shipment-deadline-overdue" title="Deadline overdue" aria-label="Deadline overdue: 25/06/2026">Deadline 25/06/2026</span>', shipment_cell)
+        self.assertIn('<span class="responsible-chip users-department-chip">ADMIN</span>', ready_row)
+        self.assertIn("Complete shipment planning", ready_row)
+        self.assertIn('<span class="bundle-action-overdue-chip">Overdue</span>', ready_row)
+        self.assertNotIn("Complete shipment pre-dispatch stage", ready_row)
         self.assertIn('class="responsible-chip bundle-supervisor-chip"', ready_row)
         self.assertIn('aria-label="Shipment bundle unblocked"', ready_row)
         self.assertIn('<path d="M8 10V7a4 4 0 0 1 8 0"></path>', ready_row)
+        ready_bundle_view = shipment_bundle_view(ready_bundle)
+        self.assertEqual(ready_bundle_view["modal_summary"]["recommended_next_action"], "Confirm delivery option with recipient")
+        self.assertEqual(ready_bundle_view["modal_summary"]["responsible"], "ADMIN")
+        self.assertEqual(ready_bundle_view["modal_summary"]["current_deadline"], date(2026, 6, 25))
         self.assertIn("shipment-gate-unblocked", schedule_pending_row)
         self.assertIn("UNBLOCKED", schedule_pending_row)
         self.assertNotIn("SEMI-UNBLOCKED", schedule_pending_row)
@@ -7421,17 +7559,22 @@ class ScheduleWorkflowTest(unittest.TestCase):
         self.assertIn("SEMI-UNBLOCKED", package_pending_row)
         self.assertIn("Bundle preparation not finished", package_pending_row)
         self.assertIn("shipment-status-bundle-preparation-not-finished", package_pending_row)
-        self.assertIn("0/1 sessions completed", package_pending_row)
-        self.assertIn('<span class="responsible-chip users-department-chip">LOGISTICS</span>', package_pending_row)
-        self.assertIn("Complete package preparation for all sessions included in this bundle", package_pending_row)
+        self.assertIn("<strong>0/1 confirmed</strong>", package_pending_row)
+        self.assertNotIn("0/1 sessions completed", package_pending_row)
+        self.assertIn('<span class="responsible-chip users-department-chip">ADMIN</span>', package_pending_row)
+        self.assertIn("Complete shipment planning", package_pending_row)
+        self.assertNotIn("Complete package preparation for all sessions included in this bundle", package_pending_row)
         self.assertNotIn("shipment-gate-unblocked", package_pending_row)
         self.assertIn("shipment-gate-blocked", blocked_row)
         self.assertIn("BLOCKED", blocked_row)
         self.assertIn("Bundle preparation not finished", blocked_row)
         self.assertIn("shipment-status-bundle-preparation-not-finished", blocked_row)
-        self.assertIn("0/1 sessions completed", blocked_row)
-        self.assertIn('<span class="responsible-chip users-department-chip">ADMIN</span>', blocked_row)
-        self.assertIn("Confirm staffing for all sessions included in this bundle", blocked_row)
+        self.assertIn("<strong>0/1 confirmed</strong>", blocked_row)
+        self.assertNotIn("0/1 sessions completed", blocked_row)
+        self.assertIn('<span class="muted">-</span>', blocked_row)
+        self.assertIn("Recipient has not yet confirmed participation in all sessions", blocked_row)
+        self.assertNotIn('<span class="responsible-chip users-department-chip">ADMIN</span>', blocked_row)
+        self.assertNotIn("Confirm staffing for all sessions included in this bundle", blocked_row)
         self.assertIn('aria-label="Shipment bundle blocked"', blocked_row)
         self.assertIn('<path d="M8 10V7a4 4 0 0 1 8 0v3"></path>', blocked_row)
         with open("app/static/css/styles.css", encoding="utf-8") as css_file:
@@ -7464,10 +7607,10 @@ class ScheduleWorkflowTest(unittest.TestCase):
         first = self.create_planning_ready_session("Deadline today A", date(2026, 7, 9), supervisor_id=1, packages_ready=True)
         second = self.create_planning_ready_session("Deadline today B", date(2026, 7, 12), supervisor_id=1, packages_ready=False)
 
-        reconcile_auto_shipment_bundles([first, second], today=date(2026, 6, 29))
+        reconcile_auto_shipment_bundles([first, second], today=date(2026, 6, 27))
 
         bundle = ExamSessionShipmentBundle.query.one()
-        self.assertEqual(bundle.dispatch_due_at, date(2026, 6, 29))
+        self.assertEqual(bundle.dispatch_due_at, date(2026, 6, 27))
         self.assertEqual(ExamSessionShipmentBundleSession.query.filter_by(bundle_id=bundle.id).count(), 2)
         self.assertEqual(ExamSessionShipmentEvent.query.filter_by(event_type="AUTO_BUNDLE_SPLIT").count(), 0)
 
@@ -7669,7 +7812,11 @@ class ScheduleWorkflowTest(unittest.TestCase):
         detail_html = detail.get_data(as_text=True)
         detail_table = detail_html[detail_html.index('aria-label="Schedule preparation and approval"'):detail_html.index('<div class="modal"', detail_html.index('aria-label="Schedule preparation and approval"'))]
         self.assertIn(f"Bundle {bundle.bundle_number}", detail_html)
+        self.assertIn("Shipment dispatch deadline: <strong>27/06/2026</strong>", detail_html)
+        self.assertIn("Session packages: <strong>2/2 confirmed</strong>", detail_html)
         self.assertIn("Back to Bundles", detail_html)
+        self.assertNotIn('aria-label="Schedule status filter"', detail_html)
+        self.assertNotIn("<select name=\"schedule_status\"", detail_html)
         self.assertNotIn("<th>Action</th>", detail_table)
         self.assertIn("<th>Session</th>", detail_table)
         self.assertNotIn("<th>Date</th>", detail_table)
@@ -8347,6 +8494,7 @@ class ScheduleWorkflowTest(unittest.TestCase):
     def test_completed_bundle_remains_visible_in_sessions_and_detail(self):
         self.create_supervisor()
         completed_session = self.create_planning_ready_session("Completed shipment session", date(2026, 8, 20), packages_ready=False)
+        completed_session.format = "Onsite"
         completed_bundle = self.create_shipment_bundle_record(status="Recipient review successful", dispatch_due_at=date(2026, 7, 20), session_record=completed_session)
         client = self.login_client()
 
@@ -8357,9 +8505,7 @@ class ScheduleWorkflowTest(unittest.TestCase):
         completed_row = table[table.rfind("<tr", 0, completed_row_index):table.index("</tr>", completed_row_index)]
 
         self.assertIn("Completed shipment session", completed_row)
-        self.assertIn(f"Bundle {completed_bundle.bundle_number}", completed_row)
-        self.assertIn("Bundle completed", completed_row)
-        self.assertIn("Recipient review successful", completed_row)
+        self.assertIn("Shipment delivered", completed_row)
         self.assertNotIn("BLOCKED", completed_row)
         self.assertNotIn("Blocking bundle", completed_row)
         self.assertNotIn("Waiting for other sessions", completed_row)
@@ -8368,6 +8514,8 @@ class ScheduleWorkflowTest(unittest.TestCase):
         detail_html = detail.get_data(as_text=True)
         self.assertIn(f"Bundle {completed_bundle.bundle_number}", detail_html)
         self.assertIn("This bundle has completed the shipment process.", detail_html)
+        self.assertIn("Shipment dispatch deadline: <strong>08/08/2026</strong>", detail_html)
+        self.assertEqual(completed_bundle.dispatch_due_at, date(2026, 7, 20))
         self.assertIn("Completed shipment session", detail_html)
 
     def test_auto_reconciliation_does_not_modify_completed_bundle_and_creates_new_bundle(self):
@@ -8507,6 +8655,33 @@ class ScheduleWorkflowTest(unittest.TestCase):
         self.assertIn("option.checked = option.value === previousValue;", js)
         self.assertIn("window.prompt(`${message}\\n\\nEnter the confirmation password to continue:`)", js)
         self.assertIn("if (confirmationPasswordInput) confirmationPasswordInput.value = password;", js)
+        self.assertNotIn("const disabled = Boolean(selected && input !== selected);", js)
+        self.assertNotIn("input.disabled = disabled;", js)
+
+        response = client.post(
+            f"/pre-session-control-tower/shipments/bundles/{bundle.id}",
+            data={
+                "csrf_token": "token",
+                "view": "sessions",
+                "current_session_id": str(self.session_record.id),
+                "supervisor_staff_id": "1",
+                "delivery_address": "Av. Siempre Viva 123",
+                "delivery_city": "Cordoba",
+                "delivery_province": "Cordoba",
+                "delivery_option": "listed_address",
+                "courier": "Correo Argentino",
+                "dispatch_due_at": "",
+                "included_session_ids": [str(self.session_record.id)],
+                "confirmation_password": "EditOK",
+            },
+            follow_redirects=False,
+        )
+
+        self.assertEqual(response.status_code, 302)
+        db.session.refresh(bundle)
+        self.assertEqual(bundle.delivery_option, "listed_address")
+        bundle.delivery_option = "store_pickup"
+        db.session.commit()
 
         response = client.post(
             f"/pre-session-control-tower/shipments/bundles/{bundle.id}",
@@ -8685,16 +8860,59 @@ class ScheduleWorkflowTest(unittest.TestCase):
 
         self.mark_session_packages_quality_checked()
         db.session.refresh(bundle)
-        self.assertEqual(shipment_bundle_operational_status(bundle)["label"], "Bundle preparation ready")
+        self.assertEqual(shipment_bundle_operational_status(bundle)["label"], "Session bundle ready")
+
+        bundle.shipping_label_url = "https://example.com/old-label.pdf"
+        bundle.tracking_number = "OLD-TRACK"
+        db.session.commit()
+        self.assertEqual(shipment_bundle_operational_status(bundle)["label"], "Session bundle ready")
 
         bundle.delivery_option = "store_pickup"
+        bundle.shipping_label_url = None
+        bundle.tracking_number = None
         db.session.commit()
         self.assertEqual(shipment_bundle_operational_status(bundle)["label"], "Shipment planning in progress")
 
         bundle.shipping_label_url = "https://example.com/label.pdf"
         bundle.tracking_number = "TRACK-123"
+        package_ready_at = datetime(2026, 8, 7, 12, 0, tzinfo=timezone.utc)
+        for assignment in ExamSessionSupervisorAssignment.query.filter_by(exam_session_id=self.session_record.id, is_shipment_recipient=True).all():
+            assignment.updated_on = package_ready_at
+        for unit in ExamSessionPackageUnit.query.filter_by(exam_session_id=self.session_record.id).all():
+            unit.updated_at = package_ready_at
+        self.session_record.package_label_verification_updated_at = package_ready_at
+        self.session_record.package_label_printing_updated_at = package_ready_at
+        self.session_record.room_package_sealing_updated_at = package_ready_at
+        self.session_record.return_packages_updated_at = package_ready_at
+        self.session_record.staff_member_ids_updated_at = package_ready_at
+        self.session_record.inclusion_final_items_updated_at = package_ready_at
+        self.session_record.session_box_sealing_updated_at = package_ready_at
+        db.session.commit()
+        db.session.add(ExamSessionShipmentEvent(
+            bundle_id=bundle.id,
+            event_type="TRACKING_UPDATED",
+            previous_status=bundle.status,
+            new_status=bundle.status,
+            created_at=datetime(2026, 8, 10, 12, 0, tzinfo=timezone.utc),
+        ))
         db.session.commit()
         self.assertEqual(shipment_bundle_operational_status(bundle)["label"], "Shipment planning ready")
+        bundle_view = shipment_bundle_view(bundle)
+        self.assertEqual(bundle_view["modal_summary"]["recommended_next_action"], "Complete shipment pre-dispatch stage")
+        self.assertEqual(bundle_view["modal_summary"]["current_deadline"], date(2026, 8, 11))
+        self.assertEqual(bundle_view["deadline_badge"]["date"], date(2026, 8, 11))
+        self.assertEqual(
+            shipments_action_contract(
+                self.session_record,
+                {
+                    "status": "Preparing bundle",
+                    "bundle": bundle,
+                    "readiness": shipment_bundle_readiness_contract(bundle),
+                },
+                packages_contract={"ready": True},
+            )["deadline"],
+            date(2026, 8, 11),
+        )
 
         sealed_boxes_item = ExamSessionShipmentChecklistItem.query.filter_by(
             bundle_id=bundle.id,
@@ -8709,16 +8927,115 @@ class ScheduleWorkflowTest(unittest.TestCase):
             ExamSessionShipmentChecklistItem.item_key.in_({"verify_sessions_boxes", "jbl_speakers_dice", "emergency_pack", "correo_label"}),
         ).all():
             item.is_checked = True
+            item.checked_at = datetime(2026, 8, 12, 12, 0, tzinfo=timezone.utc)
+        db.session.add(ExamSessionShipmentEvent(
+            bundle_id=bundle.id,
+            event_type="CHECKLIST_UPDATED",
+            previous_status=bundle.status,
+            new_status=bundle.status,
+            created_at=datetime(2026, 8, 12, 12, 0, tzinfo=timezone.utc),
+        ))
         db.session.commit()
         self.assertEqual(shipment_bundle_operational_status(bundle)["label"], "Shipment pre-dispatch ready")
+        bundle_view = shipment_bundle_view(bundle)
+        self.assertEqual(bundle_view["modal_summary"]["recommended_next_action"], "Proceed with Shipment dispatch stage")
+        self.assertEqual(bundle_view["modal_summary"]["current_deadline"], date(2026, 8, 13))
+        self.assertEqual(bundle_view["deadline_badge"]["date"], date(2026, 8, 13))
+        client = self.login_client()
+        html = client.get("/pre-session-control-tower?session_year=2026&view=sessions").get_data(as_text=True)
+        shipment_actions_index = html.index("Shipment actions")
+        shipment_actions_header = html[shipment_actions_index:html.index("<h4>Shipment dispatch</h4>", shipment_actions_index)]
+        self.assertIn("Shipment pre-dispatch ready", shipment_actions_header)
+        self.assertIn("Proceed with Shipment dispatch stage", shipment_actions_header)
 
         bundle.status = "Ready to dispatch"
         db.session.commit()
-        self.assertEqual(shipment_bundle_operational_status(bundle)["label"], "Shipment dispatch in progress")
+        self.assertEqual(shipment_bundle_operational_status(bundle)["label"], "Ready to dispatch")
+        ready_dispatch_view = shipment_bundle_view(bundle)
+        self.assertEqual(ready_dispatch_view["modal_summary"]["recommended_next_action"], "Dispatch shipment bundle")
+        self.assertEqual(ready_dispatch_view["modal_summary"]["current_deadline"], date(2026, 8, 13))
+        self.assertEqual(ready_dispatch_view["deadline_badge"]["date"], date(2026, 8, 13))
+        self.assertEqual(
+            shipments_action_contract(
+                self.session_record,
+                {
+                    "status": "Ready to dispatch",
+                    "bundle": bundle,
+                    "readiness": shipment_bundle_readiness_contract(bundle),
+                },
+                packages_contract={"ready": True},
+            )["deadline"],
+            date(2026, 8, 13),
+        )
+
+        bundle.status = "In transit to post office"
+        db.session.commit()
+        self.assertEqual(shipment_bundle_operational_status(bundle)["label"], "In transit to post office")
+        in_transit_view = shipment_bundle_view(bundle)
+        self.assertEqual(in_transit_view["modal_summary"]["recommended_next_action"], "Confirm shipment dispatch")
+        self.assertEqual(in_transit_view["modal_summary"]["current_deadline"], date(2026, 8, 13))
+        self.assertEqual(in_transit_view["deadline_badge"]["date"], date(2026, 8, 13))
+        self.assertEqual(
+            shipments_action_contract(
+                self.session_record,
+                {
+                    "status": "In transit to post office",
+                    "bundle": bundle,
+                    "readiness": shipment_bundle_readiness_contract(bundle),
+                },
+                packages_contract={"ready": True},
+            )["deadline"],
+            date(2026, 8, 13),
+        )
+
+        bundle.delivery_option = "meeting_point"
+        db.session.commit()
+        self.assertEqual(shipment_bundle_operational_status(bundle)["label"], "In transit to meeting point")
+
+        bundle.status = "Dispatched"
+        bundle.dispatched_at = datetime(2026, 8, 14, 12, 0, tzinfo=timezone.utc)
+        db.session.commit()
+        self.assertEqual(shipment_bundle_operational_status(bundle)["label"], "Dispatched")
+        dispatched_view = shipment_bundle_view(bundle)
+        self.assertEqual(dispatched_view["modal_summary"]["recommended_next_action"], "Notify recipient")
+        self.assertEqual(dispatched_view["modal_summary"]["current_deadline"], date(2026, 8, 17))
+        self.assertEqual(dispatched_view["deadline_badge"]["date"], date(2026, 8, 17))
+        self.assertEqual(
+            shipments_action_contract(
+                self.session_record,
+                {
+                    "status": "Dispatched",
+                    "bundle": bundle,
+                    "readiness": shipment_bundle_readiness_contract(bundle),
+                },
+                packages_contract={"ready": True},
+            )["deadline"],
+            date(2026, 8, 17),
+        )
+
+        bundle.status = "Recipient notified"
+        db.session.commit()
+        self.assertEqual(shipment_bundle_operational_status(bundle)["label"], "Dispatched and recipient notified")
+        recipient_notified_view = shipment_bundle_view(bundle)
+        self.assertEqual(recipient_notified_view["modal_summary"]["recommended_next_action"], "Monitor shipment delivery")
+        self.assertEqual(recipient_notified_view["modal_summary"]["current_deadline"], date(2026, 6, 22))
+        self.assertEqual(recipient_notified_view["deadline_badge"]["date"], date(2026, 6, 22))
+        self.assertEqual(
+            shipments_action_contract(
+                self.session_record,
+                {
+                    "status": "Recipient notified",
+                    "bundle": bundle,
+                    "readiness": shipment_bundle_readiness_contract(bundle),
+                },
+                packages_contract={"ready": True},
+            )["deadline"],
+            date(2026, 6, 22),
+        )
 
         bundle.status = "Delivered successfully"
         db.session.commit()
-        self.assertEqual(shipment_bundle_operational_status(bundle)["label"], "Shipment delivered")
+        self.assertEqual(shipment_bundle_operational_status(bundle)["label"], "Delivered successfully")
 
     def test_shipment_transitions_tracking_delivery_and_recipient_review(self):
         self.create_supervisor()
@@ -8739,6 +9056,9 @@ class ScheduleWorkflowTest(unittest.TestCase):
         db.session.commit()
         client = self.login_client()
 
+        html = client.get("/pre-session-control-tower?session_year=2026&view=sessions").get_data(as_text=True)
+        self.assertIn('<span class="badge shipment-status-ready-to-dispatch">Ready to dispatch</span>', html)
+
         response = client.post(
             f"/pre-session-control-tower/shipments/bundles/{bundle.id}/status",
             data={"csrf_token": "token", "current_session_id": str(self.session_record.id), "new_status": "In transit to post office"},
@@ -8748,6 +9068,7 @@ class ScheduleWorkflowTest(unittest.TestCase):
         self.assertEqual(ExamSessionShipmentBundle.query.get(bundle.id).status, "In transit to post office")
         response = client.get("/pre-session-control-tower?session_year=2026&view=sessions")
         html = response.get_data(as_text=True)
+        self.assertIn('<span class="badge shipment-status-in-transit-to-post-office">In transit to post office</span>', html)
         dispatched_action_index = html.index('name="new_status" value="Dispatched"')
         dispatch_form_end = html.index("</form>", dispatched_action_index)
         dispatch_form = html[dispatched_action_index:dispatch_form_end]
@@ -8766,6 +9087,7 @@ class ScheduleWorkflowTest(unittest.TestCase):
         self.assertIsNotNone(bundle.dispatched_at)
         response = client.get("/pre-session-control-tower?session_year=2026&view=sessions")
         html = response.get_data(as_text=True)
+        self.assertIn('<span class="badge shipment-status-dispatched">Dispatched</span>', html)
         dispatch_actions_index = html.index("Shipment dispatch")
         dispatch_actions_panel = html[dispatch_actions_index:html.index("Readiness details", dispatch_actions_index)]
         dispatch_status_panel = dispatch_actions_panel[
@@ -8802,18 +9124,41 @@ class ScheduleWorkflowTest(unittest.TestCase):
 
         self.assertNotIn("Mark as in transit to recipient", html)
         self.assertNotIn("Mark as delayed", html)
-        for new_status in ["Recipient notified", "Delivered successfully"]:
-            response = client.post(
-                f"/pre-session-control-tower/shipments/bundles/{bundle.id}/status",
-                data={"csrf_token": "token", "current_session_id": str(self.session_record.id), "new_status": new_status},
-                follow_redirects=False,
-            )
-            self.assertEqual(response.status_code, 302)
+        response = client.post(
+            f"/pre-session-control-tower/shipments/bundles/{bundle.id}/status",
+            data={"csrf_token": "token", "current_session_id": str(self.session_record.id), "new_status": "Recipient notified"},
+            follow_redirects=False,
+        )
+        self.assertEqual(response.status_code, 302)
+        response = client.get("/pre-session-control-tower?session_year=2026&view=sessions")
+        html = response.get_data(as_text=True)
+        self.assertIn('<span class="badge shipment-status-recipient-notified">Dispatched and recipient notified</span>', html)
+        response = client.post(
+            f"/pre-session-control-tower/shipments/bundles/{bundle.id}/status",
+            data={"csrf_token": "token", "current_session_id": str(self.session_record.id), "new_status": "Delivered successfully"},
+            follow_redirects=False,
+        )
+        self.assertEqual(response.status_code, 302)
         bundle = ExamSessionShipmentBundle.query.get(bundle.id)
         self.assertEqual(bundle.status, "Delivered successfully")
         self.assertIsNotNone(bundle.delivered_at)
+        self.assertEqual(
+            shipment_bundle_view(bundle)["modal_summary"],
+            {
+                "override": True,
+                "recommended_next_action": "-",
+                "responsible": "-",
+                "current_deadline": None,
+            },
+        )
         response = client.get("/pre-session-control-tower?session_year=2026&view=sessions")
         html = response.get_data(as_text=True)
+        self.assertIn('<span class="badge shipment-status-delivered-successfully">Delivered successfully</span>', html)
+        shipment_actions_index = html.index("Shipment actions")
+        shipment_actions_header = html[shipment_actions_index:html.index("Shipment dispatch", shipment_actions_index)]
+        self.assertIn("<span>Recommended next action</span>\n            <strong>-</strong>", shipment_actions_header)
+        self.assertIn("<span>Responsible</span>\n            <strong>-</strong>", shipment_actions_header)
+        self.assertIn("<span>Current deadline</span>\n            <strong>-</strong>", shipment_actions_header)
         delivered_dispatch_index = html.index("Shipment dispatch")
         delivered_panel = html[delivered_dispatch_index:html.index("Readiness details", delivered_dispatch_index)]
         delivered_status_panel = delivered_panel[
@@ -8935,11 +9280,14 @@ class ScheduleWorkflowTest(unittest.TestCase):
 
         response = client.get("/pre-session-control-tower?session_year=2026&view=sessions")
         html = response.data.decode()
+        table_start = html.index('aria-label="Schedule preparation and approval"')
+        table_end = html.index('<div class="modal"', table_start)
+        sessions_table = html[table_start:table_end]
 
         self.assertEqual(response.status_code, 200)
-        self.assertIn("<th>Shipment</th>", html)
-        self.assertLess(html.index("<th>Package</th>"), html.index("<th>Shipment</th>"))
-        self.assertLess(html.index("<th>Shipment</th>"), html.index("<th>Finance</th>"))
+        self.assertNotIn("<th>Shipment</th>", sessions_table)
+        self.assertNotIn('data-modal-scroll-target="shipments-', sessions_table)
+        self.assertLess(sessions_table.index("<th>Logistics</th>"), sessions_table.index("<th>Finance</th>"))
         self.assertIn("Shipments", html)
         self.assertNotIn("Shipment history", html)
         self.assertIn("This status only covers schedule approval, staffing and logistics.", html)
@@ -9105,7 +9453,7 @@ class ScheduleWorkflowTest(unittest.TestCase):
         table_end = html.index('<div class="modal"', table_start)
         actions_table = html[table_start:table_end]
 
-        self.assertNotIn("Complete shipment bundle preparation", actions_table)
+        self.assertNotIn("Complete shipment pre-dispatch stage", actions_table)
         self.assertNotIn("Shipments", actions_table)
 
     def test_shipment_planning_needs_review_and_address_needed(self):
@@ -9295,7 +9643,7 @@ class ScheduleWorkflowTest(unittest.TestCase):
         response = client.get("/pre-session-control-tower?session_year=2026&view=my-actions")
         html = response.data.decode()
         self.assertNotIn("Create shipment bundle", html)
-        self.assertIn("Complete shipment bundle preparation", html)
+        self.assertIn("Complete shipment pre-dispatch stage", html)
         self.assertNotIn("Bundle recommended", html[html.index('aria-label="My actions"'):html.index('<div class="modal"', html.index('aria-label="My actions"'))])
 
     def test_shipment_planning_action_contract_mapping_and_deduplication(self):
@@ -9525,7 +9873,7 @@ class ScheduleWorkflowTest(unittest.TestCase):
         self.assertIn("Recommended next action", shipments_header)
         self.assertIn("Responsible", shipments_header)
         self.assertIn("Current deadline", shipments_header)
-        self.assertIn("Complete shipment bundle preparation", shipments_header)
+        self.assertIn("Complete shipment pre-dispatch stage", shipments_header)
         self.assertIn("10/08/2026", shipments_header)
         shipment_status_track_index = modal.index(f'id="shipment-status-track-{first_session.id}"')
         self.assertLess(modal.index("Current deadline"), shipment_status_track_index)
@@ -10224,6 +10572,13 @@ class ScheduleWorkflowTest(unittest.TestCase):
         modal_start = html.index(f'id="schedule-workflow-{ready_session.id}"')
         next_modal = html.find('<div class="modal"', modal_start + 1)
         modal = html[modal_start:next_modal if next_modal != -1 else len(html)]
+        shipments_header = modal[modal.index("Shipment actions"):modal.index("<h4>Shipment planning</h4>")]
+        self.assertIn("shipment-status-bundle-preparation-not-finished", shipments_header)
+        self.assertIn("<span>Recommended next action</span>\n            <strong>-</strong>", shipments_header)
+        self.assertIn("<span>Responsible</span>\n            <strong>-</strong>", shipments_header)
+        self.assertIn("<span>Current deadline</span>\n            <strong>-</strong>", shipments_header)
+        self.assertNotIn("Complete shipment pre-dispatch stage", shipments_header)
+        self.assertNotIn("<strong>LOGISTICS</strong>", shipments_header)
         delivery_options_index = modal.index("shipment-delivery-options")
         delivery_options_end = modal.index("</fieldset>", delivery_options_index)
         delivery_options = modal[delivery_options_index:delivery_options_end]
@@ -10272,6 +10627,135 @@ class ScheduleWorkflowTest(unittest.TestCase):
 
         self.assertNotIn("shipment-delivery-options is-disabled", delivery_options)
         self.assertNotIn('disabled aria-disabled="true"', delivery_options)
+
+    def test_semi_unblocked_shipment_bundle_modal_summary_follows_delivery_option(self):
+        self.create_supervisor()
+        session_record = self.create_planning_ready_session("Semi shipment modal", date(2026, 8, 20), packages_ready=False)
+        assignment = ExamSessionSupervisorAssignment.query.filter_by(
+            exam_session_id=session_record.id,
+            team_member_id=1,
+            is_shipment_recipient=True,
+        ).one()
+        assignment.updated_on = datetime(2026, 8, 10, 12, 0, tzinfo=timezone.utc)
+        bundle = self.create_shipment_bundle_record(
+            status="Preparing bundle",
+            dispatch_due_at=date(2026, 8, 31),
+            session_record=session_record,
+        )
+        client = self.login_client()
+
+        expected_actions = {
+            "": "Confirm delivery option with recipient",
+            "meeting_point": "Confirm address of the meeting point",
+            "store_pickup": "Generate and upload shipping label and tracking number",
+            "listed_address": "Generate and upload shipping label and tracking number",
+            "different_address": "Confirm new address, generate and upload shipping label and tracking number",
+        }
+        for delivery_option, expected_action in expected_actions.items():
+            bundle.delivery_option = delivery_option
+            db.session.commit()
+            bundle_view = shipment_bundle_view(bundle)
+            self.assertTrue(bundle_view["semi_unblocked"])
+            self.assertEqual(bundle_view["modal_summary"]["recommended_next_action"], expected_action)
+            self.assertEqual(bundle_view["modal_summary"]["responsible"], "ADMIN")
+            self.assertEqual(bundle_view["modal_summary"]["current_deadline"], date(2026, 8, 12))
+
+        bundle.delivery_option = ""
+        db.session.commit()
+        response = client.get(f"/pre-session-control-tower?session_year=2026&view=sessions&open_schedule_modal={session_record.id}")
+        html = response.get_data(as_text=True)
+        modal_start = html.index(f'id="schedule-workflow-{session_record.id}"')
+        next_modal = html.find('<div class="modal"', modal_start + 1)
+        modal = html[modal_start:next_modal if next_modal != -1 else len(html)]
+        shipments_header = modal[modal.index("Shipment actions"):modal.index("<h4>Shipment planning</h4>")]
+        self.assertIn("Confirm delivery option with recipient", shipments_header)
+        self.assertIn("<strong>ADMIN</strong>", shipments_header)
+        self.assertIn("12/08/2026", shipments_header)
+        self.assertNotIn("31/08/2026", shipments_header)
+
+        bundle.delivery_option = "listed_address"
+        bundle.shipping_label_url = "https://labels.example.com/semi-ready"
+        bundle.tracking_number = "TRACK-SEMI-READY"
+        db.session.commit()
+        bundle_view = shipment_bundle_view(bundle)
+        self.assertTrue(bundle_view["semi_unblocked"])
+        self.assertEqual(
+            bundle_view["modal_summary"],
+            {
+                "override": True,
+                "recommended_next_action": "-",
+                "responsible": "-",
+                "current_deadline": None,
+            },
+        )
+        self.assertEqual(
+            bundle_view["action_items"],
+            [{"department": "", "description": "Session preparations within this bundle are not yet complete"}],
+        )
+
+        response = client.get(f"/pre-session-control-tower?session_year=2026&view=sessions&open_schedule_modal={session_record.id}")
+        html = response.get_data(as_text=True)
+        modal_start = html.index(f'id="schedule-workflow-{session_record.id}"')
+        next_modal = html.find('<div class="modal"', modal_start + 1)
+        modal = html[modal_start:next_modal if next_modal != -1 else len(html)]
+        shipments_header = modal[modal.index("Shipment actions"):modal.index("<h4>Shipment planning</h4>")]
+        self.assertIn("<span>Recommended next action</span>\n            <strong>-</strong>", shipments_header)
+        self.assertIn("<span>Responsible</span>\n            <strong>-</strong>", shipments_header)
+        self.assertIn("<span>Current deadline</span>\n            <strong>-</strong>", shipments_header)
+        bundles_html = client.get("/pre-session-control-tower?session_year=2026&view=bundles").get_data(as_text=True)
+        table_start = bundles_html.index('aria-label="Shipment bundles"')
+        table = bundles_html[table_start:bundles_html.index('<div class="modal"', table_start)]
+        row_index = table.index("Semi shipment modal")
+        row = table[table.rfind("<tr", 0, row_index):table.index("</tr>", row_index)]
+        self.assertIn('<span class="muted">-</span>', row)
+        self.assertIn("Session preparations within this bundle are not yet complete", row)
+        self.assertNotIn('<span class="responsible-chip users-department-chip">LOGISTICS</span>', row)
+        self.assertNotIn("Complete shipment pre-dispatch stage", row)
+        self.assertNotIn("Complete shipment planning", row)
+
+    def test_unblocked_shipment_bundle_modal_summary_follows_delivery_option_until_planning_ready(self):
+        self.create_supervisor()
+        session_record = self.create_planning_ready_session("Unblocked shipment modal", date(2026, 8, 20), packages_ready=True)
+        assignment = ExamSessionSupervisorAssignment.query.filter_by(
+            exam_session_id=session_record.id,
+            team_member_id=1,
+            is_shipment_recipient=True,
+        ).one()
+        assignment.updated_on = datetime(2026, 8, 10, 12, 0, tzinfo=timezone.utc)
+        bundle = self.create_shipment_bundle_record(
+            status="Preparing bundle",
+            dispatch_due_at=date(2026, 8, 31),
+            session_record=session_record,
+        )
+
+        expected_actions = {
+            "": "Confirm delivery option with recipient",
+            "meeting_point": "Confirm address of the meeting point",
+            "store_pickup": "Generate and upload shipping label and tracking number",
+            "listed_address": "Generate and upload shipping label and tracking number",
+            "different_address": "Confirm new address, generate and upload shipping label and tracking number",
+        }
+        for delivery_option, expected_action in expected_actions.items():
+            bundle.delivery_option = delivery_option
+            bundle.shipping_label_url = None
+            bundle.tracking_number = None
+            bundle.delivery_address = "Av. Siempre Viva 123"
+            db.session.commit()
+            bundle_view = shipment_bundle_view(bundle)
+            self.assertTrue(bundle_view["unblocked"])
+            self.assertEqual(bundle_view["modal_summary"]["recommended_next_action"], expected_action)
+            self.assertEqual(bundle_view["modal_summary"]["responsible"], "ADMIN")
+            self.assertEqual(bundle_view["modal_summary"]["current_deadline"], date(2026, 8, 12))
+
+        bundle.delivery_option = "listed_address"
+        bundle.shipping_label_url = "https://labels.example.com/unblocked-ready"
+        bundle.tracking_number = "TRACK-UNBLOCKED-READY"
+        db.session.commit()
+        bundle_view = shipment_bundle_view(bundle)
+        self.assertTrue(bundle_view["modal_summary"]["override"])
+        self.assertEqual(bundle_view["modal_summary"]["recommended_next_action"], "Complete shipment pre-dispatch stage")
+        self.assertEqual(bundle_view["modal_summary"]["responsible"], "LOGISTICS")
+        self.assertEqual(bundle_view["modal_summary"]["current_deadline"], date(2026, 8, 12))
 
     def test_control_tower_shipment_planning_assisted_revalidates_changed_recommendation(self):
         self.create_supervisor()
@@ -12054,8 +12538,12 @@ class ScheduleWorkflowTest(unittest.TestCase):
         html = response.data.decode()
         self.assertEqual(ExamSessionIncidentImpactReview.query.count(), review_count_before)
         self.assertEqual(response.status_code, 200)
-        self.assertLess(html.index("<th>Session readiness</th>"), html.index("<th>Incidents</th>"))
-        self.assertLess(html.index("<th>Incidents</th>"), html.index("<th>Priority action</th>"))
+        table_start = html.index('aria-label="Schedule preparation and approval"')
+        table_end = html.index('<div class="modal"', table_start)
+        sessions_table = html[table_start:table_end]
+        self.assertNotIn("<th>Session readiness</th>", sessions_table)
+        self.assertNotIn("<th>Incidents</th>", sessions_table)
+        self.assertNotIn("<th>Priority action</th>", sessions_table)
         self.assertIn("Create incident", html)
         self.assertIn("Active incidents", html)
         self.assertIn("Examiner unavailable", html)
@@ -12091,7 +12579,7 @@ class ScheduleWorkflowTest(unittest.TestCase):
             session_date=date(2026, 7, 1),
             shifts="Morning",
             modules="Speaking",
-            format="Online",
+            format="Onsite",
             monthly_registrations_closed=True,
         )
         other_year_session = ExamSession(
@@ -12118,21 +12606,80 @@ class ScheduleWorkflowTest(unittest.TestCase):
 
         response = client.get("/pre-session-control-tower?session_year=2026&view=sessions")
         html = response.data.decode()
+        table_start = html.index('aria-label="Schedule preparation and approval"')
+        table_end = html.index('<div class="modal"', table_start)
+        sessions_table = html[table_start:table_end]
 
         self.assertEqual(response.status_code, 200)
-        self.assertIn("<th>Action</th>", html)
-        self.assertLess(html.index("<th>Action</th>"), html.index("<th>Session</th>"))
-        self.assertIn("<th>Schedule</th>", html)
-        self.assertNotIn("<th>Schedule status</th>", html)
-        self.assertNotIn("<th>Schedule gate</th>", html)
-        self.assertIn("Schedule blocked", html)
-        self.assertIn("Schedule ready", html)
-        self.assertIn("schedule-gate-ready", html)
-        self.assertIn("schedule-gate-blocked", html)
-        self.assertIn("workflow-gate-unblocked", html)
-        self.assertIn("This session cannot move to the next pre-session stages until the schedules are approved.", html)
-        self.assertIn("Schedules are approved. The session can move to the next pre-session stages.", html)
+        self.assertNotIn("<th>Action</th>", sessions_table)
+        self.assertNotIn("<th>Date</th>", sessions_table)
+        self.assertNotIn("<th>Schedule</th>", sessions_table)
+        self.assertNotIn("<th>Staffing</th>", sessions_table)
+        self.assertNotIn("<th>Package</th>", sessions_table)
+        self.assertIn('<small class="bundle-session-date">25/06/2026</small>', sessions_table)
+        self.assertNotIn("<th>Schedule status</th>", sessions_table)
+        self.assertNotIn("<th>Schedule gate</th>", sessions_table)
+        self.assertNotIn('aria-label="Schedule status filter"', html)
+        self.assertNotIn("<select name=\"schedule_status\"", html)
+        self.assertNotIn('aria-label="Schedule preparation and approval summary"', html)
+        self.assertNotIn("schedule-gate-ready", sessions_table)
+        self.assertNotIn("schedule-gate-blocked", sessions_table)
+        self.assertNotIn("workflow-gate-unblocked", sessions_table)
+        self.assertNotIn("This session cannot move to the next pre-session stages until the schedules are approved.", sessions_table)
+        self.assertNotIn("Schedules are approved. The session can move to the next pre-session stages.", sessions_table)
         self.assertNotIn("Other year session", html)
+
+        filtered_response = client.get("/pre-session-control-tower?session_year=2026&view=sessions&schedule_status=Approved")
+        filtered_html = filtered_response.data.decode()
+        filtered_table = filtered_html[
+            filtered_html.index('aria-label="Schedule preparation and approval"'):filtered_html.index('<div class="modal"', filtered_html.index('aria-label="Schedule preparation and approval"'))
+        ]
+        self.assertIn('<small class="bundle-session-date">25/06/2026</small>', filtered_table)
+        self.assertIn("Approved session", filtered_table)
+
+    def test_control_tower_sessions_view_excludes_online_formats(self):
+        online_session = ExamSession(
+            exam_session_name="Remote session",
+            category="Path School",
+            status="Pending",
+            session_date=date(2026, 7, 2),
+            shifts="Morning",
+            modules="Speaking",
+            format="Online",
+        )
+        online_exam_centre_session = ExamSession(
+            exam_session_name="Exam centre online session",
+            category="Path School",
+            status="Pending",
+            session_date=date(2026, 7, 3),
+            shifts="Morning",
+            modules="Speaking",
+            format="Online at exam centre",
+        )
+        onsite_session = ExamSession(
+            exam_session_name="Visible onsite session",
+            category="Path School",
+            status="Pending",
+            session_date=date(2026, 7, 4),
+            shifts="Morning",
+            modules="Speaking",
+            format="Onsite",
+        )
+        db.session.add_all([online_session, online_exam_centre_session, onsite_session])
+        db.session.commit()
+        client = self.login_client()
+
+        response = client.get("/pre-session-control-tower?session_year=2026&view=sessions")
+        html = response.data.decode()
+        table_start = html.index('aria-label="Schedule preparation and approval"')
+        table_end = html.index('<div class="modal"', table_start)
+        sessions_table = html[table_start:table_end]
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("Visible onsite session", sessions_table)
+        self.assertIn(self.session_record.exam_session_name, sessions_table)
+        self.assertNotIn("Remote session", sessions_table)
+        self.assertNotIn("Exam centre online session", sessions_table)
 
     def test_schedule_column_lock_depends_on_monthly_registration_closed_status(self):
         db.session.add(ExamSessionScheduleWorkflow(
@@ -12142,29 +12689,22 @@ class ScheduleWorkflowTest(unittest.TestCase):
         db.session.commit()
         client = self.login_client()
 
-        def schedule_cell_html():
+        def sessions_table_html():
             response = client.get("/pre-session-control-tower?session_year=2026&view=sessions")
             html = response.get_data(as_text=True)
             table_start = html.index('aria-label="Schedule preparation and approval"')
             table_end = html.index('<div class="modal"', table_start)
-            sessions_table = html[table_start:table_end]
-            session_row_start = sessions_table.index("June exam session")
-            session_row = sessions_table[sessions_table.rfind("<tr", 0, session_row_start):sessions_table.index("</tr>", session_row_start)]
-            schedule_cell_start = session_row.index('data-modal-target-label="Review schedule"')
-            staffing_cell_start = session_row.index('data-modal-target-label="Manage staffing"')
-            return session_row[schedule_cell_start:staffing_cell_start]
+            return html[table_start:table_end]
 
-        schedule_cell = schedule_cell_html()
-        self.assertIn("workflow-gate-blocked", schedule_cell)
-        self.assertIn("BLOCKED", schedule_cell)
-        self.assertNotIn("workflow-gate-unblocked", schedule_cell)
+        sessions_table = sessions_table_html()
+        self.assertNotIn("<th>Schedule</th>", sessions_table)
+        self.assertNotIn('data-modal-target-label="Review schedule"', sessions_table)
 
         self.session_record.monthly_registrations_closed = True
         db.session.commit()
-        schedule_cell = schedule_cell_html()
-        self.assertIn("workflow-gate-unblocked", schedule_cell)
-        self.assertIn("UNBLOCKED", schedule_cell)
-        self.assertNotIn("workflow-gate-blocked", schedule_cell)
+        sessions_table = sessions_table_html()
+        self.assertNotIn("<th>Schedule</th>", sessions_table)
+        self.assertNotIn('data-modal-target-label="Review schedule"', sessions_table)
 
     def test_control_tower_sessions_table_uses_contextual_modal_targets(self):
         client = self.login_client()
@@ -12177,8 +12717,18 @@ class ScheduleWorkflowTest(unittest.TestCase):
         sessions_table = html[table_start:table_end]
 
         self.assertEqual(response.status_code, 200)
-        self.assertIn("Session overview", sessions_table)
-        self.assertIn("<th>Schedule</th>", sessions_table)
+        self.assertNotIn("Session overview", sessions_table)
+        self.assertNotIn("<th>Action</th>", sessions_table)
+        self.assertNotIn("<th>Date</th>", sessions_table)
+        self.assertNotIn("<th>Schedule</th>", sessions_table)
+        self.assertNotIn("<th>Staffing</th>", sessions_table)
+        self.assertNotIn("<th>Package</th>", sessions_table)
+        self.assertNotIn("<th>Shipment</th>", sessions_table)
+        self.assertNotIn("<th>Session readiness</th>", sessions_table)
+        self.assertNotIn("<th>Incidents</th>", sessions_table)
+        self.assertNotIn("<th>Priority action</th>", sessions_table)
+        self.assertIn(f"<strong>{self.session_record.exam_session_name}</strong>", sessions_table)
+        self.assertIn('<small class="bundle-session-date">25/06/2026</small>', sessions_table)
         self.assertNotIn("<th>Schedule status</th>", sessions_table)
         self.assertNotIn("<th>Schedule gate</th>", sessions_table)
         self.assertNotIn("<th>Core readiness</th>", sessions_table)
@@ -12187,24 +12737,48 @@ class ScheduleWorkflowTest(unittest.TestCase):
         self.assertNotIn("<th>Responsible</th>", sessions_table)
         self.assertNotIn("<th>Deadline</th>", sessions_table)
         self.assertNotIn("Gate:", sessions_table)
-        self.assertIn(f'data-open-modal="schedule-workflow-{session_id}" data-modal-scroll-target="overview-{session_id}" data-modal-mode="overview"', sessions_table)
         for target, label in [
-            ("schedule-actions", "Review schedule"),
-            ("staffing", "Manage staffing"),
             ("logistics", "Review logistics"),
-            ("packages", "Manage packages"),
-            ("shipments", "Track shipment"),
-            ("readiness", "View readiness"),
             ("finance", "Review finance"),
             ("sinapsis", "Check Sinapsis"),
             ("communications", "Review communications"),
-            ("incidents", "Open incidents"),
         ]:
             self.assertIn(f'data-modal-scroll-target="{target}-{session_id}"', sessions_table)
             self.assertIn(f'data-modal-target-label="{label}"', sessions_table)
             self.assertIn(f'aria-label="{label} for {self.session_record.exam_session_name}"', sessions_table)
+        for removed_target, removed_label in [
+            ("shipments", "Track shipment"),
+            ("readiness", "View readiness"),
+            ("incidents", "Open incidents"),
+        ]:
+            self.assertNotIn(f'data-modal-scroll-target="{removed_target}-{session_id}"', sessions_table)
+            self.assertNotIn(f'data-modal-target-label="{removed_label}"', sessions_table)
         self.assertIn("contextual-cell-trigger", sessions_table)
         self.assertNotIn(">Manage</button>", sessions_table)
+
+    def test_control_tower_sessions_session_column_shows_shipment_progress_chip(self):
+        self.create_supervisor(staff_id=1, name="Laura Mendez")
+        in_progress_session = self.create_planning_ready_session("Bundle chip in progress", date(2026, 7, 1), supervisor_id=1)
+        dispatched_session = self.create_planning_ready_session("Bundle chip dispatched", date(2026, 7, 2), supervisor_id=1)
+        notified_session = self.create_planning_ready_session("Bundle chip notified", date(2026, 7, 3), supervisor_id=1)
+        delivered_session = self.create_planning_ready_session("Bundle chip delivered", date(2026, 7, 4), supervisor_id=1)
+        for session_record in [in_progress_session, dispatched_session, notified_session, delivered_session]:
+            session_record.format = "Onsite"
+        self.create_shipment_bundle_record(status="Preparing bundle", session_record=in_progress_session)
+        self.create_shipment_bundle_record(status="Dispatched", session_record=dispatched_session)
+        self.create_shipment_bundle_record(status="Recipient notified", session_record=notified_session)
+        self.create_shipment_bundle_record(status="Delivered successfully", session_record=delivered_session)
+        db.session.commit()
+        client = self.login_client()
+
+        html = client.get("/pre-session-control-tower?session_year=2026&view=sessions").get_data(as_text=True)
+        table_start = html.index('aria-label="Schedule preparation and approval"')
+        table_end = html.index('<div class="modal"', table_start)
+        sessions_table = html[table_start:table_end]
+
+        self.assertIn('<span class="session-shipment-progress-chip session-shipment-progress-in-progress">Bundle in progress</span>', sessions_table)
+        self.assertEqual(sessions_table.count('<span class="session-shipment-progress-chip session-shipment-progress-dispatched">Shipment dispatched</span>'), 2)
+        self.assertIn('<span class="session-shipment-progress-chip session-shipment-progress-delivered">Shipment delivered</span>', sessions_table)
 
     def test_control_tower_my_actions_tab_filters_and_excludes_ready_actions(self):
         staffing_session = ExamSession(
@@ -12276,10 +12850,13 @@ class ScheduleWorkflowTest(unittest.TestCase):
         table_start = html.index('aria-label="My actions"')
         table_end = html.index('<div class="modal"', table_start)
         actions_table = html[table_start:table_end]
+        tabs_start = html.index('aria-label="Pre-session Control Tower views"')
+        tabs_end = html.index("</nav>", tabs_start)
+        view_tabs = html[tabs_start:tabs_end]
 
         self.assertEqual(response.status_code, 200)
         self.assertIn("Sessions", html)
-        self.assertIn("My actions", html)
+        self.assertNotIn("My actions", view_tabs)
         self.assertLess(actions_table.index("<th>Manage</th>"), actions_table.index("<th>Priority action</th>"))
         self.assertIn("Start schedule preparation", actions_table)
         self.assertIn("Assign staff to open roles", actions_table)
@@ -13137,29 +13714,30 @@ class ScheduleWorkflowTest(unittest.TestCase):
 
         response = client.get("/pre-session-control-tower?session_year=2026&view=sessions")
         html = response.data.decode()
+        table_start = html.index('aria-label="Schedule preparation and approval"')
+        table_end = html.index('<div class="modal"', table_start)
+        sessions_table = html[table_start:table_end]
 
         self.assertEqual(response.status_code, 200)
-        self.assertIn("<th>Staffing</th>", html)
-        self.assertLess(html.index("<th>Action</th>"), html.index("<th>Session</th>"))
-        self.assertLess(html.index("<th>Schedule</th>"), html.index("<th>Staffing</th>"))
-        self.assertIn("BLOCKED", html)
-        self.assertIn("UNBLOCKED", html)
-        self.assertIn('<svg viewBox="0 0 24 24" aria-hidden="true">', html)
-        self.assertIn("staffing-gate-blocked", html)
-        self.assertIn("staffing-gate-unblocked", html)
-        self.assertIn("Not configured", html)
-        self.assertIn("No staff roles configured", html)
-        self.assertNotIn("0 / 0 confirmed", html)
-        self.assertIn("Roles to cover", html)
-        self.assertIn("0 / 1 confirmed", html)
-        self.assertIn("1 role to cover", html)
-        self.assertIn("Confirmations to be sent", html)
-        self.assertIn("Confirmations to be updated", html)
-        self.assertIn("1 confirmation to be sent", html)
-        self.assertIn("1 confirmation to be updated", html)
-        self.assertIn("Confirmed", html)
-        self.assertNotIn(">Confirmed staff<", html)
-        self.assertIn("3 / 3 confirmed", html)
+        self.assertNotIn("<th>Action</th>", sessions_table)
+        self.assertNotIn("<th>Date</th>", sessions_table)
+        self.assertNotIn("<th>Schedule</th>", sessions_table)
+        self.assertNotIn("<th>Staffing</th>", sessions_table)
+        self.assertNotIn("<th>Package</th>", sessions_table)
+        self.assertLess(sessions_table.index("<th>Session</th>"), sessions_table.index("<th>Logistics</th>"))
+        self.assertNotIn("staffing-gate-blocked", sessions_table)
+        self.assertNotIn("staffing-gate-unblocked", sessions_table)
+        self.assertNotIn("No staff roles configured", sessions_table)
+        self.assertNotIn("0 / 0 confirmed", sessions_table)
+        self.assertNotIn("Roles to cover", sessions_table)
+        self.assertNotIn("0 / 1 confirmed", sessions_table)
+        self.assertNotIn("1 role to cover", sessions_table)
+        self.assertNotIn("Confirmations to be sent", sessions_table)
+        self.assertNotIn("Confirmations to be updated", sessions_table)
+        self.assertNotIn("1 confirmation to be sent", sessions_table)
+        self.assertNotIn("1 confirmation to be updated", sessions_table)
+        self.assertNotIn(">Confirmed staff<", sessions_table)
+        self.assertNotIn("3 / 3 confirmed", sessions_table)
         self.assertIn("Supervisor", html)
         self.assertIn("Examiner", html)
         self.assertIn("Intern", html)
@@ -13802,7 +14380,7 @@ class ScheduleWorkflowTest(unittest.TestCase):
             session_date=date(2026, 7, 1),
             shifts="Morning",
             modules="Speaking",
-            format="Online",
+            format="Onsite",
         )
         configuration_session = ExamSession(
             exam_session_name="Needs logistics setup",
@@ -13811,7 +14389,7 @@ class ScheduleWorkflowTest(unittest.TestCase):
             session_date=date(2026, 7, 2),
             shifts="Morning",
             modules="Speaking",
-            format="Online",
+            format="Onsite",
         )
         pending_session = ExamSession(
             exam_session_name="Pending logistics",
@@ -13820,7 +14398,7 @@ class ScheduleWorkflowTest(unittest.TestCase):
             session_date=date(2026, 7, 3),
             shifts="Morning",
             modules="Speaking",
-            format="Online",
+            format="Onsite",
         )
         payment_session = ExamSession(
             exam_session_name="Payment logistics",
@@ -13829,7 +14407,7 @@ class ScheduleWorkflowTest(unittest.TestCase):
             session_date=date(2026, 7, 4),
             shifts="Morning",
             modules="Speaking",
-            format="Online",
+            format="Onsite",
         )
         ready_session = ExamSession(
             exam_session_name="Ready logistics",
@@ -13838,7 +14416,7 @@ class ScheduleWorkflowTest(unittest.TestCase):
             session_date=date(2026, 7, 5),
             shifts="Morning",
             modules="Speaking",
-            format="Online",
+            format="Onsite",
         )
         missing_link_session = ExamSession(
             exam_session_name="Missing link logistics",
@@ -13847,7 +14425,7 @@ class ScheduleWorkflowTest(unittest.TestCase):
             session_date=date(2026, 7, 6),
             shifts="Morning",
             modules="Speaking",
-            format="Online",
+            format="Onsite",
         )
         db.session.add_all([
             no_logistics_session,
@@ -13919,11 +14497,22 @@ class ScheduleWorkflowTest(unittest.TestCase):
 
         response = client.get("/pre-session-control-tower?session_year=2026&view=sessions")
         html = response.data.decode()
+        table_start = html.index('aria-label="Schedule preparation and approval"')
+        table_end = html.index('<div class="modal"', table_start)
+        sessions_table = html[table_start:table_end]
 
         self.assertEqual(response.status_code, 200)
-        self.assertLess(html.index("<th>Action</th>"), html.index("<th>Session</th>"))
-        self.assertLess(html.index("<th>Staffing</th>"), html.index("<th>Logistics</th>"))
-        self.assertLess(html.index("<th>Logistics</th>"), html.index("<th>Priority action</th>"))
+        self.assertNotIn("<th>Action</th>", sessions_table)
+        self.assertNotIn("<th>Date</th>", sessions_table)
+        self.assertNotIn("<th>Schedule</th>", sessions_table)
+        self.assertNotIn("<th>Staffing</th>", sessions_table)
+        self.assertNotIn("<th>Package</th>", sessions_table)
+        self.assertNotIn("<th>Shipment</th>", sessions_table)
+        self.assertNotIn("<th>Session readiness</th>", sessions_table)
+        self.assertNotIn("<th>Incidents</th>", sessions_table)
+        self.assertNotIn("<th>Priority action</th>", sessions_table)
+        self.assertLess(sessions_table.index("<th>Session</th>"), sessions_table.index("<th>Logistics</th>"))
+        self.assertLess(sessions_table.index("<th>Logistics</th>"), sessions_table.index("<th>Finance</th>"))
         self.assertIn("Not applicable", html)
         self.assertIn("No logistics required", html)
         self.assertNotIn("0 / 0 concepts confirmed", html)
@@ -14215,11 +14804,21 @@ class ScheduleWorkflowTest(unittest.TestCase):
 
         self.assertEqual(response.status_code, 200)
         self.assertEqual(counts_before, counts_after)
-        self.assertLess(html.index("<th>Action</th>"), html.index("<th>Session</th>"))
-        self.assertLess(html.index("<th>Staffing</th>"), html.index("<th>Package</th>"))
-        self.assertLess(html.index("<th>Package</th>"), html.index("<th>Logistics</th>"))
-        self.assertNotIn("<th>Core readiness</th>", html)
-        self.assertNotIn("<th>Operational readiness</th>", html)
+        table_start = html.index('aria-label="Schedule preparation and approval"')
+        table_end = html.index('<div class="modal"', table_start)
+        sessions_table = html[table_start:table_end]
+        self.assertNotIn("<th>Action</th>", sessions_table)
+        self.assertNotIn("<th>Date</th>", sessions_table)
+        self.assertNotIn("<th>Schedule</th>", sessions_table)
+        self.assertNotIn("<th>Staffing</th>", sessions_table)
+        self.assertNotIn("<th>Package</th>", sessions_table)
+        self.assertNotIn("<th>Shipment</th>", sessions_table)
+        self.assertNotIn("<th>Session readiness</th>", sessions_table)
+        self.assertNotIn("<th>Incidents</th>", sessions_table)
+        self.assertNotIn("<th>Priority action</th>", sessions_table)
+        self.assertLess(sessions_table.index("<th>Session</th>"), sessions_table.index("<th>Logistics</th>"))
+        self.assertNotIn("<th>Core readiness</th>", sessions_table)
+        self.assertNotIn("<th>Operational readiness</th>", sessions_table)
         self.assertNotIn("<th>Next action</th>", html)
         self.assertIn("Priority action", html)
         self.assertIn("Core readiness", html)
@@ -14240,22 +14839,9 @@ class ScheduleWorkflowTest(unittest.TestCase):
         self.assertIn("Source: Staffing", html)
         self.assertIn("Source: Logistics", html)
         self.assertIn("Source: Core readiness", html)
-        staffing_row_start = html.index("Staffing open core readiness")
-        logistics_row_start = html.index("Logistics config core readiness")
-        ready_row_start = html.index("Ready without logistics core readiness")
-        staffing_row = html[staffing_row_start:logistics_row_start]
-        logistics_row = html[logistics_row_start:ready_row_start]
-        ready_row = html[ready_row_start:html.index("All ready core readiness")]
-        self.assertIn("Assign staff to open roles", staffing_row)
-        self.assertIn("ADMIN", staffing_row)
-        self.assertIn("Not set", staffing_row)
-        self.assertNotIn("Completed</span>", staffing_row)
-        self.assertIn("Configure logistics requirements", logistics_row)
-        self.assertIn("ADMIN", logistics_row)
-        self.assertIn("Not set", logistics_row)
-        self.assertNotIn("Completed</span>", logistics_row)
-        self.assertIn("Ready for next stage", ready_row)
-        self.assertIn("— · Completed", ready_row)
+        self.assertNotIn("Assign staff to open roles", sessions_table)
+        self.assertNotIn("Configure logistics requirements", sessions_table)
+        self.assertNotIn("Ready for next stage", sessions_table)
         ready_modal_start = html.index(f'id="schedule-workflow-{ready_not_applicable_session.id}"')
         next_modal_start = html.index(f'id="schedule-workflow-{all_ready_session.id}"')
         ready_modal = html[ready_modal_start:next_modal_start]
@@ -14290,17 +14876,22 @@ class ScheduleWorkflowTest(unittest.TestCase):
 
         self.assertEqual(response.status_code, 200)
         self.assertEqual(counts_before, counts_after)
-        self.assertNotIn("<th>Core readiness</th>", html)
-        self.assertNotIn("<th>Operational readiness</th>", html)
-        self.assertLess(html.index("<th>Communications</th>"), html.index("<th>Session readiness</th>"))
-        self.assertLess(html.index("<th>Session readiness</th>"), html.index("<th>Priority action</th>"))
+        table_start = html.index('aria-label="Schedule preparation and approval"')
+        table_end = html.index('<div class="modal"', table_start)
+        sessions_table = html[table_start:table_end]
+        self.assertNotIn("<th>Core readiness</th>", sessions_table)
+        self.assertNotIn("<th>Operational readiness</th>", sessions_table)
+        self.assertNotIn("<th>Session readiness</th>", sessions_table)
+        self.assertNotIn("<th>Incidents</th>", sessions_table)
+        self.assertNotIn("<th>Priority action</th>", sessions_table)
+        self.assertLess(sessions_table.index("<th>Sinapsis</th>"), sessions_table.index("<th>Communications</th>"))
         self.assertIn("Operational readiness", html)
         self.assertIn("Session readiness", html)
         self.assertIn("This status covers schedule approval, staffing, staff logistics, packages and shipments. It does not include Finance, Sinapsis readiness, Communications, Incidents or Incident review flags.", html)
         self.assertIn("This status covers Operational readiness, Finance, Sinapsis readiness, Communications, Incidents and Incident review flags.", html)
         self.assertIn("Operationally ready", html)
         self.assertIn("5 of 5 requirements are ready.", html)
-        self.assertIn("3 / 6 requirements ready", html)
+        self.assertIn("3 of 6 requirements are ready.", html)
         self.assertIn("4 of 5 requirements are ready.", html)
         self.assertIn("Shipment was delivered successfully, but recipient review is still pending.", html)
         delivered_row_start = html.index("Delivered operational readiness")

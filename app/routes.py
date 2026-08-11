@@ -118,6 +118,7 @@ staff_bp = Blueprint("staff", __name__)
 LOCAL_TZ = timezone(timedelta(hours=-3))
 CREATE_STATUS_OPTIONS = ["Inactive", "Active"]
 EDIT_STATUS_OPTIONS = ["Archived", "Inactive", "Active"]
+PRE_SESSION_SESSIONS_VIEW_EXCLUDED_FORMATS = {"Online", "Online at exam centre"}
 ROLE_OPTIONS = ["Examiner", "RSG", "Supervisor", "Intern"]
 POTENTIAL_STATUS_OPTIONS = [
     "CV to be reviewed",
@@ -999,7 +1000,7 @@ SHIPMENT_DELIVERY_OPTION_CHOICES = [
 ]
 SHIPMENT_DELIVERY_OPTION_VALUES = {option["value"] for option in SHIPMENT_DELIVERY_OPTION_CHOICES} | {""}
 SHIPMENT_DEFAULT_DELIVERY_OPTION = ""
-SHIPMENT_TRANSIT_DAYS = 10
+SHIPMENT_TRANSIT_DAYS = 12
 SHIPMENT_RECEPTION_BUFFER_DAYS = 0
 SHIPMENT_DELIVERY_RISK_DAYS = 3
 SHIPMENT_PROTECTED_STATUSES = {
@@ -8054,6 +8055,16 @@ def add_weekdays(value, days):
     return current
 
 
+def subtract_weekdays(value, days):
+    current = value
+    remaining = days
+    while remaining > 0:
+        current -= timedelta(days=1)
+        if current.weekday() < 5:
+            remaining -= 1
+    return current
+
+
 def package_deadline_badge_contract(package_units=None, preparation_status=None, today=None, session_record=None, schedule_workflow=None, staffing_completed_at=None):
     package_units = list(package_units or [])
     completed = (preparation_status or {}).get("status") == "completed"
@@ -8078,6 +8089,37 @@ def package_deadline_badge_contract(package_units=None, preparation_status=None,
 
 def deadline_badge_is_red(deadline_badge):
     return (deadline_badge or {}).get("status") in {"overdue", "missed"}
+
+
+def shipment_bundle_delivered_date(bundle):
+    if not bundle:
+        return None
+    if getattr(bundle, "delivered_at", None):
+        return local_date(bundle.delivered_at)
+    delivered_events = sorted(
+        (
+            event
+            for event in (getattr(bundle, "events", []) or [])
+            if event.new_status == "Delivered successfully"
+        ),
+        key=lambda event: (event.created_at or datetime.min.replace(tzinfo=timezone.utc), event.id or 0),
+        reverse=True,
+    )
+    if delivered_events:
+        return local_date(delivered_events[0].created_at)
+    return None
+
+
+def shipment_deadline_badge_contract(bundle, today=None):
+    if not bundle or not getattr(bundle, "dispatch_due_at", None):
+        return None
+    delivered = (getattr(bundle, "status", "") or "").strip() == "Delivered successfully"
+    return deadline_badge_contract(
+        bundle.dispatch_due_at,
+        completed=delivered,
+        completed_date=shipment_bundle_delivered_date(bundle) if delivered else None,
+        today=today,
+    )
 
 
 def package_status_label(status):
@@ -8827,6 +8869,7 @@ def shipment_bundle_dispatch_step(bundle):
         "In transit to post office": 1,
         "Dispatched": 2,
         "Recipient notified": 3,
+        "In transit to recipient": 3,
         "Delivered successfully": 4,
         "Recipient review successful": 4,
     }.get(status, -1)
@@ -8838,7 +8881,38 @@ def shipment_bundle_operational_status(bundle, gate=None):
             "label": "Not bundled",
             "status": "not_bundled",
         }
-    if (bundle.status or "").strip() in {"Delivered successfully", "Recipient review successful"}:
+    status = (bundle.status or "").strip()
+    if status == "Ready to dispatch":
+        return {
+            "label": "Ready to dispatch",
+            "status": "ready_to_dispatch",
+        }
+    if status == "In transit to post office":
+        return {
+            "label": "In transit to meeting point" if bundle.delivery_option == "meeting_point" else "In transit to post office",
+            "status": "in_transit_to_post_office",
+        }
+    if status == "Dispatched":
+        return {
+            "label": "Dispatched",
+            "status": "dispatched",
+        }
+    if status == "Recipient notified":
+        return {
+            "label": "Dispatched and recipient notified",
+            "status": "recipient_notified",
+        }
+    if status == "In transit to recipient":
+        return {
+            "label": "In transit to recipient",
+            "status": "in_transit_to_recipient",
+        }
+    if status == "Delivered successfully":
+        return {
+            "label": "Delivered successfully",
+            "status": "delivered_successfully",
+        }
+    if status == "Recipient review successful":
         return {
             "label": "Shipment delivered",
             "status": "shipment_delivered",
@@ -8872,14 +8946,14 @@ def shipment_bundle_operational_status(bundle, gate=None):
             "label": "Shipment planning ready",
             "status": "shipment_planning_ready",
         }
-    if planning["started"]:
+    if planning["started"] and (bundle.delivery_option or "").strip():
         return {
             "label": "Shipment planning in progress",
             "status": "shipment_planning_in_progress",
         }
     return {
-        "label": "Bundle preparation ready",
-        "status": "bundle_preparation_ready",
+        "label": "Session bundle ready",
+        "status": "session_bundle_ready",
     }
 
 
@@ -8960,17 +9034,359 @@ def session_staffing_confirmed_for_shipment(session_record):
     ).get("ready"))
 
 
+def session_shipment_recipient_assignment(session_record):
+    if not session_record:
+        return None
+    return next(
+        (
+            assignment
+            for assignment in (
+                list(getattr(session_record, "supervisor_assignments", []) or [])
+                + list(getattr(session_record, "examiner_assignments", []) or [])
+                + list(getattr(session_record, "intern_assignments", []) or [])
+            )
+            if getattr(assignment, "is_shipment_recipient", False)
+            and (
+                getattr(assignment, "team_member_id", None) is not None
+                or getattr(assignment, "potential_entry_id", None) is not None
+            )
+        ),
+        None,
+    )
+
+
+def session_shipment_recipient_confirmed_for_shipment(session_record):
+    recipient_assignment = session_shipment_recipient_assignment(session_record)
+    return bool(
+        recipient_assignment
+        and staffing_participation_status_label(getattr(recipient_assignment, "participation_status", "Pending")) == "Confirmed"
+    )
+
+
+def shipment_bundle_semi_unblocked_started_date(bundle, included_sessions=None):
+    sessions = list(included_sessions if included_sessions is not None else shipment_bundle_sessions(bundle))
+    if not sessions:
+        return local_date(getattr(bundle, "updated_at", None) or getattr(bundle, "created_at", None))
+    recipient_dates = []
+    for session_record in sessions:
+        assignment = session_shipment_recipient_assignment(session_record)
+        if (
+            not assignment
+            or staffing_participation_status_label(getattr(assignment, "participation_status", "Pending")) != "Confirmed"
+        ):
+            return None
+        recipient_dates.append(local_date(getattr(assignment, "updated_on", None) or getattr(assignment, "created_on", None)))
+    recipient_dates = [value for value in recipient_dates if value]
+    if recipient_dates:
+        return max(recipient_dates)
+    return local_date(getattr(bundle, "updated_at", None) or getattr(bundle, "created_at", None))
+
+
+def session_package_preparation_completed_date(session_record):
+    if not session_package_preparation_completed(session_record):
+        return None
+    dates = []
+    for unit in list(getattr(session_record, "package_units", []) or []):
+        completed_date = package_unit_completed_date(unit)
+        if completed_date:
+            dates.append(completed_date)
+    dates.extend(package_stage_activity_dates(session_record))
+    return max(dates) if dates else local_date(getattr(session_record, "updated_on", None) or getattr(session_record, "created_on", None))
+
+
+def shipment_bundle_unblocked_started_date(bundle, included_sessions=None):
+    sessions = list(included_sessions if included_sessions is not None else shipment_bundle_sessions(bundle))
+    dates = [shipment_bundle_semi_unblocked_started_date(bundle, sessions)]
+    for session_record in sessions:
+        completed_date = session_package_preparation_completed_date(session_record)
+        if not completed_date:
+            return None
+        dates.append(completed_date)
+    dates = [value for value in dates if value]
+    return max(dates) if dates else None
+
+
+def shipment_bundle_planning_ready_date(bundle):
+    if not shipment_bundle_planning_progress(bundle).get("ready"):
+        return None
+    planning_event_types = {
+        "DELIVERY_OPTION_CHANGED",
+        "ADDRESS_CHANGED",
+        "SHIPPING_LABEL_LINK_UPDATED",
+        "TRACKING_UPDATED",
+    }
+    planning_events = list(
+        event
+        for event in (getattr(bundle, "events", []) or [])
+        if event.event_type in planning_event_types
+    )
+    if getattr(bundle, "id", None):
+        recorded_events = ExamSessionShipmentEvent.query.filter(
+            ExamSessionShipmentEvent.bundle_id == bundle.id,
+            ExamSessionShipmentEvent.event_type.in_(planning_event_types),
+        ).all()
+        known_event_ids = {event.id for event in planning_events if getattr(event, "id", None)}
+        planning_events.extend(
+            event
+            for event in recorded_events
+            if not getattr(event, "id", None) or event.id not in known_event_ids
+        )
+    dates = [local_date(event.created_at) for event in planning_events]
+    dates = [value for value in dates if value]
+    if dates:
+        return max(dates)
+    return local_date(getattr(bundle, "updated_at", None) or getattr(bundle, "created_at", None))
+
+
+def shipment_bundle_pre_dispatch_stage_started_date(bundle, gate=None, included_sessions=None):
+    gate = gate or shipment_bundle_gate_contract(included_sessions if included_sessions is not None else shipment_bundle_sessions(bundle))
+    if not gate.get("unblocked") or not shipment_bundle_planning_progress(bundle).get("ready"):
+        return None
+    dates = [
+        shipment_bundle_planning_ready_date(bundle),
+        shipment_bundle_unblocked_started_date(bundle, included_sessions),
+    ]
+    dates = [value for value in dates if value]
+    return max(dates) if dates else None
+
+
+def shipment_bundle_pre_dispatch_stage_deadline(bundle, gate=None, included_sessions=None):
+    started_date = shipment_bundle_pre_dispatch_stage_started_date(bundle, gate, included_sessions)
+    return add_weekdays(started_date, 1) if started_date else None
+
+
+def shipment_bundle_dispatch_stage_started_date(bundle):
+    if not shipment_bundle_pre_dispatch_progress(bundle).get("ready"):
+        return None
+    completed_item_dates = [
+        local_date(getattr(item, "checked_at", None) or getattr(item, "updated_at", None) or getattr(item, "created_at", None))
+        for item in (getattr(bundle, "checklist_items", []) or [])
+        if item.item_key in SHIPMENT_PRE_DISPATCH_CARD_KEYS and item.is_checked
+    ]
+    checklist_events = [
+        local_date(event.created_at)
+        for event in (getattr(bundle, "events", []) or [])
+        if event.event_type == "CHECKLIST_UPDATED"
+    ]
+    if getattr(bundle, "id", None):
+        recorded_events = ExamSessionShipmentEvent.query.filter_by(
+            bundle_id=bundle.id,
+            event_type="CHECKLIST_UPDATED",
+        ).all()
+        checklist_events.extend(local_date(event.created_at) for event in recorded_events)
+    dates = [value for value in completed_item_dates + checklist_events if value]
+    if dates:
+        return max(dates)
+    return local_date(getattr(bundle, "updated_at", None) or getattr(bundle, "created_at", None))
+
+
+def shipment_bundle_dispatch_stage_deadline(bundle):
+    started_date = shipment_bundle_dispatch_stage_started_date(bundle)
+    return add_weekdays(started_date, 1) if started_date else None
+
+
+def shipment_bundle_notify_recipient_stage_started_date(bundle):
+    dispatched_date = local_date(getattr(bundle, "dispatched_at", None))
+    if dispatched_date:
+        return dispatched_date
+    status_events = [
+        local_date(event.created_at)
+        for event in (getattr(bundle, "events", []) or [])
+        if event.event_type == "STATUS_CHANGED" and event.new_status == "Dispatched"
+    ]
+    if getattr(bundle, "id", None):
+        recorded_events = ExamSessionShipmentEvent.query.filter_by(
+            bundle_id=bundle.id,
+            event_type="STATUS_CHANGED",
+            new_status="Dispatched",
+        ).all()
+        status_events.extend(local_date(event.created_at) for event in recorded_events)
+    dates = [value for value in status_events if value]
+    if dates:
+        return max(dates)
+    return local_date(getattr(bundle, "updated_at", None) or getattr(bundle, "created_at", None))
+
+
+def shipment_bundle_notify_recipient_stage_deadline(bundle):
+    started_date = shipment_bundle_notify_recipient_stage_started_date(bundle)
+    return add_weekdays(started_date, 1) if started_date else None
+
+
+def shipment_bundle_monitor_delivery_deadline(bundle, included_sessions=None):
+    sessions = list(included_sessions if included_sessions is not None else shipment_bundle_sessions(bundle))
+    session_dates = [
+        session_record.session_date
+        for session_record in sessions
+        if getattr(session_record, "session_date", None)
+    ]
+    return subtract_weekdays(min(session_dates), 3) if session_dates else None
+
+
+def shipment_bundle_nearest_session_date(bundle, included_sessions=None):
+    sessions = list(included_sessions if included_sessions is not None else shipment_bundle_sessions(bundle))
+    session_dates = [
+        session_record.session_date
+        for session_record in sessions
+        if getattr(session_record, "session_date", None)
+    ]
+    return min(session_dates) if session_dates else None
+
+
+def shipment_bundle_delivery_risk_contract(bundle, gate=None, included_sessions=None):
+    eligible_actions = {
+        "Confirm delivery option with recipient",
+        "Confirm address of the meeting point",
+        "Generate and upload shipping label and tracking number",
+        "Confirm new address, generate and upload shipping label and tracking number",
+        "Complete shipment pre-dispatch stage",
+        "Proceed with Shipment dispatch stage",
+        "Dispatch shipment bundle",
+        "Confirm shipment dispatch",
+    }
+    modal_summary = shipment_bundle_modal_summary_override(bundle, gate, included_sessions)
+    current_deadline = modal_summary.get("current_deadline") if modal_summary.get("override") else getattr(bundle, "dispatch_due_at", None)
+    nearest_session_date = shipment_bundle_nearest_session_date(bundle, included_sessions)
+    threshold_date = subtract_weekdays(nearest_session_date, 10) if nearest_session_date else None
+    risky = bool(
+        modal_summary.get("recommended_next_action") in eligible_actions
+        and current_deadline
+        and threshold_date
+        and current_deadline >= threshold_date
+    )
+    return {
+        "risky": risky,
+        "current_deadline": current_deadline,
+        "threshold_date": threshold_date,
+        "nearest_session_date": nearest_session_date,
+    }
+
+
+def shipment_bundle_modal_summary_override(bundle, gate=None, included_sessions=None):
+    gate = gate or shipment_bundle_gate_contract(shipment_bundle_sessions(bundle))
+    delivery_option = (getattr(bundle, "delivery_option", "") or "").strip()
+    recommended_actions = {
+        "": "Confirm delivery option with recipient",
+        "meeting_point": "Confirm address of the meeting point",
+        "store_pickup": "Generate and upload shipping label and tracking number",
+        "listed_address": "Generate and upload shipping label and tracking number",
+        "different_address": "Confirm new address, generate and upload shipping label and tracking number",
+    }
+    if gate.get("blocked"):
+        return {
+            "override": True,
+            "recommended_next_action": "-",
+            "responsible": "-",
+            "current_deadline": None,
+        }
+    if (getattr(bundle, "status", "") or "").strip() == "Delivered successfully":
+        return {
+            "override": True,
+            "recommended_next_action": "-",
+            "responsible": "-",
+            "current_deadline": None,
+        }
+    operational_status = shipment_bundle_operational_status(bundle, gate).get("status")
+    if gate.get("unblocked") and operational_status == "dispatched":
+        return {
+            "override": True,
+            "recommended_next_action": "Notify recipient",
+            "responsible": "LOGISTICS",
+            "current_deadline": shipment_bundle_notify_recipient_stage_deadline(bundle),
+        }
+    if gate.get("unblocked") and operational_status in {"recipient_notified", "in_transit_to_recipient"}:
+        return {
+            "override": True,
+            "recommended_next_action": "Monitor shipment delivery",
+            "responsible": "LOGISTICS",
+            "current_deadline": shipment_bundle_monitor_delivery_deadline(bundle, included_sessions),
+        }
+    if gate.get("semi_unblocked"):
+        if shipment_bundle_planning_progress(bundle).get("ready"):
+            return {
+                "override": True,
+                "recommended_next_action": "-",
+                "responsible": "-",
+                "current_deadline": None,
+            }
+        started_date = shipment_bundle_semi_unblocked_started_date(bundle, included_sessions)
+        return {
+            "override": True,
+            "recommended_next_action": recommended_actions.get(delivery_option, recommended_actions[""]),
+            "responsible": "ADMIN",
+            "current_deadline": add_weekdays(started_date, 2) if started_date else None,
+        }
+    if gate.get("unblocked") and not shipment_bundle_planning_progress(bundle).get("ready"):
+        started_date = shipment_bundle_semi_unblocked_started_date(bundle, included_sessions)
+        return {
+            "override": True,
+            "recommended_next_action": recommended_actions.get(delivery_option, recommended_actions[""]),
+            "responsible": "ADMIN",
+            "current_deadline": add_weekdays(started_date, 2) if started_date else None,
+        }
+    if gate.get("unblocked") and operational_status in {"shipment_planning_ready", "shipment_pre_dispatch_in_progress"}:
+        return {
+            "override": True,
+            "recommended_next_action": "Complete shipment pre-dispatch stage",
+            "responsible": "LOGISTICS",
+            "current_deadline": shipment_bundle_pre_dispatch_stage_deadline(bundle, gate, included_sessions),
+        }
+    if gate.get("unblocked") and operational_status == "shipment_pre_dispatch_ready":
+        return {
+            "override": True,
+            "recommended_next_action": "Proceed with Shipment dispatch stage",
+            "responsible": "LOGISTICS",
+            "current_deadline": shipment_bundle_dispatch_stage_deadline(bundle),
+        }
+    if gate.get("unblocked") and operational_status == "ready_to_dispatch":
+        return {
+            "override": True,
+            "recommended_next_action": "Dispatch shipment bundle",
+            "responsible": "LOGISTICS",
+            "current_deadline": shipment_bundle_dispatch_stage_deadline(bundle),
+        }
+    if gate.get("unblocked") and operational_status == "in_transit_to_post_office":
+        return {
+            "override": True,
+            "recommended_next_action": "Confirm shipment dispatch",
+            "responsible": "LOGISTICS",
+            "current_deadline": shipment_bundle_dispatch_stage_deadline(bundle),
+        }
+    return {"override": False}
+
+
+def shipment_bundle_display_deadline_badge_contract(bundle, gate=None, included_sessions=None, today=None):
+    if (getattr(bundle, "status", "") or "").strip() == "Delivered successfully":
+        deadline = shipment_bundle_monitor_delivery_deadline(bundle, included_sessions)
+        if deadline:
+            return deadline_badge_contract(
+                deadline,
+                completed=True,
+                completed_date=shipment_bundle_delivered_date(bundle),
+                today=today,
+            )
+        return shipment_deadline_badge_contract(bundle, today=today)
+    modal_summary = shipment_bundle_modal_summary_override(bundle, gate, included_sessions)
+    if modal_summary.get("override"):
+        current_deadline = modal_summary.get("current_deadline")
+        badge = deadline_badge_contract(current_deadline, today=today) if current_deadline else None
+    else:
+        badge = shipment_deadline_badge_contract(bundle, today=today)
+    if badge and shipment_bundle_delivery_risk_contract(bundle, gate, included_sessions).get("risky"):
+        badge = {**badge, "risky": True}
+    return badge
+
+
 def shipment_bundle_gate_contract(included_sessions):
     sessions = list(included_sessions or [])
     sessions_count = len(sessions)
-    staffing_confirmed_count = sum(1 for session_record in sessions if session_staffing_confirmed_for_shipment(session_record))
+    staffing_confirmed_count = sum(1 for session_record in sessions if session_shipment_recipient_confirmed_for_shipment(session_record))
     package_completed_count = sum(1 for session_record in sessions if session_package_preparation_completed(session_record))
     sessions_completed_count = sum(
         1
         for session_record in sessions
         if (
             session_schedule_completed_for_shipment(session_record)
-            and session_staffing_confirmed_for_shipment(session_record)
+            and session_shipment_recipient_confirmed_for_shipment(session_record)
             and session_package_preparation_completed(session_record)
         )
     )
@@ -9000,48 +9416,107 @@ def shipment_bundle_gate_contract(included_sessions):
 
 def shipment_bundle_action_items(bundle, gate=None):
     gate = gate or shipment_bundle_gate_contract(shipment_bundle_sessions(bundle))
+    deadline_badge = shipment_bundle_display_deadline_badge_contract(bundle, gate)
+    shipment_overdue = deadline_badge_is_red(deadline_badge)
+    shipment_risky = bool((deadline_badge or {}).get("risky"))
     actions = []
     if gate.get("sessions_count", 0) <= 0:
         actions.append({
             "department": "LOGISTICS",
             "description": "Add sessions to the shipment bundle.",
+            "overdue": shipment_overdue,
         })
     if gate.get("staffing_confirmed_count", 0) < gate.get("sessions_count", 0):
         actions.append({
-            "department": "ADMIN",
-            "description": "Confirm staffing for all sessions included in this bundle.",
+            "department": "",
+            "description": "Recipient has not yet confirmed participation in all sessions",
+            "overdue": shipment_overdue,
         })
-    if gate.get("staffing_all_confirmed") and gate.get("package_completed_count", 0) < gate.get("sessions_count", 0):
+    if gate.get("semi_unblocked"):
+        if shipment_bundle_planning_progress(bundle).get("ready"):
+            action = {
+                "department": "",
+                "description": "Session preparations within this bundle are not yet complete",
+            }
+            if shipment_overdue:
+                action["overdue"] = True
+            actions.append(action)
+            if shipment_risky:
+                actions.append({
+                    "department": "MANAGEMENT",
+                    "description": "Review potential risk to bundle delivery date",
+                    "risk": True,
+                })
+            return actions
         actions.append({
-            "department": "LOGISTICS",
-            "description": "Complete package preparation for all sessions included in this bundle.",
+            "department": "ADMIN",
+            "description": "Complete shipment planning",
+            "overdue": shipment_overdue,
         })
     if not actions and bundle:
+        operational_status = shipment_bundle_operational_status(bundle, gate).get("status")
         status = (bundle.status or "").strip()
-        if status == "Preparing bundle":
+        if gate.get("unblocked") and not shipment_bundle_planning_progress(bundle).get("ready"):
+            actions.append({
+                "department": "ADMIN",
+                "description": "Complete shipment planning",
+                "overdue": shipment_overdue,
+            })
+        elif gate.get("unblocked") and operational_status in {
+            "shipment_planning_ready",
+            "shipment_pre_dispatch_in_progress",
+        }:
             actions.append({
                 "department": "LOGISTICS",
-                "description": "Complete shipment bundle preparation.",
+                "description": "Complete shipment pre-dispatch and dispatch stages",
+                "overdue": shipment_overdue,
+            })
+        elif gate.get("unblocked") and operational_status in {
+            "shipment_pre_dispatch_ready",
+            "ready_to_dispatch",
+            "in_transit_to_post_office",
+            "dispatched",
+            "recipient_notified",
+        }:
+            actions.append({
+                "department": "LOGISTICS",
+                "description": "Complete shipment dispatch",
+                "overdue": shipment_overdue,
+            })
+        elif gate.get("unblocked") and operational_status == "delivered_successfully":
+            actions.append({
+                "department": "",
+                "description": "Bundle shipment delivered",
+            })
+        elif status == "Preparing bundle":
+            actions.append({
+                "department": "LOGISTICS",
+                "description": "Complete shipment pre-dispatch stage.",
+                "overdue": shipment_overdue,
             })
         elif status == "Ready to dispatch":
             actions.append({
                 "department": "LOGISTICS",
                 "description": "Dispatch the shipment bundle.",
+                "overdue": shipment_overdue,
             })
         elif status == "In transit to post office":
             actions.append({
                 "department": "LOGISTICS",
                 "description": "Confirm shipment dispatch.",
+                "overdue": shipment_overdue,
             })
         elif status == "Dispatched":
             actions.append({
                 "department": "LOGISTICS",
                 "description": "Notify recipient and share shipment information.",
+                "overdue": shipment_overdue,
             })
         elif status == "Recipient notified":
             actions.append({
                 "department": "LOGISTICS",
                 "description": "Monitor shipment delivery.",
+                "overdue": shipment_overdue,
             })
         elif status in {"Delivered successfully", "Recipient review successful", "Recipient review with discrepancy"}:
             actions.append({
@@ -9053,6 +9528,12 @@ def shipment_bundle_action_items(bundle, gate=None):
                 "department": "LOGISTICS",
                 "description": "Review shipment bundle status.",
             })
+    if shipment_risky:
+        actions.append({
+            "department": "MANAGEMENT",
+            "description": "Review potential risk to bundle delivery date",
+            "risk": True,
+        })
     deduped = []
     seen = set()
     for action in actions:
@@ -9060,6 +9541,8 @@ def shipment_bundle_action_items(bundle, gate=None):
         if key in seen:
             continue
         seen.add(key)
+        if not action.get("overdue"):
+            action = {key: value for key, value in action.items() if key != "overdue"}
         deduped.append(action)
     return deduped
 
@@ -9280,6 +9763,8 @@ def shipments_action_contract(session_record, shipment_contract=None, packages_c
 
     blocker_codes = {blocker.get("code") for blocker in readiness.get("blockers", []) if isinstance(blocker, dict)}
     if status == "Preparing bundle":
+        if not packages_contract.get("ready"):
+            return None
         if "SUPERVISOR_MISSING" in blocker_codes:
             return action(
                 "review_shipment_data",
@@ -9298,44 +9783,44 @@ def shipments_action_contract(session_record, shipment_contract=None, packages_c
             return action("review_shipment_data", "Review shipment data", description, dispatch_due_at)
         return action(
             "complete_shipment_bundle_preparation",
-            "Complete shipment bundle preparation",
+            "Complete shipment pre-dispatch stage",
             description,
-            dispatch_due_at,
+            shipment_bundle_pre_dispatch_stage_deadline(bundle),
         )
     if status == "Ready to dispatch":
         return action(
             "dispatch_shipment_bundle",
             "Dispatch shipment bundle",
             "The shipment bundle is ready to dispatch.",
-            dispatch_due_at,
+            shipment_bundle_dispatch_stage_deadline(bundle),
         )
     if status == "In transit to post office":
         return action(
             "confirm_shipment_dispatch",
             "Confirm shipment dispatch",
             "Confirm that the shipment bundle was dispatched and add the tracking number.",
-            dispatch_due_at,
+            shipment_bundle_dispatch_stage_deadline(bundle),
         )
     if status == "Dispatched":
         return action(
             "notify_shipment_recipient",
             "Notify recipient",
             "The shipment has been dispatched. Notify the recipient and share the tracking information.",
-            dispatch_due_at,
+            shipment_bundle_notify_recipient_stage_deadline(bundle),
         )
     if status == "Recipient notified":
         return action(
             "monitor_shipment_delivery",
             "Monitor shipment delivery",
             "The shipment is in transit and the recipient has been notified.",
-            dispatch_due_at,
+            shipment_bundle_monitor_delivery_deadline(bundle),
         )
     if status == "In transit to recipient":
         return action(
             "monitor_shipment_delivery",
             "Monitor shipment delivery",
             "The shipment is in transit to the recipient.",
-            dispatch_due_at,
+            shipment_bundle_monitor_delivery_deadline(bundle),
         )
     if status == "Delayed":
         return action(
@@ -10409,6 +10894,7 @@ def shipment_bundle_view(bundle):
     blocked = gate["blocked"] and not completed
     has_alternate_delivery_address = shipment_bundle_has_alternate_delivery_address(bundle)
     operational_status = shipment_bundle_operational_status(bundle, gate)
+    modal_summary = shipment_bundle_modal_summary_override(bundle, gate, included_sessions)
     return {
         "record": bundle,
         "id": bundle.id,
@@ -10423,6 +10909,7 @@ def shipment_bundle_view(bundle):
         "completed": completed,
         "gate": gate,
         "action_items": shipment_bundle_action_items(bundle, gate),
+        "modal_summary": modal_summary,
         "supervisor_name": bundle.supervisor.full_name if bundle.supervisor else "Supervisor not set",
         "supervisor_whatsapp_phone": normalize_whatsapp_phone(bundle.supervisor.phone) if bundle.supervisor else "",
         "delivery_address": bundle.delivery_address,
@@ -10435,6 +10922,8 @@ def shipment_bundle_view(bundle):
         "tracking_number": bundle.tracking_number or "",
         "shipping_label_url": bundle.shipping_label_url or "",
         "dispatch_due_at": bundle.dispatch_due_at,
+        "base_dispatch_due_at": shipment_bundle_deadline_for_sessions(included_sessions) or bundle.dispatch_due_at,
+        "deadline_badge": shipment_bundle_display_deadline_badge_contract(bundle, gate, included_sessions),
         "responsible_department": bundle.responsible_department or "LOGISTICS",
         "note": bundle.note or "",
         "included_sessions": included_sessions,
@@ -12511,6 +13000,10 @@ def pre_session_control_tower_return_args(session_record, default_view="sessions
     if requested_view == "bundle" and bundle_id.isdigit():
         args["bundle_id"] = int(bundle_id)
     return args
+
+
+def pre_session_sessions_view_visible(session_record):
+    return (session_record.format or "").strip() not in PRE_SESSION_SESSIONS_VIEW_EXCLUDED_FORMATS
 
 
 def schedule_workflow_redirect(session_record, status_filter="", action_key="", schedule_only=False):
@@ -14709,6 +15202,8 @@ def pre_session_control_tower():
     status_filter = request.args.get("schedule_status", "").strip()
     if status_filter not in SCHEDULE_WORKFLOW_STATUSES:
         status_filter = ""
+    if selected_view in {"sessions", "bundle"}:
+        status_filter = ""
     my_action_source_filter = request.args.get("action_source", "").strip()
     my_action_responsible_filter = request.args.get("action_responsible", "").strip()
     my_action_status_filter = request.args.get("action_status", "").strip()
@@ -15199,8 +15694,14 @@ def pre_session_control_tower():
         }
         for option_session in sessions
     ]
+    visible_sessions = sessions
+    if selected_view == "sessions":
+        visible_sessions = [
+            session_record for session_record in sessions
+            if pre_session_sessions_view_visible(session_record)
+        ]
     schedule_views = []
-    for session_record in sessions:
+    for session_record in visible_sessions:
         supervisor_assignments = supervisor_assignments_by_session.get(session_record.id, [])
         examiner_assignments = examiner_assignments_by_session.get(session_record.id, [])
         intern_assignments = intern_assignments_by_session.get(session_record.id, [])
@@ -15540,9 +16041,6 @@ def pre_session_control_tower():
         responsible_filter=my_action_responsible_filter,
         status_filter=my_action_status_filter,
     )
-    if status_filter and selected_view in {"sessions", "bundle"}:
-        schedule_views = [view for view in schedule_views if view["status"] == status_filter]
-
     max_date = datetime.max.date()
     if selected_view == "bundle" and selected_bundle_view:
         selected_bundle_session_ids = set(selected_bundle_view["included_session_ids"])

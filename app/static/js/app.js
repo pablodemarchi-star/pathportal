@@ -10278,10 +10278,12 @@ const syncShipmentDeliveryOptions = (fieldset) => {
   if (fieldset.dataset.shipmentDeliverySelectedValue === undefined) {
     fieldset.dataset.shipmentDeliverySelectedValue = selected?.value || "";
   }
+  const fieldsetDisabled = fieldset.disabled || fieldset.hasAttribute("disabled");
   inputs.forEach((input) => {
-    const disabled = Boolean(selected && input !== selected);
-    input.disabled = disabled;
-    input.closest("label")?.classList.toggle("is-disabled", disabled);
+    if (!fieldsetDisabled) {
+      input.disabled = false;
+    }
+    input.closest("label")?.classList.toggle("is-disabled", fieldsetDisabled || input.disabled);
   });
 };
 

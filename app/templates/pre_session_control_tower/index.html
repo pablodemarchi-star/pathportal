@@ -178,7 +178,7 @@
 {%- endmacro %}
 
 {% macro shipment_status_badge(shipment) -%}
-  <span class="badge shipment-status-{{ shipment.label|lower|replace(' ', '-')|replace('_', '-') }}">{{ shipment.label }}</span>
+  <span class="badge shipment-status-{{ (shipment.status or shipment.label)|lower|replace(' ', '-')|replace('_', '-') }}">{{ shipment.label }}</span>
 {%- endmacro %}
 
 {% macro shipment_planning_badge(planning) -%}
@@ -413,7 +413,11 @@
       {% for action in actions %}
         {% set description = action.description|trim %}
         <span>
-          <span>{{ description[:-1] if description.endswith('.') else description }}</span>
+          {% if action.risk %}
+            <span class="bundle-action-risk-chip">{{ description[:-1] if description.endswith('.') else description }}</span>
+          {% else %}
+            <span>{{ description[:-1] if description.endswith('.') else description }}</span>
+          {% endif %}
           {% if action.overdue %}
             <span class="bundle-action-overdue-chip">Overdue</span>
           {% endif %}
@@ -1149,7 +1153,6 @@
 <nav class="control-tower-view-tabs" aria-label="Pre-session Control Tower views">
   <a class="control-tower-view-tab {% if selected_view == 'bundles' %}active{% endif %}" href="{{ url_for('staff.pre_session_control_tower', session_year=selected_session_year, view='bundles') }}">Bundles</a>
   <a class="control-tower-view-tab {% if selected_view == 'sessions' %}active{% endif %}" href="{{ url_for('staff.pre_session_control_tower', session_year=selected_session_year, view='sessions', schedule_status=selected_schedule_status) }}">Sessions</a>
-  <a class="control-tower-view-tab {% if selected_view == 'my-actions' %}active{% endif %}" href="{{ url_for('staff.pre_session_control_tower', session_year=selected_session_year, view='my-actions', action_source=selected_my_action_source, action_responsible=selected_my_action_responsible, action_status=selected_my_action_status) }}">My actions</a>
 </nav>
 
 {% if selected_view == 'bundles' %}
@@ -1161,8 +1164,8 @@
         <th>Department</th>
         <th>Action description</th>
         <th>Shipment</th>
-        <th>Exam sessions</th>
         <th>Recipient</th>
+        <th>Exam sessions</th>
       </tr>
     </thead>
     <tbody>
@@ -1177,6 +1180,7 @@
               <small>Shipment recipient missing</small>
             </span>
           </td>
+          <td><span class="muted">Not configured</span></td>
           <td>
             <div class="bundle-session-chip-list">
               {% for chip in pending_shipment_bundle.session_chips %}
@@ -1184,7 +1188,6 @@
               {% endfor %}
             </div>
           </td>
-          <td><span class="muted">Not configured</span></td>
         </tr>
       {% endif %}
       {% for bundle in bundle_views %}
@@ -1231,13 +1234,8 @@
 	                  {% endif %}
 	                  {{ shipment_status_badge(bundle.operational_status) }}
                   <strong>{{ bundle.packages_label }}</strong>
-		                  {% if bundle.blocked or bundle.semi_unblocked %}
-		                    <small>{{ bundle.gate.sessions_completed_count }}/{{ bundle.gate.sessions_count }} sessions completed</small>
-	                  {% else %}
-                    <small>{{ bundle.status }}</small>
-                  {% endif %}
-                  {% if bundle.dispatch_due_at %}
-                    <span class="shipment-deadline-chip">Deadline {{ bundle.dispatch_due_at|session_date }}</span>
+                  {% if bundle.deadline_badge %}
+                    <span class="shipment-deadline-chip shipment-deadline-{{ bundle.deadline_badge.status }}" title="{{ bundle.deadline_badge.label }}" aria-label="{{ bundle.deadline_badge.label }}: {{ bundle.deadline_badge.date|session_date }}">Deadline {{ bundle.deadline_badge.date|session_date }}</span>
                   {% endif %}
                 </span>
               </button>
@@ -1248,6 +1246,7 @@
               </span>
             {% endif %}
           </td>
+          <td><span class="responsible-chip bundle-supervisor-chip">{{ bundle.supervisor_name }}</span></td>
           <td>
             <div class="bundle-session-chip-list">
               {% for chip in bundle.session_chips %}
@@ -1255,7 +1254,6 @@
               {% endfor %}
             </div>
           </td>
-          <td><span class="responsible-chip bundle-supervisor-chip">{{ bundle.supervisor_name }}</span></td>
         </tr>
       {% endfor %}
       {% if not bundle_views and not pending_shipment_bundle %}
@@ -1277,73 +1275,37 @@
       <h2>Bundle {{ selected_bundle.number }}</h2>
       <p>{{ selected_bundle.included_sessions|length }} exam session{% if selected_bundle.included_sessions|length != 1 %}s{% endif %} in this shipment bundle.</p>
     </div>
-    <div class="bundle-detail-meta">
-      <span>Supervisor: <strong>{{ selected_bundle.supervisor_name }}</strong></span>
-      <span>Deadline: <strong>{{ selected_bundle.dispatch_due_at|session_date if selected_bundle.dispatch_due_at else 'Not set' }}</strong></span>
-      <span>Shipment: <strong>{{ selected_bundle.display_status }}</strong></span>
-      <span>Packages: <strong>{{ selected_bundle.packages_label }}</strong></span>
+    <div class="bundle-detail-meta-row">
+      <div class="bundle-detail-meta">
+        <span>Supervisor: <strong>{{ selected_bundle.supervisor_name }}</strong></span>
+        <span>Shipment dispatch deadline: <strong>{{ selected_bundle.base_dispatch_due_at|session_date if selected_bundle.base_dispatch_due_at else 'Not set' }}</strong></span>
+        <span>Shipment: <strong>{{ selected_bundle.display_status }}</strong></span>
+        <span>Session packages: <strong>{{ selected_bundle.packages_label }}</strong></span>
+      </div>
+      <a class="secondary-button compact-action" href="{{ url_for('staff.pre_session_control_tower', session_year=selected_session_year, view='bundles') }}">Back to Bundles</a>
     </div>
     {% if selected_bundle.completed %}
       <p class="bundle-completed-note">This bundle has completed the shipment process.</p>
     {% endif %}
-    <a class="secondary-button compact-action" href="{{ url_for('staff.pre_session_control_tower', session_year=selected_session_year, view='bundles') }}">Back to Bundles</a>
   </section>
 {% endif %}
-<section class="control-tower-summary" aria-label="Schedule preparation and approval summary">
-  {% for label in ['Not started', 'In progress', 'Waiting for review', 'Changes requested', 'Approved', 'Overdue', 'Schedule blocked', 'Schedule ready'] %}
-    <article class="control-tower-summary-item">
-      <span>{{ label }}</span>
-      <strong>{{ summary.get(label, 0) }}</strong>
-    </article>
-  {% endfor %}
-</section>
-
-<section class="filter-bar" aria-label="Schedule status filter">
-  <form method="get" class="inline-filter-form">
-    <input type="hidden" name="session_year" value="{{ selected_session_year }}">
-    <input type="hidden" name="view" value="{{ selected_view }}">
-    {% if selected_view == 'bundle' and selected_bundle %}
-      <input type="hidden" name="bundle_id" value="{{ selected_bundle.id }}">
-    {% endif %}
-    <label>
-      Schedule status
-      <select name="schedule_status" onchange="this.form.submit()">
-        <option value="">All statuses</option>
-        {% for status in schedule_status_options %}
-          <option value="{{ status }}" {% if selected_schedule_status == status %}selected{% endif %}>{{ status }}</option>
-        {% endfor %}
-      </select>
-    </label>
-  </form>
-</section>
-
 <section class="table-wrap control-tower-table-wrap" aria-label="Schedule preparation and approval">
-  <table class="control-tower-table">
+  <table class="control-tower-table{% if selected_view != 'bundle' %} sessions-table{% endif %}">
     <thead>
       <tr>
-        {% if selected_view != 'bundle' %}
-          <th>Action</th>
-        {% endif %}
         <th>Session</th>
-        {% if selected_view != 'bundle' %}
-          <th>Date</th>
-        {% endif %}
         {% if selected_view == 'bundle' %}
           <th>Department</th>
           <th>Action description</th>
+          <th>Schedule</th>
+          <th>Staffing</th>
+          <th>Package</th>
         {% endif %}
-        <th>Schedule</th>
-        <th>Staffing</th>
-        <th>Package</th>
         {% if selected_view != 'bundle' %}
           <th>Logistics</th>
-          <th>Shipment</th>
           <th>Finance</th>
           <th>Sinapsis</th>
           <th>Communications</th>
-          <th>Session readiness</th>
-          <th>Incidents</th>
-          <th>Priority action</th>
         {% endif %}
       </tr>
     </thead>
@@ -1351,50 +1313,45 @@
       {% for view in schedule_views %}
         {% set session = view.session %}
         <tr>
-          {% if selected_view != 'bundle' %}
-            <td><button class="secondary-button compact-action" type="button" data-open-modal="schedule-workflow-{{ session.id }}" data-modal-scroll-target="overview-{{ session.id }}" data-modal-mode="overview">Session overview</button></td>
-          {% endif %}
           <td>
-            {% if selected_view == 'bundle' %}
-              <span class="shipment-summary-cell bundle-session-name-cell">
-                <strong>{{ session.exam_session_name }}</strong>
-                <small class="bundle-session-date">{{ session.session_date|session_date }}</small>
-              </span>
-            {% else %}
-              {{ session.exam_session_name }}
-            {% endif %}
+            <span class="shipment-summary-cell bundle-session-name-cell">
+              <strong>{{ session.exam_session_name }}</strong>
+              <small class="bundle-session-date">{{ session.session_date|session_date }}</small>
+              {% if selected_view != 'bundle' and view.shipments.bundle_view %}
+                {% set session_shipment_status = view.shipments.bundle_view.status %}
+                {% if session_shipment_status in ['Delivered successfully', 'Recipient review successful', 'Recipient review with discrepancy'] %}
+                  <span class="session-shipment-progress-chip session-shipment-progress-delivered">Shipment delivered</span>
+                {% elif session_shipment_status in ['Dispatched', 'Recipient notified', 'In transit to recipient'] %}
+                  <span class="session-shipment-progress-chip session-shipment-progress-dispatched">Shipment dispatched</span>
+                {% else %}
+                  <span class="session-shipment-progress-chip session-shipment-progress-in-progress">Bundle in progress</span>
+                {% endif %}
+              {% endif %}
+            </span>
           </td>
-          {% if selected_view != 'bundle' %}
-            <td>{{ session.session_date|session_date }}</td>
-          {% endif %}
           {% if selected_view == 'bundle' %}
             <td>{{ bundle_detail_departments_cell(view.bundle_detail_actions) }}</td>
             <td>{{ bundle_detail_action_descriptions_cell(view.bundle_detail_actions) }}</td>
+            <td>
+              {% call contextual_cell_trigger(session, 'schedule-actions', 'Review schedule', true) %}
+                {{ schedule_table_cell(view.status, view.schedule_gate, view.review_round, view.monthly_registrations_closed, view.deadline_badge) }}
+              {% endcall %}
+            </td>
+            <td>
+              {% call contextual_cell_trigger(session, 'staffing', 'Manage staffing', staffing_only=true) %}
+                {{ staffing_table_cell(view.staffing, view.schedule_gate, false, view.staffing_deadline_badge) }}
+              {% endcall %}
+            </td>
+            <td>
+              {% call contextual_cell_trigger(session, 'packages', 'Manage packages', packages_only=true) %}
+                {{ packages_table_cell(view.packages.contract, view.packages.schedule_ready, view.packages.staffing_ready, false, view.packages.preparation_status, view.packages.deadline_badge) }}
+              {% endcall %}
+            </td>
           {% endif %}
-          <td>
-            {% call contextual_cell_trigger(session, 'schedule-actions', 'Review schedule', selected_view == 'bundle') %}
-              {{ schedule_table_cell(view.status, view.schedule_gate, view.review_round, view.monthly_registrations_closed, view.deadline_badge) }}
-            {% endcall %}
-          </td>
-          <td>
-            {% call contextual_cell_trigger(session, 'staffing', 'Manage staffing', staffing_only=true) %}
-              {{ staffing_table_cell(view.staffing, view.schedule_gate, false, view.staffing_deadline_badge) }}
-            {% endcall %}
-          </td>
-          <td>
-            {% call contextual_cell_trigger(session, 'packages', 'Manage packages', packages_only=true) %}
-              {{ packages_table_cell(view.packages.contract, view.packages.schedule_ready, view.packages.staffing_ready, false, view.packages.preparation_status, view.packages.deadline_badge) }}
-            {% endcall %}
-          </td>
           {% if selected_view != 'bundle' %}
             <td>
               {% call contextual_cell_trigger(session, 'logistics', 'Review logistics') %}
                 {{ logistics_table_cell(view.logistics, false) }}
-              {% endcall %}
-            </td>
-            <td>
-              {% call contextual_cell_trigger(session, 'shipments', 'Track shipment', shipments_only=true) %}
-                {{ shipment_table_cell(view.shipments.contract, view.shipments.planning) }}
               {% endcall %}
             </td>
             <td>
@@ -1417,35 +1374,11 @@
                 {{ communications_table_cell(view.communications, false) }}
               {% endcall %}
             </td>
-            <td>
-              {% call contextual_cell_trigger(session, 'readiness', 'View readiness') %}
-                {{ session_readiness_table_cell(view.session_readiness, false) }}
-              {% endcall %}
-            </td>
-            <td>
-              {% call contextual_cell_trigger(session, 'incidents', 'Open incidents') %}
-                {{ incidents_table_cell(view.incidents, false) }}
-              {% endcall %}
-            </td>
-            <td>
-              {% set priority_target = view.priority_action.target if view.priority_action.target is defined and view.priority_action.target else 'priority-action' %}
-              {% if priority_target == 'schedule' %}
-                {% set priority_target = 'schedule-actions' %}
-              {% elif priority_target in ['core_readiness', 'core-readiness', 'operational_readiness', 'operational-readiness', 'session_readiness', 'session-readiness'] %}
-                {% set priority_target = 'readiness' %}
-              {% elif priority_target == 'incident-review' %}
-                {% set priority_target = 'incidents' %}
-              {% endif %}
-              {% call contextual_cell_trigger(session, priority_target, view.priority_action.label or 'View priority action') %}
-                {{ priority_action_table_cell(view.priority_action) }}
-                <small>{{ '—' if view.priority_action.is_complete else (view.priority_action.responsible or 'Not assigned') }} · {{ priority_action_deadline_text(view.priority_action) }}</small>
-              {% endcall %}
-            </td>
           {% endif %}
         </tr>
       {% else %}
         <tr>
-          <td colspan="{{ 7 if selected_view == 'bundle' else 14 }}" class="empty-state">No exam sessions found.</td>
+          <td colspan="{{ 6 if selected_view == 'bundle' else 5 }}" class="empty-state">No exam sessions found.</td>
         </tr>
       {% endfor %}
     </tbody>
@@ -2636,7 +2569,7 @@ This stage has already been marked as complete. Reopening it may affect package 
           {% elif view.shipments.contract.completed %}
             {% set shipment_next.label = 'Shipment completed' %}
           {% elif view.shipments.contract.status == 'Preparing bundle' %}
-            {% set shipment_next.label = 'Complete shipment bundle preparation' %}
+            {% set shipment_next.label = 'Complete shipment pre-dispatch stage' %}
           {% elif view.shipments.contract.status == 'Ready to dispatch' %}
             {% set shipment_next.label = 'Dispatch shipment bundle' %}
           {% elif view.shipments.contract.status == 'Dispatched' %}
@@ -2644,21 +2577,28 @@ This stage has already been marked as complete. Reopening it may affect package 
           {% elif view.shipments.contract.status == 'Recipient notified' %}
             {% set shipment_next.label = 'Confirm delivery' %}
           {% endif %}
+          {% if view.shipments.operational_status.status == 'shipment_pre_dispatch_ready' %}
+            {% set shipment_next.label = 'Proceed with Shipment dispatch stage' %}
+          {% endif %}
+          {% set shipment_modal_summary = view.shipments.bundle_view.modal_summary if view.shipments.bundle_view else {'override': false} %}
           <div>
             <span>Current status</span>
             <strong>{{ shipment_status_badge(view.shipments.operational_status) }}</strong>
           </div>
           <div>
             <span>Recommended next action</span>
-            <strong>{{ shipment_next.label }}</strong>
+            <strong>{{ shipment_modal_summary.recommended_next_action if shipment_modal_summary.override else shipment_next.label }}</strong>
           </div>
           <div>
             <span>Responsible</span>
-            <strong>LOGISTICS</strong>
+            <strong>{{ shipment_modal_summary.responsible if shipment_modal_summary.override else 'LOGISTICS' }}</strong>
           </div>
           <div>
             <span>Current deadline</span>
-            <strong>{{ view.shipments.bundle_view.dispatch_due_at|session_date if view.shipments.bundle_view and view.shipments.bundle_view.dispatch_due_at else '-' }}</strong>
+            <strong>{% if shipment_modal_summary.override %}{{ shipment_modal_summary.current_deadline|session_date if shipment_modal_summary.current_deadline else '-' }}{% else %}{{ view.shipments.bundle_view.dispatch_due_at|session_date if view.shipments.bundle_view and view.shipments.bundle_view.dispatch_due_at else '-' }}{% endif %}</strong>
+            {% if view.shipments.bundle_view and view.shipments.bundle_view.deadline_badge and view.shipments.bundle_view.deadline_badge.risky and ((shipment_modal_summary.override and shipment_modal_summary.current_deadline) or (not shipment_modal_summary.override and view.shipments.bundle_view.dispatch_due_at)) %}
+              <span class="shipment-deadline-risk-chip">Risky</span>
+            {% endif %}
           </div>
         </section>
         {{ shipment_status_track_panel(session, view.shipments.status_events or []) }}

@@ -5169,6 +5169,60 @@ span.session-marker-chip {
   vertical-align: middle;
 }
 
+.control-tower-table.sessions-table {
+  table-layout: fixed;
+}
+
+.control-tower-table.sessions-table th:nth-child(1),
+.control-tower-table.sessions-table td:nth-child(1) {
+  width: 24%;
+}
+
+.control-tower-table.sessions-table th:nth-child(2),
+.control-tower-table.sessions-table td:nth-child(2),
+.control-tower-table.sessions-table th:nth-child(3),
+.control-tower-table.sessions-table td:nth-child(3) {
+  width: 19%;
+}
+
+.control-tower-table.sessions-table th:nth-child(4),
+.control-tower-table.sessions-table td:nth-child(4),
+.control-tower-table.sessions-table th:nth-child(5),
+.control-tower-table.sessions-table td:nth-child(5) {
+  width: 19%;
+}
+
+.control-tower-table.sessions-table .contextual-cell-trigger,
+.control-tower-table.sessions-table .logistics-summary-cell,
+.control-tower-table.sessions-table .finance-summary-cell,
+.control-tower-table.sessions-table .sinapsis-readiness-summary-cell,
+.control-tower-table.sessions-table .communications-summary-cell {
+  min-width: 0;
+}
+
+.control-tower-table.sessions-table .contextual-cell-trigger {
+  overflow-wrap: anywhere;
+}
+
+.control-tower-table.sessions-table .badge {
+  max-width: 100%;
+  white-space: normal;
+  text-align: left;
+}
+
+.control-tower-table.sessions-table .logistics-summary-cell > span:not(.badge),
+.control-tower-table.sessions-table .logistics-summary-cell small,
+.control-tower-table.sessions-table .finance-summary-cell > span:not(.badge),
+.control-tower-table.sessions-table .finance-summary-cell small,
+.control-tower-table.sessions-table .sinapsis-readiness-summary-cell > span:not(.badge),
+.control-tower-table.sessions-table .sinapsis-readiness-summary-cell small,
+.control-tower-table.sessions-table .communications-summary-cell > span:not(.badge),
+.control-tower-table.sessions-table .communications-summary-cell small {
+  white-space: normal;
+  overflow-wrap: anywhere;
+  word-break: normal;
+}
+
 .contextual-cell-trigger {
   display: block;
   width: 100%;
@@ -5249,7 +5303,8 @@ span.session-marker-chip {
   line-height: 1.35;
 }
 
-.bundle-action-overdue-chip {
+.bundle-action-overdue-chip,
+.bundle-action-risk-chip {
   display: inline-flex;
   align-items: center;
   width: fit-content;
@@ -6948,6 +7003,20 @@ span.session-marker-chip {
   font-weight: 700;
 }
 
+.staffing-control-metadata .shipment-deadline-risk-chip {
+  display: inline-flex;
+  align-items: center;
+  width: fit-content;
+  border-radius: 999px;
+  padding: 3px 8px;
+  background: var(--badge-red-bg);
+  color: var(--badge-red-text);
+  font-size: 11px;
+  font-weight: 900;
+  line-height: 1.1;
+  white-space: nowrap;
+}
+
 .staffing-control-metadata small {
   color: var(--color-muted);
   font-size: 12px;
@@ -7203,10 +7272,14 @@ span.session-marker-chip {
 }
 
 .shipment-status-ready-to-dispatch,
-.shipment-status-in-transit-to-post-office,
+.shipment-status-in-transit-to-post-office {
+  background: var(--badge-yellow-bg);
+  color: var(--badge-yellow-text);
+}
+
 .shipment-status-dispatched,
 .shipment-status-recipient-notified,
-.shipment-status-bundle-preparation-ready,
+.shipment-status-session-bundle-ready,
 .shipment-status-shipment-planning-ready,
 .shipment-status-shipment-pre-dispatch-ready,
 .shipment-status-in-transit-to-recipient {
@@ -7502,6 +7575,33 @@ span.session-marker-chip {
   font-weight: 400;
 }
 
+.session-shipment-progress-chip {
+  display: inline-flex;
+  align-items: center;
+  width: fit-content;
+  border-radius: 999px;
+  padding: 3px 8px;
+  font-size: 11px;
+  font-weight: 900;
+  line-height: 1.1;
+  white-space: nowrap;
+}
+
+.session-shipment-progress-in-progress {
+  background: var(--badge-yellow-bg);
+  color: var(--badge-yellow-text);
+}
+
+.session-shipment-progress-dispatched {
+  background: var(--badge-blue-bg);
+  color: var(--badge-blue-text);
+}
+
+.session-shipment-progress-delivered {
+  background: var(--badge-green-bg);
+  color: var(--badge-green-text);
+}
+
 .shipment-summary-cell > .shipment-deadline-chip {
   display: inline-flex;
   align-items: center;
@@ -7514,6 +7614,22 @@ span.session-marker-chip {
   font-weight: 800;
   line-height: 1.2;
   white-space: nowrap;
+}
+
+.shipment-summary-cell > .shipment-deadline-on-track {
+  background: var(--badge-grey-bg);
+  color: var(--badge-grey-text);
+}
+
+.shipment-summary-cell > .shipment-deadline-overdue,
+.shipment-summary-cell > .shipment-deadline-missed {
+  background: var(--badge-red-bg);
+  color: var(--badge-red-text);
+}
+
+.shipment-summary-cell > .shipment-deadline-met {
+  background: var(--badge-green-bg);
+  color: var(--badge-green-text);
 }
 
 .bundle-session-chip-list {
@@ -7545,22 +7661,35 @@ span.session-marker-chip {
   border-radius: var(--radius-md);
   background: var(--surface-card);
   padding: var(--space-4);
-  margin: var(--space-4) 0;
+  margin: var(--space-4) 0 calc(2rem - 5mm);
 }
 
 .bundle-detail-header h2 {
   margin: 0;
 }
 
-.bundle-detail-header > a {
-  justify-self: end;
+.bundle-detail-header + .table-wrap.control-tower-table-wrap {
+  margin-top: calc(2rem - 5mm);
+}
+
+.bundle-detail-meta-row {
+  grid-column: 1 / -1;
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: var(--space-3);
+}
+
+.bundle-detail-meta-row > a {
+  flex: 0 0 auto;
 }
 
 .bundle-detail-meta {
-  grid-column: 1 / -1;
   display: flex;
   flex-wrap: wrap;
   gap: var(--space-2);
+  min-width: 0;
 }
 
 .bundle-detail-meta span {
