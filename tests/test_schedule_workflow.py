@@ -13781,6 +13781,7 @@ class ScheduleWorkflowTest(unittest.TestCase):
         self.assertNotIn("<th>Staffing</th>", sessions_table)
         self.assertNotIn("<th>Package</th>", sessions_table)
         self.assertLess(sessions_table.index("<th>Session</th>"), sessions_table.index("<th>Logistics</th>"))
+        self.assertIn("control-tower-session-name-cell", sessions_table)
         self.assertNotIn("staffing-gate-blocked", sessions_table)
         self.assertNotIn("staffing-gate-unblocked", sessions_table)
         self.assertNotIn("No staff roles configured", sessions_table)

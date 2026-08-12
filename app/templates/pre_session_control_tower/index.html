@@ -1341,7 +1341,7 @@
         {% set session = view.session %}
         <tr>
           <td>
-            <span class="shipment-summary-cell bundle-session-name-cell">
+            <span class="shipment-summary-cell bundle-session-name-cell control-tower-session-name-cell">
               <strong>{{ session.exam_session_name }}</strong>
               <small class="bundle-session-date">{{ session.session_date|session_date }}</small>
               {% if selected_view != 'bundle' and view.shipments.bundle_view %}

@@ -5176,6 +5176,7 @@ span.session-marker-chip {
 .control-tower-table.sessions-table th:nth-child(1),
 .control-tower-table.sessions-table td:nth-child(1) {
   width: 24%;
+  max-width: 0;
 }
 
 .control-tower-table.sessions-table th:nth-child(2),
@@ -5193,11 +5194,30 @@ span.session-marker-chip {
 }
 
 .control-tower-table.sessions-table .contextual-cell-trigger,
+.control-tower-table.sessions-table .control-tower-session-name-cell,
 .control-tower-table.sessions-table .logistics-summary-cell,
 .control-tower-table.sessions-table .finance-summary-cell,
 .control-tower-table.sessions-table .sinapsis-readiness-summary-cell,
 .control-tower-table.sessions-table .communications-summary-cell {
   min-width: 0;
+}
+
+.control-tower-table.sessions-table .control-tower-session-name-cell {
+  width: 100%;
+  max-width: 100%;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  word-break: normal;
+}
+
+.control-tower-table.sessions-table .control-tower-session-name-cell strong,
+.control-tower-table.sessions-table .control-tower-session-name-cell small {
+  display: block;
+  min-width: 0;
+  max-width: 100%;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  word-break: normal;
 }
 
 .control-tower-table.sessions-table .contextual-cell-trigger {
