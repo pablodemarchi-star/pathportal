@@ -1735,12 +1735,31 @@ class ScheduleWorkflowTest(unittest.TestCase):
         statuses = exam_session_overall_statuses_by_session_ids([session_record.id])
         self.assertEqual(statuses[session_record.id], "Pending")
 
-        session_record.emergency_contact_not_required = True
+        session_record.date_confirmation_status = "Confirmed"
         db.session.commit()
         statuses = exam_session_overall_statuses_by_session_ids([session_record.id])
         self.assertEqual(statuses[session_record.id], "Pending")
 
-        session_record.date_confirmation_status = "Confirmed"
+        session_record.emergency_contact_required = True
+        db.session.commit()
+        statuses = exam_session_overall_statuses_by_session_ids([session_record.id])
+        self.assertEqual(statuses[session_record.id], "Pending")
+
+        emergency_contact = AcademicStaff(id=10, status="Active", full_name="Eva Emergency", roles="")
+        db.session.add(emergency_contact)
+        session_record.emergency_contact_member_id = emergency_contact.id
+        db.session.commit()
+        statuses = exam_session_overall_statuses_by_session_ids([session_record.id])
+        self.assertEqual(statuses[session_record.id], "Pending")
+
+        session_record.emergency_contact_participation_status = "Confirmed"
+        db.session.commit()
+        statuses = exam_session_overall_statuses_by_session_ids([session_record.id])
+        self.assertEqual(statuses[session_record.id], "Confirmed")
+
+        session_record.emergency_contact_not_required = True
+        session_record.emergency_contact_required = False
+        session_record.emergency_contact_member_id = None
         db.session.commit()
         statuses = exam_session_overall_statuses_by_session_ids([session_record.id])
         self.assertEqual(statuses[session_record.id], "Confirmed")
@@ -1867,6 +1886,46 @@ class ScheduleWorkflowTest(unittest.TestCase):
 
         self.assertIn("Minimum number of candidates not met: 28/30", tooltip)
         self.assertIn("Confirm the session date.", tooltip)
+
+    def test_exam_session_pending_tooltip_lists_missing_emergency_contact_staff_member(self):
+        session_record = ExamSession(
+            exam_session_name="Emergency contact tooltip",
+            category="Path School",
+            status="Pending",
+            session_date=date(2026, 7, 2),
+            shifts="Morning",
+            modules="Speaking",
+            format="Online",
+            emergency_contact_required=True,
+            date_confirmation_status="Confirmed",
+        )
+        db.session.add(session_record)
+        db.session.flush()
+        assignment = ExamSessionSupervisorAssignment(
+            exam_session_id=session_record.id,
+            team_member_id=1,
+            participation_status="Confirmed",
+        )
+        db.session.add_all([
+            assignment,
+            ExamSessionMonthlyCandidateTotal(
+                exam_session_id=session_record.id,
+                month=6,
+                total_candidates=30,
+            ),
+        ])
+        db.session.commit()
+        candidate_contract = monthly_candidate_requirement_contracts([session_record.id])[session_record.id]
+        tooltip = exam_session_pending_status_tooltip(
+            staffing_readiness_contract([assignment], [], []),
+            logistics_readiness_contract([assignment], [], None),
+            session_record,
+            [assignment],
+            candidate_contract,
+        )
+
+        self.assertIn("Assign staff member as Emergency contact.", tooltip)
+        self.assertNotIn("Select Emergency contact required or Emergency contact NOT required.", tooltip)
 
     def test_monthly_registration_update_recalculates_exam_session_status(self):
         session_record = ExamSession(
@@ -7154,6 +7213,64 @@ class ScheduleWorkflowTest(unittest.TestCase):
         db.session.refresh(self.session_record)
         self.assertTrue(self.session_record.emergency_contact_required)
         self.assertEqual(self.session_record.emergency_contact_member_id, active_contact.id)
+
+    def test_session_emergency_contact_required_can_save_without_staff_member(self):
+        client = self.login_client()
+
+        response = client.post(
+            f"/exam-session-planner/sessions/{self.session_record.id}/members",
+            data={
+                "csrf_token": "token",
+                "session_year": "2026",
+                "modal_action": "save",
+                "session_non_available_member_ids": "",
+                "emergency_contact_required": "1",
+                "emergency_contact_member_id": "",
+            },
+            follow_redirects=False,
+        )
+
+        self.assertEqual(response.status_code, 302)
+        db.session.refresh(self.session_record)
+        self.assertTrue(self.session_record.emergency_contact_required)
+        self.assertFalse(self.session_record.emergency_contact_not_required)
+        self.assertIsNone(self.session_record.emergency_contact_member_id)
+
+        html = client.get(f"/exam-session-planner?session_year=2026&open_session_modal={self.session_record.id}").get_data(as_text=True)
+        modal_start = html.index(f'id="exam-session-members-{self.session_record.id}"')
+        modal_html = html[modal_start:modal_start + 25000]
+        self.assertIn('data-emergency-contact-role-to-cover', modal_html)
+        self.assertIn("Role to cover", modal_html)
+
+    def test_session_emergency_contact_status_select_can_be_saved_from_modal(self):
+        active_contact = AcademicStaff(id=8, status="Active", full_name="Mara Ruiz", roles="")
+        db.session.add(active_contact)
+        db.session.commit()
+        client = self.login_client()
+
+        html = client.get(f"/exam-session-planner?session_year=2026&open_session_modal={self.session_record.id}").get_data(as_text=True)
+        self.assertIn('name="emergency_contact_participation_status"', html)
+        self.assertIn('<option value="Official confirmation sent"', html)
+        self.assertIn('<option value="Confirmed"', html)
+
+        response = client.post(
+            f"/exam-session-planner/sessions/{self.session_record.id}/members",
+            data={
+                "csrf_token": "token",
+                "session_year": "2026",
+                "modal_action": "save",
+                "session_non_available_member_ids": "",
+                "emergency_contact_required": "1",
+                "emergency_contact_member_id": str(active_contact.id),
+                "emergency_contact_participation_status": "Confirmed",
+            },
+            follow_redirects=False,
+        )
+
+        self.assertEqual(response.status_code, 302)
+        db.session.refresh(self.session_record)
+        self.assertEqual(self.session_record.emergency_contact_member_id, active_contact.id)
+        self.assertEqual(self.session_record.emergency_contact_participation_status, "Confirmed")
 
     def test_session_emergency_contact_is_cleared_when_not_required(self):
         active_contact = AcademicStaff(id=8, status="Active", full_name="Mara Ruiz", roles="")

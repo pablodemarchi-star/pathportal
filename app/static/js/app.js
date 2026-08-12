@@ -4341,11 +4341,38 @@ const syncEmergencyContactControl = (control) => {
   const notRequiredCheckbox = control?.querySelector("[data-emergency-contact-not-required]");
   const selectWrap = control?.querySelector("[data-emergency-contact-select-wrap]");
   const select = control?.querySelector("[data-emergency-contact-select]");
+  const roleToCover = control?.querySelector("[data-emergency-contact-role-to-cover]");
+  const statusSelect = control?.querySelector("[data-emergency-contact-status-select]");
   if (!requiredCheckbox || !notRequiredCheckbox || !selectWrap || !select) return;
   const required = requiredCheckbox.checked && !notRequiredCheckbox.checked;
   selectWrap.hidden = !required;
   select.disabled = !required;
   if (!required) select.value = "";
+  const hasMember = Boolean(select.value);
+  if (roleToCover) roleToCover.hidden = !required || hasMember;
+  if (statusSelect) {
+    const savedMemberId = selectWrap.dataset.emergencyContactSavedMemberId || "";
+    const savedStatus = selectWrap.dataset.emergencyContactSavedStatus || "Pending";
+    if (select.value && statusSelect.dataset.currentMemberId !== select.value) {
+      statusSelect.value = select.value === savedMemberId ? savedStatus : "Pending";
+      statusSelect.dataset.currentMemberId = select.value;
+    }
+    const participationClasses = [
+      "participation-pending",
+      "participation-pre-confirmation-sent",
+      "participation-pre-confirmed",
+      "participation-official-confirmation-sent",
+      "participation-confirmed",
+      "participation-sent",
+      "participation-assigned",
+      "participation-declined",
+      "participation-cancelled",
+    ];
+    statusSelect.classList.remove(...participationClasses);
+    statusSelect.classList.add(`participation-${(statusSelect.value || "Pending").toLowerCase().replace(/\s+/g, "-")}`);
+    statusSelect.hidden = !required || !hasMember;
+    statusSelect.disabled = !required || !hasMember;
+  }
 };
 
 const initEmergencyContactControls = (root = document) => {
@@ -4366,6 +4393,11 @@ const initEmergencyContactControls = (root = document) => {
       markStaffChangesUnsaved(sessionMembersFormForElement(control));
     });
     select?.addEventListener("change", () => {
+      syncEmergencyContactControl(control);
+      markStaffChangesUnsaved(sessionMembersFormForElement(control));
+    });
+    control.querySelector("[data-emergency-contact-status-select]")?.addEventListener("change", () => {
+      syncEmergencyContactControl(control);
       markStaffChangesUnsaved(sessionMembersFormForElement(control));
     });
     syncEmergencyContactControl(control);

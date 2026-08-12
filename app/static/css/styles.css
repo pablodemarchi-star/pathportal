@@ -3542,11 +3542,20 @@ span.session-marker-chip {
 .modal-emergency-contact-select {
   display: grid;
   gap: 5px;
+  min-width: 0;
   color: var(--color-muted);
   font-size: 10px;
   font-weight: 900;
   letter-spacing: 0;
   text-transform: uppercase;
+}
+
+.modal-emergency-contact-select-row {
+  display: grid;
+  grid-template-columns: minmax(0, 320px) 190px;
+  align-items: start;
+  gap: 10px;
+  width: min(520px, 100%);
 }
 
 .modal-emergency-contact-select select {
@@ -3560,6 +3569,41 @@ span.session-marker-chip {
   font-size: 12px;
   font-weight: 800;
   text-transform: none;
+}
+
+.modal-emergency-contact-role-to-cover {
+  min-height: 24px;
+  display: inline-flex;
+  align-items: center;
+  color: var(--badge-red-text);
+  font-size: 12px;
+  font-weight: 900;
+  line-height: 1.2;
+}
+
+.modal-emergency-contact-status-field {
+  display: grid;
+  gap: 5px;
+  min-width: 0;
+}
+
+.modal-emergency-contact-status-label {
+  color: var(--color-muted);
+  font-size: 10px;
+  font-weight: 900;
+  letter-spacing: 0;
+  line-height: 1.2;
+  text-transform: uppercase;
+}
+
+.modal-emergency-contact-status {
+  width: 190px;
+  min-height: 28px;
+  min-width: 0;
+  margin-bottom: 0;
+  padding-block: 2px;
+  font-size: 11px;
+  line-height: 1;
 }
 
 .compact-table-wrap {
@@ -4649,6 +4693,16 @@ span.session-marker-chip {
   font-size: 12px;
   font-weight: 900;
   padding-inline: 10px 22px;
+}
+
+.modal-emergency-contact-select-row .modal-emergency-contact-status {
+  width: 190px;
+  min-height: 28px;
+  min-width: 0;
+  height: 28px;
+  padding-block: 2px;
+  font-size: 11px;
+  line-height: 1;
 }
 
 .participation-cell-stack {

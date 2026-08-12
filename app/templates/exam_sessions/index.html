@@ -1047,15 +1047,28 @@
                 <span>Emergency contact NOT required</span>
               </label>
             </div>
-            <label class="modal-emergency-contact-select" data-emergency-contact-select-wrap {% if not session.emergency_contact_required or session.emergency_contact_not_required %}hidden{% endif %}>
-              Emergency contact
-              <select name="emergency_contact_member_id" form="exam-session-members-form-{{ session.id }}" data-emergency-contact-select {% if not session.emergency_contact_required or session.emergency_contact_not_required %}disabled{% endif %}>
-                <option value="">Select active staff member</option>
-                {% for member in emergency_contact_members %}
-                  <option value="{{ member.id }}" {% if session.emergency_contact_member_id == member.id %}selected{% endif %}>{{ member_option_label(member) }}</option>
-                {% endfor %}
-              </select>
-            </label>
+            {% set emergency_contact_status = 'Pre-confirmation sent' if session.emergency_contact_participation_status == 'Sent' else session.emergency_contact_participation_status|default('Pending', true) %}
+            {% set emergency_contact_status_class = emergency_contact_status|lower|replace(' ', '-') %}
+            <div class="modal-emergency-contact-select-row" data-emergency-contact-select-wrap data-emergency-contact-saved-member-id="{{ session.emergency_contact_member_id or '' }}" data-emergency-contact-saved-status="{{ emergency_contact_status }}" {% if not session.emergency_contact_required or session.emergency_contact_not_required %}hidden{% endif %}>
+              <label class="modal-emergency-contact-select">
+                Emergency contact
+                <select name="emergency_contact_member_id" form="exam-session-members-form-{{ session.id }}" data-emergency-contact-select {% if not session.emergency_contact_required or session.emergency_contact_not_required %}disabled{% endif %}>
+                  <option value="">Select active staff member</option>
+                  {% for member in emergency_contact_members %}
+                    <option value="{{ member.id }}" {% if session.emergency_contact_member_id == member.id %}selected{% endif %}>{{ member_option_label(member) }}</option>
+                  {% endfor %}
+                </select>
+              </label>
+              <div class="modal-emergency-contact-status-field">
+                <span class="modal-emergency-contact-status-label">Status</span>
+                <span class="modal-emergency-contact-role-to-cover" data-emergency-contact-role-to-cover {% if session.emergency_contact_member_id %}hidden{% endif %}>Role to cover</span>
+                <select name="emergency_contact_participation_status" form="exam-session-members-form-{{ session.id }}" class="participation-select modal-emergency-contact-status participation-{{ emergency_contact_status_class }}" data-emergency-contact-status-select {% if not session.emergency_contact_member_id %}hidden disabled{% endif %}>
+                  {% for option in participation_options %}
+                    <option value="{{ option }}" {% if emergency_contact_status == option %}selected{% endif %}>{{ option }}</option>
+                  {% endfor %}
+                </select>
+              </div>
+            </div>
           </div>
         </div>
         {% set modal_conflicts = same_date_assignment_conflicts.get(session.id, []) %}

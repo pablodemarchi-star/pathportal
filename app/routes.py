@@ -1595,7 +1595,9 @@ def pluralize_count(count, singular, plural=None):
 def exam_session_emergency_contact_decision_ready(session_record):
     if not session_record:
         return False
-    return bool(session_record.emergency_contact_required or session_record.emergency_contact_not_required)
+    if session_record.emergency_contact_not_required:
+        return True
+    return bool(session_record.emergency_contact_required and session_record.emergency_contact_member_id)
 
 
 def exam_session_shipment_recipient_ready(session_record, assignments):
@@ -2135,7 +2137,10 @@ def exam_session_pending_status_tooltip(staffing_contract, logistics_contract, s
             missing_items.append("Add the Check logistics files link.")
 
     if session_record and not exam_session_emergency_contact_decision_ready(session_record):
-        missing_items.append("Select Emergency contact required or Emergency contact NOT required.")
+        if session_record.emergency_contact_required and not session_record.emergency_contact_member_id:
+            missing_items.append("Assign staff member as Emergency contact.")
+        else:
+            missing_items.append("Select Emergency contact required or Emergency contact NOT required.")
     if session_record and session_record.date_confirmation_status != "Confirmed":
         missing_items.append("Confirm the session date.")
     if session_record and not exam_session_shipment_recipient_ready(session_record, assignments or []):
@@ -20280,21 +20285,30 @@ def update_exam_session_members(session_id):
     emergency_contact_not_required = request.form.get("emergency_contact_not_required") == "1"
     emergency_contact_required = request.form.get("emergency_contact_required") == "1" and not emergency_contact_not_required
     emergency_contact_member_id = None
+    emergency_contact_participation_status = normalize_participation_status(
+        request.form.get("emergency_contact_participation_status", "Pending")
+    )
+    if emergency_contact_participation_status not in EXAM_SESSION_PARTICIPATION_OPTIONS:
+        flash("Please select a valid Emergency contact participation status.", "error")
+        return session_members_redirect(keep_open=True)
     if emergency_contact_required:
         emergency_contact_member_id_value = request.form.get("emergency_contact_member_id", "").strip()
-        if not emergency_contact_member_id_value.isdigit():
-            flash("Please select an active emergency contact.", "error")
-            return session_members_redirect(keep_open=True)
-        emergency_contact_member_id = int(emergency_contact_member_id_value)
-        if not AcademicStaff.query.filter_by(id=emergency_contact_member_id, status="Active").first():
-            flash("Please select an active emergency contact.", "error")
-            return session_members_redirect(keep_open=True)
+        if emergency_contact_member_id_value:
+            if not emergency_contact_member_id_value.isdigit():
+                flash("Please select an active emergency contact.", "error")
+                return session_members_redirect(keep_open=True)
+            emergency_contact_member_id = int(emergency_contact_member_id_value)
+            if not AcademicStaff.query.filter_by(id=emergency_contact_member_id, status="Active").first():
+                flash("Please select an active emergency contact.", "error")
+                return session_members_redirect(keep_open=True)
+    if emergency_contact_member_id is None:
+        emergency_contact_participation_status = "Pending"
     previous_emergency_contact_member_id = session_record.emergency_contact_member_id
     session_record.emergency_contact_required = emergency_contact_required
     session_record.emergency_contact_not_required = emergency_contact_not_required
     session_record.emergency_contact_member_id = emergency_contact_member_id
+    session_record.emergency_contact_participation_status = emergency_contact_participation_status
     if previous_emergency_contact_member_id != emergency_contact_member_id:
-        session_record.emergency_contact_participation_status = "Pending"
         clear_emergency_contact_deadline(session_record)
 
     keep_modal_open_on_success = modal_action == "save"
