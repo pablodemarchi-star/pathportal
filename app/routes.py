@@ -242,7 +242,7 @@ EXAM_SESSION_CATEGORY_OPTIONS = [
     "Educational Partner",
 ]
 EXAM_SESSION_MODULE_OPTIONS = ["Reading and writing", "Listening and speaking", "Speaking"]
-EXAM_SESSION_SHIFT_OPTIONS = ["Morning", "Afternoon", "Night", "All day"]
+EXAM_SESSION_SHIFT_OPTIONS = ["Morning", "Afternoon", "Evening", "All day"]
 EXAM_SESSION_FORMAT_OPTIONS = ["Onsite", "Online", "Online at exam centre"]
 EXAM_SESSION_EXAM_CENTRE_FORMATS = {"Onsite", "Online at exam centre"}
 EXAM_SESSION_PARTICIPATION_OPTIONS = [
@@ -2482,8 +2482,10 @@ def valid_time_range_value(value):
 
 
 def normalize_exam_session_shifts(shifts):
-    clean_shifts = [shift for shift in shifts if shift in EXAM_SESSION_SHIFT_OPTIONS]
-    partial_shifts = ["Morning", "Afternoon", "Night"]
+    legacy_shift_map = {"Night": "Evening"}
+    clean_shifts = [legacy_shift_map.get(shift, shift) for shift in shifts]
+    clean_shifts = [shift for shift in clean_shifts if shift in EXAM_SESSION_SHIFT_OPTIONS]
+    partial_shifts = ["Morning", "Afternoon", "Evening"]
     if "All day" in clean_shifts or all(shift in clean_shifts for shift in partial_shifts):
         return ["All day"]
     return [shift for shift in clean_shifts if shift in partial_shifts]

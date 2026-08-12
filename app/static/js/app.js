@@ -2887,7 +2887,7 @@ document.querySelectorAll("[data-exam-session-form]").forEach((form) => {
   const dateError = form.querySelector("[data-date-error]");
   const shiftInputs = Array.from(form.querySelectorAll("[data-exam-shift-option]"));
   const allDayShift = shiftInputs.find((input) => input.value === "All day");
-  const partialShiftValues = ["Morning", "Afternoon", "Night"];
+  const partialShiftValues = ["Morning", "Afternoon", "Evening"];
   const partialShifts = shiftInputs.filter((input) => partialShiftValues.includes(input.value));
 
   const syncExamShiftOptions = (changedInput = null) => {

@@ -2225,7 +2225,8 @@ td .status-inactive {
   color: var(--badge-blue-text);
 }
 
-.exam-shift-night {
+.exam-shift-night,
+.exam-shift-evening {
   background: var(--badge-purple-bg);
   color: var(--badge-purple-text);
 }

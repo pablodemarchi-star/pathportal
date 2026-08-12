@@ -368,6 +368,21 @@ class ScheduleWorkflowTest(unittest.TestCase):
         self.assertLess(html.index('name="format" value="Online"'), html.index('name="format" value="Online at exam centre"'))
         self.assertNotIn("Minimum number of candidates required", table_head)
 
+    def test_exam_session_shifts_use_evening_instead_of_night(self):
+        self.session_record.shifts = "Night"
+        db.session.commit()
+        client = self.login_client()
+
+        response = client.get("/exam-session-planner?session_year=2026")
+        html = response.get_data(as_text=True)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn('name="shifts" value="Evening"', html)
+        self.assertIn(">Evening</span>", html)
+        self.assertIn('data-session-shift="Evening"', html)
+        self.assertNotIn('name="shifts" value="Night"', html)
+        self.assertNotIn(">Night</span>", html)
+
     def test_exam_session_planner_shows_pending_date_confirmation_chip_by_default(self):
         client = self.login_client()
         response = client.get("/exam-session-planner?session_year=2026")

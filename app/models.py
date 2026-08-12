@@ -714,7 +714,12 @@ class ExamSession(db.Model):
         return [module.strip() for module in self.modules.split(",") if module.strip()]
 
     def shifts_list(self):
-        return [shift.strip() for shift in self.shifts.split(",") if shift.strip()]
+        legacy_shift_map = {"Night": "Evening"}
+        return [
+            legacy_shift_map.get(shift.strip(), shift.strip())
+            for shift in self.shifts.split(",")
+            if shift.strip()
+        ]
 
     def non_available_ids(self):
         try:
