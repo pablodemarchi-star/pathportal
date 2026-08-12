@@ -1,11 +1,23 @@
 import os
 import unittest
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta, timezone
 
 os.environ["DATABASE_URL"] = "sqlite:///:memory:"
 
 from app import create_app, db
-from app.models import PotentialEntry, User, UserMenuPermission, VALID_MENU_PERMISSION_KEYS
+from app.models import (
+    ExamSession,
+    ExamSessionScheduleNoteMention,
+    ExamSessionScheduleWorkflow,
+    ExamSessionShipmentBundle,
+    ExamSessionShipmentBundleSession,
+    ExamSessionStaffingNoteMention,
+    ExamSessionSupervisorAssignment,
+    PotentialEntry,
+    User,
+    UserMenuPermission,
+    VALID_MENU_PERMISSION_KEYS,
+)
 
 
 class DashboardTest(unittest.TestCase):
@@ -31,8 +43,8 @@ class DashboardTest(unittest.TestCase):
             user_session["csrf_token"] = "token"
         return client
 
-    def permission_client(self, permissions, *, full_name="Person Example", department="Finance"):
-        user = User(full_name=full_name, email="person@example.com", department=department, is_active=True)
+    def permission_client(self, permissions, *, full_name="Person Example", department="Finance", email="person@example.com"):
+        user = User(full_name=full_name, email=email, department=department, is_active=True)
         user.set_password("secret123")
         db.session.add(user)
         db.session.flush()
@@ -152,6 +164,347 @@ class DashboardTest(unittest.TestCase):
         self.assertIn("Dashboard | Path Examinations", body)
         self.assertNotIn("<h2>Potential entries</h2>", body)
         self.assertNotIn(">Go to menu<", body)
+
+    def test_dashboard_shows_pre_session_card_with_department_actions(self):
+        session_record = ExamSession(
+            exam_session_name="Unassigned recipient session",
+            category="Path School",
+            status="Pending",
+            session_date=date(2026, 8, 20),
+            shifts="Morning",
+            modules="Speaking",
+            format="Onsite",
+        )
+        db.session.add(session_record)
+        db.session.commit()
+        client = self.permission_client({"pre_session_control_tower": {"view": True}}, department="Management")
+
+        response = client.get("/?session_year=2026")
+        body = response.get_data(as_text=True)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("<h2>Pre onsite session control tower</h2>", body)
+        self.assertIn("You have 1 action to complete in this menu.", body)
+        self.assertIn('aria-label="Pre onsite session control tower counters"', body)
+        self.assertIn('aria-label="Pre onsite session control tower department actions"', body)
+        self.assertIn('href="/pre-session-control-tower?session_year=2026&amp;view=bundles"', body)
+        self.assertIn(">View action in Pending bundles</a>", body)
+        self.assertNotIn('href="/pre-session-control-tower?view=my-actions&amp;action_responsible=MANAGEMENT"', body)
+
+    def test_dashboard_pre_session_count_ignores_sessions_without_visible_department_chip(self):
+        session_record = ExamSession(
+            exam_session_name="Finance action session",
+            category="Path School",
+            status="Pending",
+            session_date=date(2026, 8, 21),
+            shifts="Morning",
+            modules="Speaking",
+            format="Onsite",
+        )
+        db.session.add(session_record)
+        db.session.commit()
+        client = self.permission_client({"pre_session_control_tower": {"view": True}}, department="Finance")
+
+        response = client.get("/?session_year=2026")
+        body = response.get_data(as_text=True)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("Everything is up to date in this menu.", body)
+        self.assertNotIn("action to complete in this menu.", body)
+
+    def test_dashboard_pre_session_count_ignores_sessions_hidden_online_formats(self):
+        session_record = ExamSession(
+            exam_session_name="Hidden online session",
+            category="Path School",
+            status="Pending",
+            session_date=date(2026, 8, 22),
+            shifts="Morning",
+            modules="Speaking",
+            format="Online",
+        )
+        db.session.add(session_record)
+        db.session.commit()
+        client = self.permission_client({"pre_session_control_tower": {"view": True}}, department="Finance")
+
+        response = client.get("/?session_year=2026")
+        body = response.get_data(as_text=True)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("Everything is up to date in this menu.", body)
+        self.assertNotIn("action to complete in this menu.", body)
+
+    def test_dashboard_pre_session_action_links_match_visible_department_chip_count(self):
+        session_record = ExamSession(
+            exam_session_name="Pending bundle session",
+            category="Path School",
+            status="Pending",
+            session_date=date(2026, 8, 23),
+            shifts="Morning",
+            modules="Speaking",
+            format="Onsite",
+        )
+        db.session.add(session_record)
+        db.session.commit()
+
+        client = self.permission_client(
+            {"pre_session_control_tower": {"view": True}},
+            full_name="Manager Example",
+            department="Management",
+        )
+        response = client.get("/?session_year=2026")
+        body = response.get_data(as_text=True)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("You have 1 action to complete in this menu.", body)
+        self.assertEqual(body.count('href="/pre-session-control-tower?session_year=2026&amp;view=bundles"'), 1)
+        self.assertIn(">View action in Pending bundles</a>", body)
+        self.assertNotIn("Go to menu", body)
+
+    def test_dashboard_bundle_action_link_opens_bundles_list(self):
+        session_record = ExamSession(
+            exam_session_name="Bundle action session",
+            category="Path School",
+            status="Pending",
+            session_date=date(2026, 8, 26),
+            shifts="Morning",
+            modules="Speaking",
+            format="Onsite",
+        )
+        db.session.add(session_record)
+        db.session.flush()
+        bundle = ExamSessionShipmentBundle(
+            supervisor_staff_id=1,
+            delivery_address="Test address",
+            courier="Correo Argentino",
+            status="Preparing bundle",
+            dispatch_due_at=date(2026, 8, 10),
+            bundle_number="6-26",
+        )
+        db.session.add(bundle)
+        db.session.flush()
+        db.session.add_all([
+            ExamSessionShipmentBundleSession(
+                bundle_id=bundle.id,
+                exam_session_id=session_record.id,
+            ),
+            ExamSessionSupervisorAssignment(
+                exam_session_id=session_record.id,
+                team_member_id=1,
+                participation_status="Confirmed",
+                is_shipment_recipient=True,
+            ),
+        ])
+        db.session.commit()
+
+        client = self.permission_client({"pre_session_control_tower": {"view": True}}, department="Admin")
+        response = client.get("/?session_year=2026")
+        body = response.get_data(as_text=True)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn(">View action in Bundle 6-26</a>", body)
+        self.assertIn('href="/pre-session-control-tower?session_year=2026&amp;view=bundles"', body)
+        self.assertNotIn(
+            f'href="/pre-session-control-tower?session_year=2026&amp;view=bundle&amp;bundle_id={bundle.id}">View action in Bundle 6-26</a>',
+            body,
+        )
+
+    def test_pre_session_my_actions_url_no_longer_renders_list(self):
+        client = self.permission_client({"pre_session_control_tower": {"view": True}}, department="Management")
+
+        response = client.get("/pre-session-control-tower?session_year=2026&view=my-actions&action_responsible=MANAGEMENT")
+        body = response.get_data(as_text=True)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("Shipment bundles", body)
+        self.assertNotIn("My actions summary", body)
+        self.assertNotIn("My actions filters", body)
+        self.assertNotIn("No pending actions for the selected year.", body)
+
+    def test_dashboard_pre_session_card_counts_unread_mentions(self):
+        client = self.permission_client({"pre_session_control_tower": {"view": True}}, department="Admin")
+        user = User.query.filter_by(email="person@example.com").one()
+        session_record = ExamSession(
+            exam_session_name="Mentioned control tower session",
+            category="Path School",
+            status="Pending",
+            session_date=date(2026, 8, 20),
+            shifts="Morning",
+            modules="Speaking",
+            format="Onsite",
+        )
+        db.session.add(session_record)
+        db.session.flush()
+        workflow = ExamSessionScheduleWorkflow(exam_session_id=session_record.id, status="Not started")
+        db.session.add(workflow)
+        db.session.flush()
+        bundle = ExamSessionShipmentBundle(
+            supervisor_staff_id=1,
+            delivery_address="Test address",
+            courier="Correo Argentino",
+            status="Preparing bundle",
+            dispatch_due_at=date(2026, 8, 10),
+        )
+        db.session.add(bundle)
+        db.session.flush()
+        db.session.add(ExamSessionShipmentBundleSession(
+            bundle_id=bundle.id,
+            exam_session_id=session_record.id,
+        ))
+        db.session.add_all([
+            ExamSessionScheduleNoteMention(
+                note_id="schedule-note-1",
+                workflow_id=workflow.id,
+                to_user_id=user.id,
+                to_full_name=user.full_name,
+                comment_text="Please read the schedule note.",
+                is_read=False,
+                created_on=datetime(2026, 8, 1, 12, 0, tzinfo=timezone.utc),
+            ),
+            ExamSessionStaffingNoteMention(
+                note_id="staffing-note-1",
+                exam_session_id=session_record.id,
+                to_user_id=user.id,
+                to_full_name=user.full_name,
+                comment_text="Please read the staffing note.",
+                is_read=False,
+                created_on=datetime(2026, 8, 1, 13, 0, tzinfo=timezone.utc),
+            ),
+            ExamSessionStaffingNoteMention(
+                note_id="staffing-note-read",
+                exam_session_id=session_record.id,
+                to_user_id=user.id,
+                to_full_name=user.full_name,
+                comment_text="Already read.",
+                is_read=True,
+                created_on=datetime(2026, 8, 1, 14, 0, tzinfo=timezone.utc),
+            ),
+        ])
+        db.session.commit()
+
+        response = client.get("/?session_year=2026")
+        body = response.get_data(as_text=True)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("You have been mentioned in 2 notes in this menu.", body)
+        self.assertIn('<span class="dashboard-count-chip dashboard-count-chip-note">2 notes</span>', body)
+        self.assertIn("View note in Mentioned control tower session", body)
+        self.assertNotIn("View note in Bundle", body)
+        self.assertIn("highlight_note=staffing-note-1", body)
+        self.assertIn("view=bundle", body)
+        self.assertIn(f"bundle_id={bundle.id}", body)
+        self.assertIn(f"open_schedule_modal={session_record.id}", body)
+        self.assertIn("open_modal_target=staffing-notes", body)
+        self.assertIn("highlight_note=schedule-note-1", body)
+        self.assertNotIn('href="/pre-session-control-tower?view=sessions&amp;mentions=1"', body)
+
+    def test_dashboard_pre_session_shipment_note_link_opens_shipment_modal(self):
+        client = self.permission_client({"pre_session_control_tower": {"view": True}}, department="Admin")
+        user = User.query.filter_by(email="person@example.com").one()
+        session_record = ExamSession(
+            exam_session_name="Shipment note session",
+            category="Path School",
+            status="Pending",
+            session_date=date(2026, 8, 24),
+            shifts="Morning",
+            modules="Speaking",
+            format="Onsite",
+        )
+        db.session.add(session_record)
+        db.session.flush()
+        bundle = ExamSessionShipmentBundle(
+            supervisor_staff_id=1,
+            delivery_address="Test address",
+            courier="Correo Argentino",
+            status="Preparing bundle",
+            dispatch_due_at=date(2026, 8, 10),
+            bundle_number="4-26",
+        )
+        db.session.add(bundle)
+        db.session.flush()
+        db.session.add(ExamSessionShipmentBundleSession(
+            bundle_id=bundle.id,
+            exam_session_id=session_record.id,
+        ))
+        db.session.add(ExamSessionStaffingNoteMention(
+            note_id="shipment-note-1",
+            exam_session_id=session_record.id,
+            note_context="shipments",
+            to_user_id=user.id,
+            to_full_name=user.full_name,
+            comment_text="Please read the shipment note.",
+            is_read=False,
+            created_on=datetime(2026, 8, 2, 13, 0, tzinfo=timezone.utc),
+        ))
+        db.session.commit()
+
+        response = client.get("/?session_year=2026")
+        body = response.get_data(as_text=True)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn(">View note in Bundle 4-26</a>", body)
+        self.assertIn("open_modal_target=shipments-notes", body)
+        self.assertIn("shipments_only=1", body)
+        self.assertIn("close_view=bundles", body)
+        self.assertIn("highlight_note=shipment-note-1", body)
+        self.assertNotIn("open_modal_target=staffing-notes", body)
+
+    def test_dashboard_pre_session_package_note_link_uses_session_label(self):
+        client = self.permission_client({"pre_session_control_tower": {"view": True}}, department="Admin")
+        user = User.query.filter_by(email="person@example.com").one()
+        session_record = ExamSession(
+            exam_session_name="Package note session",
+            category="Path School",
+            status="Pending",
+            session_date=date(2026, 8, 25),
+            shifts="Morning",
+            modules="Speaking",
+            format="Onsite",
+        )
+        db.session.add(session_record)
+        db.session.flush()
+        bundle = ExamSessionShipmentBundle(
+            supervisor_staff_id=1,
+            delivery_address="Test address",
+            courier="Correo Argentino",
+            status="Preparing bundle",
+            dispatch_due_at=date(2026, 8, 10),
+            bundle_number="5-26",
+        )
+        db.session.add(bundle)
+        db.session.flush()
+        db.session.add(ExamSessionShipmentBundleSession(
+            bundle_id=bundle.id,
+            exam_session_id=session_record.id,
+        ))
+        db.session.add(ExamSessionStaffingNoteMention(
+            note_id="package-note-1",
+            exam_session_id=session_record.id,
+            note_context="packages",
+            to_user_id=user.id,
+            to_full_name=user.full_name,
+            comment_text="Please read the package note.",
+            is_read=False,
+            created_on=datetime(2026, 8, 2, 14, 0, tzinfo=timezone.utc),
+        ))
+        db.session.commit()
+
+        response = client.get("/?session_year=2026")
+        body = response.get_data(as_text=True)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn(">View note in Package note session</a>", body)
+        self.assertNotIn(">View note in Bundle 5-26</a>", body)
+        self.assertIn("open_modal_target=packages-notes", body)
+        self.assertIn("packages_only=1", body)
+        self.assertIn("highlight_note=package-note-1", body)
+
+    def test_dashboard_hides_pre_session_card_without_permission(self):
+        client = self.permission_client({"fees": {"view": True}})
+        response = client.get("/")
+        body = response.get_data(as_text=True)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertNotIn("<h2>Pre onsite session control tower</h2>", body)
 
     def test_staff_members_table_moved_to_staff_members_route(self):
         response = self.client().get("/staff-members")

@@ -803,7 +803,7 @@
   </section>
 {%- endmacro %}
 
-{% macro schedule_notes_panel(session, notes, csrf_token, selected_view='sessions', selected_bundle=none) -%}
+{% macro schedule_notes_panel(session, notes, csrf_token, selected_schedule_status='', selected_view='sessions', selected_bundle=none) -%}
   <section class="schedule-notes-section staffing-control-section" id="schedule-notes-{{ session.id }}" aria-labelledby="schedule-notes-title-{{ session.id }}">
     <div class="staffing-control-header">
       <div>
@@ -812,6 +812,33 @@
       </div>
       <strong class="responsible-chip">{{ notes|length }} notes</strong>
     </div>
+    <form method="post" action="{{ url_for('staff.add_schedule_note', session_id=session.id) }}" class="staffing-control-form schedule-action-form staffing-note-form" data-disable-on-submit>
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+      <input type="hidden" name="schedule_status" value="{{ selected_schedule_status }}">
+      {{ pre_session_return_fields(selected_view, selected_bundle) }}
+      <label for="schedule-free-note-{{ session.id }}">
+        Note <span class="required-marker">*</span>
+      </label>
+      <textarea id="schedule-free-note-{{ session.id }}" name="note" rows="3" required placeholder="Add a schedule note"></textarea>
+      <div class="cv-review-note-actions schedule-note-routing">
+        <div class="note-from-field">
+          <span>From</span>
+          <strong>{{ note_actor_label() }}</strong>
+        </div>
+        <label class="note-recipient-field">
+          To
+          <select name="note_to_user_id" multiple data-note-recipient-select>
+            {% for user_option in note_to_user_options() %}
+              <option value="{{ user_option.id }}">{{ user_option.full_name }}, {{ user_option.department }}</option>
+            {% endfor %}
+          </select>
+          <span class="note-recipient-selected-chips" data-note-recipient-chips></span>
+        </label>
+      </div>
+      <div class="form-actions">
+        <button class="primary-button compact-action" type="submit">Add note</button>
+      </div>
+    </form>
     {% if notes %}
       <div class="history-list compact-history">
         {% for note in notes %}
@@ -1384,98 +1411,6 @@
     </tbody>
   </table>
 </section>
-{% else %}
-<section class="control-tower-summary my-actions-summary" aria-label="My actions summary">
-  {% for label in ['Needs review', 'Overdue', 'Due today', 'Upcoming', 'Not set'] %}
-    <article class="control-tower-summary-item">
-      <span>{{ label }}</span>
-      <strong>{{ my_actions_summary.get(label, 0) }}</strong>
-    </article>
-  {% endfor %}
-</section>
-
-<section class="filter-bar" aria-label="My actions filters">
-  <form method="get" class="inline-filter-form">
-    <input type="hidden" name="session_year" value="{{ selected_session_year }}">
-    <input type="hidden" name="view" value="my-actions">
-    <label>
-      Source
-      <select name="action_source" onchange="this.form.submit()">
-        <option value="">All</option>
-        {% for source in my_action_source_options %}
-          <option value="{{ source }}" {% if selected_my_action_source == source %}selected{% endif %}>{{ source }}</option>
-        {% endfor %}
-      </select>
-    </label>
-    <label>
-      Responsible
-      <select name="action_responsible" onchange="this.form.submit()">
-        <option value="">All</option>
-        {% for responsible in my_action_responsible_options %}
-          <option value="{{ responsible }}" {% if selected_my_action_responsible == responsible %}selected{% endif %}>{{ responsible }}</option>
-        {% endfor %}
-      </select>
-    </label>
-    <label>
-      Deadline status
-      <select name="action_status" onchange="this.form.submit()">
-        <option value="">All</option>
-        {% for status in my_action_status_options %}
-          <option value="{{ status }}" {% if selected_my_action_status == status %}selected{% endif %}>{{ status }}</option>
-        {% endfor %}
-      </select>
-    </label>
-  </form>
-</section>
-
-<section class="table-wrap control-tower-table-wrap" aria-label="My actions">
-  <table class="control-tower-table my-actions-table">
-    <thead>
-      <tr>
-        <th>Manage</th>
-        <th>Priority action</th>
-        <th>Source</th>
-        <th>Session</th>
-        <th>Date</th>
-        <th>Responsible</th>
-        <th>Deadline</th>
-        <th>Status</th>
-        <th>Reason</th>
-      </tr>
-    </thead>
-    <tbody>
-      {% for action in my_actions %}
-        {% set session = action.session %}
-        {% set manage_target = action.manage_target %}
-        {% if manage_target == 'schedule' %}
-          {% set manage_target = 'schedule-actions' %}
-        {% elif manage_target in ['core_readiness', 'core-readiness', 'operational_readiness', 'operational-readiness', 'session_readiness', 'session-readiness'] %}
-          {% set manage_target = 'readiness' %}
-        {% elif manage_target == 'incident-review' %}
-          {% set manage_target = 'incidents' %}
-        {% endif %}
-        <tr>
-          <td><button class="secondary-button compact-action" type="button" data-open-modal="schedule-workflow-{{ session.id }}" {% if manage_target %}data-modal-scroll-target="{{ manage_target }}-{{ session.id }}"{% endif %}>Manage</button></td>
-          <td><strong class="my-action-label">{{ action.action_label }}</strong></td>
-          <td>{{ my_action_source_tag(action) }}</td>
-          <td>{{ action.display_label or session.exam_session_name }}</td>
-          <td>{{ (action.display_date or session.session_date)|session_date }}</td>
-          <td><span class="responsible-chip">{{ action.responsible }}</span></td>
-          <td>{{ action.deadline_display }}</td>
-          <td>{{ my_action_status_badge(action) }}</td>
-          <td><span class="my-action-reason">{{ action.reason }}</span></td>
-        </tr>
-      {% else %}
-        <tr>
-          <td colspan="9" class="empty-state">
-            <strong>No pending actions for the selected year.</strong>
-            <span>Sessions that are ready for the next stage are not shown in My actions.</span>
-          </td>
-        </tr>
-      {% endfor %}
-    </tbody>
-  </table>
-</section>
 {% endif %}
 
 {% for view in modal_views %}
@@ -1543,7 +1478,7 @@
         </section>
       </section>
 
-      {{ schedule_notes_panel(session, schedule_notes, csrf_token, selected_view, selected_bundle) }}
+      {{ schedule_notes_panel(session, schedule_notes, csrf_token, selected_schedule_status, selected_view, selected_bundle) }}
       {% set staffing_notes = staffing_note_views(staffing_notes_by_session.get(session.id, []), staffing_note_mentions_by_note_id) %}
       {{ package_notes_panel(session, staffing_notes, csrf_token, selected_schedule_status, selected_view, selected_bundle) }}
       {{ shipment_notes_panel(session, staffing_notes, csrf_token, selected_schedule_status, selected_view, selected_bundle) }}

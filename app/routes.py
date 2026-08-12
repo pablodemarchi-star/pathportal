@@ -3730,9 +3730,36 @@ def staffing_note_status(note):
     return potential_entry_note_status(note)
 
 
-def register_staffing_note_mentions(session_record, note_id, comment_text, actor, recipients):
+STAFFING_NOTE_CONTEXTS = {"staffing", "packages", "shipments"}
+
+
+def normalized_staffing_note_context(value):
+    value = (value or "").strip()
+    return value if value in STAFFING_NOTE_CONTEXTS else "staffing"
+
+
+def staffing_note_modal_target(note_context):
+    note_context = normalized_staffing_note_context(note_context)
+    if note_context == "shipments":
+        return "shipments-notes"
+    if note_context == "packages":
+        return "packages-notes"
+    return "staffing-notes"
+
+
+def staffing_note_context_view_args(note_context):
+    note_context = normalized_staffing_note_context(note_context)
+    if note_context == "shipments":
+        return {"shipments_only": "1"}
+    if note_context == "packages":
+        return {"packages_only": "1"}
+    return {"staffing_only": "1"}
+
+
+def register_staffing_note_mentions(session_record, note_id, comment_text, actor, recipients, note_context="staffing"):
     if not session_record or not note_id:
         return []
+    note_context = normalized_staffing_note_context(note_context)
     mentions = []
     for recipient in recipients:
         if not recipient.get("user_id"):
@@ -3747,6 +3774,7 @@ def register_staffing_note_mentions(session_record, note_id, comment_text, actor
         mention = ExamSessionStaffingNoteMention(
             note_id=note_id,
             exam_session_id=session_record.id,
+            note_context=note_context,
             from_user_id=actor.get("user_id"),
             from_full_name=actor.get("full_name"),
             from_department=actor.get("department"),
@@ -3766,16 +3794,18 @@ def create_staffing_note(session_record, note_text, form=None):
         return None
     actor = current_note_actor()
     recipients = selected_note_recipients(form or {})
+    note_context = normalized_staffing_note_context((form or {}).get("note_modal_context"))
     note = ExamSessionStaffingNote(
         exam_session_id=session_record.id,
         note_id=uuid.uuid4().hex,
+        note_context=note_context,
         note_text=note_text,
         from_user_id=actor.get("user_id"),
         from_full_name=actor.get("full_name"),
         from_department=actor.get("department"),
     )
     db.session.add(note)
-    register_staffing_note_mentions(session_record, note.note_id, note_text, actor, recipients)
+    register_staffing_note_mentions(session_record, note.note_id, note_text, actor, recipients, note_context)
     return note
 
 
@@ -3783,6 +3813,7 @@ def staffing_note_view(note, mentions=None):
     mentions = mentions or []
     return {
         "note_id": note.note_id,
+        "note_context": normalized_staffing_note_context(getattr(note, "note_context", "staffing")),
         "date": note.created_at.astimezone(LOCAL_TZ).strftime("%d/%m/%Y - %H:%M h.") if note.created_at else "Date not recorded",
         "note": note.note_text,
         "from_full_name": note.from_full_name or "",
@@ -11770,6 +11801,108 @@ def my_action_rows_from_schedule_view(view, today=None):
     return rows
 
 
+def my_action_row_from_visible_department_chip(
+    *,
+    identity,
+    session_record,
+    action,
+    source_label,
+    display_label=None,
+    display_date=None,
+    deadline=None,
+    manage_target="shipments",
+):
+    department = (action.get("department") or "").strip().upper()
+    if not department:
+        return None
+    status = "overdue" if action.get("overdue") or action.get("risk") else "not_set"
+    description = (action.get("description") or "").rstrip(".")
+    return {
+        "id": identity,
+        "session": session_record,
+        "priority_action": {},
+        "action_label": description,
+        "source": source_label.lower().replace(" ", "_"),
+        "source_label": source_label,
+        "responsible": department,
+        "deadline": deadline,
+        "deadline_display": display_session_date(deadline) if deadline else "Not set",
+        "status": status,
+        "status_label": my_action_status_label(status),
+        "reason": description,
+        "display_label": display_label or session_record.exam_session_name,
+        "display_date": display_date or session_record.session_date,
+        "manage_target": manage_target,
+        "severity": "Critical" if action.get("risk") else "",
+    }
+
+
+def visible_department_chip_action_rows(bundle_views, pending_shipment_bundle, schedule_views):
+    rows = []
+    seen = set()
+    visible_bundle_ids = {
+        bundle_view.get("id")
+        for bundle_view in bundle_views
+        if bundle_view.get("id")
+    }
+
+    def add_row(row):
+        if not row or row["id"] in seen:
+            return
+        seen.add(row["id"])
+        rows.append(row)
+
+    if pending_shipment_bundle and pending_shipment_bundle.get("session_records"):
+        first_session = pending_shipment_bundle["session_records"][0]
+        add_row(my_action_row_from_visible_department_chip(
+            identity="pending-bundles:management",
+            session_record=first_session,
+            action={
+                "department": "MANAGEMENT",
+                "description": "Assign recipient to these exam sessions",
+            },
+            source_label="Bundles",
+            display_label="Pending bundles",
+            display_date=first_session.session_date,
+        ))
+
+    for bundle_view in bundle_views:
+        included_sessions = bundle_view.get("included_sessions") or []
+        if not included_sessions:
+            continue
+        first_session = included_sessions[0]
+        deadline = (bundle_view.get("deadline_badge") or {}).get("date")
+        for index, action in enumerate(bundle_view.get("action_items", []), start=1):
+            add_row(my_action_row_from_visible_department_chip(
+                identity=f"bundle:{bundle_view.get('id')}:department-chip:{index}",
+                session_record=first_session,
+                action=action,
+                source_label="Bundles",
+                display_label=bundle_view.get("label") or f"Bundle {bundle_view.get('number')}",
+                display_date=first_session.session_date,
+                deadline=deadline,
+            ))
+
+    for view in schedule_views:
+        shipment_bundle_view = ((view.get("shipments") or {}).get("bundle_view") or {})
+        bundle_id = shipment_bundle_view.get("id")
+        if bundle_id not in visible_bundle_ids:
+            continue
+        session_record = view["session"]
+        for index, action in enumerate(view.get("bundle_detail_actions", []), start=1):
+            add_row(my_action_row_from_visible_department_chip(
+                identity=f"bundle-detail:{bundle_id or 'none'}:{session_record.id}:department-chip:{index}",
+                session_record=session_record,
+                action=action,
+                source_label="Bundle detail",
+                display_label=session_record.exam_session_name,
+                display_date=session_record.session_date,
+                manage_target="schedule-actions",
+            ))
+
+    return rows
+
+
 def my_actions_summary(actions):
     summary = {
         "Needs review": 0,
@@ -12990,7 +13123,7 @@ def parse_schedule_deadline(value):
 
 def pre_session_control_tower_return_args(session_record, default_view="sessions"):
     requested_view = request.form.get("view", default_view) or default_view
-    if requested_view not in {"bundles", "sessions", "bundle", "my-actions"}:
+    if requested_view not in {"bundles", "sessions", "bundle"}:
         requested_view = default_view
     args = {
         "session_year": session_record.session_date.year,
@@ -13170,7 +13303,7 @@ def session_box_sealing_prerequisites_completed(session_record):
 
 def shipment_control_redirect(session_record, status_filter="", bundle_id=None, assisted_action_key=""):
     requested_view = request.form.get("view", "sessions") or "sessions"
-    if requested_view not in {"bundles", "sessions", "bundle", "my-actions"}:
+    if requested_view not in {"bundles", "sessions", "bundle"}:
         requested_view = "sessions"
     args = {
         "session_year": session_record.session_date.year,
@@ -15193,7 +15326,7 @@ def update_staff_payment(member_id, payment_year):
 def pre_session_control_tower():
     selected_year, session_years = selected_exam_session_year()
     selected_view = request.args.get("view", "bundles").strip()
-    if selected_view not in {"bundles", "sessions", "bundle", "my-actions"}:
+    if selected_view not in {"bundles", "sessions", "bundle"}:
         selected_view = "bundles"
     try:
         selected_bundle_id = int(request.args.get("bundle_id", ""))
@@ -15601,11 +15734,26 @@ def pre_session_control_tower():
         ]
         bundle_view["sort_blocked"] = 0 if bundle_view["blocked"] else 1
         bundle_view["sort_ready"] = 0 if bundle_view["status"] == "Ready to dispatch" else 1
+        bundle_view["sort_delivered_action"] = 1 if any(
+            (action.get("description") or "").rstrip(".") == "Bundle shipment delivered"
+            for action in bundle_view.get("action_items", [])
+        ) else 0
+        bundle_view["sort_first_session_date"] = min(
+            (included.session_date for included in bundle_view["included_sessions"] if included.session_date),
+            default=datetime.max.date(),
+        )
+        if bundle_view["sort_delivered_action"]:
+            bundle_view["sort_gate_rank"] = 3
+        elif bundle_view["unblocked"]:
+            bundle_view["sort_gate_rank"] = 0
+        elif bundle_view["semi_unblocked"]:
+            bundle_view["sort_gate_rank"] = 1
+        else:
+            bundle_view["sort_gate_rank"] = 2
     bundle_views = [bundle_view for bundle_view in all_bundle_views if not bundle_view["completed"]]
     bundle_views.sort(key=lambda bundle_view: (
-        bundle_view["dispatch_due_at"] or datetime.max.date(),
-        bundle_view["sort_blocked"],
-        bundle_view["sort_ready"],
+        bundle_view["sort_gate_rank"],
+        bundle_view["sort_first_session_date"],
         bundle_view["record"].bundle_sequence or 999999,
         bundle_view["id"],
     ))
@@ -15632,6 +15780,17 @@ def pre_session_control_tower():
         for session_record in sessions
     }
     pending_shipment_bundle = {
+        "session_records": [
+            session_record
+            for session_record in sessions
+            if (
+                session_record.format == "Onsite"
+                and session_record.id not in shipment_links_by_session
+                and not get_exam_session_shipment_recipient_supervisor(
+                    shipment_recipient_assignments_by_session.get(session_record.id, [])
+                )
+            )
+        ],
         "session_chips": [
             {
                 "id": session_record.id,
@@ -16002,35 +16161,24 @@ def pre_session_control_tower():
         else:
             summary["Schedule blocked"] += 1
     modal_views = list(schedule_views)
-    my_actions = []
-    seen_action_ids = set()
-    for view in schedule_views:
-        for action_row in my_action_rows_from_schedule_view(view, today=today):
-            if action_row["id"] in seen_action_ids:
-                continue
-            seen_action_ids.add(action_row["id"])
-            my_actions.append(action_row)
+    my_actions = visible_department_chip_action_rows(
+        bundle_views,
+        pending_shipment_bundle if pending_shipment_bundle["session_chips"] else None,
+        schedule_views,
+    )
     my_actions = sort_my_actions(my_actions)
-    my_action_source_options = [
-        "Schedule",
-        "Staffing",
-        "Logistics",
-        "Readiness",
-        "Core readiness",
-        "Finance",
-        "Sinapsis",
-        "Communications",
-        "Incidents",
-        "Incident review",
-        "Packages",
-        "Shipments",
-        "Shipment planning",
-    ]
+    my_action_source_options = sorted(
+        {action["source_label"] for action in my_actions},
+        key=lambda value: value.lower(),
+    )
     if my_action_source_filter not in my_action_source_options:
         my_action_source_filter = ""
     my_action_responsible_filter_options = my_actions_responsible_options(my_actions)
-    if my_action_responsible_filter not in my_action_responsible_filter_options:
-        my_action_responsible_filter = ""
+    if my_action_responsible_filter and my_action_responsible_filter not in my_action_responsible_filter_options:
+        my_action_responsible_filter_options = sorted(
+            [*my_action_responsible_filter_options, my_action_responsible_filter],
+            key=lambda value: (value == "Not assigned", value.lower()),
+        )
     my_action_status_options = ["Needs review", "Overdue", "Due today", "Upcoming", "Not set"]
     if my_action_status_filter not in my_action_status_options:
         my_action_status_filter = ""
@@ -16131,7 +16279,7 @@ def create_path_session_journey_share_token(session_id, audience=None, action=No
     if status_filter not in SCHEDULE_WORKFLOW_STATUSES:
         status_filter = ""
     selected_view = request.form.get("view", "sessions").strip()
-    if selected_view not in {"sessions", "my-actions"}:
+    if selected_view not in {"sessions"}:
         selected_view = "sessions"
     if not validate_csrf():
         flash("Security token expired. Please try again.", "error")
@@ -16303,7 +16451,7 @@ def add_staffing_note(session_id):
     status_filter = request.form.get("schedule_status", "").strip()
     if status_filter not in SCHEDULE_WORKFLOW_STATUSES:
         status_filter = ""
-    note_modal_context = request.form.get("note_modal_context", "").strip()
+    note_modal_context = normalized_staffing_note_context(request.form.get("note_modal_context"))
     shipment_notes_context = note_modal_context == "shipments"
     package_notes_context = note_modal_context == "packages"
     if not validate_csrf():
@@ -16326,10 +16474,8 @@ def add_staffing_note(session_id):
         "staff.pre_session_control_tower",
         **pre_session_control_tower_return_args(session_record),
         open_schedule_modal=session_record.id,
-        open_modal_target="shipments-notes" if shipment_notes_context else "packages-notes" if package_notes_context else "staffing-notes",
-        packages_only="1" if package_notes_context else None,
-        shipments_only="1" if shipment_notes_context else None,
-        staffing_only=None if package_notes_context or shipment_notes_context else "1",
+        open_modal_target=staffing_note_modal_target(note_modal_context),
+        **staffing_note_context_view_args(note_modal_context),
     ))
 
 
@@ -16353,17 +16499,15 @@ def mark_staffing_note_read(mention_id):
         flash("Note marked as read.", "success")
 
     session_record = ExamSession.query.get_or_404(mention.exam_session_id)
-    note_modal_context = request.form.get("note_modal_context", "").strip()
-    shipment_notes_context = note_modal_context == "shipments"
-    package_notes_context = note_modal_context == "packages"
+    note_modal_context = normalized_staffing_note_context(
+        request.form.get("note_modal_context") or getattr(mention, "note_context", "staffing")
+    )
     return redirect(url_for(
         "staff.pre_session_control_tower",
         **pre_session_control_tower_return_args(session_record),
         open_schedule_modal=session_record.id,
-        open_modal_target="shipments-notes" if shipment_notes_context else "packages-notes" if package_notes_context else "staffing-notes",
-        packages_only="1" if package_notes_context else None,
-        shipments_only="1" if shipment_notes_context else None,
-        staffing_only=None if package_notes_context or shipment_notes_context else "1",
+        open_modal_target=staffing_note_modal_target(note_modal_context),
+        **staffing_note_context_view_args(note_modal_context),
         highlight_note=(request.form.get("highlight_note") or mention.note_id).strip(),
     ))
 
@@ -20653,26 +20797,407 @@ def delete_exam_session_year(year):
     return exam_session_year_redirect()
 
 
+def pre_session_dashboard_department_actions(department):
+    department = (department or "").strip().upper()
+    if not department:
+        return []
+    selected_year, _session_years = selected_exam_session_year()
+    sessions = (
+        ExamSession.query.filter(db.extract("year", ExamSession.session_date) == selected_year)
+        .order_by(ExamSession.session_date.asc(), ExamSession.exam_session_name.asc())
+        .all()
+    )
+    session_ids = [session_record.id for session_record in sessions]
+    shipment_links = (
+        ExamSessionShipmentBundleSession.query.filter(
+            ExamSessionShipmentBundleSession.exam_session_id.in_(session_ids)
+        )
+        .options(
+            joinedload(ExamSessionShipmentBundleSession.bundle).joinedload(ExamSessionShipmentBundle.supervisor),
+            joinedload(ExamSessionShipmentBundleSession.bundle).joinedload(ExamSessionShipmentBundle.checklist_items),
+            joinedload(ExamSessionShipmentBundleSession.bundle).joinedload(ExamSessionShipmentBundle.events),
+            joinedload(ExamSessionShipmentBundleSession.bundle)
+            .joinedload(ExamSessionShipmentBundle.session_links)
+            .joinedload(ExamSessionShipmentBundleSession.exam_session),
+        )
+        .all()
+        if session_ids else []
+    )
+    shipment_links_by_session = {link.exam_session_id: link for link in shipment_links}
+    bundles = {link.bundle for link in shipment_links if link.bundle}
+    action_links = []
+
+    def add_department_action(action, label, url):
+        if (action.get("department") or "").strip().upper() != department:
+            return
+        action_links.append({
+            "label": label,
+            "description": (action.get("description") or "").rstrip("."),
+            "url": url,
+        })
+
+    # Bundles view: visible Department chips for configured bundles.
+    visible_bundle_ids = set()
+    for bundle in bundles:
+        bundle_view = shipment_bundle_view(bundle)
+        if not bundle_view or bundle_view.get("completed"):
+            continue
+        visible_bundle_ids.add(bundle_view.get("id"))
+        for action in bundle_view.get("action_items", []):
+            add_department_action(
+                action,
+                bundle_view.get("label") or f"Bundle {bundle_view.get('number')}",
+                url_for(
+                    "staff.pre_session_control_tower",
+                    session_year=selected_year,
+                    view="bundles",
+                ),
+            )
+
+    # Bundles view: the visible Pending bundles row always shows MANAGEMENT.
+    if department == "MANAGEMENT":
+        supervisor_records = (
+            ExamSessionSupervisorAssignment.query.filter(
+                ExamSessionSupervisorAssignment.exam_session_id.in_(session_ids)
+            )
+            .options(joinedload(ExamSessionSupervisorAssignment.team_member))
+            .all()
+            if session_ids else []
+        )
+        examiner_records = (
+            ExamSessionExaminerAssignment.query.filter(
+                ExamSessionExaminerAssignment.exam_session_id.in_(session_ids)
+            )
+            .options(joinedload(ExamSessionExaminerAssignment.team_member))
+            .all()
+            if session_ids else []
+        )
+        intern_records = (
+            ExamSessionInternAssignment.query.filter(
+                ExamSessionInternAssignment.exam_session_id.in_(session_ids)
+            )
+            .options(joinedload(ExamSessionInternAssignment.team_member))
+            .all()
+            if session_ids else []
+        )
+        assignments_by_session = {}
+        for assignment in supervisor_records + examiner_records + intern_records:
+            assignments_by_session.setdefault(assignment.exam_session_id, []).append(assignment)
+        pending_sessions = [
+            session_record
+            for session_record in sessions
+            if (
+                (session_record.format or "").strip() == "Onsite"
+                and session_record.id not in shipment_links_by_session
+                and not get_exam_session_shipment_recipient_supervisor(
+                    assignments_by_session.get(session_record.id, [])
+                )
+            )
+        ]
+        if pending_sessions:
+            action_links.append({
+                "label": "Pending bundles",
+                "description": "Assign recipient to these exam sessions",
+                "url": url_for(
+                    "staff.pre_session_control_tower",
+                    session_year=selected_year,
+                    view="bundles",
+                ),
+            })
+
+    # Bundle detail view: visible Department chips beside each session.
+    workflow_records = (
+        ExamSessionScheduleWorkflow.query.filter(
+            ExamSessionScheduleWorkflow.exam_session_id.in_(session_ids)
+        ).all()
+        if session_ids else []
+    )
+    workflows_by_session = {workflow.exam_session_id: workflow for workflow in workflow_records}
+    supervisor_records = (
+        ExamSessionSupervisorAssignment.query.filter(
+            ExamSessionSupervisorAssignment.exam_session_id.in_(session_ids)
+        )
+        .options(joinedload(ExamSessionSupervisorAssignment.team_member), joinedload(ExamSessionSupervisorAssignment.potential_entry))
+        .all()
+        if session_ids else []
+    )
+    examiner_records = (
+        ExamSessionExaminerAssignment.query.filter(
+            ExamSessionExaminerAssignment.exam_session_id.in_(session_ids)
+        )
+        .options(joinedload(ExamSessionExaminerAssignment.team_member), joinedload(ExamSessionExaminerAssignment.potential_entry))
+        .all()
+        if session_ids else []
+    )
+    intern_records = (
+        ExamSessionInternAssignment.query.filter(
+            ExamSessionInternAssignment.exam_session_id.in_(session_ids)
+        )
+        .options(joinedload(ExamSessionInternAssignment.team_member), joinedload(ExamSessionInternAssignment.potential_entry))
+        .all()
+        if session_ids else []
+    )
+    supervisor_assignments_by_session = {}
+    examiner_assignments_by_session = {}
+    intern_assignments_by_session = {}
+    for assignment in supervisor_records:
+        supervisor_assignments_by_session.setdefault(assignment.exam_session_id, []).append(assignment)
+    for assignment in examiner_records:
+        examiner_assignments_by_session.setdefault(assignment.exam_session_id, []).append(assignment)
+    for assignment in intern_records:
+        intern_assignments_by_session.setdefault(assignment.exam_session_id, []).append(assignment)
+    staffing_control_records = (
+        ExamSessionStaffingControl.query.filter(
+            ExamSessionStaffingControl.exam_session_id.in_(session_ids)
+        ).all()
+        if session_ids else []
+    )
+    staffing_controls_by_session = {record.exam_session_id: record for record in staffing_control_records}
+    package_unit_records = (
+        ExamSessionPackageUnit.query.filter(
+            ExamSessionPackageUnit.exam_session_id.in_(session_ids)
+        )
+        .options(joinedload(ExamSessionPackageUnit.checklist_items), joinedload(ExamSessionPackageUnit.events))
+        .all()
+        if session_ids else []
+    )
+    package_units_by_session = {session_id: [] for session_id in session_ids}
+    for unit in package_unit_records:
+        package_units_by_session.setdefault(unit.exam_session_id, []).append(unit)
+    package_checklist_records = (
+        ExamSessionPackageChecklistItem.query.filter(
+            ExamSessionPackageChecklistItem.exam_session_id.in_(session_ids),
+            ExamSessionPackageChecklistItem.scope == "SESSION",
+        ).all()
+        if session_ids else []
+    )
+    package_session_items_by_session = {session_id: [] for session_id in session_ids}
+    for item in package_checklist_records:
+        package_session_items_by_session.setdefault(item.exam_session_id, []).append(item)
+    today = datetime.now(LOCAL_TZ).date()
+    for session_record in sessions:
+        if session_record.id not in shipment_links_by_session:
+            continue
+        bundle = shipment_links_by_session[session_record.id].bundle
+        if not bundle or bundle.id not in visible_bundle_ids:
+            continue
+        supervisor_assignments = supervisor_assignments_by_session.get(session_record.id, [])
+        examiner_assignments = examiner_assignments_by_session.get(session_record.id, [])
+        intern_assignments = intern_assignments_by_session.get(session_record.id, [])
+        session_assignments = supervisor_assignments + examiner_assignments + intern_assignments
+        staffing_contract = staffing_readiness_contract(
+            supervisor_assignments,
+            examiner_assignments,
+            intern_assignments,
+            session_record=session_record,
+        )
+        schedule_status = schedule_workflow_status(workflows_by_session.get(session_record.id))
+        schedule_gate = schedule_gate_status(workflows_by_session.get(session_record.id))
+        staffing_control = staffing_control_contract(
+            staffing_controls_by_session.get(session_record.id),
+            staffing_contract,
+            today=today,
+        )
+        package_units = package_units_by_session.get(session_record.id, [])
+        package_session_items = package_session_items_by_session.get(session_record.id, [])
+        packages_contract = packages_readiness_contract(
+            session_record,
+            package_units=package_units,
+            session_items=package_session_items,
+            schedule_gate=schedule_gate,
+            staffing_contract=staffing_contract,
+        )
+        package_preparation_status = package_preparation_status_contract(
+            session_record,
+            staff_member_id_requirements_for_session(session_record, session_assignments),
+        )
+        packages_action = packages_action_contract(
+            session_record,
+            packages_contract,
+            schedule_gate=schedule_gate,
+            staffing_contract=staffing_contract,
+            package_units=package_units,
+            preparation_status=package_preparation_status,
+        )
+        detail_actions = bundle_detail_action_items(
+            schedule_status,
+            schedule_gate,
+            schedule_workflow_next_action(status=schedule_status),
+            schedule_workflow_responsible(schedule_status),
+            monthly_registrations_closed=bool(getattr(session_record, "monthly_registrations_closed", False)),
+            staffing_contract=staffing_contract,
+            staffing_control=staffing_control,
+            packages_action=packages_action,
+            package_preparation_status=package_preparation_status,
+        )
+        for action in detail_actions:
+            add_department_action(
+                action,
+                session_record.exam_session_name,
+                url_for(
+                    "staff.pre_session_control_tower",
+                    session_year=selected_year,
+                    view="bundle",
+                    bundle_id=bundle.id,
+                ),
+            )
+    return action_links
+
+
+def pre_session_dashboard_pending_action_count(department):
+    return len(pre_session_dashboard_department_actions(department))
+
+
+def pre_session_note_mentions_for_current_user(limit=None):
+    current_user = getattr(g, "current_user", None)
+    if not current_user:
+        return []
+    schedule_mentions = (
+        ExamSessionScheduleNoteMention.query
+        .options(joinedload(ExamSessionScheduleNoteMention.workflow).joinedload(ExamSessionScheduleWorkflow.exam_session))
+        .filter(
+            ExamSessionScheduleNoteMention.to_user_id == current_user.id,
+            ExamSessionScheduleNoteMention.is_read.is_(False),
+        )
+        .all()
+    )
+    staffing_mentions = (
+        ExamSessionStaffingNoteMention.query
+        .options(joinedload(ExamSessionStaffingNoteMention.exam_session))
+        .filter(
+            ExamSessionStaffingNoteMention.to_user_id == current_user.id,
+            ExamSessionStaffingNoteMention.is_read.is_(False),
+        )
+        .all()
+    )
+    selected_year, _session_years = selected_exam_session_year()
+    staffing_session_ids = [
+        mention.exam_session_id
+        for mention in staffing_mentions
+        if mention.exam_session_id
+    ]
+    staffing_bundle_links = (
+        ExamSessionShipmentBundleSession.query.filter(
+            ExamSessionShipmentBundleSession.exam_session_id.in_(staffing_session_ids)
+        )
+        .options(joinedload(ExamSessionShipmentBundleSession.bundle))
+        .all()
+        if staffing_session_ids else []
+    )
+    staffing_bundle_id_by_session = {
+        link.exam_session_id: link.bundle_id
+        for link in staffing_bundle_links
+        if link.bundle_id
+    }
+    staffing_bundle_label_by_session = {
+        link.exam_session_id: f"Bundle {shipment_bundle_display_number(link.bundle)}"
+        for link in staffing_bundle_links
+        if link.bundle
+    }
+    mention_views = []
+    for mention in schedule_mentions:
+        session_record = mention.workflow.exam_session if mention.workflow else None
+        if not session_record:
+            continue
+        mention_views.append({
+            "created_on": mention.created_on,
+            "id": mention.id,
+            "label": session_record.exam_session_name,
+            "url": url_for(
+                "staff.pre_session_control_tower",
+                session_year=session_record.session_date.year if session_record.session_date else selected_year,
+                view="sessions",
+                open_schedule_modal=session_record.id,
+                open_modal_target="schedule-notes",
+                schedule_only="1",
+                highlight_note=mention.note_id,
+            ),
+        })
+    for mention in staffing_mentions:
+        session_record = mention.exam_session
+        if not session_record:
+            continue
+        bundle_id = staffing_bundle_id_by_session.get(session_record.id)
+        note_context = normalized_staffing_note_context(getattr(mention, "note_context", "staffing"))
+        view_args = {
+            "session_year": session_record.session_date.year if session_record.session_date else selected_year,
+            "view": "bundle" if bundle_id else "sessions",
+            "open_schedule_modal": session_record.id,
+            "open_modal_target": staffing_note_modal_target(note_context),
+            "highlight_note": mention.note_id,
+        }
+        view_args.update(staffing_note_context_view_args(note_context))
+        if bundle_id:
+            view_args["bundle_id"] = bundle_id
+        if note_context == "shipments":
+            view_args["close_view"] = "bundles"
+        mention_label = session_record.exam_session_name
+        if note_context == "shipments":
+            mention_label = staffing_bundle_label_by_session.get(session_record.id) or session_record.exam_session_name
+        mention_views.append({
+            "created_on": mention.created_on,
+            "id": mention.id,
+            "label": mention_label,
+            "url": url_for("staff.pre_session_control_tower", **view_args),
+        })
+    mention_views.sort(key=lambda item: (item["created_on"] or datetime.min.replace(tzinfo=timezone.utc), item["id"]), reverse=True)
+    if limit:
+        return mention_views[:limit]
+    return mention_views
+
+
+def pre_session_note_mentions_count_for_current_user():
+    current_user = getattr(g, "current_user", None)
+    if not current_user:
+        return 0
+    return (
+        ExamSessionScheduleNoteMention.query.filter(
+            ExamSessionScheduleNoteMention.to_user_id == current_user.id,
+            ExamSessionScheduleNoteMention.is_read.is_(False),
+        ).count()
+        + ExamSessionStaffingNoteMention.query.filter(
+            ExamSessionStaffingNoteMention.to_user_id == current_user.id,
+            ExamSessionStaffingNoteMention.is_read.is_(False),
+        ).count()
+    )
+
+
 @staff_bp.route("/")
 @login_required
 def dashboard():
     potential_entries_allowed = user_can_view("staff_members")
+    pre_session_control_tower_allowed = user_can_view("pre_session_control_tower")
     potential_entries_pending_count = 0
     potential_entries_note_mentions = []
     potential_entries_note_mentions_count = 0
+    pre_session_pending_count = 0
+    pre_session_action_links = []
+    pre_session_note_mentions = []
+    pre_session_note_mentions_count = 0
+    current_user = getattr(g, "current_user", None)
+    dashboard_department = (
+        getattr(current_user, "department", "")
+        or session.get("user_department")
+        or ""
+    )
     if potential_entries_allowed:
         potential_entries_pending_count = PotentialEntry.query.filter(
             PotentialEntry.is_rejected == False,
             potential_department_expression() == current_user_audit_department(),
             potential_pending_action_filter(),
         ).count()
-    current_user = getattr(g, "current_user", None)
     if potential_entries_allowed and current_user:
         potential_entries_note_mentions_count = PotentialEntryNoteMention.query.filter(
             PotentialEntryNoteMention.to_user_id == current_user.id,
             PotentialEntryNoteMention.is_read.is_(False),
         ).count()
         potential_entries_note_mentions = potential_entry_mentions_for_current_user(limit=3)
+    if pre_session_control_tower_allowed:
+        pre_session_action_links = pre_session_dashboard_department_actions(dashboard_department)
+        pre_session_pending_count = len(pre_session_action_links)
+    if pre_session_control_tower_allowed and current_user:
+        pre_session_note_mentions_count = pre_session_note_mentions_count_for_current_user()
+        pre_session_note_mentions = pre_session_note_mentions_for_current_user(limit=3)
     dashboard_display_name = (
         getattr(current_user, "full_name", "")
         or session.get("user_full_name")
@@ -20685,11 +21210,6 @@ def dashboard():
         if "@" in dashboard_display_name or not dashboard_name_parts
         else dashboard_name_parts[0]
     )
-    dashboard_department = (
-        getattr(current_user, "department", "")
-        or session.get("user_department")
-        or ""
-    )
     return render_template(
         "staff/dashboard.html",
         dashboard_full_name=dashboard_full_name,
@@ -20698,6 +21218,11 @@ def dashboard():
         potential_entries_pending_count=potential_entries_pending_count,
         potential_entries_note_mentions=potential_entries_note_mentions,
         potential_entries_note_mentions_count=potential_entries_note_mentions_count,
+        pre_session_control_tower_allowed=pre_session_control_tower_allowed,
+        pre_session_pending_count=pre_session_pending_count,
+        pre_session_action_links=pre_session_action_links,
+        pre_session_note_mentions=pre_session_note_mentions,
+        pre_session_note_mentions_count=pre_session_note_mentions_count,
     )
 
 

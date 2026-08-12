@@ -13,7 +13,7 @@ MENU_PERMISSIONS = (
     ("supervisor_certification", "Supervisor certification"),
     ("internship_stages", "Internship stages"),
     ("exam_session_planner", "Exam session planner"),
-    ("pre_session_control_tower", "Pre-session Control Tower"),
+    ("pre_session_control_tower", "Pre onsite session control tower"),
     ("monthly_exam_session_registrations", "Monthly exam session registrations"),
     ("staff_payments", "Staff payments"),
     ("fees", "Fees"),
@@ -857,6 +857,7 @@ class ExamSessionStaffingNote(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     exam_session_id = db.Column(db.Integer, db.ForeignKey("exam_session.id"), nullable=False, index=True)
     note_id = db.Column(db.String(64), nullable=False, unique=True, index=True)
+    note_context = db.Column(db.String(40), nullable=False, default="staffing", server_default="staffing")
     note_text = db.Column(db.Text, nullable=False)
     from_user_id = db.Column(db.Integer, db.ForeignKey("app_user.id"), nullable=True, index=True)
     from_full_name = db.Column(db.String(160), nullable=True)
@@ -875,6 +876,7 @@ class ExamSessionStaffingNoteMention(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     note_id = db.Column(db.String(64), nullable=False, index=True)
     exam_session_id = db.Column(db.Integer, db.ForeignKey("exam_session.id"), nullable=False, index=True)
+    note_context = db.Column(db.String(40), nullable=False, default="staffing", server_default="staffing")
     from_user_id = db.Column(db.Integer, db.ForeignKey("app_user.id"), nullable=True, index=True)
     from_full_name = db.Column(db.String(160), nullable=True)
     from_department = db.Column(db.String(40), nullable=True)

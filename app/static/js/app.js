@@ -1129,6 +1129,11 @@ const closeModal = (modal) => {
   modal.querySelectorAll("[data-interview-no-show]").forEach((checkbox) => syncPotentialInterviewNoShow(checkbox.closest("form")));
   const opener = modalOpeners.get(modal);
   if (opener && document.contains(opener)) opener.focus();
+  const closeRedirectUrl = modal.dataset.closeRedirectUrl;
+  if (closeRedirectUrl) {
+    delete modal.dataset.closeRedirectUrl;
+    window.location.assign(closeRedirectUrl);
+  }
 };
 
 const openRequestedSessionModal = () => {
@@ -1156,6 +1161,28 @@ const openRequestedScheduleModal = () => {
   const shipmentsOnly = params.get("shipments_only") === "1";
   const modal = document.getElementById(`schedule-workflow-${sessionId}`);
   if (modal) {
+    delete modal.dataset.closeRedirectUrl;
+    if (params.get("close_view") === "bundles") {
+      const closeParams = new URLSearchParams(params);
+      closeParams.set("view", "bundles");
+      closeParams.delete("bundle_id");
+      closeParams.delete("open_schedule_modal");
+      closeParams.delete("open_modal_target");
+      closeParams.delete("open_schedule_action");
+      closeParams.delete("schedule_only");
+      closeParams.delete("staffing_only");
+      closeParams.delete("packages_only");
+      closeParams.delete("shipments_only");
+      closeParams.delete("open_staffing_control");
+      closeParams.delete("open_logistics_control");
+      closeParams.delete("open_finance_control");
+      closeParams.delete("open_sinapsis_control");
+      closeParams.delete("open_communications_control");
+      closeParams.delete("highlight_note");
+      closeParams.delete("close_view");
+      const closeQuery = closeParams.toString();
+      modal.dataset.closeRedirectUrl = `${window.location.pathname}${closeQuery ? `?${closeQuery}` : ""}`;
+    }
     modal.classList.toggle("is-schedule-only", scheduleOnly);
     modal.classList.toggle("is-staffing-only", staffingOnly);
     modal.classList.toggle("is-packages-only", packagesOnly);
@@ -1251,6 +1278,8 @@ const openRequestedScheduleModal = () => {
   params.delete("open_finance_control");
   params.delete("open_sinapsis_control");
   params.delete("open_communications_control");
+  params.delete("highlight_note");
+  params.delete("close_view");
   const query = params.toString();
   const nextUrl = `${window.location.pathname}${query ? `?${query}` : ""}${window.location.hash}`;
   window.history.replaceState({}, "", nextUrl);

@@ -263,6 +263,17 @@ def create_app():
             db.session.execute(text("ALTER TABLE potential_entry ADD COLUMN updated_on DATETIME"))
             db.session.execute(text("UPDATE potential_entry SET updated_on = COALESCE(created_on, CURRENT_TIMESTAMP) WHERE updated_on IS NULL"))
             db.session.commit()
+        staffing_note_context_tables = (
+            "exam_session_staffing_note",
+            "exam_session_staffing_note_mention",
+        )
+        for table_name in staffing_note_context_tables:
+            table_columns = {
+                row[1] for row in db.session.execute(text(f"PRAGMA table_info({table_name})"))
+            }
+            if table_columns and "note_context" not in table_columns:
+                db.session.execute(text(f"ALTER TABLE {table_name} ADD COLUMN note_context VARCHAR(40) NOT NULL DEFAULT 'staffing'"))
+                db.session.commit()
         note_metadata_columns = {
             "from_user_id": "INTEGER",
             "from_full_name": "VARCHAR(160)",

@@ -3056,8 +3056,8 @@ class ScheduleWorkflowTest(unittest.TestCase):
         self.assertIn("Not read yet", html)
         self.assertIn('data-note-read-checkbox', html)
         self.assertLess(
-            notes_panel.index("Please review the updated schedule files."),
             notes_panel.index(f'id="schedule-free-note-{self.session_record.id}"'),
+            notes_panel.index("Please review the updated schedule files."),
         )
 
         read_response = recipient_client.post(
@@ -8494,6 +8494,58 @@ class ScheduleWorkflowTest(unittest.TestCase):
         self.assertIn("Assign recipient to these exam sessions", pending_row)
         self.assertIn("Shipment recipient missing", html)
         self.assertNotIn("No pending shipment bundles.", html)
+
+    def test_bundles_view_moves_delivered_action_bundles_to_bottom_by_first_session_date(self):
+        self.create_supervisor()
+        normal_session = self.create_planning_ready_session("Active shipment bundle", date(2026, 8, 25), packages_ready=True)
+        later_delivered_session = self.create_planning_ready_session("Later delivered bundle", date(2026, 8, 30), packages_ready=True)
+        earlier_delivered_session = self.create_planning_ready_session("Earlier delivered bundle", date(2026, 8, 18), packages_ready=True)
+        self.create_shipment_bundle_record(status="Preparing bundle", dispatch_due_at=date(2026, 8, 1), session_record=normal_session)
+        later_delivered_bundle = self.create_shipment_bundle_record(status="Delivered successfully", dispatch_due_at=date(2026, 7, 1), session_record=later_delivered_session)
+        earlier_delivered_bundle = self.create_shipment_bundle_record(status="Delivered successfully", dispatch_due_at=date(2026, 7, 2), session_record=earlier_delivered_session)
+        for bundle in (later_delivered_bundle, earlier_delivered_bundle):
+            bundle.delivery_option = "listed_address"
+            bundle.shipping_label_url = "https://example.com/label.pdf"
+            bundle.tracking_number = "TRACK-123"
+        db.session.commit()
+        client = self.login_client()
+
+        response = client.get("/pre-session-control-tower?session_year=2026&view=bundles")
+        html = response.get_data(as_text=True)
+        table = html[html.index('aria-label="Shipment bundles"'):html.index('<div class="modal"', html.index('aria-label="Shipment bundles"'))]
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("Bundle shipment delivered", table)
+        active_index = table.index("Active shipment bundle")
+        earlier_delivered_index = table.index("Earlier delivered bundle")
+        later_delivered_index = table.index("Later delivered bundle")
+        self.assertLess(active_index, earlier_delivered_index)
+        self.assertLess(earlier_delivered_index, later_delivered_index)
+
+    def test_bundles_view_orders_unblocked_then_semi_unblocked_by_first_session_date(self):
+        self.create_supervisor()
+        semi_earlier = self.create_planning_ready_session("Semi earlier bundle", date(2026, 8, 12), packages_ready=False)
+        unblocked_later = self.create_planning_ready_session("Unblocked later bundle", date(2026, 8, 20), packages_ready=True)
+        unblocked_earlier = self.create_planning_ready_session("Unblocked earlier bundle", date(2026, 8, 10), packages_ready=True)
+        semi_later = self.create_planning_ready_session("Semi later bundle", date(2026, 8, 18), packages_ready=False)
+        self.create_shipment_bundle_record(status="Preparing bundle", dispatch_due_at=date(2026, 7, 1), session_record=semi_earlier)
+        self.create_shipment_bundle_record(status="Preparing bundle", dispatch_due_at=date(2026, 7, 2), session_record=unblocked_later)
+        self.create_shipment_bundle_record(status="Preparing bundle", dispatch_due_at=date(2026, 7, 3), session_record=unblocked_earlier)
+        self.create_shipment_bundle_record(status="Preparing bundle", dispatch_due_at=date(2026, 7, 4), session_record=semi_later)
+        client = self.login_client()
+
+        response = client.get("/pre-session-control-tower?session_year=2026&view=bundles")
+        html = response.get_data(as_text=True)
+        table = html[html.index('aria-label="Shipment bundles"'):html.index('<div class="modal"', html.index('aria-label="Shipment bundles"'))]
+
+        self.assertEqual(response.status_code, 200)
+        unblocked_earlier_index = table.index("Unblocked earlier bundle")
+        unblocked_later_index = table.index("Unblocked later bundle")
+        semi_earlier_index = table.index("Semi earlier bundle")
+        semi_later_index = table.index("Semi later bundle")
+        self.assertLess(unblocked_earlier_index, unblocked_later_index)
+        self.assertLess(unblocked_later_index, semi_earlier_index)
+        self.assertLess(semi_earlier_index, semi_later_index)
 
     def test_completed_bundle_remains_visible_in_sessions_and_detail(self):
         self.create_supervisor()

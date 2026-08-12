@@ -68,6 +68,48 @@
         <a class="primary-button link-button dashboard-menu-button" href="{{ url_for('staff.potential_entries', action_scope='my_actions') }}">Go to menu</a>
       </article>
     {% endif %}
+
+    {% if pre_session_control_tower_allowed %}
+      <article class="dashboard-card dashboard-action-card">
+        <div class="dashboard-card-header">
+          <div>
+            <h2>Pre onsite session control tower</h2>
+            {% if pre_session_pending_count %}
+              <p>You have {{ pre_session_pending_count }} action{% if pre_session_pending_count != 1 %}s{% endif %} to complete in this menu.</p>
+            {% else %}
+              <p>Everything is up to date in this menu.</p>
+            {% endif %}
+            {% if pre_session_note_mentions_count %}
+              <p class="dashboard-mention-summary">You have been mentioned in {{ pre_session_note_mentions_count }} note{% if pre_session_note_mentions_count != 1 %}s{% endif %} in this menu.</p>
+            {% endif %}
+          </div>
+          {% if pre_session_pending_count or pre_session_note_mentions_count %}
+            <div class="dashboard-count-stack" aria-label="Pre onsite session control tower counters">
+              {% if pre_session_pending_count %}
+                <span class="dashboard-count-chip">{{ pre_session_pending_count }} action{% if pre_session_pending_count != 1 %}s{% endif %}</span>
+              {% endif %}
+              {% if pre_session_note_mentions_count %}
+                <span class="dashboard-count-chip dashboard-count-chip-note">{{ pre_session_note_mentions_count }} note{% if pre_session_note_mentions_count != 1 %}s{% endif %}</span>
+              {% endif %}
+            </div>
+          {% endif %}
+        </div>
+        {% if pre_session_action_links %}
+          <div class="dashboard-mention-links" aria-label="Pre onsite session control tower department actions">
+            {% for action in pre_session_action_links %}
+              <a href="{{ action.url }}">View action in {{ action.label }}</a>
+            {% endfor %}
+          </div>
+        {% endif %}
+        {% if pre_session_note_mentions_count %}
+          <div class="dashboard-mention-links" aria-label="Pre onsite session control tower note mentions">
+            {% for mention in pre_session_note_mentions %}
+              <a href="{{ mention.url }}">View note in {{ mention.label }}</a>
+            {% endfor %}
+          </div>
+        {% endif %}
+      </article>
+    {% endif %}
   </div>
 </section>
 {% endblock %}
