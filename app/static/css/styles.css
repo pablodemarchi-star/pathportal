@@ -3182,7 +3182,8 @@ span.session-marker-chip {
   border-color: #d1d5db;
 }
 
-.staff-logistics-simple-logistics {
+.staff-logistics-simple-logistics,
+.staff-logistics-uber {
   color: var(--badge-purple-text);
   background-color: var(--badge-purple-bg);
   border-color: rgba(128, 134, 167, 0.34);
@@ -3412,6 +3413,13 @@ span.session-marker-chip {
   backdrop-filter: blur(6px);
 }
 
+.session-modal-scroll-controls {
+  display: grid;
+  gap: 10px;
+  padding-top: 12px;
+  background: white;
+}
+
 .session-modal-module-summary {
   display: inline-flex;
   align-items: center;
@@ -3505,7 +3513,7 @@ span.session-marker-chip {
 .modal-emergency-contact-control {
   display: grid;
   gap: 7px;
-  width: min(520px, 100%);
+  width: min(943px, 100%);
   margin-top: 10px;
 }
 
@@ -3552,18 +3560,28 @@ span.session-marker-chip {
 
 .modal-emergency-contact-select-row {
   display: grid;
-  grid-template-columns: minmax(0, 320px) 190px;
+  grid-template-columns: minmax(0, 433px) 190px minmax(0, 300px);
   align-items: start;
   gap: 10px;
-  width: min(520px, 100%);
+  width: min(943px, 100%);
+}
+
+.modal-emergency-contact-rows {
+  display: grid;
+  gap: 0;
+  width: min(943px, 100%);
+}
+
+.modal-emergency-contact-select-row + .modal-emergency-contact-select-row {
+  margin-top: -8px;
 }
 
 .modal-emergency-contact-select select {
-  width: min(320px, 100%);
-  min-height: 36px;
+  width: min(433px, 100%);
+  min-height: 28px;
   border: 1px solid var(--color-border);
   border-radius: 8px;
-  padding: 5px 8px;
+  padding: 2px 8px;
   background: white;
   color: var(--color-primary-dark);
   font-size: 12px;
@@ -3587,6 +3605,12 @@ span.session-marker-chip {
   min-width: 0;
 }
 
+.modal-emergency-contact-time-field {
+  display: grid;
+  gap: 5px;
+  min-width: 0;
+}
+
 .modal-emergency-contact-status-label {
   color: var(--color-muted);
   font-size: 10px;
@@ -3604,6 +3628,40 @@ span.session-marker-chip {
   padding-block: 2px;
   font-size: 11px;
   line-height: 1;
+}
+
+.modal-emergency-contact-time-stack {
+  gap: 3px;
+}
+
+.modal-emergency-contact-time-stack .time-range-control {
+  min-height: 28px;
+}
+
+.modal-emergency-contact-time-stack .time-range-input {
+  min-height: 26px;
+  padding-block: 3px;
+}
+
+.modal-emergency-contact-time-stack .time-range-error {
+  min-height: 12px;
+}
+
+.modal-emergency-contact-row-add,
+.modal-emergency-contact-row-remove {
+  flex: 0 0 auto;
+}
+
+@media (max-width: 900px) {
+  .modal-emergency-contact-select-row {
+    grid-template-columns: 1fr;
+    width: 100%;
+  }
+
+  .modal-emergency-contact-status,
+  .modal-emergency-contact-select select {
+    width: 100%;
+  }
 }
 
 .compact-table-wrap {
@@ -4124,6 +4182,13 @@ span.session-marker-chip {
   color: var(--color-primary-dark);
   font-size: 12px;
   font-weight: 900;
+}
+
+.time-range-separator {
+  color: var(--color-muted);
+  font-size: 12px;
+  font-weight: 900;
+  line-height: 28px;
 }
 
 .time-range-input {
@@ -6048,15 +6113,47 @@ span.session-marker-chip {
   display: none;
 }
 
+.modal.is-logistics-only .modal-overview-return,
+.modal.is-logistics-only .modal-focused-context,
+.modal.is-logistics-only .schedule-workflow-panel > :not(.modal-header):not(.control-tower-overview):not(.schedule-notes-section):not([id^="logistics-"]) {
+  display: none;
+}
+
+.modal.is-finance-only .modal-overview-return,
+.modal.is-finance-only .modal-focused-context,
+.modal.is-finance-only .schedule-workflow-panel > :not(.modal-header):not(.control-tower-overview):not(.schedule-notes-section):not([id^="finance-"]) {
+  display: none;
+}
+
+.modal.is-sinapsis-only .modal-overview-return,
+.modal.is-sinapsis-only .modal-focused-context,
+.modal.is-sinapsis-only .schedule-workflow-panel > :not(.modal-header):not(.control-tower-overview):not(.schedule-notes-section):not([id^="sinapsis-"]) {
+  display: none;
+}
+
+.modal.is-communications-only .modal-overview-return,
+.modal.is-communications-only .modal-focused-context,
+.modal.is-communications-only .schedule-workflow-panel > :not(.modal-header):not(.control-tower-overview):not(.schedule-notes-section):not([id^="communications-"]) {
+  display: none;
+}
+
 .modal-title-staffing,
 .modal-title-packages,
-.modal-title-shipments {
+.modal-title-shipments,
+.modal-title-logistics,
+.modal-title-finance,
+.modal-title-sinapsis,
+.modal-title-communications {
   display: none;
 }
 
 .modal.is-staffing-only .modal-title-schedule,
 .modal.is-packages-only .modal-title-schedule,
-.modal.is-shipments-only .modal-title-schedule {
+.modal.is-shipments-only .modal-title-schedule,
+.modal.is-logistics-only .modal-title-schedule,
+.modal.is-finance-only .modal-title-schedule,
+.modal.is-sinapsis-only .modal-title-schedule,
+.modal.is-communications-only .modal-title-schedule {
   display: none;
 }
 
@@ -6069,6 +6166,22 @@ span.session-marker-chip {
 }
 
 .modal.is-shipments-only .modal-title-shipments {
+  display: inline;
+}
+
+.modal.is-logistics-only .modal-title-logistics {
+  display: inline;
+}
+
+.modal.is-finance-only .modal-title-finance {
+  display: inline;
+}
+
+.modal.is-sinapsis-only .modal-title-sinapsis {
+  display: inline;
+}
+
+.modal.is-communications-only .modal-title-communications {
   display: inline;
 }
 

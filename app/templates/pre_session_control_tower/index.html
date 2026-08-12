@@ -50,9 +50,9 @@
   </span>
 {%- endmacro %}
 
-{% macro contextual_cell_trigger(session, target, label, schedule_only=false, staffing_only=false, packages_only=false, shipments_only=false) -%}
+{% macro contextual_cell_trigger(session, target, label, schedule_only=false, staffing_only=false, packages_only=false, shipments_only=false, logistics_only=false, finance_only=false, sinapsis_only=false, communications_only=false) -%}
   {% set scroll_target = 'schedule-notes' if schedule_only and target == 'schedule-actions' else target %}
-  <button class="contextual-cell-trigger" type="button" data-open-modal="schedule-workflow-{{ session.id }}" data-modal-scroll-target="{{ scroll_target }}-{{ session.id }}" data-modal-target-label="{{ label }}"{% if schedule_only %} data-modal-schedule-only="true"{% endif %}{% if staffing_only %} data-modal-staffing-only="true"{% endif %}{% if packages_only %} data-modal-packages-only="true"{% endif %}{% if shipments_only %} data-modal-shipments-only="true"{% endif %} aria-label="{{ label }} for {{ session.exam_session_name }}">
+  <button class="contextual-cell-trigger" type="button" data-open-modal="schedule-workflow-{{ session.id }}" data-modal-scroll-target="{{ scroll_target }}-{{ session.id }}" data-modal-target-label="{{ label }}"{% if schedule_only %} data-modal-schedule-only="true"{% endif %}{% if staffing_only %} data-modal-staffing-only="true"{% endif %}{% if packages_only %} data-modal-packages-only="true"{% endif %}{% if shipments_only %} data-modal-shipments-only="true"{% endif %}{% if logistics_only %} data-modal-logistics-only="true"{% endif %}{% if finance_only %} data-modal-finance-only="true"{% endif %}{% if sinapsis_only %} data-modal-sinapsis-only="true"{% endif %}{% if communications_only %} data-modal-communications-only="true"{% endif %} aria-label="{{ label }} for {{ session.exam_session_name }}">
     {{ caller() }}
   </button>
 {%- endmacro %}
@@ -815,6 +815,7 @@
     <form method="post" action="{{ url_for('staff.add_schedule_note', session_id=session.id) }}" class="staffing-control-form schedule-action-form staffing-note-form" data-disable-on-submit>
       <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
       <input type="hidden" name="schedule_status" value="{{ selected_schedule_status }}">
+      <input type="hidden" name="focused_notes_context" value="" data-schedule-note-focused-context>
       {{ pre_session_return_fields(selected_view, selected_bundle) }}
       <label for="schedule-free-note-{{ session.id }}">
         Note <span class="required-marker">*</span>
@@ -1377,18 +1378,18 @@
           {% endif %}
           {% if selected_view != 'bundle' %}
             <td>
-              {% call contextual_cell_trigger(session, 'logistics', 'Review logistics') %}
+              {% call contextual_cell_trigger(session, 'logistics', 'Review logistics', logistics_only=true) %}
                 {{ logistics_table_cell(view.logistics, false) }}
               {% endcall %}
             </td>
             <td>
-              {% call contextual_cell_trigger(session, 'finance', 'Review finance') %}
+              {% call contextual_cell_trigger(session, 'finance', 'Review finance', finance_only=true) %}
                 {{ finance_table_cell(view.finance, false) }}
               {% endcall %}
             </td>
             <td>
               <div class="sinapsis-table-cell-with-link">
-                {% call contextual_cell_trigger(session, 'sinapsis', 'Check Sinapsis') %}
+                {% call contextual_cell_trigger(session, 'sinapsis', 'Check Sinapsis', sinapsis_only=true) %}
                   {{ sinapsis_table_cell(view.sinapsis, false) }}
                 {% endcall %}
                 {% if view.sinapsis_available %}
@@ -1397,7 +1398,7 @@
               </div>
             </td>
             <td>
-              {% call contextual_cell_trigger(session, 'communications', 'Review communications') %}
+              {% call contextual_cell_trigger(session, 'communications', 'Review communications', communications_only=true) %}
                 {{ communications_table_cell(view.communications, false) }}
               {% endcall %}
             </td>
@@ -1436,6 +1437,10 @@
             <span class="modal-title-staffing">STAFF PARTICIPATION AND CONFIRMATION</span>
             <span class="modal-title-packages">SESSION PACKAGE PREPARATION</span>
             <span class="modal-title-shipments">BUNDLE SHIPMENT</span>
+            <span class="modal-title-logistics">LOGISTICS</span>
+            <span class="modal-title-finance">FINANCE</span>
+            <span class="modal-title-sinapsis">SINAPSIS</span>
+            <span class="modal-title-communications">COMMUNICATIONS</span>
           </p>
           <h2 id="schedule-workflow-title-{{ session.id }}" tabindex="-1">{{ session.exam_session_name }}</h2>
           <div class="modal-session-header-actions" aria-label="Session quick links">

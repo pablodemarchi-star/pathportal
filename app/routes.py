@@ -9,7 +9,7 @@ import calendar
 import uuid
 from collections import defaultdict
 from io import BytesIO
-from urllib.parse import parse_qs, quote, urlparse
+from urllib.parse import parse_qs, parse_qsl, quote, urlencode, urlparse, urlunparse
 
 from flask import Blueprint, Response, abort, current_app, flash, g, has_request_context, jsonify, redirect, render_template, request, session, url_for
 from openpyxl import load_workbook
@@ -268,10 +268,10 @@ POTENTIAL_ENTRY_ASSIGNMENT_EXCLUDED_STATUSES = {
 }
 EXAM_SESSION_LOGISTICS_TYPE_OPTIONS = [
     "Does not apply",
-    "Simple logistics",
+    "Uber",
     "Complex logistics",
 ]
-EXAM_SESSION_LOGISTICS_ACTIVE_TYPES = {"Simple logistics", "Complex logistics"}
+EXAM_SESSION_LOGISTICS_ACTIVE_TYPES = {"Uber", "Complex logistics"}
 LEGACY_PARTICIPATION_STATUS_MAP = {
     "Sent": "Pre-confirmation sent",
 }
@@ -1381,10 +1381,12 @@ def normalize_participation_status(status):
 
 def normalize_assignment_logistics_type(logistics_type, legacy_enabled=False):
     logistics_type = (logistics_type or "").strip()
+    if logistics_type == "Simple logistics":
+        return "Uber"
     if logistics_type in EXAM_SESSION_LOGISTICS_TYPE_OPTIONS:
         return logistics_type
     if legacy_enabled:
-        return "Simple logistics"
+        return "Uber"
     return "Does not apply"
 
 
@@ -2176,6 +2178,67 @@ def current_pagination_settings():
     return page, page_size
 
 
+def pagination_state_key(endpoint=None):
+    endpoint = endpoint or request.endpoint or ""
+    return f"pagination_state:{endpoint}"
+
+
+def remember_pagination_state(pagination):
+    if not has_request_context() or not request.endpoint or request.method != "GET" or not pagination:
+        return
+    page = pagination.get("page")
+    page_size = pagination.get("page_size")
+    if not page or page_size not in PAGE_SIZE_OPTIONS:
+        return
+    session[pagination_state_key()] = {
+        "path": request.path,
+        "page": str(page),
+        "page_size": str(page_size),
+    }
+
+
+def pagination_state_for_redirect_path(path):
+    if not path:
+        return None
+    for key, value in session.items():
+        if not key.startswith("pagination_state:") or not isinstance(value, dict):
+            continue
+        if value.get("path") == path and value.get("page"):
+            return value
+    return None
+
+
+def location_with_preserved_pagination(location):
+    if not location:
+        return location
+    parsed = urlparse(location)
+    query_pairs = parse_qsl(parsed.query, keep_blank_values=True)
+    query_keys = {key for key, _ in query_pairs}
+    if "page" in query_keys:
+        return location
+    state = pagination_state_for_redirect_path(parsed.path)
+    if not state:
+        return location
+    query_pairs.append(("page", state["page"]))
+    if "page_size" not in query_keys and state.get("page_size") in PAGE_SIZE_OPTIONS:
+        query_pairs.append(("page_size", state["page_size"]))
+    return urlunparse(parsed._replace(query=urlencode(query_pairs)))
+
+
+@staff_bp.after_app_request
+def preserve_pagination_on_redirect(response):
+    if (
+        has_request_context()
+        and request.method == "POST"
+        and response.status_code in {301, 302, 303, 307, 308}
+    ):
+        location = response.headers.get("Location")
+        next_location = location_with_preserved_pagination(location)
+        if next_location != location:
+            response.headers["Location"] = next_location
+    return response
+
+
 def pagination_url(page, page_size=None):
     args = request.args.to_dict(flat=False)
     args["page"] = [str(page)]
@@ -2221,6 +2284,7 @@ def paginate_query(query):
     page, page_size = current_pagination_settings()
     total = query.order_by(None).count()
     pagination = build_pagination(total, page, page_size)
+    remember_pagination_state(pagination)
     if page_size == "all":
         items = query.all()
     else:
@@ -2232,6 +2296,7 @@ def paginate_items(items):
     page, page_size = current_pagination_settings()
     total = len(items)
     pagination = build_pagination(total, page, page_size)
+    remember_pagination_state(pagination)
     if page_size == "all":
         return items, pagination
     start_index = (pagination["page"] - 1) * pagination["per_page"]
@@ -13178,6 +13243,7 @@ def logistics_control_redirect(session_record, status_filter="", edit=False):
         "session_year": session_record.session_date.year,
         "open_schedule_modal": session_record.id,
         "open_modal_target": "logistics",
+        "logistics_only": "1",
     }
     if status_filter in SCHEDULE_WORKFLOW_STATUSES:
         args["schedule_status"] = status_filter
@@ -13191,6 +13257,7 @@ def finance_control_redirect(session_record, status_filter="", edit=False):
         "session_year": session_record.session_date.year,
         "open_schedule_modal": session_record.id,
         "open_modal_target": "finance",
+        "finance_only": "1",
     }
     if status_filter in SCHEDULE_WORKFLOW_STATUSES:
         args["schedule_status"] = status_filter
@@ -13204,6 +13271,7 @@ def sinapsis_control_redirect(session_record, status_filter="", edit=False):
         "session_year": session_record.session_date.year,
         "open_schedule_modal": session_record.id,
         "open_modal_target": "sinapsis",
+        "sinapsis_only": "1",
     }
     if status_filter in SCHEDULE_WORKFLOW_STATUSES:
         args["schedule_status"] = status_filter
@@ -13217,6 +13285,7 @@ def communications_control_redirect(session_record, status_filter="", edit=False
         "session_year": session_record.session_date.year,
         "open_schedule_modal": session_record.id,
         "open_modal_target": "communications",
+        "communications_only": "1",
     }
     if status_filter in SCHEDULE_WORKFLOW_STATUSES:
         args["schedule_status"] = status_filter
@@ -16398,24 +16467,51 @@ def add_schedule_note(session_id):
     status_filter = request.form.get("schedule_status", "").strip()
     if status_filter not in SCHEDULE_WORKFLOW_STATUSES:
         status_filter = ""
+    focused_notes_context = request.form.get("focused_notes_context", "").strip()
+    focused_note_redirect_flags = {
+        "logistics": {"logistics_only": "1"},
+        "finance": {"finance_only": "1"},
+        "sinapsis": {"sinapsis_only": "1"},
+        "communications": {"communications_only": "1"},
+    }
+    focused_note_redirect_args = focused_note_redirect_flags.get(focused_notes_context, {})
     if not validate_csrf():
         flash("Security token expired. Please try again.", "error")
+        if focused_note_redirect_args:
+            return redirect(url_for(
+                "staff.pre_session_control_tower",
+                **pre_session_control_tower_return_args(session_record),
+                open_schedule_modal=session_record.id,
+                open_modal_target="schedule-notes",
+                **focused_note_redirect_args,
+            ))
         return schedule_workflow_redirect(session_record, status_filter, schedule_only=True)
     note = request.form.get("note", "").strip()
     if not note:
         flash("Schedule note cannot be empty.", "error")
+        if focused_note_redirect_args:
+            return redirect(url_for(
+                "staff.pre_session_control_tower",
+                **pre_session_control_tower_return_args(session_record),
+                open_schedule_modal=session_record.id,
+                open_modal_target="schedule-notes",
+                **focused_note_redirect_args,
+            ))
         return schedule_workflow_redirect(session_record, status_filter, schedule_only=True)
     workflow = get_or_create_schedule_workflow(session_record)
     create_schedule_note(workflow, note, request.form)
     db.session.commit()
     flash("Schedule note added successfully.", "success")
-    return redirect(url_for(
-        "staff.pre_session_control_tower",
+    redirect_args = {
         **pre_session_control_tower_return_args(session_record),
-        open_schedule_modal=session_record.id,
-        open_modal_target="schedule-notes",
-        schedule_only="1",
-    ))
+        "open_schedule_modal": session_record.id,
+        "open_modal_target": "schedule-notes",
+    }
+    if focused_note_redirect_args:
+        redirect_args.update(focused_note_redirect_args)
+    else:
+        redirect_args["schedule_only"] = "1"
+    return redirect(url_for("staff.pre_session_control_tower", **redirect_args))
 
 
 @staff_bp.route("/schedule-note-mentions/<int:mention_id>/read", methods=["POST"])
@@ -20007,6 +20103,10 @@ def exam_session_staff_member_ids(session_id):
     session_record = db.session.get(ExamSession, session_id)
     if session_record:
         member_ids.extend(session_record.non_available_refs())
+        if session_record.emergency_contact_member_id is not None:
+            member_ids.append(str(session_record.emergency_contact_member_id))
+        for contact in session_record.additional_emergency_contacts_list():
+            member_ids.append(str(contact["member_id"]))
     for model in (ExamSessionSupervisorAssignment, ExamSessionExaminerAssignment, ExamSessionInternAssignment):
         for assignment in model.query.filter_by(exam_session_id=session_id).all():
             member_ids.extend(assignment.non_available_refs())
@@ -20285,29 +20385,66 @@ def update_exam_session_members(session_id):
     emergency_contact_not_required = request.form.get("emergency_contact_not_required") == "1"
     emergency_contact_required = request.form.get("emergency_contact_required") == "1" and not emergency_contact_not_required
     emergency_contact_member_id = None
-    emergency_contact_participation_status = normalize_participation_status(
-        request.form.get("emergency_contact_participation_status", "Pending")
-    )
-    if emergency_contact_participation_status not in EXAM_SESSION_PARTICIPATION_OPTIONS:
-        flash("Please select a valid Emergency contact participation status.", "error")
-        return session_members_redirect(keep_open=True)
+    emergency_contact_participation_status = "Pending"
+    emergency_contact_start_time = ""
+    emergency_contact_end_time = ""
+    additional_emergency_contacts = []
     if emergency_contact_required:
-        emergency_contact_member_id_value = request.form.get("emergency_contact_member_id", "").strip()
-        if emergency_contact_member_id_value:
-            if not emergency_contact_member_id_value.isdigit():
+        emergency_contact_member_values = [value.strip() for value in request.form.getlist("emergency_contact_member_id")]
+        emergency_contact_status_values = [value.strip() for value in request.form.getlist("emergency_contact_participation_status")]
+        emergency_contact_start_values = [value.strip() for value in request.form.getlist("emergency_contact_start_time")]
+        emergency_contact_end_values = [value.strip() for value in request.form.getlist("emergency_contact_end_time")]
+        row_count = max(
+            len(emergency_contact_member_values),
+            len(emergency_contact_status_values),
+            len(emergency_contact_start_values),
+            len(emergency_contact_end_values),
+            1,
+        )
+        emergency_contact_rows = []
+        for index in range(row_count):
+            member_value = emergency_contact_member_values[index] if index < len(emergency_contact_member_values) else ""
+            status_value = normalize_participation_status(
+                emergency_contact_status_values[index] if index < len(emergency_contact_status_values) else "Pending"
+            )
+            start_time = emergency_contact_start_values[index] if index < len(emergency_contact_start_values) else ""
+            end_time = emergency_contact_end_values[index] if index < len(emergency_contact_end_values) else ""
+            if status_value not in EXAM_SESSION_PARTICIPATION_OPTIONS:
+                flash("Please select a valid Emergency contact participation status.", "error")
+                return session_members_redirect(keep_open=True)
+            if not valid_time_range_value(start_time) or not valid_time_range_value(end_time):
+                flash("Wrong time", "error")
+                return session_members_redirect(keep_open=True)
+            if not member_value:
+                continue
+            if not member_value.isdigit():
                 flash("Please select an active emergency contact.", "error")
                 return session_members_redirect(keep_open=True)
-            emergency_contact_member_id = int(emergency_contact_member_id_value)
-            if not AcademicStaff.query.filter_by(id=emergency_contact_member_id, status="Active").first():
+            member_id = int(member_value)
+            if not AcademicStaff.query.filter_by(id=member_id, status="Active").first():
                 flash("Please select an active emergency contact.", "error")
                 return session_members_redirect(keep_open=True)
-    if emergency_contact_member_id is None:
-        emergency_contact_participation_status = "Pending"
+            emergency_contact_rows.append({
+                "member_id": member_id,
+                "status": status_value,
+                "start_time": start_time,
+                "end_time": end_time,
+            })
+        if emergency_contact_rows:
+            primary_emergency_contact = emergency_contact_rows[0]
+            emergency_contact_member_id = primary_emergency_contact["member_id"]
+            emergency_contact_participation_status = primary_emergency_contact["status"]
+            emergency_contact_start_time = primary_emergency_contact["start_time"]
+            emergency_contact_end_time = primary_emergency_contact["end_time"]
+            additional_emergency_contacts = emergency_contact_rows[1:]
     previous_emergency_contact_member_id = session_record.emergency_contact_member_id
     session_record.emergency_contact_required = emergency_contact_required
     session_record.emergency_contact_not_required = emergency_contact_not_required
     session_record.emergency_contact_member_id = emergency_contact_member_id
     session_record.emergency_contact_participation_status = emergency_contact_participation_status
+    session_record.emergency_contact_start_time = emergency_contact_start_time
+    session_record.emergency_contact_end_time = emergency_contact_end_time
+    session_record.emergency_contact_additional_contacts = json.dumps(additional_emergency_contacts)
     if previous_emergency_contact_member_id != emergency_contact_member_id:
         clear_emergency_contact_deadline(session_record)
 

@@ -672,6 +672,9 @@ class ExamSession(db.Model):
     emergency_contact_not_required = db.Column(db.Boolean, nullable=False, default=False)
     emergency_contact_member_id = db.Column(db.Integer, db.ForeignKey("academic_staff.id"), nullable=True, index=True)
     emergency_contact_participation_status = db.Column(db.String(40), nullable=False, default="Pending", index=True)
+    emergency_contact_start_time = db.Column(db.String(5), nullable=True)
+    emergency_contact_end_time = db.Column(db.String(5), nullable=True)
+    emergency_contact_additional_contacts = db.Column(db.Text, nullable=False, default="[]")
     emergency_contact_status_due_at = db.Column(db.Date, nullable=True)
     emergency_contact_status_due_stage = db.Column(db.String(40), nullable=True)
     emergency_contact_status_due_started_at = db.Column(db.DateTime(timezone=True), nullable=True)
@@ -736,6 +739,36 @@ class ExamSession(db.Model):
             elif text.startswith("staff:") or text.startswith("potential:"):
                 refs.append(text)
         return refs
+
+    def additional_emergency_contacts_list(self):
+        try:
+            values = json.loads(self.emergency_contact_additional_contacts or "[]")
+        except (TypeError, ValueError, json.JSONDecodeError):
+            return []
+        contacts = []
+        for value in values:
+            if not isinstance(value, dict):
+                continue
+            member_id = value.get("member_id")
+            if not str(member_id or "").isdigit():
+                continue
+            contacts.append({
+                "member_id": int(member_id),
+                "status": (value.get("status") or "Pending").strip() or "Pending",
+                "start_time": (value.get("start_time") or "").strip(),
+                "end_time": (value.get("end_time") or "").strip(),
+            })
+        return contacts
+
+    def emergency_contact_rows(self):
+        rows = [{
+            "member_id": self.emergency_contact_member_id,
+            "status": self.emergency_contact_participation_status or "Pending",
+            "start_time": self.emergency_contact_start_time or "",
+            "end_time": self.emergency_contact_end_time or "",
+        }]
+        rows.extend(self.additional_emergency_contacts_list())
+        return rows
 
     emergency_contact_member = db.relationship("AcademicStaff", foreign_keys=[emergency_contact_member_id])
 

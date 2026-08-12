@@ -263,7 +263,7 @@
   {% set participation_status = 'Pre-confirmation sent' if raw_participation_status == 'Sent' else raw_participation_status %}
   {% set participation_class = participation_status|lower|replace(' ', '-') %}
   {% set raw_logistics_type = assignment.logistics_type if assignment and assignment.logistics_type else '' %}
-  {% set logistics_type = raw_logistics_type if raw_logistics_type in logistics_type_options else ('Simple logistics' if assignment and assignment.logistics_enabled else 'Does not apply') %}
+  {% set logistics_type = raw_logistics_type if raw_logistics_type in logistics_type_options else ('Uber' if assignment and assignment.logistics_enabled else 'Does not apply') %}
   {% set logistics_type_class = logistics_type|lower|replace(' ', '-') %}
   <article class="staff-assignment-card" data-supervisor-row data-section-key="{{ section_key }}" data-saved-team-member-id="{{ selected_value }}" data-saved-participation-status="{{ assignment.participation_status if assignment else '' }}" {% if is_shipment_recipient %}data-shipment-recipient-row="true"{% endif %}>
     <div class="staff-card-header">
@@ -1008,6 +1008,12 @@
               <a class="secondary-button compact-action" href="https://www.google.com/maps/dir///@-34.4551866,-58.9118453,14z/data=!4m2!4m1!3e0?entry=ttu&amp;g_ep=EgoyMDI2MDYxMC4wIKXMDSoASAFQAw%3D%3D" target="_blank" rel="noopener noreferrer">Calculate distances</a>
             </div>
           {% endif %}
+        </div>
+        {% if not session_fullscreen %}
+          <button class="icon-button" type="button" data-close-modal>&times;</button>
+        {% endif %}
+      </div>
+      <div class="session-modal-scroll-controls">
           {% set session_non_available_options = session_non_available_staff_members.get(session.id, []) %}
           {% set selected_non_available_ids = session_non_available_member_ids.get(session.id, []) %}
           <div class="modal-non-available-control">
@@ -1047,30 +1053,52 @@
                 <span>Emergency contact NOT required</span>
               </label>
             </div>
-            {% set emergency_contact_status = 'Pre-confirmation sent' if session.emergency_contact_participation_status == 'Sent' else session.emergency_contact_participation_status|default('Pending', true) %}
-            {% set emergency_contact_status_class = emergency_contact_status|lower|replace(' ', '-') %}
-            <div class="modal-emergency-contact-select-row" data-emergency-contact-select-wrap data-emergency-contact-saved-member-id="{{ session.emergency_contact_member_id or '' }}" data-emergency-contact-saved-status="{{ emergency_contact_status }}" {% if not session.emergency_contact_required or session.emergency_contact_not_required %}hidden{% endif %}>
-              <label class="modal-emergency-contact-select">
-                Emergency contact
-                <select name="emergency_contact_member_id" form="exam-session-members-form-{{ session.id }}" data-emergency-contact-select {% if not session.emergency_contact_required or session.emergency_contact_not_required %}disabled{% endif %}>
-                  <option value="">Select active staff member</option>
-                  {% for member in emergency_contact_members %}
-                    <option value="{{ member.id }}" {% if session.emergency_contact_member_id == member.id %}selected{% endif %}>{{ member_option_label(member) }}</option>
-                  {% endfor %}
-                </select>
-              </label>
-              <div class="modal-emergency-contact-status-field">
-                <span class="modal-emergency-contact-status-label">Status</span>
-                <span class="modal-emergency-contact-role-to-cover" data-emergency-contact-role-to-cover {% if session.emergency_contact_member_id %}hidden{% endif %}>Role to cover</span>
-                <select name="emergency_contact_participation_status" form="exam-session-members-form-{{ session.id }}" class="participation-select modal-emergency-contact-status participation-{{ emergency_contact_status_class }}" data-emergency-contact-status-select {% if not session.emergency_contact_member_id %}hidden disabled{% endif %}>
-                  {% for option in participation_options %}
-                    <option value="{{ option }}" {% if emergency_contact_status == option %}selected{% endif %}>{{ option }}</option>
-                  {% endfor %}
-                </select>
-              </div>
+            <div class="modal-emergency-contact-rows" data-emergency-contact-select-wrap {% if not session.emergency_contact_required or session.emergency_contact_not_required %}hidden{% endif %}>
+              {% for emergency_contact_row in session.emergency_contact_rows() %}
+                {% set emergency_contact_status = 'Pre-confirmation sent' if emergency_contact_row.status == 'Sent' else emergency_contact_row.status|default('Pending', true) %}
+                {% set emergency_contact_status_class = emergency_contact_status|lower|replace(' ', '-') %}
+                <div class="modal-emergency-contact-select-row" data-emergency-contact-row data-emergency-contact-saved-member-id="{{ emergency_contact_row.member_id or '' }}" data-emergency-contact-saved-status="{{ emergency_contact_status }}">
+                  <label class="modal-emergency-contact-select">
+                    <span class="modal-emergency-contact-row-title" {% if not loop.first %}hidden{% endif %}>Emergency contact</span>
+                    <select name="emergency_contact_member_id" form="exam-session-members-form-{{ session.id }}" data-emergency-contact-select {% if not session.emergency_contact_required or session.emergency_contact_not_required %}disabled{% endif %}>
+                      <option value="">Select active staff member</option>
+                      {% for member in emergency_contact_members %}
+                        <option value="{{ member.id }}" {% if emergency_contact_row.member_id == member.id %}selected{% endif %}>{{ member_option_label(member) }}</option>
+                      {% endfor %}
+                    </select>
+                  </label>
+                  <div class="modal-emergency-contact-status-field">
+                    <span class="modal-emergency-contact-status-label modal-emergency-contact-row-title" {% if not loop.first %}hidden{% endif %}>Status</span>
+                    <span class="modal-emergency-contact-role-to-cover" data-emergency-contact-role-to-cover {% if emergency_contact_row.member_id %}hidden{% endif %}>Role to cover</span>
+                    <select name="emergency_contact_participation_status" form="exam-session-members-form-{{ session.id }}" class="participation-select modal-emergency-contact-status participation-{{ emergency_contact_status_class }}" data-emergency-contact-status-select {% if not emergency_contact_row.member_id %}hidden{% endif %} {% if not session.emergency_contact_required or session.emergency_contact_not_required %}disabled{% endif %}>
+                      {% for option in participation_options %}
+                        <option value="{{ option }}" {% if emergency_contact_status == option %}selected{% endif %}>{{ option }}</option>
+                      {% endfor %}
+                    </select>
+                  </div>
+                  <div class="modal-emergency-contact-time-field" data-emergency-contact-time-field {% if not emergency_contact_row.member_id %}hidden{% endif %}>
+                    <span class="modal-emergency-contact-status-label modal-emergency-contact-row-title" {% if not loop.first %}hidden{% endif %}>Time range</span>
+                    <div class="time-range-stack modal-emergency-contact-time-stack" data-time-range-stack>
+                      <div class="time-range-fields" data-time-range-row>
+                        <label class="time-range-control">
+                          <input class="time-range-input" type="text" name="emergency_contact_start_time" value="{{ emergency_contact_row.start_time or '' }}" form="exam-session-members-form-{{ session.id }}" inputmode="numeric" maxlength="5" pattern="([01][0-9]|2[0-4]):[0-5][0-9]" aria-label="Emergency contact start time" title="Start time" placeholder="Start time" data-time-input data-emergency-contact-time-input {% if not session.emergency_contact_required or session.emergency_contact_not_required %}disabled{% endif %}>
+                          <span>h.</span>
+                        </label>
+                        <span class="time-range-separator">to</span>
+                        <label class="time-range-control">
+                          <input class="time-range-input" type="text" name="emergency_contact_end_time" value="{{ emergency_contact_row.end_time or '' }}" form="exam-session-members-form-{{ session.id }}" inputmode="numeric" maxlength="5" pattern="([01][0-9]|2[0-4]):[0-5][0-9]" aria-label="Emergency contact end time" title="End time" placeholder="End time" data-time-input data-emergency-contact-time-input {% if not session.emergency_contact_required or session.emergency_contact_not_required %}disabled{% endif %}>
+                          <span>h.</span>
+                        </label>
+                        <button class="time-range-add-button modal-emergency-contact-row-add" type="button" data-add-emergency-contact-row aria-label="Add emergency contact">+</button>
+                        <button class="time-range-remove-button modal-emergency-contact-row-remove" type="button" data-remove-emergency-contact-row aria-label="Remove emergency contact" {% if loop.first %}hidden{% endif %}>&times;</button>
+                      </div>
+                      <span class="time-range-error" data-time-error></span>
+                    </div>
+                  </div>
+                </div>
+              {% endfor %}
             </div>
           </div>
-        </div>
         {% set modal_conflicts = same_date_assignment_conflicts.get(session.id, []) %}
         {% set modal_dietary_requirements = session_dietary_requirement_alerts.get(session.id, []) %}
         <div class="session-modal-alerts">
@@ -1095,9 +1123,6 @@
             </div>
           {% endif %}
         </div>
-        {% if not session_fullscreen %}
-          <button class="icon-button" type="button" data-close-modal>&times;</button>
-        {% endif %}
       </div>
       {% set session_logistics_config = logistics_by_session.get(session.id) %}
       {% set staffing_readiness = staffing_readiness_by_session.get(session.id, {}) %}

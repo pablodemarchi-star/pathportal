@@ -659,6 +659,15 @@ def create_app():
         if exam_session_columns and "emergency_contact_participation_status" not in exam_session_columns:
             db.session.execute(text("ALTER TABLE exam_session ADD COLUMN emergency_contact_participation_status VARCHAR(40) NOT NULL DEFAULT 'Pending'"))
             db.session.commit()
+        if exam_session_columns and "emergency_contact_start_time" not in exam_session_columns:
+            db.session.execute(text("ALTER TABLE exam_session ADD COLUMN emergency_contact_start_time VARCHAR(5)"))
+            db.session.commit()
+        if exam_session_columns and "emergency_contact_end_time" not in exam_session_columns:
+            db.session.execute(text("ALTER TABLE exam_session ADD COLUMN emergency_contact_end_time VARCHAR(5)"))
+            db.session.commit()
+        if exam_session_columns and "emergency_contact_additional_contacts" not in exam_session_columns:
+            db.session.execute(text("ALTER TABLE exam_session ADD COLUMN emergency_contact_additional_contacts TEXT NOT NULL DEFAULT '[]'"))
+            db.session.commit()
         if exam_session_columns and "emergency_contact_status_due_at" not in exam_session_columns:
             db.session.execute(text("ALTER TABLE exam_session ADD COLUMN emergency_contact_status_due_at DATE"))
             db.session.commit()
@@ -878,7 +887,7 @@ def create_app():
                 db.session.execute(
                     text(
                         f"UPDATE {table_name} "
-                        "SET logistics_type = 'Simple logistics' "
+                        "SET logistics_type = 'Uber' "
                         "WHERE logistics_enabled = 1 "
                         "AND (logistics_type IS NULL OR logistics_type = '' OR logistics_type = 'Does not apply')"
                     )

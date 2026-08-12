@@ -3131,6 +3131,32 @@ class ScheduleWorkflowTest(unittest.TestCase):
         self.assertEqual(mention.read_by_user_id, recipient.id)
         self.assertIsNotNone(mention.read_on)
 
+    def test_schedule_note_from_focused_operational_context_returns_to_same_modal(self):
+        client = self.login_client()
+
+        for context in ["logistics", "finance", "sinapsis", "communications"]:
+            with self.subTest(context=context):
+                db.session.query(ExamSessionScheduleNote).delete()
+                db.session.commit()
+                response = client.post(
+                    f"/pre-session-control-tower/sessions/{self.session_record.id}/schedule-notes",
+                    data={
+                        "csrf_token": "token",
+                        "note": f"Review {context} details.",
+                        "focused_notes_context": context,
+                    },
+                    follow_redirects=False,
+                )
+
+                self.assertEqual(response.status_code, 302)
+                location = response.headers["Location"]
+                self.assertIn("open_schedule_modal=", location)
+                self.assertIn("open_modal_target=schedule-notes", location)
+                self.assertIn(f"{context}_only=1", location)
+                self.assertNotIn("schedule_only=1", location)
+                note = ExamSessionScheduleNote.query.one()
+                self.assertEqual(note.note_text, f"Review {context} details.")
+
     def test_schedule_action_note_creates_visible_note_mention(self):
         actor = User(full_name="Admin User", email="admin-action-note@example.com", department="Admin", is_active=True)
         recipient = User(full_name="Schedule Reviewer", email="reviewer-action-note@example.com", department="Management", is_active=True)
@@ -5612,7 +5638,8 @@ class ScheduleWorkflowTest(unittest.TestCase):
         self.assertIn("data-participation-select", html)
         self.assertIn("data-logistics-control", html)
         self.assertIn("Does not apply", html)
-        self.assertIn("Simple logistics", html)
+        self.assertIn("Uber", html)
+        self.assertNotIn("Simple logistics", html)
         self.assertIn("Complex logistics", html)
         self.assertNotIn("data-logistics-checkbox", html)
         self.assertIn("data-km-field", html)
@@ -5966,7 +5993,7 @@ class ScheduleWorkflowTest(unittest.TestCase):
                 {"label": "Seniority", "value": "ARS 2.200"},
             ],
             "total_fee": "ARS 54.200",
-            "logistics_status": "Simple logistics",
+            "logistics_status": "Uber",
             "logistics_url": "https://example.com/logistics",
             "next_payment_date": "27/12/2026",
             "contacts": [
@@ -6136,7 +6163,7 @@ class ScheduleWorkflowTest(unittest.TestCase):
         self.assertEqual(online["error"], "Official confirmation email is only available for onsite sessions.")
         self.assertEqual(missing_time["error"], "Staff member time range is required for official confirmation emails.")
         self.assertEqual(missing_total["error"], "Total fee is required for official confirmation emails.")
-        self.assertEqual(missing_logistics_url["error"], "Logistics folder link is required for simple logistics.")
+        self.assertEqual(missing_logistics_url["error"], "Logistics folder link is required for Uber.")
         self.assertEqual(missing_next_payment_date["error"], "Next payment date is required for official confirmation emails.")
 
     def test_exam_session_logistics_confirmed_status_requires_password(self):
@@ -6146,7 +6173,7 @@ class ScheduleWorkflowTest(unittest.TestCase):
             team_member_id=supervisor.id,
             participation_status="Confirmed",
             logistics_enabled=True,
-            logistics_type="Simple logistics",
+            logistics_type="Uber",
         ))
         provider_type = ProviderType(name="Transport", is_system=False, color_key="provider-type-1")
         db.session.add(provider_type)
@@ -7271,6 +7298,145 @@ class ScheduleWorkflowTest(unittest.TestCase):
         db.session.refresh(self.session_record)
         self.assertEqual(self.session_record.emergency_contact_member_id, active_contact.id)
         self.assertEqual(self.session_record.emergency_contact_participation_status, "Confirmed")
+
+    def test_session_emergency_contact_time_range_can_be_saved_from_modal(self):
+        active_contact = AcademicStaff(id=8, status="Active", full_name="Mara Ruiz", roles="")
+        db.session.add(active_contact)
+        db.session.commit()
+        client = self.login_client()
+
+        html = client.get(f"/exam-session-planner?session_year=2026&open_session_modal={self.session_record.id}").get_data(as_text=True)
+        self.assertIn("Time range", html)
+        self.assertIn('name="emergency_contact_start_time"', html)
+        self.assertIn('name="emergency_contact_end_time"', html)
+
+        response = client.post(
+            f"/exam-session-planner/sessions/{self.session_record.id}/members",
+            data={
+                "csrf_token": "token",
+                "session_year": "2026",
+                "modal_action": "save",
+                "session_non_available_member_ids": "",
+                "emergency_contact_required": "1",
+                "emergency_contact_member_id": str(active_contact.id),
+                "emergency_contact_participation_status": "Confirmed",
+                "emergency_contact_start_time": "08:30",
+                "emergency_contact_end_time": "12:45",
+            },
+            follow_redirects=False,
+        )
+
+        self.assertEqual(response.status_code, 302)
+        db.session.refresh(self.session_record)
+        self.assertEqual(self.session_record.emergency_contact_start_time, "08:30")
+        self.assertEqual(self.session_record.emergency_contact_end_time, "12:45")
+
+    def test_session_emergency_contact_additional_row_can_be_saved_from_modal(self):
+        first_contact = AcademicStaff(id=8, status="Active", full_name="Mara Ruiz", roles="")
+        second_contact = AcademicStaff(id=9, status="Active", full_name="Leo Paz", roles="")
+        db.session.add_all([first_contact, second_contact])
+        db.session.commit()
+        client = self.login_client()
+
+        html = client.get(f"/exam-session-planner?session_year=2026&open_session_modal={self.session_record.id}").get_data(as_text=True)
+        self.assertIn('data-add-emergency-contact-row', html)
+
+        response = client.post(
+            f"/exam-session-planner/sessions/{self.session_record.id}/members",
+            data={
+                "csrf_token": "token",
+                "session_year": "2026",
+                "modal_action": "save",
+                "session_non_available_member_ids": "",
+                "emergency_contact_required": "1",
+                "emergency_contact_member_id": [str(first_contact.id), str(second_contact.id)],
+                "emergency_contact_participation_status": ["Confirmed", "Official confirmation sent"],
+                "emergency_contact_start_time": ["08:30", "12:00"],
+                "emergency_contact_end_time": ["11:30", "15:00"],
+            },
+            follow_redirects=False,
+        )
+
+        self.assertEqual(response.status_code, 302)
+        db.session.refresh(self.session_record)
+        self.assertEqual(self.session_record.emergency_contact_member_id, first_contact.id)
+        self.assertEqual(self.session_record.emergency_contact_participation_status, "Confirmed")
+        self.assertEqual(self.session_record.emergency_contact_start_time, "08:30")
+        self.assertEqual(self.session_record.emergency_contact_end_time, "11:30")
+        additional_contacts = json.loads(self.session_record.emergency_contact_additional_contacts)
+        self.assertEqual(additional_contacts, [{
+            "member_id": second_contact.id,
+            "status": "Official confirmation sent",
+            "start_time": "12:00",
+            "end_time": "15:00",
+        }])
+
+    def test_session_emergency_contact_time_range_is_cleared_without_staff_member(self):
+        self.session_record.emergency_contact_start_time = "08:30"
+        self.session_record.emergency_contact_end_time = "12:45"
+        self.session_record.emergency_contact_additional_contacts = json.dumps([{
+            "member_id": 9,
+            "status": "Confirmed",
+            "start_time": "12:00",
+            "end_time": "15:00",
+        }])
+        db.session.commit()
+        client = self.login_client()
+
+        response = client.post(
+            f"/exam-session-planner/sessions/{self.session_record.id}/members",
+            data={
+                "csrf_token": "token",
+                "session_year": "2026",
+                "modal_action": "save",
+                "session_non_available_member_ids": "",
+                "emergency_contact_required": "1",
+                "emergency_contact_member_id": "",
+                "emergency_contact_start_time": "09:00",
+                "emergency_contact_end_time": "13:00",
+            },
+            follow_redirects=False,
+        )
+
+        self.assertEqual(response.status_code, 302)
+        db.session.refresh(self.session_record)
+        self.assertIsNone(self.session_record.emergency_contact_member_id)
+        self.assertEqual(self.session_record.emergency_contact_start_time, "")
+        self.assertEqual(self.session_record.emergency_contact_end_time, "")
+        self.assertEqual(self.session_record.emergency_contact_additional_contacts, "[]")
+
+    def test_exam_session_members_save_preserves_current_pagination(self):
+        for index in range(1, 6):
+            db.session.add(ExamSession(
+                exam_session_name=f"Earlier session {index}",
+                category="Path School",
+                status="Pending",
+                session_date=date(2026, 6, index),
+                shifts="Morning",
+                modules="Speaking",
+                format="Online",
+            ))
+        db.session.commit()
+        client = self.login_client()
+
+        response = client.get("/exam-session-planner?session_year=2026&page=2&page_size=5")
+        self.assertEqual(response.status_code, 200)
+
+        response = client.post(
+            f"/exam-session-planner/sessions/{self.session_record.id}/members",
+            data={
+                "csrf_token": "token",
+                "session_year": "2026",
+                "modal_action": "save_close",
+                "session_non_available_member_ids": "",
+                "emergency_contact_not_required": "1",
+            },
+            follow_redirects=False,
+        )
+
+        self.assertEqual(response.status_code, 302)
+        self.assertIn("page=2", response.headers["Location"])
+        self.assertIn("page_size=5", response.headers["Location"])
 
     def test_session_emergency_contact_is_cleared_when_not_required(self):
         active_contact = AcademicStaff(id=8, status="Active", full_name="Mara Ruiz", roles="")
@@ -8522,6 +8688,77 @@ class ScheduleWorkflowTest(unittest.TestCase):
         )
         self.assertIn(".modal.is-staffing-only .modal-title-schedule", css)
         self.assertIn(".modal.is-staffing-only .modal-title-staffing", css)
+
+    def test_logistics_column_opens_logistics_only_modal_context(self):
+        client = self.login_client()
+
+        response = client.get("/pre-session-control-tower?session_year=2026&view=sessions")
+        html = response.get_data(as_text=True)
+        session_id = self.session_record.id
+        table = html[html.index('aria-label="Schedule preparation and approval"'):html.index('<div class="modal"', html.index('aria-label="Schedule preparation and approval"'))]
+        logistics_button_start = table.index(f'data-modal-scroll-target="logistics-{session_id}"')
+        logistics_button = table[table.rfind("<button", 0, logistics_button_start):table.index("</button>", logistics_button_start)]
+        modal_start = html.index(f'id="schedule-workflow-{session_id}"')
+        next_modal = html.find('<div class="modal"', modal_start + 1)
+        modal = html[modal_start:next_modal if next_modal != -1 else len(html)]
+
+        self.assertIn('data-modal-logistics-only="true"', logistics_button)
+        self.assertIn('data-modal-target-label="Review logistics"', logistics_button)
+        self.assertIn('<span class="modal-title-logistics">LOGISTICS</span>', modal)
+        self.assertIn(f'id="overview-{session_id}"', modal)
+        self.assertIn(f'id="schedule-notes-{session_id}"', modal)
+        self.assertIn('data-schedule-note-focused-context', modal)
+        self.assertIn(f'id="logistics-{session_id}"', modal)
+        with open("app/static/css/styles.css", encoding="utf-8") as css_file:
+            css = css_file.read()
+        self.assertIn(
+            '.modal.is-logistics-only .schedule-workflow-panel > :not(.modal-header):not(.control-tower-overview):not(.schedule-notes-section):not([id^="logistics-"])',
+            css,
+        )
+        self.assertIn(".modal.is-logistics-only .modal-title-schedule", css)
+        self.assertIn(".modal.is-logistics-only .modal-title-logistics", css)
+        with open("app/static/js/app.js", encoding="utf-8") as js_file:
+            js = js_file.read()
+        self.assertIn('const logisticsOnly = params.get("logistics_only") === "1";', js)
+        self.assertIn('modal.classList.toggle("is-logistics-only", logisticsOnly);', js)
+        self.assertIn('const isLogisticsOnlyMode = opener.dataset.modalLogisticsOnly === "true";', js)
+        self.assertIn("syncScheduleNoteContextInputs(modal);", js)
+
+    def test_sessions_operational_columns_open_single_section_modal_contexts(self):
+        client = self.login_client()
+
+        response = client.get("/pre-session-control-tower?session_year=2026&view=sessions")
+        html = response.get_data(as_text=True)
+        session_id = self.session_record.id
+        table = html[html.index('aria-label="Schedule preparation and approval"'):html.index('<div class="modal"', html.index('aria-label="Schedule preparation and approval"'))]
+        modal_start = html.index(f'id="schedule-workflow-{session_id}"')
+        next_modal = html.find('<div class="modal"', modal_start + 1)
+        modal = html[modal_start:next_modal if next_modal != -1 else len(html)]
+        with open("app/static/css/styles.css", encoding="utf-8") as css_file:
+            css = css_file.read()
+        with open("app/static/js/app.js", encoding="utf-8") as js_file:
+            js = js_file.read()
+
+        for target, label, flag, title in [
+            ("finance", "Review finance", "finance", "FINANCE"),
+            ("sinapsis", "Check Sinapsis", "sinapsis", "SINAPSIS"),
+            ("communications", "Review communications", "communications", "COMMUNICATIONS"),
+        ]:
+            button_start = table.index(f'data-modal-scroll-target="{target}-{session_id}"')
+            button = table[table.rfind("<button", 0, button_start):table.index("</button>", button_start)]
+            self.assertIn(f'data-modal-{flag}-only="true"', button)
+            self.assertIn(f'data-modal-target-label="{label}"', button)
+            self.assertIn(f'<span class="modal-title-{flag}">{title}</span>', modal)
+            self.assertIn(
+                f'.modal.is-{flag}-only .schedule-workflow-panel > :not(.modal-header):not(.control-tower-overview):not(.schedule-notes-section):not([id^="{target}-"])',
+                css,
+            )
+            self.assertIn(f".modal.is-{flag}-only .modal-title-schedule", css)
+            self.assertIn(f".modal.is-{flag}-only .modal-title-{flag}", css)
+            self.assertIn(f'const {flag}Only = params.get("{flag}_only") === "1";', js)
+            self.assertIn(f'modal.classList.toggle("is-{flag}-only", {flag}Only);', js)
+            dataset_name = "modalCommunicationsOnly" if flag == "communications" else f"modal{flag.capitalize()}Only"
+            self.assertIn(dataset_name, js)
 
     def test_schedule_notes_are_fixed_below_session_overview(self):
         client = self.login_client()
@@ -11045,6 +11282,7 @@ class ScheduleWorkflowTest(unittest.TestCase):
         )
         self.assertEqual(response.status_code, 302)
         self.assertIn("open_logistics_control=1", response.headers["Location"])
+        self.assertIn("logistics_only=1", response.headers["Location"])
         self.assertEqual(ExamSessionLogisticsControl.query.count(), 1)
         self.assertEqual(control.logistics_due_at, date(2026, 7, 1))
         self.assertEqual(control.note, "Updated logistics note.")
@@ -14327,7 +14565,7 @@ class ScheduleWorkflowTest(unittest.TestCase):
             team_member_id=staff_member.id,
             participation_status="Official confirmation sent",
             logistics_enabled=True,
-            logistics_type="Simple logistics",
+            logistics_type="Uber",
             is_shipment_recipient=True,
             km=25,
         )

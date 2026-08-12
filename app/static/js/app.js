@@ -982,6 +982,10 @@ const relatedFocusedTargets = {
   readiness: ["readiness", "session-readiness"],
   "session-readiness": ["readiness", "session-readiness"],
   incidents: ["incidents"],
+  logistics: ["logistics"],
+  finance: ["finance"],
+  sinapsis: ["sinapsis"],
+  communications: ["communications"],
   shipments: ["shipments"],
   journey: ["journey"],
   history: ["history", "schedule-actions"],
@@ -1053,6 +1057,19 @@ const resetControlSectionsToDefault = (modal) => {
   });
 };
 
+const syncScheduleNoteContextInputs = (modal) => {
+  if (!modal) return;
+  const focusedContext = [
+    ["is-logistics-only", "logistics"],
+    ["is-finance-only", "finance"],
+    ["is-sinapsis-only", "sinapsis"],
+    ["is-communications-only", "communications"],
+  ].find(([className]) => modal.classList.contains(className))?.[1] || "";
+  modal.querySelectorAll("[data-schedule-note-focused-context]").forEach((input) => {
+    input.value = focusedContext;
+  });
+};
+
 const clearFocusedMode = (modal) => {
   if (!modal) return;
   modal.classList.remove("is-focused-mode");
@@ -1060,6 +1077,11 @@ const clearFocusedMode = (modal) => {
   modal.classList.remove("is-staffing-only");
   modal.classList.remove("is-packages-only");
   modal.classList.remove("is-shipments-only");
+  modal.classList.remove("is-logistics-only");
+  modal.classList.remove("is-finance-only");
+  modal.classList.remove("is-sinapsis-only");
+  modal.classList.remove("is-communications-only");
+  syncScheduleNoteContextInputs(modal);
   delete modal.dataset.focusedTarget;
   const context = modal.querySelector("[data-focused-context]");
   if (context) {
@@ -1159,6 +1181,10 @@ const openRequestedScheduleModal = () => {
   const staffingOnly = params.get("staffing_only") === "1";
   const packagesOnly = params.get("packages_only") === "1";
   const shipmentsOnly = params.get("shipments_only") === "1";
+  const logisticsOnly = params.get("logistics_only") === "1";
+  const financeOnly = params.get("finance_only") === "1";
+  const sinapsisOnly = params.get("sinapsis_only") === "1";
+  const communicationsOnly = params.get("communications_only") === "1";
   const modal = document.getElementById(`schedule-workflow-${sessionId}`);
   if (modal) {
     delete modal.dataset.closeRedirectUrl;
@@ -1173,6 +1199,10 @@ const openRequestedScheduleModal = () => {
       closeParams.delete("staffing_only");
       closeParams.delete("packages_only");
       closeParams.delete("shipments_only");
+      closeParams.delete("logistics_only");
+      closeParams.delete("finance_only");
+      closeParams.delete("sinapsis_only");
+      closeParams.delete("communications_only");
       closeParams.delete("open_staffing_control");
       closeParams.delete("open_logistics_control");
       closeParams.delete("open_finance_control");
@@ -1187,6 +1217,11 @@ const openRequestedScheduleModal = () => {
     modal.classList.toggle("is-staffing-only", staffingOnly);
     modal.classList.toggle("is-packages-only", packagesOnly);
     modal.classList.toggle("is-shipments-only", shipmentsOnly);
+    modal.classList.toggle("is-logistics-only", logisticsOnly);
+    modal.classList.toggle("is-finance-only", financeOnly);
+    modal.classList.toggle("is-sinapsis-only", sinapsisOnly);
+    modal.classList.toggle("is-communications-only", communicationsOnly);
+    syncScheduleNoteContextInputs(modal);
   }
   if (actionKey) {
     const form = document.querySelector(`#schedule-workflow-${sessionId} [data-schedule-action-panel][data-schedule-action-key="${CSS.escape(actionKey)}"]`);
@@ -1273,6 +1308,10 @@ const openRequestedScheduleModal = () => {
   params.delete("staffing_only");
   params.delete("packages_only");
   params.delete("shipments_only");
+  params.delete("logistics_only");
+  params.delete("finance_only");
+  params.delete("sinapsis_only");
+  params.delete("communications_only");
   params.delete("open_staffing_control");
   params.delete("open_logistics_control");
   params.delete("open_finance_control");
@@ -1292,6 +1331,11 @@ const openRequestedScheduleModal = () => {
         modal.classList.toggle("is-staffing-only", staffingOnly);
         modal.classList.toggle("is-packages-only", packagesOnly);
         modal.classList.toggle("is-shipments-only", shipmentsOnly);
+        modal.classList.toggle("is-logistics-only", logisticsOnly);
+        modal.classList.toggle("is-finance-only", financeOnly);
+        modal.classList.toggle("is-sinapsis-only", sinapsisOnly);
+        modal.classList.toggle("is-communications-only", communicationsOnly);
+        syncScheduleNoteContextInputs(modal);
       }
       if (!focusModalTarget(targetId, { scroll: !modalTarget.startsWith("package-") })) {
         focusModalHeading(modal);
@@ -1766,11 +1810,20 @@ document.addEventListener("click", (event) => {
     const isStaffingOnlyMode = opener.dataset.modalStaffingOnly === "true";
     const isPackagesOnlyMode = opener.dataset.modalPackagesOnly === "true";
     const isShipmentsOnlyMode = opener.dataset.modalShipmentsOnly === "true";
+    const isLogisticsOnlyMode = opener.dataset.modalLogisticsOnly === "true";
+    const isFinanceOnlyMode = opener.dataset.modalFinanceOnly === "true";
+    const isSinapsisOnlyMode = opener.dataset.modalSinapsisOnly === "true";
+    const isCommunicationsOnlyMode = opener.dataset.modalCommunicationsOnly === "true";
     clearFocusedMode(modal);
     if (modal) modal.classList.toggle("is-schedule-only", isScheduleOnlyMode);
     if (modal) modal.classList.toggle("is-staffing-only", isStaffingOnlyMode);
     if (modal) modal.classList.toggle("is-packages-only", isPackagesOnlyMode);
     if (modal) modal.classList.toggle("is-shipments-only", isShipmentsOnlyMode);
+    if (modal) modal.classList.toggle("is-logistics-only", isLogisticsOnlyMode);
+    if (modal) modal.classList.toggle("is-finance-only", isFinanceOnlyMode);
+    if (modal) modal.classList.toggle("is-sinapsis-only", isSinapsisOnlyMode);
+    if (modal) modal.classList.toggle("is-communications-only", isCommunicationsOnlyMode);
+    syncScheduleNoteContextInputs(modal);
     resetControlSectionsToDefault(modal);
     openModal(opener.dataset.openModal, { opener, focus: !opener.dataset.modalScrollTarget });
     window.requestAnimationFrame(() => {
@@ -4340,39 +4393,55 @@ const syncEmergencyContactControl = (control) => {
   const requiredCheckbox = control?.querySelector("[data-emergency-contact-required]");
   const notRequiredCheckbox = control?.querySelector("[data-emergency-contact-not-required]");
   const selectWrap = control?.querySelector("[data-emergency-contact-select-wrap]");
-  const select = control?.querySelector("[data-emergency-contact-select]");
-  const roleToCover = control?.querySelector("[data-emergency-contact-role-to-cover]");
-  const statusSelect = control?.querySelector("[data-emergency-contact-status-select]");
-  if (!requiredCheckbox || !notRequiredCheckbox || !selectWrap || !select) return;
+  if (!requiredCheckbox || !notRequiredCheckbox || !selectWrap) return;
   const required = requiredCheckbox.checked && !notRequiredCheckbox.checked;
   selectWrap.hidden = !required;
-  select.disabled = !required;
-  if (!required) select.value = "";
-  const hasMember = Boolean(select.value);
-  if (roleToCover) roleToCover.hidden = !required || hasMember;
-  if (statusSelect) {
-    const savedMemberId = selectWrap.dataset.emergencyContactSavedMemberId || "";
-    const savedStatus = selectWrap.dataset.emergencyContactSavedStatus || "Pending";
-    if (select.value && statusSelect.dataset.currentMemberId !== select.value) {
-      statusSelect.value = select.value === savedMemberId ? savedStatus : "Pending";
-      statusSelect.dataset.currentMemberId = select.value;
+  const participationClasses = [
+    "participation-pending",
+    "participation-pre-confirmation-sent",
+    "participation-pre-confirmed",
+    "participation-official-confirmation-sent",
+    "participation-confirmed",
+    "participation-sent",
+    "participation-assigned",
+    "participation-declined",
+    "participation-cancelled",
+  ];
+  selectWrap.querySelectorAll("[data-emergency-contact-row]").forEach((row) => {
+    const isFirstRow = row === selectWrap.querySelector("[data-emergency-contact-row]");
+    row.querySelectorAll(".modal-emergency-contact-row-title").forEach((title) => {
+      title.hidden = !isFirstRow;
+    });
+    const select = row.querySelector("[data-emergency-contact-select]");
+    const roleToCover = row.querySelector("[data-emergency-contact-role-to-cover]");
+    const statusSelect = row.querySelector("[data-emergency-contact-status-select]");
+    const timeField = row.querySelector("[data-emergency-contact-time-field]");
+    const timeInputs = Array.from(row.querySelectorAll("[data-emergency-contact-time-input]") || []);
+    if (!select) return;
+    select.disabled = !required;
+    if (!required) select.value = "";
+    const hasMember = Boolean(select.value);
+    if (roleToCover) roleToCover.hidden = !required || hasMember;
+    if (statusSelect) {
+      const savedMemberId = row.dataset.emergencyContactSavedMemberId || "";
+      const savedStatus = row.dataset.emergencyContactSavedStatus || "Pending";
+      statusSelect.disabled = !required;
+      if (!required) statusSelect.value = "Pending";
+      if (select.value && statusSelect.dataset.currentMemberId !== select.value) {
+        statusSelect.value = select.value === savedMemberId ? savedStatus : "Pending";
+        statusSelect.dataset.currentMemberId = select.value;
+      }
+      statusSelect.classList.remove(...participationClasses);
+      statusSelect.classList.add(`participation-${(statusSelect.value || "Pending").toLowerCase().replace(/\s+/g, "-")}`);
+      statusSelect.hidden = !required || !hasMember;
     }
-    const participationClasses = [
-      "participation-pending",
-      "participation-pre-confirmation-sent",
-      "participation-pre-confirmed",
-      "participation-official-confirmation-sent",
-      "participation-confirmed",
-      "participation-sent",
-      "participation-assigned",
-      "participation-declined",
-      "participation-cancelled",
-    ];
-    statusSelect.classList.remove(...participationClasses);
-    statusSelect.classList.add(`participation-${(statusSelect.value || "Pending").toLowerCase().replace(/\s+/g, "-")}`);
-    statusSelect.hidden = !required || !hasMember;
-    statusSelect.disabled = !required || !hasMember;
-  }
+    if (timeField) timeField.hidden = !required || !hasMember;
+    timeInputs.forEach((input) => {
+      input.disabled = !required;
+      if (!required || !hasMember) input.value = "";
+      syncTimeRangeError(input);
+    });
+  });
 };
 
 const initEmergencyContactControls = (root = document) => {
@@ -4381,7 +4450,6 @@ const initEmergencyContactControls = (root = document) => {
     control.dataset.initialized = "true";
     const requiredCheckbox = control.querySelector("[data-emergency-contact-required]");
     const notRequiredCheckbox = control.querySelector("[data-emergency-contact-not-required]");
-    const select = control.querySelector("[data-emergency-contact-select]");
     requiredCheckbox?.addEventListener("change", () => {
       if (requiredCheckbox.checked && notRequiredCheckbox) notRequiredCheckbox.checked = false;
       syncEmergencyContactControl(control);
@@ -4392,13 +4460,54 @@ const initEmergencyContactControls = (root = document) => {
       syncEmergencyContactControl(control);
       markStaffChangesUnsaved(sessionMembersFormForElement(control));
     });
-    select?.addEventListener("change", () => {
+    control.addEventListener("change", (event) => {
+      if (!event.target.closest("[data-emergency-contact-select], [data-emergency-contact-status-select]")) return;
       syncEmergencyContactControl(control);
       markStaffChangesUnsaved(sessionMembersFormForElement(control));
     });
-    control.querySelector("[data-emergency-contact-status-select]")?.addEventListener("change", () => {
-      syncEmergencyContactControl(control);
-      markStaffChangesUnsaved(sessionMembersFormForElement(control));
+    control.addEventListener("input", (event) => {
+      if (event.target.closest("[data-emergency-contact-time-input]")) {
+        markStaffChangesUnsaved(sessionMembersFormForElement(control));
+      }
+    });
+    control.addEventListener("click", (event) => {
+      const addButton = event.target.closest("[data-add-emergency-contact-row]");
+      const removeButton = event.target.closest("[data-remove-emergency-contact-row]");
+      if (addButton) {
+        const row = addButton.closest("[data-emergency-contact-row]");
+        const clone = row?.cloneNode(true);
+        if (!clone) return;
+        clone.dataset.emergencyContactSavedMemberId = "";
+        clone.dataset.emergencyContactSavedStatus = "Pending";
+        clone.querySelectorAll("select").forEach((select) => {
+          select.value = select.matches("[data-emergency-contact-status-select]") ? "Pending" : "";
+          select.dataset.currentMemberId = "";
+          select.hidden = select.matches("[data-emergency-contact-status-select]");
+        });
+        clone.querySelectorAll("input").forEach((input) => {
+          input.value = "";
+          input.dataset.timeInitialized = "";
+        });
+        clone.querySelector("[data-emergency-contact-role-to-cover]")?.removeAttribute("hidden");
+        clone.querySelectorAll(".modal-emergency-contact-row-title").forEach((title) => {
+          title.hidden = true;
+        });
+        clone.querySelector("[data-emergency-contact-time-field]")?.setAttribute("hidden", "");
+        clone.querySelector("[data-remove-emergency-contact-row]")?.removeAttribute("hidden");
+        row.after(clone);
+        initTimeInputs(clone);
+        syncEmergencyContactControl(control);
+        clone.querySelector("[data-emergency-contact-select]")?.focus();
+        markStaffChangesUnsaved(sessionMembersFormForElement(control));
+      }
+      if (removeButton) {
+        const row = removeButton.closest("[data-emergency-contact-row]");
+        if (row && control.querySelectorAll("[data-emergency-contact-row]").length > 1) {
+          row.remove();
+          syncEmergencyContactControl(control);
+          markStaffChangesUnsaved(sessionMembersFormForElement(control));
+        }
+      }
     });
     syncEmergencyContactControl(control);
   });
@@ -7372,11 +7481,11 @@ const validateStaffOfficialConfirmationEmailPayload = (payload) => {
     return "Total fee is required for official confirmation emails.";
   }
   const logisticsStatus = cleanEmailValue(payload?.logistics_status || payload?.logisticsStatus);
-  if (!["Does not apply", "Simple logistics", "Complex logistics"].includes(logisticsStatus)) {
+  if (!["Does not apply", "Uber", "Simple logistics", "Complex logistics"].includes(logisticsStatus)) {
     return "Logistics status is required for official confirmation emails.";
   }
-  if (logisticsStatus === "Simple logistics" && !emailLinkIsUsable(payload?.logistics_url || payload?.logisticsUrl)) {
-    return "Logistics folder link is required for simple logistics.";
+  if (["Uber", "Simple logistics"].includes(logisticsStatus) && !emailLinkIsUsable(payload?.logistics_url || payload?.logisticsUrl)) {
+    return "Logistics folder link is required for Uber.";
   }
 	  if (logisticsStatus === "Complex logistics" && !emailLinkIsUsable(payload?.logistics_url || payload?.logisticsUrl)) {
 	    return "Logistics folder link is required for complex logistics.";
@@ -7508,7 +7617,7 @@ const officialTravelCopy = (role, status, logisticsUrl) => {
       text: `You may travel to and from the exam centre using your own vehicle or public transport. Please plan your journey accordingly, allow sufficient travel time and ${suffix}`,
     };
   }
-  if (status === "Simple logistics") {
+  if (["Uber", "Simple logistics"].includes(status)) {
     const suffix = role === "Supervisor"
       ? `allow sufficient travel time, and arrive ${arrival} minutes before the start of the exam session.`
       : `allow sufficient travel time and arrive ${arrival} minutes before the start of your first assigned module.`;
@@ -8059,6 +8168,7 @@ const syncStaffHeaderLogisticsTag = (row, value) => {
   tag.classList.remove(...STAFF_LOGISTICS_CLASSES);
   const logisticsClass = {
     "Does not apply": "staff-logistics-does-not-apply",
+    "Uber": "staff-logistics-simple-logistics",
     "Simple logistics": "staff-logistics-simple-logistics",
     "Complex logistics": "staff-logistics-complex-logistics",
   }[value] || "staff-logistics-does-not-apply";
@@ -8150,7 +8260,7 @@ const formHasLogisticsConcepts = (form) => logisticsConceptRows(form).length > 0
 
 const logisticsControls = (form) => Array.from(form?.querySelectorAll("[data-logistics-control]") || []);
 
-const logisticsControlIsActive = (control) => ["Simple logistics", "Complex logistics"].includes(control?.value);
+const logisticsControlIsActive = (control) => ["Uber", "Complex logistics"].includes(control?.value);
 
 const activeLogisticsControls = (form) => logisticsControls(form).filter(logisticsControlIsActive);
 
@@ -8163,6 +8273,7 @@ const syncStaffLogisticsControl = (control) => {
   );
   const logisticsClass = {
     "Does not apply": "staff-logistics-does-not-apply",
+    "Uber": "staff-logistics-simple-logistics",
     "Simple logistics": "staff-logistics-simple-logistics",
     "Complex logistics": "staff-logistics-complex-logistics",
   }[control.value] || "staff-logistics-does-not-apply";
