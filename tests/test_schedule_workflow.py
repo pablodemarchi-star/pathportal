@@ -8136,13 +8136,15 @@ class ScheduleWorkflowTest(unittest.TestCase):
         self.assertNotIn("<th>Priority action</th>", detail_table)
         self.assertIn("Axis English", detail_html)
         self.assertIn("Lincoln", detail_html)
-        self.assertIn('<span class="shipment-summary-cell bundle-session-name-cell">', detail_table)
+        self.assertIn('<span class="shipment-summary-cell bundle-session-name-cell control-tower-session-name-cell">', detail_table)
         self.assertIn("<strong>Axis English</strong>", detail_table)
         self.assertIn('<small class="bundle-session-date">09/07/2026</small>', detail_table)
         self.assertIn("<strong>Lincoln</strong>", detail_table)
         self.assertIn('<small class="bundle-session-date">12/07/2026</small>', detail_table)
         with open("app/static/css/styles.css", encoding="utf-8") as css_file:
             css = css_file.read()
+        self.assertIn(".bundle-session-chip-list {\n  display: grid;", css)
+        self.assertNotIn(".bundle-session-chip-list {\n  display: flex;", css)
         self.assertIn(".shipment-summary-cell .bundle-session-date {\n  font-size: inherit;\n  font-weight: 400;\n}", css)
         self.assertLess(detail_html.index("Axis English"), detail_html.index("Lincoln"))
 

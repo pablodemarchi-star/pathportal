@@ -7821,15 +7821,16 @@ span.session-marker-chip {
 }
 
 .bundle-session-chip-list {
-  display: flex;
-  flex-wrap: wrap;
+  display: grid;
   gap: var(--space-2);
   min-width: 220px;
 }
 
 .bundle-session-chip {
-  display: inline-flex;
+  display: flex;
   align-items: center;
+  width: max-content;
+  max-width: 100%;
   border: 1px solid var(--border-soft);
   border-radius: 999px;
   padding: 0.25rem 0.55rem;
