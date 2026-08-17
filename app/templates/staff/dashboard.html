@@ -110,6 +110,33 @@
         {% endif %}
       </article>
     {% endif %}
+
+    {% if finance_requests_allowed %}
+      <article class="dashboard-card dashboard-action-card">
+        <div class="dashboard-card-header">
+          <div>
+            <h2>Finance requests</h2>
+            {% if finance_requests_pending_count %}
+              <p>You have {{ finance_requests_pending_count }} action{% if finance_requests_pending_count != 1 %}s{% endif %} to complete in this menu.</p>
+            {% else %}
+              <p>Everything is up to date in this menu.</p>
+            {% endif %}
+          </div>
+          {% if finance_requests_pending_count %}
+            <div class="dashboard-count-stack" aria-label="Finance requests counters">
+              <span class="dashboard-count-chip">{{ finance_requests_pending_count }} action{% if finance_requests_pending_count != 1 %}s{% endif %}</span>
+            </div>
+          {% endif %}
+        </div>
+        {% if finance_requests_action_links %}
+          <div class="dashboard-mention-links" aria-label="Finance requests actions">
+            {% for action in finance_requests_action_links %}
+              <a href="{{ action.url }}">{{ action.text }}</a>
+            {% endfor %}
+          </div>
+        {% endif %}
+      </article>
+    {% endif %}
   </div>
 </section>
 {% endblock %}

@@ -6,6 +6,7 @@ os.environ["DATABASE_URL"] = "sqlite:///:memory:"
 
 from app import create_app, db
 from app.models import (
+    BillingRequest,
     ExamSession,
     ExamSessionScheduleNoteMention,
     ExamSessionScheduleWorkflow,
@@ -13,6 +14,8 @@ from app.models import (
     ExamSessionShipmentBundleSession,
     ExamSessionStaffingNoteMention,
     ExamSessionSupervisorAssignment,
+    FinanceConcept,
+    PaymentRequest,
     PotentialEntry,
     User,
     UserMenuPermission,
@@ -43,8 +46,8 @@ class DashboardTest(unittest.TestCase):
             user_session["csrf_token"] = "token"
         return client
 
-    def permission_client(self, permissions, *, full_name="Person Example", department="Finance", email="person@example.com"):
-        user = User(full_name=full_name, email=email, department=department, is_active=True)
+    def permission_client(self, permissions, *, full_name="Person Example", department="Finance", email="person@example.com", is_superadmin=False):
+        user = User(full_name=full_name, email=email, department=department, is_active=True, is_superadmin=is_superadmin)
         user.set_password("secret123")
         db.session.add(user)
         db.session.flush()
@@ -80,6 +83,52 @@ class DashboardTest(unittest.TestCase):
         db.session.add(entry)
         db.session.commit()
         return entry
+
+    def add_finance_concept(self, name="Consultancy", applies_to="Both"):
+        concept = FinanceConcept(name=name, applies_to=applies_to, is_active=True)
+        db.session.add(concept)
+        db.session.commit()
+        return concept
+
+    def add_payment_request(self, requester, *, status="Submitted", scheduled_payment_date=None, is_archived=False, request_number="PAY-2026-0001"):
+        concept = FinanceConcept.query.first() or self.add_finance_concept()
+        payment = PaymentRequest(
+            request_number=request_number,
+            requester_user_id=requester.id,
+            requester_department=requester.department,
+            description=f"{status} payment",
+            concept_id=concept.id,
+            concept_name_snapshot=concept.name,
+            payee_name_snapshot="Payee Example",
+            amount=100,
+            currency="ARS",
+            payment_method="Cash",
+            scheduled_payment_date=scheduled_payment_date,
+            status=status,
+            is_archived=is_archived,
+        )
+        db.session.add(payment)
+        db.session.commit()
+        return payment
+
+    def add_billing_request(self, requester, *, status="Requested", is_archived=False, request_number="INVOICE-2026-0001"):
+        concept = FinanceConcept.query.first() or self.add_finance_concept()
+        billing = BillingRequest(
+            request_number=request_number,
+            requester_user_id=requester.id,
+            requester_department=requester.department,
+            client_name_snapshot="Client Example",
+            concept_id=concept.id,
+            concept_name_snapshot=concept.name,
+            description=f"{status} invoice",
+            currency="ARS",
+            amount=100,
+            status=status,
+            is_archived=is_archived,
+        )
+        db.session.add(billing)
+        db.session.commit()
+        return billing
 
     def test_dashboard_renders_title_news_and_department(self):
         response = self.client(user="Pablo Demarchi", department="Management").get("/")
@@ -164,6 +213,114 @@ class DashboardTest(unittest.TestCase):
         self.assertIn("Dashboard | Path Examinations", body)
         self.assertNotIn("<h2>Potential entries</h2>", body)
         self.assertNotIn(">Go to menu<", body)
+
+    def test_dashboard_shows_finance_payment_actions_for_requester_departments(self):
+        client = self.permission_client({"finance_requests": {"view": True}}, department="Logistics")
+        requester = User.query.filter_by(email="person@example.com").one()
+        other_user = User(full_name="Other User", email="other@example.com", department="Logistics", is_active=True)
+        other_user.set_password("secret123")
+        db.session.add(other_user)
+        db.session.commit()
+        self.add_payment_request(requester, status="Needs correction", request_number="PAY-2026-0001")
+        self.add_payment_request(requester, status="Payment completed", request_number="PAY-2026-0002")
+        self.add_payment_request(requester, status="On hold", request_number="PAY-2026-0006")
+        self.add_payment_request(
+            requester,
+            status="Management approved",
+            scheduled_payment_date=date.today() - timedelta(days=1),
+            request_number="PAY-2026-0003",
+        )
+        self.add_payment_request(other_user, status="Payment completed", request_number="PAY-2026-0004")
+        self.add_payment_request(requester, status="Payment cancelled", is_archived=True, request_number="PAY-2026-0005")
+
+        response = client.get("/")
+        body = response.get_data(as_text=True)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("<h2>Finance requests</h2>", body)
+        self.assertIn("You have 4 actions to complete in this menu.", body)
+        self.assertIn('aria-label="Finance requests counters"', body)
+        self.assertIn('href="/finance-requests?tab=payment_requests">View actions in Payment requests</a>', body)
+
+    def test_dashboard_shows_admin_invoice_actions_for_requested_cards(self):
+        client = self.permission_client({"finance_requests": {"view": True}}, department="Admin")
+        requester = User.query.filter_by(email="person@example.com").one()
+        other_user = User(full_name="Other Admin", email="other-admin@example.com", department="Admin", is_active=True)
+        other_user.set_password("secret123")
+        db.session.add(other_user)
+        db.session.commit()
+        self.add_billing_request(requester, status="Invoice issued", request_number="INVOICE-2026-0001")
+        self.add_billing_request(requester, status="Invoice cancelled", request_number="INVOICE-2026-0002")
+        self.add_billing_request(other_user, status="Invoice issued", request_number="INVOICE-2026-0003")
+        self.add_billing_request(requester, status="Invoice cancelled", is_archived=True, request_number="INVOICE-2026-0004")
+
+        response = client.get("/")
+        body = response.get_data(as_text=True)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("You have 2 actions to complete in this menu.", body)
+        self.assertIn('href="/finance-requests?tab=billing_requests">View actions in Invoice requests</a>', body)
+
+    def test_dashboard_shows_finance_today_actions_for_finance_users(self):
+        client = self.permission_client({"finance_requests": {"view": True}}, department="Finance")
+        requester = User.query.filter_by(email="person@example.com").one()
+        self.add_payment_request(
+            requester,
+            status="Management approved",
+            scheduled_payment_date=date.today(),
+            request_number="PAY-2026-0001",
+        )
+        self.add_payment_request(
+            requester,
+            status="Payment scheduled",
+            scheduled_payment_date=date.today() - timedelta(days=1),
+            request_number="PAY-2026-0002",
+        )
+        self.add_payment_request(
+            requester,
+            status="Management approved",
+            scheduled_payment_date=date.today() + timedelta(days=1),
+            request_number="PAY-2026-0003",
+        )
+        self.add_billing_request(requester, status="Requested", request_number="INVOICE-2026-0001")
+
+        response = client.get("/")
+        body = response.get_data(as_text=True)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("You have 3 actions to complete in this menu.", body)
+        self.assertIn(
+            'href="/finance-requests?tab=finance_payments&amp;finance_filter=today">View actions in Finance actions</a>',
+            body,
+        )
+
+    def test_dashboard_shows_superadmin_management_review_actions(self):
+        client = self.permission_client(
+            {},
+            full_name="Super Admin",
+            department="Management",
+            email="super@example.com",
+            is_superadmin=True,
+        )
+        requester = User.query.filter_by(email="super@example.com").one()
+        other_user = User(full_name="Other Admin", email="other-super@example.com", department="Admin", is_active=True)
+        other_user.set_password("secret123")
+        db.session.add(other_user)
+        db.session.commit()
+        self.add_payment_request(requester, status="Submitted", request_number="PAY-2026-0001")
+        self.add_payment_request(requester, status="Resubmitted", request_number="PAY-2026-0002")
+        self.add_payment_request(requester, status="Management approved", request_number="PAY-2026-0003")
+        self.add_payment_request(other_user, status="Payment completed", request_number="PAY-2026-0004")
+        self.add_billing_request(other_user, status="Invoice issued", request_number="INVOICE-2026-0001")
+
+        response = client.get("/")
+        body = response.get_data(as_text=True)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("You have 2 actions to complete in this menu.", body)
+        self.assertIn('href="/finance-requests?tab=management_review">View actions in Management review</a>', body)
+        self.assertNotIn("View action in Payment requests", body)
+        self.assertNotIn("View action in Invoice requests", body)
 
     def test_dashboard_shows_pre_session_card_with_department_actions(self):
         session_record = ExamSession(

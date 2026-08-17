@@ -21986,6 +21986,113 @@ def finance_visible_billings(show_archived=False):
     ]
 
 
+FINANCE_DASHBOARD_PAYMENT_ACTION_STATUSES = {
+    "Needs correction",
+    "On hold",
+    "Rejected",
+    "Payment cancelled",
+    "Payment completed",
+}
+FINANCE_DASHBOARD_INVOICE_ACTION_STATUSES = {"Invoice issued", "Invoice cancelled"}
+FINANCE_DASHBOARD_MANAGEMENT_REVIEW_STATUSES = {"Submitted", "Pending approval", "Resubmitted"}
+
+
+def finance_dashboard_action_link(label, count, url):
+    return {
+        "label": label,
+        "count": count,
+        "url": url,
+        "text": f"View action{'s' if count != 1 else ''} in {label}",
+    }
+
+
+def finance_dashboard_actions():
+    if not user_can_view(FINANCE_REQUESTS_MENU_KEY):
+        return False, [], 0
+    current_user = getattr(g, "current_user", None)
+    department = current_user_audit_department()
+    is_superadmin = current_user_is_superadmin()
+    action_links = []
+    total_count = 0
+    visible_payments = finance_visible_payments(show_archived=False)
+
+    if is_superadmin or department in {"ADMIN", "LOGISTICS", "ADMISSIONS"}:
+        payment_scope = [
+            payment for payment in visible_payments
+            if current_user and payment.requester_user_id == current_user.id
+        ]
+        payment_action_count = len([
+            payment for payment in payment_scope
+            if not payment.is_archived
+            and (
+                payment.status in FINANCE_DASHBOARD_PAYMENT_ACTION_STATUSES
+                or payment.status == "Payment delayed"
+                or payment_is_delayed(payment)
+            )
+        ])
+        if payment_action_count:
+            action_links.append(finance_dashboard_action_link(
+                "Payment requests",
+                payment_action_count,
+                url_for("staff.finance_requests", tab="payment_requests"),
+            ))
+            total_count += payment_action_count
+
+    if is_superadmin or department == "ADMIN":
+        visible_billings = finance_visible_billings(show_archived=False)
+        billing_scope = [
+            billing for billing in visible_billings
+            if current_user and billing.requester_user_id == current_user.id
+        ]
+        billing_action_count = len([
+            billing for billing in billing_scope
+            if not billing.is_archived
+            and billing.status in FINANCE_DASHBOARD_INVOICE_ACTION_STATUSES
+        ])
+        if billing_action_count:
+            action_links.append(finance_dashboard_action_link(
+                "Invoice requests",
+                billing_action_count,
+                url_for("staff.finance_requests", tab="billing_requests"),
+            ))
+            total_count += billing_action_count
+
+    if is_superadmin:
+        management_action_count = len([
+            payment for payment in visible_payments
+            if not payment.is_archived
+            and payment.status in FINANCE_DASHBOARD_MANAGEMENT_REVIEW_STATUSES
+        ])
+        if management_action_count:
+            action_links.append(finance_dashboard_action_link(
+                "Management review",
+                management_action_count,
+                url_for("staff.finance_requests", tab="management_review"),
+            ))
+            total_count += management_action_count
+
+    if department == "FINANCE" and not is_superadmin:
+        finance_action_candidates = [
+            payment for payment in visible_payments
+            if payment.status in {"Management approved", "Payment scheduled"}
+        ]
+        finance_today_count = len(finance_action_filter_groups(finance_action_candidates)["today"])
+        finance_today_count += len([
+            billing for billing in finance_visible_billings(show_archived=False)
+            if not billing.is_archived
+            and billing.status not in FINANCE_DASHBOARD_INVOICE_ACTION_STATUSES
+        ])
+        if finance_today_count:
+            action_links.append(finance_dashboard_action_link(
+                "Finance actions",
+                finance_today_count,
+                url_for("staff.finance_requests", tab="finance_payments", finance_filter="today"),
+            ))
+            total_count += finance_today_count
+
+    return True, action_links, total_count
+
+
 def apply_payment_form(payment, form, allow_status=False, save_payee_contact=False, allow_empty_amount=False):
     errors = []
     concept = FinanceConcept.query.get(form.get("concept_id") or 0)
@@ -22937,6 +23044,7 @@ def delete_finance_concept(concept_id):
 def dashboard():
     potential_entries_allowed = user_can_view("staff_members")
     pre_session_control_tower_allowed = user_can_view("pre_session_control_tower")
+    finance_requests_allowed = False
     potential_entries_pending_count = 0
     potential_entries_note_mentions = []
     potential_entries_note_mentions_count = 0
@@ -22944,6 +23052,8 @@ def dashboard():
     pre_session_action_links = []
     pre_session_note_mentions = []
     pre_session_note_mentions_count = 0
+    finance_requests_pending_count = 0
+    finance_requests_action_links = []
     current_user = getattr(g, "current_user", None)
     dashboard_department = (
         getattr(current_user, "department", "")
@@ -22968,6 +23078,7 @@ def dashboard():
     if pre_session_control_tower_allowed and current_user:
         pre_session_note_mentions_count = pre_session_note_mentions_count_for_current_user()
         pre_session_note_mentions = pre_session_note_mentions_for_current_user(limit=3)
+    finance_requests_allowed, finance_requests_action_links, finance_requests_pending_count = finance_dashboard_actions()
     dashboard_display_name = (
         getattr(current_user, "full_name", "")
         or session.get("user_full_name")
@@ -22993,6 +23104,9 @@ def dashboard():
         pre_session_action_links=pre_session_action_links,
         pre_session_note_mentions=pre_session_note_mentions,
         pre_session_note_mentions_count=pre_session_note_mentions_count,
+        finance_requests_allowed=finance_requests_allowed,
+        finance_requests_pending_count=finance_requests_pending_count,
+        finance_requests_action_links=finance_requests_action_links,
     )
 
 
