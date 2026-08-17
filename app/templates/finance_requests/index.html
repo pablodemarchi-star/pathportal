@@ -599,8 +599,8 @@
 
 <nav class="finance-tabs" aria-label="Finance requests views">
   <div class="finance-tab-links">
-    <a class="{% if active_tab == 'payment_requests' %}is-active{% endif %}" href="{{ url_for('staff.finance_requests', tab='payment_requests') }}">Payment requests</a>
-    <a class="{% if active_tab == 'billing_requests' %}is-active{% endif %}" href="{{ url_for('staff.finance_requests', tab='billing_requests') }}">Invoice requests</a>
+    {% if 'payment_requests' in valid_tabs %}<a class="{% if active_tab == 'payment_requests' %}is-active{% endif %}" href="{{ url_for('staff.finance_requests', tab='payment_requests') }}">Payment requests</a>{% endif %}
+    {% if 'billing_requests' in valid_tabs %}<a class="{% if active_tab == 'billing_requests' %}is-active{% endif %}" href="{{ url_for('staff.finance_requests', tab='billing_requests') }}">Invoice requests</a>{% endif %}
     {% if 'management_review' in valid_tabs %}<a class="{% if active_tab == 'management_review' %}is-active{% endif %}" href="{{ url_for('staff.finance_requests', tab='management_review') }}">Management review</a>{% endif %}
     {% if 'finance_payments' in valid_tabs %}<a class="{% if active_tab == 'finance_payments' %}is-active{% endif %}" href="{{ url_for('staff.finance_requests', tab='finance_payments') }}">Finance actions</a>{% endif %}
     {% if 'concepts' in valid_tabs %}<a class="{% if active_tab == 'concepts' %}is-active{% endif %}" href="{{ url_for('staff.finance_requests', tab='concepts') }}">Concepts</a>{% endif %}

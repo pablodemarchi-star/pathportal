@@ -22301,14 +22301,19 @@ def finance_requests():
     require_menu_view(FINANCE_REQUESTS_MENU_KEY)
     ensure_default_finance_concepts()
     reconcile_overdue_payment_requests()
-    active_tab = request.args.get("tab") or "payment_requests"
-    valid_tabs = {"payment_requests", "billing_requests"}
+    active_tab = request.args.get("tab")
+    if is_finance_user() and not current_user_is_superadmin():
+        valid_tabs = {"finance_payments"}
+        default_tab = "finance_payments"
+    else:
+        valid_tabs = {"payment_requests", "billing_requests"}
+        default_tab = "payment_requests"
     if current_user_is_superadmin():
         valid_tabs.update({"management_review", "finance_payments", "concepts"})
-    elif is_finance_user():
-        valid_tabs.update({"finance_payments"})
+        default_tab = "payment_requests"
+    active_tab = active_tab or default_tab
     if active_tab not in valid_tabs:
-        active_tab = "payment_requests"
+        active_tab = default_tab
     show_archived = request.args.get("show_archived") == "1"
     show_archived_invoices = request.args.get("show_archived_invoices") == "1"
     finance_sort_by = request.args.get("sort", "").strip()

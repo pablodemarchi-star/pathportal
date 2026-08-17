@@ -192,17 +192,29 @@ class FinanceRequestsTest(unittest.TestCase):
         body = self.client_for(user).get("/finance-requests").get_data(as_text=True)
 
         self.assertIn("Finance actions", body)
+        self.assertIn("<h2>Finance actions</h2>", body)
+        self.assertNotIn("Payment requests</a>", body)
+        self.assertNotIn("Invoice requests</a>", body)
+        self.assertNotIn("Management review</a>", body)
+        self.assertNotIn("Concepts</a>", body)
         self.assertNotIn("Finance payments", body)
         self.assertNotIn(">Calendar<", body)
         self.assertNotIn("<h2>Calendar</h2>", body)
 
-    def test_calendar_tab_request_falls_back_to_payment_requests(self):
+    def test_unavailable_tab_requests_fall_back_to_finance_actions_for_finance_users(self):
         user = self.create_user("finance@example.com", department="Finance")
-        body = self.client_for(user).get("/finance-requests?tab=calendar").get_data(as_text=True)
+        client = self.client_for(user)
 
-        self.assertIn("<h2>Payment requests</h2>", body)
-        self.assertNotIn(">Calendar<", body)
-        self.assertNotIn("<h2>Calendar</h2>", body)
+        for tab in ["calendar", "payment_requests", "billing_requests", "management_review", "concepts"]:
+            with self.subTest(tab=tab):
+                body = client.get(f"/finance-requests?tab={tab}").get_data(as_text=True)
+
+                self.assertIn("<h2>Finance actions</h2>", body)
+                self.assertNotIn("<h2>Payment requests</h2>", body)
+                self.assertNotIn("<h2>Invoice requests</h2>", body)
+                self.assertNotIn("<h2>Management review</h2>", body)
+                self.assertNotIn(">Calendar<", body)
+                self.assertNotIn("<h2>Calendar</h2>", body)
 
     def test_concepts_view_renders_edit_controls_for_superadmin(self):
         user = self.create_user("admin@example.com", is_superadmin=True)
@@ -1005,7 +1017,7 @@ class FinanceRequestsTest(unittest.TestCase):
         self.assertIn('<span class="finance-status-chip status-payment-scheduled">Processing payment</span>', body)
 
     def test_scheduled_payment_request_card_shows_put_on_hold_button(self):
-        user = self.create_user("finance@example.com", department="Finance")
+        user = self.create_user("requester@example.com", department="Admissions")
         payment = self.payment(user, status="Management approved", scheduled_payment_date=date.today())
 
         body = self.client_for(user).get("/finance-requests?tab=payment_requests").get_data(as_text=True)
@@ -1056,7 +1068,7 @@ class FinanceRequestsTest(unittest.TestCase):
         self.assertNotIn(superadmin_only.description, body)
 
     def test_operational_users_only_see_payment_request_buttons_on_their_cards(self):
-        owner = self.create_user("finance@example.com", department="Finance")
+        owner = self.create_user("owner@example.com", department="Admissions")
         other_requester = self.create_user("other@example.com", department="Admissions")
         own_payment = self.payment(owner, status="Management approved", scheduled_payment_date=date.today())
         own_payment.description = "Own scheduled payment"
@@ -1116,12 +1128,13 @@ class FinanceRequestsTest(unittest.TestCase):
         self.assertIn("Ready to complete", body)
         self.assertIn('<span class="finance-status-chip status-payment-completed">Payment completed</span>', body)
 
-        payment_requests_body = self.client_for(user).get("/finance-requests?tab=payment_requests").get_data(as_text=True)
+        superadmin = self.create_user("superadmin@example.com", department="Admin", is_superadmin=True)
+        payment_requests_body = self.client_for(superadmin).get("/finance-requests?tab=payment_requests").get_data(as_text=True)
         self.assertIn(payment.request_number, payment_requests_body)
         self.assertIn("Ready to complete", payment_requests_body)
         self.assertIn(">Archive</button>", payment_requests_body)
 
-        archived_payment_requests_body = self.client_for(user).get("/finance-requests?tab=payment_requests&show_archived=1").get_data(as_text=True)
+        archived_payment_requests_body = self.client_for(superadmin).get("/finance-requests?tab=payment_requests&show_archived=1").get_data(as_text=True)
         self.assertNotIn(payment.request_number, archived_payment_requests_body)
 
     def test_finance_actions_complete_payment_requires_payment_proof(self):
@@ -1167,7 +1180,8 @@ class FinanceRequestsTest(unittest.TestCase):
         self.assertIn(payment.request_number, body)
         self.assertIn('<span class="finance-status-chip status-payment-cancelled">Payment cancelled</span>', body)
 
-        payment_requests_body = self.client_for(user).get("/finance-requests?tab=payment_requests").get_data(as_text=True)
+        superadmin = self.create_user("superadmin@example.com", department="Admin", is_superadmin=True)
+        payment_requests_body = self.client_for(superadmin).get("/finance-requests?tab=payment_requests").get_data(as_text=True)
         self.assertIn(payment.request_number, payment_requests_body)
         self.assertIn(">Archive</button>", payment_requests_body)
 
@@ -2318,7 +2332,7 @@ class FinanceRequestsTest(unittest.TestCase):
         self.assertIsNotNone(BillingRequest.query.get(billing.id))
 
     def test_invoice_request_card_shows_completed_metadata_and_invoice_link(self):
-        user = self.create_user("finance@example.com", department="Finance")
+        user = self.create_user("requester@example.com", department="Admissions")
         billing = BillingRequest(
             request_number="BILL-2026-0001",
             requester_user_id=user.id,
@@ -2362,7 +2376,7 @@ class FinanceRequestsTest(unittest.TestCase):
         self.assertIn("*Path International Examinations*", page)
 
     def test_invoice_requests_can_archive_issued_or_cancelled_invoices(self):
-        user = self.create_user("finance@example.com", department="Finance")
+        user = self.create_user("requester@example.com", department="Admissions")
         issued = BillingRequest(
             request_number="INVOICE-2026-0001",
             requester_user_id=user.id,
@@ -2669,7 +2683,7 @@ class FinanceRequestsTest(unittest.TestCase):
         self.assertEqual(payment.status, "Submitted")
 
     def test_on_hold_payment_card_shows_release_and_cancel_buttons(self):
-        user = self.create_user("finance@example.com", department="Finance")
+        user = self.create_user("requester@example.com", department="Admissions")
         payment = self.payment(user, status="On hold", scheduled_payment_date=date.today())
         payment.previous_status_before_hold = "Management approved"
         db.session.commit()
