@@ -76,6 +76,10 @@ def create_app():
         ExamSessionSupervisorAssignment,
         ExamSessionYear,
         Fee,
+        BillingRequest,
+        BillingRequestEvent,
+        FinanceConcept,
+        FinanceContact,
         InternStage2Selection,
         InternStage3Selection,
         InternStageAnnualMeetingSelection,
@@ -86,6 +90,8 @@ def create_app():
         PotentialEntryNoteMention,
         PotentialEntryPreassignedExamSession,
         PotentialEntryStatusTrack,
+        PaymentRequest,
+        PaymentRequestEvent,
         Provider,
         ProviderHistory,
         ProviderType,
@@ -217,6 +223,38 @@ def create_app():
 
     with app.app_context():
         db.create_all()
+        user_menu_permission_sql = db.session.execute(
+            text("SELECT sql FROM sqlite_master WHERE type='table' AND name='user_menu_permission'")
+        ).scalar()
+        if user_menu_permission_sql and "'finance_requests'" not in user_menu_permission_sql:
+            db.session.execute(text("ALTER TABLE user_menu_permission RENAME TO user_menu_permission_legacy"))
+            db.session.execute(text("""
+                CREATE TABLE user_menu_permission (
+                    id INTEGER NOT NULL,
+                    user_id INTEGER NOT NULL,
+                    menu_key VARCHAR(80) NOT NULL,
+                    can_view BOOLEAN NOT NULL,
+                    can_edit BOOLEAN NOT NULL,
+                    can_manage_permissions BOOLEAN NOT NULL,
+                    created_at DATETIME NOT NULL,
+                    updated_at DATETIME NOT NULL,
+                    PRIMARY KEY (id),
+                    CONSTRAINT uq_user_menu_permission_user_menu UNIQUE (user_id, menu_key),
+                    FOREIGN KEY(user_id) REFERENCES app_user (id),
+                    CONSTRAINT ck_user_menu_permission_menu_key CHECK (menu_key IN ('staff_members', 'examiner_certification', 'supervisor_certification', 'internship_stages', 'exam_session_planner', 'pre_session_control_tower', 'monthly_exam_session_registrations', 'staff_payments', 'finance_requests', 'fees', 'providers', 'users')),
+                    CONSTRAINT ck_user_menu_permission_edit_implies_view CHECK (can_edit = 0 OR can_view = 1)
+                )
+            """))
+            db.session.execute(text("""
+                INSERT INTO user_menu_permission (
+                    id, user_id, menu_key, can_view, can_edit, can_manage_permissions, created_at, updated_at
+                )
+                SELECT id, user_id, menu_key, can_view, can_edit, can_manage_permissions, created_at, updated_at
+                FROM user_menu_permission_legacy
+                WHERE menu_key IN ('staff_members', 'examiner_certification', 'supervisor_certification', 'internship_stages', 'exam_session_planner', 'pre_session_control_tower', 'monthly_exam_session_registrations', 'staff_payments', 'finance_requests', 'fees', 'providers', 'users')
+            """))
+            db.session.execute(text("DROP TABLE user_menu_permission_legacy"))
+            db.session.commit()
         app_user_columns = {
             row[1] for row in db.session.execute(text("PRAGMA table_info(app_user)"))
         }
@@ -237,6 +275,49 @@ def create_app():
         }
         if fee_columns and "valid_through" not in fee_columns:
             db.session.execute(text("ALTER TABLE fee ADD COLUMN valid_through TEXT NOT NULL DEFAULT '[]'"))
+            db.session.commit()
+        payment_request_columns = {
+            row[1] for row in db.session.execute(text("PRAGMA table_info(payment_request)"))
+        }
+        if payment_request_columns and "payment_date_mode" not in payment_request_columns:
+            db.session.execute(text("ALTER TABLE payment_request ADD COLUMN payment_date_mode VARCHAR(20) NOT NULL DEFAULT 'asap'"))
+            db.session.execute(text("UPDATE payment_request SET payment_date_mode = 'specific' WHERE scheduled_payment_date IS NOT NULL"))
+            db.session.commit()
+        billing_request_columns = {
+            row[1] for row in db.session.execute(text("PRAGMA table_info(billing_request)"))
+        }
+        if billing_request_columns and "client_tax_id" not in billing_request_columns:
+            db.session.execute(text("ALTER TABLE billing_request ADD COLUMN client_tax_id VARCHAR(80)"))
+            db.session.commit()
+        if billing_request_columns and "vat_status_invoice_type" not in billing_request_columns:
+            db.session.execute(text("ALTER TABLE billing_request ADD COLUMN vat_status_invoice_type VARCHAR(80)"))
+            db.session.commit()
+        if billing_request_columns and "client_full_address" not in billing_request_columns:
+            db.session.execute(text("ALTER TABLE billing_request ADD COLUMN client_full_address VARCHAR(500)"))
+            db.session.commit()
+        if billing_request_columns and "is_archived" not in billing_request_columns:
+            db.session.execute(text("ALTER TABLE billing_request ADD COLUMN is_archived BOOLEAN NOT NULL DEFAULT 0"))
+            db.session.commit()
+        if billing_request_columns and "archived_at" not in billing_request_columns:
+            db.session.execute(text("ALTER TABLE billing_request ADD COLUMN archived_at DATETIME"))
+            db.session.commit()
+        if billing_request_columns and "archived_by_user_id" not in billing_request_columns:
+            db.session.execute(text("ALTER TABLE billing_request ADD COLUMN archived_by_user_id INTEGER"))
+            db.session.commit()
+        if billing_request_columns and "archived_by_department" not in billing_request_columns:
+            db.session.execute(text("ALTER TABLE billing_request ADD COLUMN archived_by_department VARCHAR(40)"))
+            db.session.commit()
+        finance_client_contact_columns = {
+            row[1] for row in db.session.execute(text("PRAGMA table_info(finance_client_contact)"))
+        }
+        if finance_client_contact_columns and "client_tax_id" not in finance_client_contact_columns:
+            db.session.execute(text("ALTER TABLE finance_client_contact ADD COLUMN client_tax_id VARCHAR(80)"))
+            db.session.commit()
+        if finance_client_contact_columns and "vat_status_invoice_type" not in finance_client_contact_columns:
+            db.session.execute(text("ALTER TABLE finance_client_contact ADD COLUMN vat_status_invoice_type VARCHAR(80)"))
+            db.session.commit()
+        if finance_client_contact_columns and "client_full_address" not in finance_client_contact_columns:
+            db.session.execute(text("ALTER TABLE finance_client_contact ADD COLUMN client_full_address VARCHAR(500)"))
             db.session.commit()
         certification_year_configuration_columns = {
             row[1] for row in db.session.execute(text("PRAGMA table_info(certification_year_configuration)"))

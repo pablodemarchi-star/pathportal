@@ -1,6 +1,34 @@
 const modalOpeners = new WeakMap();
 
 (() => {
+  const referencePaymentNumber = "PAY-2026-0022";
+  const syncFinancePaymentCardHeight = () => {
+    const cards = Array.from(document.querySelectorAll(".finance-payment-request-grid .finance-request-card"));
+    if (!cards.length) return;
+    const referenceCard = cards.find((card) => card.dataset.paymentNumber === referencePaymentNumber);
+    if (!referenceCard) return;
+
+    const previousHeight = referenceCard.style.height;
+    const previousMinHeight = referenceCard.style.minHeight;
+    const previousMaxHeight = referenceCard.style.maxHeight;
+    referenceCard.style.height = "auto";
+    referenceCard.style.minHeight = "0";
+    referenceCard.style.maxHeight = "none";
+    const measuredHeight = Math.ceil(referenceCard.getBoundingClientRect().height);
+    referenceCard.style.height = previousHeight;
+    referenceCard.style.minHeight = previousMinHeight;
+    referenceCard.style.maxHeight = previousMaxHeight;
+    if (measuredHeight > 0) {
+      document.documentElement.style.setProperty("--finance-payment-card-height", `${measuredHeight}px`);
+    }
+  };
+
+  window.addEventListener("load", syncFinancePaymentCardHeight);
+  window.addEventListener("resize", syncFinancePaymentCardHeight);
+  syncFinancePaymentCardHeight();
+})();
+
+(() => {
   const statuses = ["Pending", "Waiting for confirmation", "Confirmed"];
   const classPrefix = "date-confirmation-";
   const classForStatus = (status) => `${classPrefix}${status.toLowerCase().replace(/\s+/g, "-")}`;
@@ -7997,23 +8025,445 @@ const initCopyTextButtons = (root = document) => {
     if (button.dataset.initialized === "true") return;
     button.dataset.initialized = "true";
     button.addEventListener("click", async () => {
+      const feedback = button.querySelector(".copy-button-feedback");
+      const defaultFeedback = feedback?.textContent || "Copied.";
+      const successMessage = button.dataset.copySuccess || defaultFeedback;
+      const errorMessage = button.dataset.copyError || "Could not copy the payment WhatsApp message. Please try again.";
+      const showFeedback = (message, isError = false) => {
+        if (feedback) feedback.textContent = message;
+        button.classList.toggle("is-error", isError);
+        button.classList.toggle("is-copied", !isError);
+        window.setTimeout(() => {
+          button.classList.remove("is-error", "is-copied");
+          if (feedback) feedback.textContent = defaultFeedback;
+        }, isError ? 2600 : 1400);
+      };
+      if (button.dataset.copyError) {
+        showFeedback(errorMessage, true);
+        return;
+      }
       try {
         await copyTextToClipboard(button.dataset.copyText || "");
-        button.classList.add("is-copied");
-        window.setTimeout(() => {
-          button.classList.remove("is-copied");
-        }, 1200);
+        showFeedback(successMessage);
       } catch (error) {
-        button.classList.add("is-error");
-        window.setTimeout(() => {
-          button.classList.remove("is-error");
-        }, 1200);
+        showFeedback(errorMessage, true);
       }
     });
   });
 };
 
 initCopyTextButtons();
+
+const initFinanceConceptEditor = () => {
+  const form = document.querySelector("[data-finance-concept-form]");
+  if (!form) return;
+  const title = form.querySelector("[data-finance-concept-form-title]");
+  const conceptIdInput = form.querySelector("[data-finance-concept-id]");
+  const nameInput = form.querySelector("[data-finance-concept-name]");
+  const descriptionInput = form.querySelector("[data-finance-concept-description]");
+  const appliesToInput = form.querySelector("[data-finance-concept-applies-to]");
+  const activeInput = form.querySelector("input[name='is_active']");
+  const createButton = form.querySelector("[data-finance-concept-create-button]");
+  const saveButton = form.querySelector("[data-finance-concept-save-button]");
+  const deleteButton = form.querySelector("[data-finance-concept-delete-button]");
+  const deleteActionTemplate = form.dataset.deleteAction || "";
+
+  document.querySelectorAll("[data-edit-finance-concept]").forEach((button) => {
+    button.addEventListener("click", () => {
+      const conceptId = button.dataset.conceptId || "";
+      if (conceptIdInput) conceptIdInput.value = conceptId;
+      if (nameInput) nameInput.value = button.dataset.conceptName || "";
+      if (descriptionInput) descriptionInput.value = button.dataset.conceptDescription || "";
+      if (appliesToInput) appliesToInput.value = button.dataset.conceptAppliesTo || "Both";
+      if (activeInput) activeInput.checked = button.dataset.conceptActive === "1";
+      if (title) title.textContent = "Edit concept";
+      if (createButton) createButton.hidden = true;
+      if (saveButton) saveButton.hidden = false;
+      if (deleteButton) {
+        deleteButton.hidden = false;
+        if (deleteActionTemplate && conceptId) {
+          deleteButton.setAttribute("formaction", deleteActionTemplate.replace("/0/", `/${conceptId}/`));
+        }
+      }
+      nameInput?.focus();
+    });
+  });
+
+  deleteButton?.addEventListener("click", (event) => {
+    if (!window.confirm("Are you sure you want to delete this finance concept? This action cannot be undone.")) {
+      event.preventDefault();
+    }
+  });
+};
+
+initFinanceConceptEditor();
+
+const initFinanceManagementReviewActions = () => {
+  document.querySelectorAll(".finance-management-review-actions").forEach((form) => {
+    const comments = form.querySelector("[data-management-review-comments]");
+    if (!comments) return;
+    comments.addEventListener("input", () => comments.setCustomValidity(""));
+    form.querySelectorAll("[data-requires-management-comment]").forEach((button) => {
+      button.addEventListener("click", (event) => {
+        if (comments.value.trim()) {
+          comments.setCustomValidity("");
+          return;
+        }
+        comments.setCustomValidity("Management comments are required for this action.");
+        comments.reportValidity();
+        event.preventDefault();
+      });
+    });
+  });
+};
+
+initFinanceManagementReviewActions();
+
+const initFinancePaymentExecutionActions = () => {
+  document.querySelectorAll(".finance-payment-execution-actions").forEach((form) => {
+    const proofInput = form.querySelector("[data-payment-proof-input]");
+    if (!proofInput) return;
+    const requiredProofMessage = form.dataset.requiredPaymentProofMessage || "Payment proof is required to complete a payment.";
+    const emptyProofMessage = form.dataset.emptyPaymentProofMessage || "Payment proof must be empty to continue.";
+    proofInput.addEventListener("input", () => proofInput.setCustomValidity(""));
+    form.querySelectorAll("[data-requires-payment-proof]").forEach((button) => {
+      button.addEventListener("click", (event) => {
+        if (proofInput.value.trim()) {
+          proofInput.setCustomValidity("");
+          return;
+        }
+        proofInput.setCustomValidity(button.dataset.requiredPaymentProofMessage || requiredProofMessage);
+        proofInput.reportValidity();
+        event.preventDefault();
+      });
+    });
+    form.querySelectorAll("[data-requires-empty-payment-proof]").forEach((button) => {
+      button.addEventListener("click", (event) => {
+        if (!proofInput.value.trim()) {
+          proofInput.setCustomValidity("");
+          return;
+        }
+        proofInput.setCustomValidity(button.dataset.emptyPaymentProofMessage || emptyProofMessage);
+        proofInput.reportValidity();
+        event.preventDefault();
+      });
+    });
+  });
+};
+
+initFinancePaymentExecutionActions();
+
+const syncFinancePayeeMenu = (picker) => {
+  if (!picker) return;
+  const input = picker.querySelector("[data-finance-payee-input]");
+  const menu = picker.querySelector("[data-finance-payee-menu]");
+  if (!input || !menu) return;
+  const emptyMessage = picker.dataset.financeContactKind === "client" ? "No saved clients." : "No saved contacts.";
+  const query = input.value.trim().toLowerCase();
+  let visibleCount = 0;
+  menu.querySelectorAll("[data-finance-payee-option]").forEach((option) => {
+    const name = option.dataset.contactName || "";
+    const visible = !query || name.toLowerCase().includes(query);
+    option.hidden = !visible;
+    if (visible) visibleCount += 1;
+  });
+  let empty = menu.querySelector("[data-finance-payee-empty]");
+  if (!empty && visibleCount === 0) {
+    empty = document.createElement("div");
+    empty.className = "finance-payee-empty";
+    empty.dataset.financePayeeEmpty = "true";
+    empty.textContent = emptyMessage;
+    menu.append(empty);
+  }
+  if (empty) empty.textContent = emptyMessage;
+  if (empty) empty.hidden = visibleCount > 0;
+};
+
+const openFinancePayeeMenu = (picker) => {
+  const menu = picker?.querySelector?.("[data-finance-payee-menu]");
+  if (!menu) return;
+  syncFinancePayeeMenu(picker);
+  menu.hidden = false;
+};
+
+const applyFinancePayeeDefaults = (picker, option) => {
+  const form = picker?.closest?.("form");
+  if (!form || !option) return;
+  const setField = (name, value) => {
+    const field = form.querySelector(`[name="${name}"]`);
+    if (!field) return;
+    field.value = value || "";
+    field.dispatchEvent(new Event("input", { bubbles: true }));
+    field.dispatchEvent(new Event("change", { bubbles: true }));
+  };
+  setField("concept_id", option.dataset.conceptId);
+  setField("currency", option.dataset.currency);
+  setField("payment_method", option.dataset.paymentMethod);
+  syncFinancePaymentMethodFields(form);
+  setField("account_holder", option.dataset.accountHolder);
+  setField("account_number", option.dataset.accountNumber);
+  setField("alias", option.dataset.alias);
+  setField("tax_id", option.dataset.taxId);
+  setField("client_tax_id", option.dataset.taxId);
+  setField("vat_status_invoice_type", option.dataset.vatStatus);
+  syncFinanceVatAddressFields(form);
+  setField("client_full_address", option.dataset.fullAddress);
+};
+
+const closeFinancePayeeMenus = (exceptPicker = null) => {
+  document.querySelectorAll("[data-finance-payee-picker]").forEach((picker) => {
+    if (picker === exceptPicker) return;
+    const menu = picker.querySelector("[data-finance-payee-menu]");
+    if (menu) menu.hidden = true;
+  });
+};
+
+document.addEventListener("focusin", (event) => {
+  const input = event.target.closest?.("[data-finance-payee-input]");
+  if (!input) return;
+  const picker = input.closest("[data-finance-payee-picker]");
+  closeFinancePayeeMenus(picker);
+  openFinancePayeeMenu(picker);
+});
+
+document.addEventListener("input", (event) => {
+  const input = event.target.closest?.("[data-finance-payee-input]");
+  if (!input) return;
+  openFinancePayeeMenu(input.closest("[data-finance-payee-picker]"));
+});
+
+document.addEventListener("click", async (event) => {
+  const selectButton = event.target.closest?.("[data-finance-payee-select]");
+  if (selectButton) {
+    const picker = selectButton.closest("[data-finance-payee-picker]");
+    const option = selectButton.closest("[data-finance-payee-option]");
+    const input = picker?.querySelector("[data-finance-payee-input]");
+    if (input && option) {
+      input.value = option.dataset.contactName || selectButton.textContent.trim();
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+      applyFinancePayeeDefaults(picker, option);
+      picker.querySelector("[data-finance-payee-menu]").hidden = true;
+      input.focus();
+    }
+    return;
+  }
+
+  const forgetButton = event.target.closest?.("[data-finance-payee-forget]");
+  if (forgetButton) {
+    const option = forgetButton.closest("[data-finance-payee-option]");
+    const contactId = option?.dataset.contactId;
+    const formData = new FormData();
+    formData.append("csrf_token", document.querySelector("input[name='csrf_token']")?.value || "");
+    forgetButton.disabled = true;
+    try {
+      const response = await fetch(forgetButton.dataset.action || "", {
+        method: "POST",
+        body: formData,
+        headers: { "X-Requested-With": "XMLHttpRequest" },
+      });
+      const payload = await response.json();
+      if (!response.ok || !payload.ok) throw new Error(payload.message || "Unable to remove contact.");
+      const contactKind = option?.dataset.contactKind || option?.closest("[data-finance-payee-picker]")?.dataset.financeContactKind || "payee";
+      document.querySelectorAll(`[data-finance-payee-option][data-contact-kind="${CSS.escape(contactKind)}"][data-contact-id="${CSS.escape(contactId || String(payload.contact_id || ""))}"]`).forEach((matchingOption) => {
+        const picker = matchingOption.closest("[data-finance-payee-picker]");
+        matchingOption.remove();
+        syncFinancePayeeMenu(picker);
+      });
+    } catch (error) {
+      forgetButton.disabled = false;
+      window.alert("The contact could not be removed from the list. Please try again.");
+    }
+    return;
+  }
+
+  if (!event.target.closest?.("[data-finance-payee-picker]")) closeFinancePayeeMenus();
+});
+
+document.addEventListener("keydown", (event) => {
+  if (event.key !== "Escape") return;
+  if (!event.target.closest?.("[data-finance-payee-picker]")) return;
+  closeFinancePayeeMenus();
+});
+
+const syncFinanceVatAddressFields = (root = document) => {
+  const addressRequiredStatuses = new Set([
+    "Responsable Inscripto (factura A)",
+    "Monotributista (factura A)",
+    "IVA Sujeto Exento (factura B)",
+    "International clients (factura E)",
+  ]);
+  root.querySelectorAll("[data-finance-vat-status]").forEach((select) => {
+    const form = select.closest("form") || document;
+    const addressField = form.querySelector("[data-finance-full-address-field]");
+    if (!addressField) return;
+    const input = addressField.querySelector("input, textarea");
+    const shouldShow = addressRequiredStatuses.has(select.value);
+    addressField.hidden = !shouldShow;
+    if (input) {
+      input.disabled = !shouldShow;
+      input.required = shouldShow;
+      if (!shouldShow) input.value = "";
+    }
+  });
+};
+
+syncFinanceVatAddressFields();
+
+document.addEventListener("change", (event) => {
+  if (!event.target.closest?.("[data-finance-vat-status]")) return;
+  syncFinanceVatAddressFields(event.target.closest("form") || document);
+});
+
+const syncFinancePaymentMethodFields = (root = document) => {
+  root.querySelectorAll("[data-finance-payment-method]").forEach((select) => {
+    const form = select.closest("form") || document;
+    const bankFields = form.querySelector("[data-finance-bank-fields]");
+    const cardFields = form.querySelector("[data-finance-card-fields]");
+    const showBankFields = ["Bank transfer", "Deposit"].includes(select.value);
+    const showCardFields = select.value === "Card";
+    if (bankFields) {
+      bankFields.hidden = !showBankFields;
+      bankFields.querySelectorAll("input, select, textarea").forEach((field) => {
+        field.disabled = !showBankFields;
+      });
+    }
+    if (cardFields) {
+      cardFields.hidden = !showCardFields;
+      cardFields.querySelectorAll("input, select, textarea").forEach((field) => {
+        field.disabled = !showCardFields;
+      });
+    }
+    syncFinanceBankRequirement(form);
+  });
+};
+
+syncFinancePaymentMethodFields();
+
+const normalizeFinanceAmountInput = (input) => {
+  if (!input) return;
+  const normalized = input.value.replace(/,/g, ".");
+  if (normalized !== input.value) input.value = normalized;
+};
+
+document.addEventListener("input", (event) => {
+  const amountInput = event.target.closest?.("[data-finance-amount]");
+  if (!amountInput) return;
+  normalizeFinanceAmountInput(amountInput);
+});
+
+document.addEventListener("change", (event) => {
+  if (!event.target.closest?.("[data-finance-payment-method]")) return;
+  const form = event.target.closest("form") || document;
+  syncFinancePaymentMethodFields(form);
+  syncFinancePaymentDateFields(form);
+});
+
+function syncFinanceBankRequirement(form) {
+  if (!form?.querySelector?.("[data-finance-payment-method]")) return;
+  const paymentMethod = form.querySelector("[data-finance-payment-method]")?.value || "";
+  const accountHolder = form.querySelector("input[name='account_holder']");
+  const accountNumber = form.querySelector("input[name='account_number']");
+  const alias = form.querySelector("input[name='alias']");
+  if (!accountHolder || !accountNumber || !alias) return;
+  const needsBankDetails = ["Bank transfer", "Deposit"].includes(paymentMethod);
+  const holderMessage = needsBankDetails && !accountHolder.value.trim()
+    ? "Account holder is required for bank transfer/deposit."
+    : "";
+  const hasBankIdentifier = Boolean(accountNumber.value.trim() || alias.value.trim());
+  const identifierMessage = needsBankDetails && !hasBankIdentifier
+    ? "CBU / CVU or Alias is required for bank transfer/deposit."
+    : "";
+  accountHolder.setCustomValidity(holderMessage);
+  accountNumber.setCustomValidity(identifierMessage);
+  alias.setCustomValidity(identifierMessage);
+}
+
+document.addEventListener("input", (event) => {
+  if (!event.target.closest?.("input[name='account_holder'], input[name='account_number'], input[name='alias']")) return;
+  syncFinanceBankRequirement(event.target.closest("form"));
+});
+
+document.addEventListener("submit", (event) => {
+  const form = event.target.closest?.("form");
+  if (!form?.querySelector?.("[data-finance-payment-method]")) return;
+  form.classList.add("is-validation-attempted");
+  form.querySelectorAll("[data-finance-amount]").forEach(normalizeFinanceAmountInput);
+  syncFinanceBankRequirement(form);
+  if (!form.checkValidity()) {
+    event.preventDefault();
+    form.reportValidity();
+  }
+}, true);
+
+document.addEventListener("invalid", (event) => {
+  const form = event.target.closest?.("form");
+  if (!form?.querySelector?.("[data-finance-payment-method]")) return;
+  form.classList.add("is-validation-attempted");
+}, true);
+
+const syncFinancePaymentDateFields = (root = document) => {
+  const forms = root.matches?.("form") ? [root] : Array.from(root.querySelectorAll?.("form") || []);
+  forms.forEach((form) => {
+    const group = form.querySelector("[data-finance-payment-date-options]");
+    if (!group) return;
+    const specificDate = form.querySelector("[data-finance-specific-payment-date]");
+    const paymentMethod = form.querySelector("[data-finance-payment-method]")?.value || "";
+    const cardStatus = form.querySelector("input[name='card_payment_status']:checked")?.value || "";
+    const hidePaymentDate = paymentMethod === "Card" && cardStatus === "Already paid";
+    group.hidden = hidePaymentDate;
+    group.setAttribute("aria-hidden", hidePaymentDate ? "true" : "false");
+    group.querySelectorAll("input, select, textarea").forEach((field) => {
+      field.disabled = hidePaymentDate;
+    });
+    if (hidePaymentDate) {
+      if (specificDate) {
+        specificDate.classList.remove("is-visible");
+        specificDate.setAttribute("aria-hidden", "true");
+        const warning = specificDate.querySelector("[data-finance-business-date-warning]");
+        if (warning) warning.hidden = true;
+        specificDate.querySelectorAll("input, select, textarea").forEach((field) => {
+          field.disabled = true;
+          field.required = false;
+          if (field.setCustomValidity) field.setCustomValidity("");
+        });
+      }
+      return;
+    }
+    const selected = group.querySelector("[data-finance-payment-date-mode]:checked")?.value || "asap";
+    const showSpecificDate = selected === "specific";
+    if (specificDate) {
+      specificDate.classList.toggle("is-visible", showSpecificDate);
+      specificDate.setAttribute("aria-hidden", showSpecificDate ? "false" : "true");
+      specificDate.querySelectorAll("input, select, textarea").forEach((field) => {
+        field.disabled = !showSpecificDate;
+        field.required = showSpecificDate;
+        if (!showSpecificDate && field.setCustomValidity) field.setCustomValidity("");
+      });
+      const warning = specificDate.querySelector("[data-finance-business-date-warning]");
+      if (warning && !showSpecificDate) warning.hidden = true;
+    }
+  });
+};
+
+syncFinancePaymentDateFields();
+
+document.addEventListener("change", (event) => {
+  const paymentDateMode = event.target.closest?.("[data-finance-payment-date-mode]");
+  if (paymentDateMode) {
+    const group = paymentDateMode.closest("[data-finance-payment-date-options]");
+    if (group && paymentDateMode.value === "specific") {
+      group.dataset.financeSpecificDateSeen = "true";
+    }
+    if (group && paymentDateMode.value === "asap" && group.dataset.financeSpecificDateSeen === "true") {
+      const recalculated = group.querySelector("[data-finance-payment-date-recalculated]");
+      const runDate = group.querySelector("[data-finance-payment-run-date]");
+      if (recalculated) recalculated.value = "1";
+      if (runDate && group.dataset.nextPaymentRunDisplay) runDate.textContent = group.dataset.nextPaymentRunDisplay;
+    }
+  }
+  if (!paymentDateMode && !event.target.closest?.("input[name='card_payment_status']")) return;
+  syncFinancePaymentDateFields(event.target.closest("form") || document);
+});
 
 const staffPaymentStatus = (invoiceChecked, paymentChecked) => {
   if (invoiceChecked && paymentChecked) return "Completed";
@@ -9762,7 +10212,68 @@ const isFutureDdMmYyyyDate = (value) => {
   return parsed >= today;
 };
 
-const dateMaskValidationMessage = (value, { futureOrToday = false } = {}) => {
+const easterSundayDate = (year) => {
+  const a = year % 19;
+  const b = Math.floor(year / 100);
+  const c = year % 100;
+  const d = Math.floor(b / 4);
+  const e = b % 4;
+  const f = Math.floor((b + 8) / 25);
+  const g = Math.floor((b - f + 1) / 3);
+  const h = (19 * a + b - d - g + 15) % 30;
+  const i = Math.floor(c / 4);
+  const k = c % 4;
+  const l = (32 + 2 * e + 2 * i - h - k) % 7;
+  const m = Math.floor((a + 11 * h + 22 * l) / 451);
+  const month = Math.floor((h + l - 7 * m + 114) / 31);
+  const day = ((h + l - 7 * m + 114) % 31) + 1;
+  return new Date(year, month - 1, day);
+};
+
+const addDays = (dateValue, days) => {
+  const next = new Date(dateValue);
+  next.setDate(next.getDate() + days);
+  return next;
+};
+
+const dateKey = (dateValue) => {
+  const year = dateValue.getFullYear();
+  const month = String(dateValue.getMonth() + 1).padStart(2, "0");
+  const day = String(dateValue.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+};
+
+const argentinaNationalHolidayKeys = (year) => {
+  const easter = easterSundayDate(year);
+  return new Set([
+    `${year}-01-01`,
+    dateKey(addDays(easter, -48)),
+    dateKey(addDays(easter, -47)),
+    `${year}-03-24`,
+    dateKey(addDays(easter, -2)),
+    `${year}-04-02`,
+    `${year}-05-01`,
+    `${year}-05-25`,
+    `${year}-06-17`,
+    `${year}-06-20`,
+    `${year}-07-09`,
+    `${year}-08-17`,
+    `${year}-10-12`,
+    `${year}-11-20`,
+    `${year}-12-08`,
+    `${year}-12-25`,
+  ]);
+};
+
+const isArgentinaBusinessDate = (dateValue) => {
+  if (!dateValue) return false;
+  const day = dateValue.getDay();
+  return day !== 0 && day !== 6 && !argentinaNationalHolidayKeys(dateValue.getFullYear()).has(dateKey(dateValue));
+};
+
+const nonBusinessPaymentDateMessage = "Payments cannot be processed on Saturdays, Sundays or public holidays.";
+
+const dateMaskValidationMessage = (value, { futureOrToday = false, businessDate = false } = {}) => {
   const raw = String(value || "").trim();
   if (!raw) return "";
   const match = raw.match(/^(\d{2})\/(\d{2})\/(\d{4})$/);
@@ -9774,16 +10285,22 @@ const dateMaskValidationMessage = (value, { futureOrToday = false } = {}) => {
   if (day < 1 || day > 31) return "Day must be between 01 and 31.";
   if (month < 1 || month > 12) return "Month must be between 01 and 12.";
   if (year < currentYear) return "Year must be the current year or later.";
-  if (!parseDdMmYyyyDate(raw)) return "Please enter a valid date.";
+  const parsed = parseDdMmYyyyDate(raw);
+  if (!parsed) return "Please enter a valid date.";
   if (futureOrToday && !isFutureDdMmYyyyDate(raw)) return "Date cannot be in the past.";
+  if (businessDate && !isArgentinaBusinessDate(parsed)) return nonBusinessPaymentDateMessage;
   return "";
 };
 
 const validateDateMaskInput = (input) => {
   if (!input?.setCustomValidity) return;
-  input.setCustomValidity(dateMaskValidationMessage(input.value, {
+  const message = dateMaskValidationMessage(input.value, {
     futureOrToday: input.matches("[data-date-future-or-today]"),
-  }));
+    businessDate: input.matches("[data-finance-business-date]"),
+  });
+  input.setCustomValidity(message);
+  const warning = input.closest("[data-finance-specific-payment-date]")?.querySelector("[data-finance-business-date-warning]");
+  if (warning) warning.hidden = message !== nonBusinessPaymentDateMessage;
 };
 
 const formatDateMaskSlashInput = (value) => {

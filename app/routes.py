@@ -71,6 +71,11 @@ from app.models import (
     ExamSessionSupervisorAssignment,
     ExamSessionYear,
     Fee,
+    BillingRequest,
+    BillingRequestEvent,
+    FinanceClientContact,
+    FinanceConcept,
+    FinanceContact,
     InternStage2Selection,
     InternStage3Selection,
     InternStageAnnualMeetingSelection,
@@ -81,6 +86,8 @@ from app.models import (
     PotentialEntryNoteMention,
     PotentialEntryPreassignedExamSession,
     PotentialEntryStatusTrack,
+    PaymentRequest,
+    PaymentRequestEvent,
     Provider,
     ProviderHistory,
     ProviderType,
@@ -228,6 +235,7 @@ MENU_PERMISSION_PATHS = (
     ("pre_session_control_tower", ("/pre-session-control-tower",)),
     ("monthly_exam_session_registrations", ("/monthly-exam-session-registrations",)),
     ("staff_payments", ("/staff-payments",)),
+    ("finance_requests", ("/finance-requests",)),
     ("fees", ("/fees",)),
     ("providers", ("/providers",)),
     ("users", ("/users",)),
@@ -3186,9 +3194,13 @@ def apply_import_row(member, row_data, update_empty_fields):
 def display_date(value):
     if not value:
         return ""
+    if isinstance(value, datetime):
+        return value.strftime("%d/%m/%Y")
+    if isinstance(value, date):
+        return value.strftime("%d/%m/%Y")
     try:
         parsed = datetime.strptime(value, "%Y-%m-%d")
-    except ValueError:
+    except (TypeError, ValueError):
         return value
     return parsed.strftime("%d/%m/%Y")
 
@@ -21313,6 +21325,1611 @@ def pre_session_note_mentions_count_for_current_user():
             ExamSessionStaffingNoteMention.is_read.is_(False),
         ).count()
     )
+
+
+FINANCE_REQUESTS_MENU_KEY = "finance_requests"
+PAYMENT_STATUSES = (
+    "Submitted",
+    "Pending approval",
+    "Needs correction",
+    "Resubmitted",
+    "Rejected",
+    "Management approved",
+    "Payment scheduled",
+    "Payment delayed",
+    "Payment completed",
+    "Payment cancelled",
+    "On hold",
+)
+PAYMENT_HOLD_ELIGIBLE_STATUSES = {
+    "Submitted",
+    "Pending approval",
+    "Needs correction",
+    "Resubmitted",
+    "Management approved",
+    "Payment scheduled",
+    "Payment delayed",
+}
+PAYMENT_ARCHIVE_ELIGIBLE_STATUSES = {"Payment completed", "Rejected", "Payment cancelled"}
+PAYMENT_METHODS = ("Bank transfer", "Deposit", "Cash", "Card")
+BILLING_ARCHIVE_ELIGIBLE_STATUSES = {"Invoice issued", "Invoice cancelled"}
+BILLING_STATUSES = (
+    "Requested",
+    "Needs correction",
+    "Rejected",
+    "Processing invoice",
+    "Invoice scheduled",
+    "Invoice issued",
+    "Invoice cancelled",
+    "Cancelled",
+)
+VAT_STATUS_INVOICE_TYPES = (
+    "Responsable Inscripto (factura A)",
+    "Monotributista (factura A)",
+    "Consumidor Final (factura B)",
+    "IVA Sujeto Exento (factura B)",
+    "International clients (factura E)",
+)
+VAT_STATUS_REQUIRES_FULL_ADDRESS = {
+    "Responsable Inscripto (factura A)",
+    "Monotributista (factura A)",
+    "IVA Sujeto Exento (factura B)",
+    "International clients (factura E)",
+}
+FINANCE_VISIBILITY_MODES = ("Standard", "Restricted", "Superadmin only")
+FINANCE_NON_BUSINESS_PAYMENT_DATE_MESSAGE = "Payments cannot be processed on Saturdays, Sundays or public holidays."
+PAYMENT_DESCRIPTION_MAX_LENGTH = 90
+FINANCE_CONCEPT_SEEDS = (
+    "Accounting",
+    "Training",
+    "Printing",
+    "Consultancy",
+    "Communications",
+    "Logistics",
+    "Software",
+    "Legal",
+    "Academic services",
+    "Design",
+    "Travel",
+    "Reimbursements",
+    "Office expenses",
+    "Other",
+)
+
+
+def current_actor():
+    user = getattr(g, "current_user", None)
+    session_department = session.get("user_department") if has_request_context() else None
+    return {
+        "user": user,
+        "user_id": getattr(user, "id", None),
+        "department": getattr(user, "department", None) or session_department or "Unknown department",
+        "is_superadmin": current_user_is_superadmin(),
+        "can_edit": user_can_edit(FINANCE_REQUESTS_MENU_KEY) if has_request_context() else False,
+    }
+
+
+def is_finance_user():
+    return current_user_is_superadmin() or (getattr(g, "current_user", None) and g.current_user.department == "Finance")
+
+
+def can_manage_payment_visibility():
+    current_user = getattr(g, "current_user", None)
+    return bool(current_user_is_superadmin() or (current_user and current_user.department == "Management"))
+
+
+def finance_request_redirect(tab="payment_requests", **params):
+    params = {key: value for key, value in params.items() if value not in (None, "")}
+    return redirect(url_for("staff.finance_requests", tab=tab, **params))
+
+
+def parse_finance_date(value):
+    if isinstance(value, datetime):
+        return value.date()
+    if isinstance(value, date):
+        return value
+    value = (value or "").strip()
+    if not value:
+        return None
+    for fmt in ("%Y-%m-%d", "%d/%m/%Y"):
+        try:
+            return datetime.strptime(value, fmt).date()
+        except ValueError:
+            continue
+    raise ValueError("Use a valid date.")
+
+
+def finance_next_payment_run_date(loaded_date=None):
+    base_date = loaded_date or today_local()
+    if isinstance(base_date, datetime):
+        base_date = base_date.date()
+    earliest_date = base_date + timedelta(days=13)
+    days_until_monday = (7 - earliest_date.weekday()) % 7
+    payment_run_date = earliest_date + timedelta(days=days_until_monday)
+    while not is_argentina_business_day(payment_run_date):
+        payment_run_date += timedelta(days=1)
+    return payment_run_date
+
+
+def parse_finance_amount(value):
+    try:
+        amount = Decimal((value or "").strip().replace(",", "."))
+    except (InvalidOperation, AttributeError):
+        raise ValueError("Amount must be a valid number.")
+    if amount <= 0:
+        raise ValueError("Amount must be greater than 0.")
+    return amount
+
+
+def clean_optional_url(value, field_label):
+    value = (value or "").strip()
+    if value and not is_valid_url(value):
+        raise ValueError(f"{field_label} must be a valid URL.")
+    return value
+
+
+def finance_contact_name(contact, fallback=""):
+    return contact.display_name if contact else (fallback or "").strip()
+
+
+def update_finance_contact_from_payment(contact, payee_name, concept, currency, payment_method, bank_details):
+    if not payee_name:
+        return contact
+    if not contact:
+        contact = FinanceContact(display_name=payee_name)
+        db.session.add(contact)
+    contact.display_name = payee_name
+    contact.default_concept = concept
+    contact.default_currency = currency
+    contact.default_payment_method = payment_method
+    contact.is_active = True
+    if payment_method in {"Bank transfer", "Deposit"}:
+        contact.account_holder = bank_details["account_holder"]
+        contact.account_number = bank_details["account_number"]
+        contact.alias = bank_details["alias"]
+        contact.tax_id = bank_details["tax_id"]
+    else:
+        contact.account_holder = ""
+        contact.account_number = ""
+        contact.alias = ""
+        contact.tax_id = ""
+    return contact
+
+
+def update_finance_client_contact_from_billing(
+    contact,
+    client_name,
+    concept,
+    currency,
+    client_tax_id,
+    vat_status_invoice_type,
+    client_full_address,
+):
+    if not client_name:
+        return contact
+    if not contact:
+        contact = FinanceClientContact(display_name=client_name)
+        db.session.add(contact)
+    contact.display_name = client_name
+    contact.default_concept = concept
+    contact.default_currency = currency
+    contact.client_tax_id = client_tax_id
+    contact.vat_status_invoice_type = vat_status_invoice_type
+    contact.client_full_address = client_full_address if vat_status_invoice_type in VAT_STATUS_REQUIRES_FULL_ADDRESS else ""
+    contact.is_active = True
+    return contact
+
+
+def finance_bank_snapshot(payment):
+    if not payment or not payment.bank_details_snapshot:
+        return {}
+    try:
+        snapshot = json.loads(payment.bank_details_snapshot)
+    except (TypeError, ValueError):
+        return {}
+    return snapshot if isinstance(snapshot, dict) else {}
+
+
+def ensure_default_finance_concepts():
+    if FinanceConcept.query.count():
+        return
+    for index, name in enumerate(FINANCE_CONCEPT_SEEDS, start=1):
+        db.session.add(FinanceConcept(name=name, applies_to="Both", display_order=index))
+    db.session.commit()
+
+
+def next_finance_request_number(model, prefix, legacy_prefixes=()):
+    year = date.today().year
+    prefixes = (prefix, *legacy_prefixes)
+    latest_number = 0
+    for lookup_prefix in prefixes:
+        pattern = f"{lookup_prefix}-{year}-%"
+        latest = model.query.filter(model.request_number.like(pattern)).order_by(model.request_number.desc()).first()
+        if latest and latest.request_number:
+            try:
+                latest_number = max(latest_number, int(latest.request_number.rsplit("-", 1)[-1]))
+            except ValueError:
+                latest_number = max(latest_number, model.query.filter(model.request_number.like(pattern)).count())
+    next_number = 1
+    if latest_number:
+        next_number = latest_number + 1
+    return f"{prefix}-{year}-{next_number:04d}"
+
+
+def can_view_payment_request(user, payment):
+    if current_user_is_superadmin():
+        return True
+    if not user_can_view(FINANCE_REQUESTS_MENU_KEY):
+        return False
+    if not user:
+        return bool(session.get("user"))
+    if payment.requester_user_id == user.id:
+        return True
+    if payment.visibility_mode == "Superadmin only":
+        return False
+    if user.department == "Management":
+        return True
+    if user.department == "Finance" and payment.visible_to_finance and payment.status in {
+        "Pending approval",
+        "Management approved",
+        "Payment scheduled",
+        "Payment delayed",
+        "Payment completed",
+        "Payment cancelled",
+        "On hold",
+    }:
+        return True
+    if payment.visibility_mode == "Standard":
+        return True
+    return False
+
+
+def can_use_payment_request_card_actions(user, payment):
+    if not user_can_edit(FINANCE_REQUESTS_MENU_KEY):
+        return False
+    if current_user_is_superadmin():
+        return True
+    if not user:
+        return False
+    if payment.visibility_mode == "Superadmin only":
+        return False
+    if user.department == "Management":
+        return can_view_payment_request(user, payment)
+    return payment.requester_user_id == user.id
+
+
+def can_edit_payment_request(user, payment):
+    if payment.status not in {"Submitted", "Needs correction"}:
+        return False
+    return can_use_payment_request_card_actions(user, payment)
+
+
+def can_management_review_payment(user, payment):
+    return current_user_is_superadmin() and can_view_payment_request(user, payment)
+
+
+def payment_amount_is_pending(payment):
+    return bool(payment and payment.status == "Pending approval" and (payment.amount is None or payment.amount <= 0))
+
+
+def can_finance_process_payment(user, payment):
+    if current_user_is_superadmin():
+        return True
+    return bool(user and user.department == "Finance" and can_view_payment_request(user, payment))
+
+
+def can_hold_payment_request(user, payment):
+    return payment.status in PAYMENT_HOLD_ELIGIBLE_STATUSES and can_use_payment_request_card_actions(user, payment)
+
+
+def can_release_payment_hold(user, payment):
+    return payment.status == "On hold" and can_use_payment_request_card_actions(user, payment)
+
+
+def can_archive_payment_request(user, payment):
+    return (
+        payment.status in PAYMENT_ARCHIVE_ELIGIBLE_STATUSES
+        and not payment.is_archived
+        and can_use_payment_request_card_actions(user, payment)
+    )
+
+
+def payment_is_delayed(payment, today=None):
+    today = today or date.today()
+    return bool(
+        payment
+        and payment.scheduled_payment_date
+        and payment.scheduled_payment_date < today
+        and payment.status in {"Management approved", "Payment scheduled", "On hold"}
+    )
+
+
+def can_view_billing_request(user, billing):
+    if current_user_is_superadmin():
+        return True
+    if not user_can_view(FINANCE_REQUESTS_MENU_KEY):
+        return False
+    if not user:
+        return bool(session.get("user"))
+    if billing.requester_user_id == user.id:
+        return True
+    if billing.visibility_mode == "Superadmin only":
+        return False
+    if user.department == "Finance":
+        return True
+    return billing.visibility_mode == "Standard"
+
+
+def can_edit_billing_request(user, billing):
+    if not user_can_edit(FINANCE_REQUESTS_MENU_KEY):
+        return False
+    if current_user_is_superadmin():
+        return True
+    if not user:
+        return False
+    return user.department == "Finance" or (billing.requester_user_id == user.id and billing.status in {"Requested", "Needs correction"})
+
+
+def can_archive_billing_request(user, billing):
+    if not user_can_edit(FINANCE_REQUESTS_MENU_KEY):
+        return False
+    if not billing or billing.status not in BILLING_ARCHIVE_ELIGIBLE_STATUSES or billing.is_archived:
+        return False
+    if current_user_is_superadmin():
+        return True
+    if not user or not can_view_billing_request(user, billing):
+        return False
+    return user.department == "Finance" or billing.requester_user_id == user.id
+
+
+def add_payment_event(payment, event_type, previous_status=None, new_status=None, comment=None, commit=False):
+    actor = current_actor()
+    duplicate = PaymentRequestEvent.query.filter_by(
+        payment_request_id=payment.id,
+        event_type=event_type,
+        previous_status=previous_status,
+        new_status=new_status,
+        comment=comment,
+    ).first()
+    if duplicate and event_type.startswith("Payment automatically marked as delayed"):
+        return duplicate
+    event = PaymentRequestEvent(
+        payment_request=payment,
+        event_type=event_type,
+        previous_status=previous_status,
+        new_status=new_status,
+        comment=(comment or "").strip() or None,
+        created_by_user_id=actor["user_id"],
+        created_by_department=actor["department"],
+    )
+    db.session.add(event)
+    if commit:
+        db.session.commit()
+    return event
+
+
+def add_billing_event(billing, event_type, previous_status=None, new_status=None, comment=None, commit=False):
+    actor = current_actor()
+    event = BillingRequestEvent(
+        billing_request=billing,
+        event_type=event_type,
+        previous_status=previous_status,
+        new_status=new_status,
+        comment=(comment or "").strip() or None,
+        created_by_user_id=actor["user_id"],
+        created_by_department=actor["department"],
+    )
+    db.session.add(event)
+    if commit:
+        db.session.commit()
+    return event
+
+
+def reconcile_overdue_payment_requests(today=None):
+    return 0
+
+
+def payment_copy_summary(payment):
+    rows = [
+        ("Payment request", payment.request_number),
+        ("Description", payment.description),
+        ("Concept", payment.concept_name_snapshot),
+        ("Amount", f"{payment.currency} {payment.amount}" if payment.currency and payment.amount else ""),
+        ("Payment method", payment.payment_method),
+        ("Payee", payment.payee_name_snapshot),
+        ("Status", payment.status),
+        ("Scheduled payment date", display_date(payment.scheduled_payment_date)),
+        ("Supporting documentation", payment.supporting_documentation_url),
+        ("Payment proof", payment.payment_proof_url),
+    ]
+    return "\n".join(f"{label}: {value}" for label, value in rows if value not in (None, "", "None", "null", "undefined"))
+
+
+PAYMENT_WHATSAPP_STATUS_LABELS = {
+    "Submitted": "Submitted",
+    "Pending approval": "Pending Approval",
+    "Needs correction": "Needs Correction",
+    "Resubmitted": "Resubmitted",
+    "Rejected": "Rejected",
+    "Management approved": "Management Approved",
+    "On hold": "On Hold",
+    "Payment scheduled": "Payment Scheduled",
+    "Payment delayed": "Payment Delayed",
+    "Payment completed": "Payment Completed",
+    "Payment cancelled": "Payment Cancelled",
+}
+
+PAYMENT_WHATSAPP_STATUS_LABELS_ES = {
+    "Submitted": "Enviado",
+    "Pending approval": "Pendiente de aprobación",
+    "Needs correction": "Necesita corrección",
+    "Resubmitted": "Reenviado",
+    "Rejected": "Rechazado",
+    "Management approved": "Aprobado por Management",
+    "On hold": "En pausa",
+    "Payment scheduled": "Pago programado",
+    "Payment delayed": "Pago demorado",
+    "Payment completed": "Pago completado",
+    "Payment cancelled": "Pago cancelado",
+}
+
+
+def payment_status_changed_at(payment):
+    for event in payment.events:
+        if event.new_status == payment.status:
+            return event.created_on
+    return payment.updated_on or payment.archived_at
+
+
+def payment_whatsapp_datetime(value):
+    if not value:
+        return ""
+    if value.tzinfo is None:
+        value = value.replace(tzinfo=timezone.utc)
+    local_value = value.astimezone(LOCAL_TZ)
+    return local_value.strftime("%d/%m/%Y at %H:%Mh")
+
+
+def payment_whatsapp_datetime_es(value):
+    if not value:
+        return ""
+    if value.tzinfo is None:
+        value = value.replace(tzinfo=timezone.utc)
+    local_value = value.astimezone(LOCAL_TZ)
+    return local_value.strftime("%d/%m/%Y a las %H:%M h")
+
+
+def payment_whatsapp_copy_contract(payment, language="en"):
+    request_number = (payment.request_number or "").strip()
+    if not request_number:
+        return {"message": "", "error": "Payment number is required to copy this message."}
+    payee_name = (payment.payee_name_snapshot or getattr(payment.payee_contact, "display_name", "") or "").strip()
+    if not payee_name:
+        return {"message": "", "error": "Payee name is required to copy this message."}
+    is_spanish = language == "sp"
+    status_labels = PAYMENT_WHATSAPP_STATUS_LABELS_ES if is_spanish else PAYMENT_WHATSAPP_STATUS_LABELS
+    status_label = status_labels.get(payment.status, (payment.status or "").replace("_", " ").title())
+    if not status_label:
+        return {"message": "", "error": "Payment status is required to copy this message."}
+    changed_at = payment_status_changed_at(payment)
+    changed_at_label = payment_whatsapp_datetime_es(changed_at) if is_spanish else payment_whatsapp_datetime(changed_at)
+    if not changed_at_label:
+        return {"message": "", "error": "Payment status change date is required to copy this message."}
+    if payment.status == "Payment completed" and not payment.payment_proof_url:
+        return {"message": "", "error": "Payment proof link is required to copy a completed payment message."}
+    if is_spanish:
+        message = (
+            f"*{request_number}*\n\n"
+            f"El pago a *{payee_name}* fue actualizado a *{status_label}* el *{changed_at_label}.*"
+        )
+        if payment.status == "Payment completed":
+            message += f"\n\n*Ver el comprobante del pago aquí:* {payment.payment_proof_url}"
+    else:
+        message = (
+            f"*{request_number}*\n\n"
+            f"The payment to *{payee_name}* was updated to *{status_label}* on *{changed_at_label}.*"
+        )
+        if payment.status == "Payment completed":
+            message += f"\n\n*View the payment receipt here:* {payment.payment_proof_url}"
+    message += "\n\n*Path International Examinations*"
+    return {"message": message, "error": ""}
+
+
+def payment_finalized_at(payment):
+    if payment.status == "Payment completed" and payment.payment_completed_at:
+        return payment.payment_completed_at
+    for event in payment.events:
+        if event.new_status == payment.status or event.event_type == payment.status:
+            return event.created_on
+    return payment.updated_on or payment.archived_at
+
+
+def billing_completed_at(billing):
+    if billing.status != "Invoice issued":
+        return None
+    for event in billing.events:
+        if event.new_status == "Invoice issued" or event.event_type == "Invoice issued":
+            return event.created_on
+    return billing.updated_on
+
+
+def billing_finalized_at(billing):
+    if billing.status not in {"Invoice issued", "Invoice cancelled"}:
+        return None
+    for event in billing.events:
+        if event.new_status == billing.status or event.event_type == billing.status:
+            return event.created_on
+    return billing.updated_on
+
+
+BILLING_WHATSAPP_STATUS_LABELS = {
+    "Requested": "Requested",
+    "Needs correction": "Needs Correction",
+    "Rejected": "Rejected",
+    "Processing invoice": "Processing Invoice",
+    "Invoice scheduled": "Invoice Scheduled",
+    "Invoice issued": "Invoice issued",
+    "Invoice cancelled": "Invoice Cancelled",
+    "Cancelled": "Cancelled",
+}
+
+BILLING_WHATSAPP_STATUS_LABELS_ES = {
+    "Requested": "Solicitada",
+    "Needs correction": "Necesita corrección",
+    "Rejected": "Rechazada",
+    "Processing invoice": "Procesando factura",
+    "Invoice scheduled": "Factura programada",
+    "Invoice issued": "Factura emitida",
+    "Invoice cancelled": "Factura cancelada",
+    "Cancelled": "Cancelada",
+}
+
+
+def billing_status_changed_at(billing):
+    for event in billing.events:
+        if event.new_status == billing.status:
+            return event.created_on
+    return billing.updated_on or billing.archived_at or billing.created_on
+
+
+def billing_whatsapp_copy_contract(billing, language="en"):
+    request_number = (billing.request_number or "").strip()
+    if not request_number:
+        return {"message": "", "error": "Invoice number is required to copy this message."}
+    client_name = (billing.client_name_snapshot or getattr(billing.client_contact, "display_name", "") or "").strip()
+    if not client_name:
+        return {"message": "", "error": "Client name is required to copy this message."}
+    is_spanish = language == "sp"
+    status_labels = BILLING_WHATSAPP_STATUS_LABELS_ES if is_spanish else BILLING_WHATSAPP_STATUS_LABELS
+    status_label = status_labels.get(billing.status, (billing.status or "").replace("_", " ").title())
+    if not status_label:
+        return {"message": "", "error": "Invoice status is required to copy this message."}
+    changed_at = billing_status_changed_at(billing)
+    changed_at_label = payment_whatsapp_datetime_es(changed_at) if is_spanish else payment_whatsapp_datetime(changed_at)
+    if not changed_at_label:
+        return {"message": "", "error": "Invoice status change date is required to copy this message."}
+    if billing.status == "Invoice issued" and not billing.invoice_link:
+        return {"message": "", "error": "Invoice link is required to copy an issued invoice message."}
+    if is_spanish:
+        message = (
+            f"*{request_number}*\n\n"
+            f"La factura para *{client_name}* fue actualizada a *{status_label}* el *{changed_at_label}.*"
+        )
+        if billing.invoice_link:
+            message += f"\n\n*Ver la factura aquí:* {billing.invoice_link}"
+    else:
+        message = (
+            f"*{request_number}*\n\n"
+            f"The invoice for *{client_name}* was updated to *{status_label}* on *{changed_at_label}.*"
+        )
+        if billing.invoice_link:
+            message += f"\n\n*View the invoice here:* {billing.invoice_link}"
+    message += "\n\n*Path International Examinations*"
+    return {"message": message, "error": ""}
+
+
+def payment_calendar_groups(payments, today=None):
+    today = today or date.today()
+    tomorrow = today + timedelta(days=1)
+    groups = {"today": [], "tomorrow": [], "upcoming": [], "delayed": []}
+    for payment in payments:
+        if payment.is_archived or payment.status in {"Payment completed", "Payment cancelled", "Rejected"}:
+            continue
+        if payment.status == "Payment delayed" or payment_is_delayed(payment, today=today):
+            groups["today"].append(payment)
+            groups["delayed"].append(payment)
+            continue
+        if not payment.scheduled_payment_date:
+            continue
+        if payment.scheduled_payment_date == today:
+            groups["today"].append(payment)
+        elif payment.scheduled_payment_date == tomorrow:
+            groups["tomorrow"].append(payment)
+        elif payment.scheduled_payment_date > tomorrow:
+            groups["upcoming"].append(payment)
+    return groups
+
+
+def finance_action_filter_groups(payments, today=None):
+    today = today or date.today()
+    tomorrow = today + timedelta(days=1)
+    groups = {"today": [], "tomorrow": [], "future": {}}
+    for payment in payments:
+        if payment.is_archived:
+            continue
+        if payment.status not in {"Management approved", "Payment scheduled"} or not payment.scheduled_payment_date:
+            continue
+        if payment.scheduled_payment_date <= today:
+            groups["today"].append(payment)
+        elif payment.scheduled_payment_date == tomorrow:
+            groups["tomorrow"].append(payment)
+        elif payment.scheduled_payment_date > tomorrow:
+            groups["future"].setdefault(payment.scheduled_payment_date, []).append(payment)
+    return groups
+
+
+def finance_visible_payments(show_archived=False):
+    user = getattr(g, "current_user", None)
+    payments = PaymentRequest.query.options(joinedload(PaymentRequest.requester)).order_by(PaymentRequest.created_on.desc(), PaymentRequest.id.desc()).all()
+    return [
+        payment for payment in payments
+        if can_view_payment_request(user, payment) and (show_archived or not payment.is_archived)
+    ]
+
+
+def finance_visible_billings(show_archived=False):
+    user = getattr(g, "current_user", None)
+    billings = BillingRequest.query.options(joinedload(BillingRequest.requester)).order_by(BillingRequest.created_on.desc()).all()
+    return [
+        billing for billing in billings
+        if can_view_billing_request(user, billing) and (show_archived or not billing.is_archived)
+    ]
+
+
+def apply_payment_form(payment, form, allow_status=False, save_payee_contact=False, allow_empty_amount=False):
+    errors = []
+    concept = FinanceConcept.query.get(form.get("concept_id") or 0)
+    payee_name = (form.get("payee_name") or "").strip()
+    contact = FinanceContact.query.get(form.get("payee_contact_id") or 0) if form.get("payee_contact_id") else None
+    if not contact and payee_name:
+        contact = FinanceContact.query.filter(db.func.lower(FinanceContact.display_name) == payee_name.lower()).first()
+    amount_value = (form.get("amount") or "").strip()
+    if allow_empty_amount and not amount_value:
+        amount = Decimal("0.00")
+    else:
+        try:
+            amount = parse_finance_amount(amount_value)
+        except ValueError as exc:
+            errors.append(str(exc))
+            amount = None
+    description = (form.get("description") or "").strip()
+    currency = (form.get("currency") or "").strip().upper()
+    payment_method = (form.get("payment_method") or "").strip()
+    if not description:
+        errors.append("Description is required.")
+    if len(description) > PAYMENT_DESCRIPTION_MAX_LENGTH:
+        errors.append(f"Description must be {PAYMENT_DESCRIPTION_MAX_LENGTH} characters or fewer.")
+    if not concept:
+        errors.append("Concept is required.")
+    if not currency:
+        errors.append("Currency is required.")
+    if payment_method not in PAYMENT_METHODS:
+        errors.append("Payment method is required.")
+    payment_date_mode = (form.get("payment_date_mode") or "asap").strip()
+    if payment_date_mode not in {"asap", "specific"}:
+        payment_date_mode = "asap"
+    try:
+        requested_date = parse_finance_date(form.get("requested_payment_date"))
+        if payment_date_mode == "asap":
+            should_keep_existing_asap_date = (
+                payment.id
+                and payment.payment_date_mode == "asap"
+                and payment.scheduled_payment_date
+                and form.get("payment_date_recalculated") != "1"
+            )
+            scheduled_date = payment.scheduled_payment_date if should_keep_existing_asap_date else finance_next_payment_run_date()
+        else:
+            scheduled_date = parse_finance_date(form.get("scheduled_payment_date"))
+    except ValueError as exc:
+        errors.append(str(exc))
+        requested_date = scheduled_date = None
+    if payment_date_mode == "specific" and not scheduled_date:
+        errors.append("Payment date is required when Specific date is selected.")
+    if payment_date_mode == "specific" and scheduled_date and scheduled_date < date.today():
+        errors.append("Payment date cannot be in the past.")
+    if payment_date_mode == "specific" and scheduled_date and not is_argentina_business_day(scheduled_date):
+        errors.append(FINANCE_NON_BUSINESS_PAYMENT_DATE_MESSAGE)
+    account_holder = (form.get("account_holder") or getattr(contact, "account_holder", "") or "").strip()
+    account_number = (form.get("account_number") or getattr(contact, "account_number", "") or "").strip()
+    alias = (form.get("alias") or getattr(contact, "alias", "") or "").strip()
+    tax_id = (form.get("tax_id") or getattr(contact, "tax_id", "") or "").strip()
+    card_payment_status = (form.get("card_payment_status") or "").strip()
+    if payment_method == "Card" and card_payment_status == "Already paid":
+        scheduled_date = None
+    if payment_method in {"Bank transfer", "Deposit"} and not account_holder:
+        errors.append("Account holder is required for bank transfer/deposit.")
+    if payment_method in {"Bank transfer", "Deposit"} and not (account_number or alias):
+        errors.append("CBU / CVU or Alias is required for bank transfer/deposit.")
+    if payment_method == "Card" and card_payment_status not in {"Already paid", "To be paid"}:
+        errors.append("Select whether the card payment is already paid or to be paid.")
+    try:
+        supporting_url = clean_optional_url(form.get("supporting_documentation_url"), "Supporting documentation")
+    except ValueError as exc:
+        errors.append(str(exc))
+        supporting_url = ""
+    if errors:
+        return errors
+    if save_payee_contact:
+        contact = update_finance_contact_from_payment(
+            contact,
+            payee_name,
+            concept,
+            currency,
+            payment_method,
+            {
+                "account_holder": account_holder if payment_method in {"Bank transfer", "Deposit"} else "",
+                "account_number": account_number if payment_method in {"Bank transfer", "Deposit"} else "",
+                "alias": alias if payment_method in {"Bank transfer", "Deposit"} else "",
+                "tax_id": tax_id if payment_method in {"Bank transfer", "Deposit"} else "",
+            },
+        )
+    payment.description = description
+    payment.concept = concept
+    payment.concept_name_snapshot = concept.name
+    payment.payee_contact = contact
+    payment.payee_name_snapshot = finance_contact_name(contact, payee_name)
+    payment.amount = amount
+    payment.currency = currency
+    payment.payment_method = payment_method
+    payment.requested_payment_date = requested_date
+    payment.scheduled_payment_date = scheduled_date
+    payment.payment_date_mode = payment_date_mode
+    payment.fixed_payment_date_required = form.get("fixed_payment_date_required") == "1"
+    payment.supporting_documentation_url = supporting_url
+    payment.requester_comments = (form.get("requester_comments") or "").strip()
+    if can_manage_payment_visibility():
+        payment.visibility_mode = form.get("visibility_mode") if form.get("visibility_mode") in FINANCE_VISIBILITY_MODES else "Standard"
+        if payment.visibility_mode == "Superadmin only" and not current_user_is_superadmin():
+            payment.visibility_mode = "Restricted"
+    elif not payment.id:
+        payment.visibility_mode = "Standard"
+    payment.bank_details_snapshot = json.dumps({
+        "bank_name": (form.get("bank_name") or getattr(contact, "bank_name", "") or "").strip(),
+        "account_holder": account_holder,
+        "account_number": account_number,
+        "alias": alias,
+        "tax_id": tax_id,
+        "card_payment_status": card_payment_status if payment_method == "Card" else "",
+        "additional_bank_details": (form.get("additional_bank_details") or "").strip(),
+    })
+    if allow_status and form.get("status") in PAYMENT_STATUSES:
+        payment.status = form.get("status")
+    return []
+
+
+def apply_billing_form(billing, form, save_client_contact=False):
+    errors = []
+    concept = FinanceConcept.query.get(form.get("concept_id") or 0)
+    client_name_input = (form.get("client_name") or "").strip()
+    contact = FinanceClientContact.query.get(form.get("client_contact_id") or 0) if form.get("client_contact_id") else None
+    if not contact and client_name_input:
+        contact = FinanceClientContact.query.filter(db.func.lower(FinanceClientContact.display_name) == client_name_input.lower()).first()
+    try:
+        amount = parse_finance_amount(form.get("amount"))
+    except ValueError as exc:
+        errors.append(str(exc))
+        amount = None
+    description = (form.get("description") or "").strip()
+    currency = (form.get("currency") or "").strip().upper()
+    client_tax_id = (form.get("client_tax_id") or "").strip()
+    vat_status_invoice_type = (form.get("vat_status_invoice_type") or "").strip()
+    client_full_address = (form.get("client_full_address") or "").strip()
+    client_name = finance_contact_name(contact, client_name_input)
+    if not client_name:
+        errors.append("Client/contact is required.")
+    if not concept:
+        errors.append("Concept is required.")
+    if not currency:
+        errors.append("Currency is required.")
+    if not client_tax_id:
+        errors.append("Tax ID / CUIL / CUIT is required.")
+    if not vat_status_invoice_type:
+        errors.append("VAT status / Invoice type is required.")
+    elif vat_status_invoice_type not in VAT_STATUS_INVOICE_TYPES:
+        errors.append("Select a valid VAT status / invoice type.")
+    if vat_status_invoice_type in VAT_STATUS_REQUIRES_FULL_ADDRESS and not client_full_address:
+        errors.append("Full address is required.")
+    try:
+        requested_date = parse_finance_date(form.get("requested_invoice_issue_date"))
+        scheduled_date = parse_finance_date(form.get("scheduled_invoice_issue_date"))
+    except ValueError as exc:
+        errors.append(str(exc))
+        requested_date = scheduled_date = None
+    for value, label in (
+        (form.get("invoice_link"), "Invoice link"),
+        (form.get("supporting_documentation_url"), "Supporting documentation"),
+    ):
+        try:
+            clean_optional_url(value, label)
+        except ValueError as exc:
+            errors.append(str(exc))
+    if errors:
+        return errors
+    if save_client_contact:
+        contact = update_finance_client_contact_from_billing(
+            contact,
+            client_name,
+            concept,
+            currency,
+            client_tax_id,
+            vat_status_invoice_type,
+            client_full_address,
+        )
+    if not description:
+        description = concept.name if concept else "Invoice request"
+    billing.client_contact = contact
+    billing.client_name_snapshot = client_name
+    billing.concept = concept
+    billing.concept_name_snapshot = concept.name
+    billing.description = description
+    billing.currency = currency
+    billing.amount = amount
+    billing.client_tax_id = client_tax_id
+    billing.vat_status_invoice_type = vat_status_invoice_type
+    billing.client_full_address = client_full_address if vat_status_invoice_type in VAT_STATUS_REQUIRES_FULL_ADDRESS else ""
+    billing.requested_invoice_issue_date = requested_date
+    billing.scheduled_invoice_issue_date = scheduled_date
+    billing.invoice_number = (form.get("invoice_number") or "").strip()
+    billing.invoice_link = (form.get("invoice_link") or "").strip()
+    billing.supporting_documentation_url = (form.get("supporting_documentation_url") or "").strip()
+    billing.requester_comments = (form.get("requester_comments") or "").strip()
+    billing.finance_comments = (form.get("finance_comments") or "").strip()
+    billing.visibility_mode = form.get("visibility_mode") if form.get("visibility_mode") in FINANCE_VISIBILITY_MODES else "Standard"
+    return []
+
+
+@staff_bp.route("/finance-requests")
+@login_required
+def finance_requests():
+    require_menu_view(FINANCE_REQUESTS_MENU_KEY)
+    ensure_default_finance_concepts()
+    reconcile_overdue_payment_requests()
+    active_tab = request.args.get("tab") or "payment_requests"
+    valid_tabs = {"payment_requests", "billing_requests"}
+    if current_user_is_superadmin():
+        valid_tabs.update({"management_review", "finance_payments", "concepts"})
+    elif is_finance_user():
+        valid_tabs.update({"finance_payments"})
+    if active_tab not in valid_tabs:
+        active_tab = "payment_requests"
+    show_archived = request.args.get("show_archived") == "1"
+    show_archived_invoices = request.args.get("show_archived_invoices") == "1"
+    finance_sort_by = request.args.get("sort", "").strip()
+    finance_sort_dir = request.args.get("dir", "asc").strip()
+    if finance_sort_by not in {"payment_no", "invoice_no", "final_date", "status", "payee", "client", "concept"}:
+        finance_sort_by = ""
+    if finance_sort_dir not in {"asc", "desc"}:
+        finance_sort_dir = "asc"
+    all_visible_payments = finance_visible_payments(show_archived=True)
+    visible_payments = finance_visible_payments(show_archived=show_archived)
+    payment_requests = [
+        payment for payment in all_visible_payments
+        if payment.is_archived == show_archived
+    ]
+    finance_archived_payments = [
+        payment for payment in all_visible_payments
+        if payment.status in {"Payment completed", "Payment cancelled", "Rejected"}
+    ]
+    min_datetime = datetime.min.replace(tzinfo=timezone.utc)
+
+    def sorted_finance_payment_list(payments):
+        if finance_sort_by:
+            if finance_sort_by == "payment_no":
+                return sorted(payments, key=lambda payment: (payment.request_number or "", payment.request_number or ""), reverse=finance_sort_dir == "desc")
+            if finance_sort_by == "final_date":
+                return sorted(payments, key=lambda payment: (payment_finalized_at(payment) or min_datetime, payment.request_number or ""), reverse=finance_sort_dir == "desc")
+            if finance_sort_by == "status":
+                return sorted(payments, key=lambda payment: ((payment.status or "").casefold(), payment.request_number or ""), reverse=finance_sort_dir == "desc")
+            if finance_sort_by == "payee":
+                return sorted(payments, key=lambda payment: ((payment.payee_name_snapshot or "").casefold(), payment.request_number or ""), reverse=finance_sort_dir == "desc")
+            if finance_sort_by == "concept":
+                return sorted(payments, key=lambda payment: ((payment.concept_name_snapshot or "").casefold(), payment.request_number or ""), reverse=finance_sort_dir == "desc")
+        terminal_statuses = {"Payment completed", "Payment cancelled"}
+
+        def default_payment_request_sort_value(payment):
+            is_terminal = payment.status in terminal_statuses
+            activity_date = (
+                payment_finalized_at(payment)
+                if is_terminal
+                else payment.created_on
+            ) or payment.updated_on or payment.archived_at or min_datetime
+            return (is_terminal, activity_date, payment.id or 0)
+
+        return sorted(payments, key=default_payment_request_sort_value, reverse=True)
+
+    payment_requests = sorted_finance_payment_list(payment_requests)
+    finance_archived_payments = sorted_finance_payment_list(finance_archived_payments)
+
+    def finance_sort_url(column):
+        args = request.args.to_dict(flat=False)
+        args.pop("open_staff_modal", None)
+        args["tab"] = [active_tab if active_tab in {"payment_requests", "billing_requests", "finance_payments"} else "payment_requests"]
+        if show_archived_invoices:
+            args.pop("show_archived", None)
+            args["show_archived_invoices"] = ["1"]
+        else:
+            args.pop("show_archived_invoices", None)
+            args["show_archived"] = ["1"]
+        current_sort = args.get("sort", [""])[0]
+        current_dir = args.get("dir", ["asc"])[0]
+        next_dir = "desc" if current_sort == column and current_dir == "asc" else "asc"
+        args["sort"] = [column]
+        args["dir"] = [next_dir]
+        return url_for("staff.finance_requests", **args)
+
+    finance_action_candidates = [
+        payment for payment in visible_payments
+        if payment.status in {"Management approved", "Payment scheduled"}
+    ]
+    finance_pending_approval_payments = [
+        payment for payment in visible_payments
+        if payment.status == "Pending approval"
+    ]
+    finance_action_groups = finance_action_filter_groups(finance_action_candidates)
+    all_visible_billings = finance_visible_billings(show_archived=True)
+    visible_billings = finance_visible_billings(show_archived=show_archived_invoices)
+    billing_requests = [
+        billing for billing in all_visible_billings
+        if billing.is_archived == show_archived_invoices
+    ]
+    finance_archived_billings = [
+        billing for billing in all_visible_billings
+        if billing.status in {"Invoice issued", "Invoice cancelled"}
+    ]
+
+    def sorted_finance_billing_list(billings):
+        if finance_sort_by:
+            if finance_sort_by == "invoice_no":
+                return sorted(billings, key=lambda billing: (billing.request_number or "", billing.request_number or ""), reverse=finance_sort_dir == "desc")
+            if finance_sort_by == "final_date":
+                return sorted(billings, key=lambda billing: (billing_finalized_at(billing) or min_datetime, billing.request_number or ""), reverse=finance_sort_dir == "desc")
+            if finance_sort_by == "status":
+                return sorted(billings, key=lambda billing: ((billing.status or "").casefold(), billing.request_number or ""), reverse=finance_sort_dir == "desc")
+            if finance_sort_by == "client":
+                return sorted(billings, key=lambda billing: ((billing.client_name_snapshot or "").casefold(), billing.request_number or ""), reverse=finance_sort_dir == "desc")
+            if finance_sort_by == "concept":
+                return sorted(billings, key=lambda billing: ((billing.concept_name_snapshot or "").casefold(), billing.request_number or ""), reverse=finance_sort_dir == "desc")
+        return sorted(
+            billings,
+            key=lambda billing: (billing_finalized_at(billing) or billing.updated_on or billing.created_on or min_datetime, billing.id or 0),
+            reverse=True,
+        )
+
+    finance_archived_billings = sorted_finance_billing_list(finance_archived_billings)
+    billing_requests = sorted_finance_billing_list(billing_requests)
+    finance_billings = [
+        billing for billing in all_visible_billings
+        if billing.status not in {"Invoice issued", "Invoice cancelled"}
+        and not billing.is_archived
+    ] if not show_archived and not show_archived_invoices else []
+    finance_action_filter = request.args.get("finance_filter") or "today"
+    finance_action_future_dates = sorted(finance_action_groups["future"])
+    valid_finance_action_filters = {"today", "tomorrow"} | {
+        f"date:{scheduled_date.isoformat()}" for scheduled_date in finance_action_future_dates
+    }
+    if finance_pending_approval_payments:
+        valid_finance_action_filters.add("pending_approval")
+    if finance_action_filter not in valid_finance_action_filters:
+        finance_action_filter = "today"
+    if finance_action_filter == "pending_approval":
+        finance_payments = finance_pending_approval_payments
+    elif finance_action_filter == "tomorrow":
+        finance_payments = finance_action_groups["tomorrow"]
+    elif finance_action_filter.startswith("date:"):
+        try:
+            selected_finance_date = date.fromisoformat(finance_action_filter.split(":", 1)[1])
+        except ValueError:
+            selected_finance_date = None
+        finance_payments = finance_action_groups["future"].get(selected_finance_date, [])
+    else:
+        finance_payments = finance_action_groups["today"]
+
+    def finance_action_filter_url(filter_key):
+        args = {"tab": "finance_payments", "finance_filter": filter_key}
+        if show_archived:
+            args["show_archived"] = "1"
+        if show_archived_invoices:
+            args["show_archived_invoices"] = "1"
+        return url_for("staff.finance_requests", **args)
+
+    finance_filter_options = [
+        {
+            "key": "today",
+            "label": "Today",
+            "count": len(finance_action_groups["today"]) + len(finance_billings),
+            "url": finance_action_filter_url("today"),
+            "is_active": finance_action_filter == "today",
+        },
+        {
+            "key": "tomorrow",
+            "label": "Tomorrow",
+            "count": len(finance_action_groups["tomorrow"]),
+            "url": finance_action_filter_url("tomorrow"),
+            "is_active": finance_action_filter == "tomorrow",
+        },
+    ]
+    for scheduled_date in finance_action_future_dates:
+        filter_key = f"date:{scheduled_date.isoformat()}"
+        finance_filter_options.append({
+            "key": filter_key,
+            "label": scheduled_date.strftime("%d/%m/%Y"),
+            "count": len(finance_action_groups["future"][scheduled_date]),
+            "url": finance_action_filter_url(filter_key),
+            "is_active": finance_action_filter == filter_key,
+        })
+    if finance_pending_approval_payments:
+        finance_filter_options.append({
+            "key": "pending_approval",
+            "label": "Pending approval",
+            "count": len(finance_pending_approval_payments),
+            "url": finance_action_filter_url("pending_approval"),
+            "is_active": finance_action_filter == "pending_approval",
+        })
+    management_payments = [
+        payment for payment in visible_payments
+        if payment.status in {"Submitted", "Pending approval", "Resubmitted"} and not payment.is_archived
+    ]
+    contacts = FinanceContact.query.order_by(FinanceContact.is_active.desc(), FinanceContact.display_name.asc()).all()
+    client_contacts = FinanceClientContact.query.order_by(FinanceClientContact.is_active.desc(), FinanceClientContact.display_name.asc()).all()
+    concepts = FinanceConcept.query.order_by(FinanceConcept.name.asc()).all()
+    calendar_groups = payment_calendar_groups(finance_action_candidates)
+    return render_template(
+        "finance_requests/index.html",
+        active_tab=active_tab,
+        valid_tabs=valid_tabs,
+        payment_requests=payment_requests,
+        finance_payments=finance_payments,
+        finance_billings=finance_billings,
+        finance_archived_payments=finance_archived_payments,
+        finance_archived_billings=finance_archived_billings,
+        management_payments=management_payments,
+        billing_requests=billing_requests,
+        contacts=contacts,
+        client_contacts=client_contacts,
+        concepts=concepts,
+        payment_concepts=[concept for concept in concepts if concept.is_active and concept.applies_to in {"Payments", "Both"}],
+        billing_concepts=[concept for concept in concepts if concept.is_active and concept.applies_to in {"Billing", "Both"}],
+        payment_methods=PAYMENT_METHODS,
+        payment_statuses=PAYMENT_STATUSES,
+        billing_statuses=BILLING_STATUSES,
+        vat_status_invoice_types=VAT_STATUS_INVOICE_TYPES,
+        vat_status_requires_full_address=VAT_STATUS_REQUIRES_FULL_ADDRESS,
+        visibility_modes=FINANCE_VISIBILITY_MODES,
+        calendar_groups=calendar_groups,
+        finance_filter_options=finance_filter_options,
+        active_finance_filter=finance_action_filter,
+        today_date=date.today(),
+        next_payment_run_date=finance_next_payment_run_date(),
+        show_archived=show_archived,
+        show_archived_invoices=show_archived_invoices,
+        sort=finance_sort_by,
+        dir=finance_sort_dir,
+        finance_sort_url=finance_sort_url,
+        can_manage_finance=is_finance_user(),
+        can_manage_concepts=current_user_is_superadmin(),
+        copy_payment_summary=payment_copy_summary,
+        payment_whatsapp_copy_contract=payment_whatsapp_copy_contract,
+        payment_finalized_at=payment_finalized_at,
+        payment_amount_is_pending=payment_amount_is_pending,
+        billing_completed_at=billing_completed_at,
+        billing_finalized_at=billing_finalized_at,
+        payment_is_delayed=payment_is_delayed,
+        billing_whatsapp_copy_contract=billing_whatsapp_copy_contract,
+        can_view_payment_request=can_view_payment_request,
+        can_edit_payment_request=can_edit_payment_request,
+        can_hold_payment_request=can_hold_payment_request,
+        can_release_payment_hold=can_release_payment_hold,
+        can_archive_payment_request=can_archive_payment_request,
+        can_finance_process_payment=can_finance_process_payment,
+        can_management_review_payment=can_management_review_payment,
+        can_edit_billing_request=can_edit_billing_request,
+        can_archive_billing_request=can_archive_billing_request,
+        can_manage_payment_visibility=can_manage_payment_visibility(),
+        finance_bank_snapshot=finance_bank_snapshot,
+        current_user=getattr(g, "current_user", None),
+        current_user_is_superadmin=current_user_is_superadmin(),
+        current_user_id=getattr(getattr(g, "current_user", None), "id", None),
+        current_menu_key=FINANCE_REQUESTS_MENU_KEY,
+    )
+
+
+@staff_bp.route("/finance-requests/payment-requests", methods=["POST"])
+@login_required
+def create_payment_request():
+    require_menu_edit(FINANCE_REQUESTS_MENU_KEY)
+    ensure_default_finance_concepts()
+    actor = current_actor()
+    source_tab = request.form.get("source_tab") if request.form.get("source_tab") in {"payment_requests", "finance_payments"} else "payment_requests"
+    is_finance_action_request = source_tab == "finance_payments"
+    initial_status = "Pending approval" if is_finance_action_request else ("Management approved" if actor["is_superadmin"] else "Submitted")
+    payment = PaymentRequest(
+        request_number=next_finance_request_number(PaymentRequest, "PAY"),
+        requester_user_id=actor["user_id"],
+        requester_department=actor["department"],
+        status=initial_status,
+        management_approved_at=datetime.now(timezone.utc) if initial_status == "Management approved" else None,
+    )
+    errors = apply_payment_form(payment, request.form, save_payee_contact=True, allow_empty_amount=is_finance_action_request)
+    if errors:
+        for error in errors:
+            flash(error, "error")
+        redirect_params = {"open_staff_modal": "new-payment-request-modal"}
+        if source_tab == "finance_payments":
+            redirect_params["finance_filter"] = "pending_approval"
+        return finance_request_redirect(source_tab, **redirect_params)
+    db.session.add(payment)
+    db.session.flush()
+    add_payment_event(payment, "Pending approval" if is_finance_action_request else "Submitted", new_status=payment.status)
+    if initial_status == "Management approved":
+        add_payment_event(payment, "Approved by Management", previous_status="Submitted", new_status="Management approved")
+    db.session.commit()
+    flash("Payment request created.", "success")
+    if source_tab == "finance_payments":
+        return finance_request_redirect("finance_payments", finance_filter="pending_approval")
+    return finance_request_redirect("payment_requests")
+
+
+@staff_bp.route("/finance-requests/payment-requests/<int:payment_id>/edit", methods=["POST"])
+@login_required
+def update_payment_request(payment_id):
+    require_menu_edit(FINANCE_REQUESTS_MENU_KEY)
+    payment = PaymentRequest.query.get_or_404(payment_id)
+    user = getattr(g, "current_user", None)
+    if not can_edit_payment_request(user, payment):
+        abort(403, description="Your account does not have permission to edit this payment request.")
+    errors = apply_payment_form(payment, request.form)
+    if errors:
+        for error in errors:
+            flash(error, "error")
+        return finance_request_redirect(request.form.get("tab") or "payment_requests", open_staff_modal=f"edit-payment-request-{payment.id}")
+    db.session.commit()
+    flash("Payment request updated.", "success")
+    return finance_request_redirect(request.form.get("tab") or "payment_requests")
+
+
+@staff_bp.route("/finance-requests/payment-requests/<int:payment_id>/delete", methods=["POST"])
+@login_required
+def delete_payment_request(payment_id):
+    require_menu_edit(FINANCE_REQUESTS_MENU_KEY)
+    payment = PaymentRequest.query.get_or_404(payment_id)
+    user = getattr(g, "current_user", None)
+    if payment.status != "Submitted" or not can_edit_payment_request(user, payment):
+        abort(403, description="This payment request cannot be deleted.")
+    db.session.delete(payment)
+    db.session.commit()
+    flash("Payment request deleted.", "success")
+    return finance_request_redirect("payment_requests")
+
+
+@staff_bp.route("/finance-requests/payment-requests/<int:payment_id>/resubmit", methods=["POST"])
+@login_required
+def resubmit_payment_request(payment_id):
+    require_menu_edit(FINANCE_REQUESTS_MENU_KEY)
+    payment = PaymentRequest.query.get_or_404(payment_id)
+    user = getattr(g, "current_user", None)
+    if not can_edit_payment_request(user, payment) or payment.status != "Needs correction":
+        abort(403, description="This payment request cannot be resubmitted.")
+    previous = payment.status
+    errors = apply_payment_form(payment, request.form)
+    if errors:
+        for error in errors:
+            flash(error, "error")
+        return finance_request_redirect("payment_requests")
+    payment.status = "Resubmitted"
+    add_payment_event(payment, "Resubmitted", previous_status=previous, new_status="Resubmitted", comment=request.form.get("requester_comments"))
+    db.session.commit()
+    flash("Payment request resubmitted.", "success")
+    return finance_request_redirect(request.form.get("tab") or "management_review")
+
+
+@staff_bp.route("/finance-requests/payment-requests/<int:payment_id>/set-amount", methods=["POST"])
+@login_required
+def set_payment_request_amount(payment_id):
+    require_menu_edit(FINANCE_REQUESTS_MENU_KEY)
+    payment = PaymentRequest.query.get_or_404(payment_id)
+    user = getattr(g, "current_user", None)
+    if not can_management_review_payment(user, payment) or payment.status != "Pending approval":
+        abort(403, description="Only the Superadmin can set the amount for pending approval payment requests.")
+    try:
+        payment.amount = parse_finance_amount(request.form.get("amount"))
+    except ValueError as exc:
+        flash(str(exc), "error")
+        return finance_request_redirect("management_review", open_staff_modal=f"set-payment-amount-{payment.id}")
+    add_payment_event(payment, "Amount set", previous_status=payment.status, new_status=payment.status)
+    db.session.commit()
+    flash("Payment amount set.", "success")
+    return finance_request_redirect("management_review")
+
+
+@staff_bp.route("/finance-requests/payment-requests/<int:payment_id>/management", methods=["POST"])
+@login_required
+def manage_payment_request(payment_id):
+    require_menu_edit(FINANCE_REQUESTS_MENU_KEY)
+    payment = PaymentRequest.query.get_or_404(payment_id)
+    user = getattr(g, "current_user", None)
+    if not can_management_review_payment(user, payment):
+        abort(403, description="Only the Superadmin can review payment requests.")
+    action = request.form.get("action")
+    comment = (request.form.get("management_comments") or "").strip()
+    previous = payment.status
+    if action == "approve":
+        if payment_amount_is_pending(payment):
+            flash("Amount must be set before approving this payment request.", "error")
+            return finance_request_redirect("management_review")
+        payment.status = "Management approved"
+        payment.management_approved_at = datetime.now(timezone.utc)
+        payment.management_comments = comment
+        try:
+            payment.scheduled_payment_date = parse_finance_date(request.form.get("scheduled_payment_date"))
+        except ValueError:
+            flash("Scheduled payment date must be valid.", "error")
+            return finance_request_redirect("management_review")
+        add_payment_event(payment, "Approved by Management", previous_status=previous, new_status=payment.status, comment=comment)
+    elif action == "needs_correction":
+        if not comment:
+            flash("Management comments are required for Needs correction.", "error")
+            return finance_request_redirect("management_review")
+        payment.status = "Needs correction"
+        payment.management_comments = comment
+        add_payment_event(payment, "Needs correction", previous_status=previous, new_status=payment.status, comment=comment)
+    elif action == "reject":
+        if not comment:
+            flash("Management comments are required to reject a request.", "error")
+            return finance_request_redirect("management_review")
+        payment.status = "Rejected"
+        payment.management_comments = comment
+        add_payment_event(payment, "Rejected", previous_status=previous, new_status=payment.status, comment=comment)
+    else:
+        abort(403)
+    db.session.commit()
+    flash("Management review saved.", "success")
+    return finance_request_redirect("management_review")
+
+
+@staff_bp.route("/finance-requests/payment-requests/<int:payment_id>/finance", methods=["POST"])
+@login_required
+def process_payment_request(payment_id):
+    require_menu_edit(FINANCE_REQUESTS_MENU_KEY)
+    payment = PaymentRequest.query.get_or_404(payment_id)
+    user = getattr(g, "current_user", None)
+    if not can_finance_process_payment(user, payment):
+        abort(403, description="Your account cannot process this payment request.")
+    previous = payment.status
+    status = request.form.get("status")
+    if status not in {"Payment scheduled", "Payment delayed", "Payment completed", "Payment cancelled"}:
+        abort(403)
+    try:
+        payment.scheduled_payment_date = parse_finance_date(request.form.get("scheduled_payment_date"))
+    except ValueError:
+        flash("Scheduled payment date must be valid.", "error")
+        return finance_request_redirect("finance_payments")
+    proof_url = (request.form.get("payment_proof_url") or "").strip()
+    if status == "Payment completed" and not proof_url:
+        flash("Payment proof is required to complete a payment.", "error")
+        return finance_request_redirect("finance_payments", finance_filter=request.form.get("finance_filter") or None)
+    if status in {"Payment cancelled", "Payment scheduled"} and proof_url:
+        flash("Payment proof must be empty to cancel or process a payment.", "error")
+        return finance_request_redirect("finance_payments", finance_filter=request.form.get("finance_filter") or None)
+    try:
+        payment.payment_proof_url = clean_optional_url(proof_url, "Payment proof")
+    except ValueError as exc:
+        flash(str(exc), "error")
+        return finance_request_redirect("finance_payments", finance_filter=request.form.get("finance_filter") or None)
+    payment.finance_comments = (request.form.get("finance_comments") or "").strip()
+    payment.status = status
+    if status == "Payment completed":
+        payment.payment_completed_at = datetime.now(timezone.utc)
+    add_payment_event(payment, status, previous_status=previous, new_status=status, comment=payment.finance_comments)
+    db.session.commit()
+    flash("Finance payment update saved.", "success")
+    if status in {"Payment completed", "Payment cancelled"}:
+        return finance_request_redirect("finance_payments", show_archived="1")
+    return finance_request_redirect("finance_payments", finance_filter=request.form.get("finance_filter") or None)
+
+
+@staff_bp.route("/finance-requests/payment-requests/<int:payment_id>/hold", methods=["POST"])
+@login_required
+def hold_payment_request(payment_id):
+    require_menu_edit(FINANCE_REQUESTS_MENU_KEY)
+    payment = PaymentRequest.query.get_or_404(payment_id)
+    user = getattr(g, "current_user", None)
+    if not can_hold_payment_request(user, payment):
+        abort(403, description="This payment request cannot be placed on hold from its current status.")
+    actor = current_actor()
+    previous = payment.status
+    payment.previous_status_before_hold = previous
+    payment.status = "On hold"
+    payment.hold_comment = (request.form.get("hold_comment") or "").strip()
+    payment.hold_set_at = datetime.now(timezone.utc)
+    payment.hold_set_by_user_id = actor["user_id"]
+    payment.hold_set_by_department = actor["department"]
+    add_payment_event(payment, "Payment placed on hold", previous_status=previous, new_status="On hold", comment=payment.hold_comment)
+    db.session.commit()
+    flash("Payment request placed on hold.", "success")
+    return finance_request_redirect(request.form.get("tab") or "payment_requests")
+
+
+@staff_bp.route("/finance-requests/payment-requests/<int:payment_id>/release-hold", methods=["POST"])
+@login_required
+def release_payment_hold(payment_id):
+    require_menu_edit(FINANCE_REQUESTS_MENU_KEY)
+    payment = PaymentRequest.query.get_or_404(payment_id)
+    user = getattr(g, "current_user", None)
+    if not can_release_payment_hold(user, payment):
+        abort(403, description="This payment request is not on hold or cannot be released by your account.")
+    previous = payment.status
+    restored = payment.previous_status_before_hold or "Submitted"
+    if restored == "Payment scheduled":
+        restored = "Management approved"
+    payment.status = restored
+    payment.previous_status_before_hold = None
+    add_payment_event(payment, "Payment hold released", previous_status=previous, new_status=restored, comment=request.form.get("hold_comment"))
+    db.session.commit()
+    reconcile_overdue_payment_requests()
+    flash("Payment hold released.", "success")
+    return finance_request_redirect(request.form.get("tab") or "payment_requests")
+
+
+@staff_bp.route("/finance-requests/payment-requests/<int:payment_id>/cancel-hold", methods=["POST"])
+@login_required
+def cancel_payment_hold(payment_id):
+    require_menu_edit(FINANCE_REQUESTS_MENU_KEY)
+    payment = PaymentRequest.query.get_or_404(payment_id)
+    user = getattr(g, "current_user", None)
+    if not can_release_payment_hold(user, payment):
+        abort(403, description="This payment request is not on hold or cannot be cancelled by your account.")
+    previous = payment.status
+    payment.status = "Payment cancelled"
+    payment.previous_status_before_hold = None
+    add_payment_event(payment, "Payment cancelled", previous_status=previous, new_status=payment.status, comment=request.form.get("hold_comment"))
+    db.session.commit()
+    flash("Payment request cancelled.", "success")
+    return finance_request_redirect(request.form.get("tab") or "payment_requests")
+
+
+@staff_bp.route("/finance-requests/payment-requests/<int:payment_id>/archive", methods=["POST"])
+@login_required
+def archive_payment_request(payment_id):
+    require_menu_edit(FINANCE_REQUESTS_MENU_KEY)
+    payment = PaymentRequest.query.get_or_404(payment_id)
+    user = getattr(g, "current_user", None)
+    if not can_archive_payment_request(user, payment):
+        abort(403, description="Only completed or rejected payment requests can be archived.")
+    actor = current_actor()
+    payment.is_archived = True
+    payment.archived_at = datetime.now(timezone.utc)
+    payment.archived_by_user_id = actor["user_id"]
+    payment.archived_by_department = actor["department"]
+    add_payment_event(payment, "Payment request archived", previous_status=payment.status, new_status=payment.status)
+    db.session.commit()
+    flash("Payment request archived.", "success")
+    return finance_request_redirect(request.form.get("tab") or "payment_requests")
+
+
+@staff_bp.route("/finance-requests/billing-requests", methods=["POST"])
+@login_required
+def create_billing_request():
+    require_menu_edit(FINANCE_REQUESTS_MENU_KEY)
+    ensure_default_finance_concepts()
+    actor = current_actor()
+    billing = BillingRequest(
+        request_number=next_finance_request_number(BillingRequest, "INVOICE", legacy_prefixes=("BILL",)),
+        requester_user_id=actor["user_id"],
+        requester_department=actor["department"],
+        status="Requested",
+    )
+    errors = apply_billing_form(billing, request.form, save_client_contact=True)
+    if errors:
+        for error in errors:
+            flash(error, "error")
+        return finance_request_redirect("billing_requests")
+    db.session.add(billing)
+    db.session.flush()
+    add_billing_event(billing, "Requested", new_status="Requested")
+    db.session.commit()
+    flash("Invoice request created.", "success")
+    return finance_request_redirect("billing_requests")
+
+
+@staff_bp.route("/finance-requests/billing-requests/<int:billing_id>/edit", methods=["POST"])
+@login_required
+def update_billing_request(billing_id):
+    require_menu_edit(FINANCE_REQUESTS_MENU_KEY)
+    billing = BillingRequest.query.get_or_404(billing_id)
+    user = getattr(g, "current_user", None)
+    if billing.status != "Requested" or not can_edit_billing_request(user, billing):
+        abort(403, description="This invoice request cannot be edited.")
+    errors = apply_billing_form(billing, request.form, save_client_contact=True)
+    if errors:
+        for error in errors:
+            flash(error, "error")
+        return finance_request_redirect("billing_requests", open_staff_modal=f"edit-billing-request-{billing.id}")
+    db.session.commit()
+    flash("Invoice request updated.", "success")
+    return finance_request_redirect("billing_requests")
+
+
+@staff_bp.route("/finance-requests/billing-requests/<int:billing_id>/delete", methods=["POST"])
+@login_required
+def delete_billing_request(billing_id):
+    require_menu_edit(FINANCE_REQUESTS_MENU_KEY)
+    billing = BillingRequest.query.get_or_404(billing_id)
+    user = getattr(g, "current_user", None)
+    if billing.status != "Requested" or not can_edit_billing_request(user, billing):
+        abort(403, description="This invoice request cannot be deleted.")
+    db.session.delete(billing)
+    db.session.commit()
+    flash("Invoice request deleted.", "success")
+    return finance_request_redirect("billing_requests")
+
+
+@staff_bp.route("/finance-requests/billing-requests/<int:billing_id>/archive", methods=["POST"])
+@login_required
+def archive_billing_request(billing_id):
+    require_menu_edit(FINANCE_REQUESTS_MENU_KEY)
+    billing = BillingRequest.query.get_or_404(billing_id)
+    user = getattr(g, "current_user", None)
+    if not can_archive_billing_request(user, billing):
+        abort(403, description="Only issued or cancelled invoice requests can be archived.")
+    actor = current_actor()
+    billing.is_archived = True
+    billing.archived_at = datetime.now(timezone.utc)
+    billing.archived_by_user_id = actor["user_id"]
+    billing.archived_by_department = actor["department"]
+    add_billing_event(billing, "Invoice request archived", previous_status=billing.status, new_status=billing.status)
+    db.session.commit()
+    flash("Invoice request archived.", "success")
+    return finance_request_redirect(request.form.get("tab") or "billing_requests", show_archived_invoices="1")
+
+
+@staff_bp.route("/finance-requests/billing-requests/<int:billing_id>/finance", methods=["POST"])
+@login_required
+def process_billing_request(billing_id):
+    require_menu_edit(FINANCE_REQUESTS_MENU_KEY)
+    billing = BillingRequest.query.get_or_404(billing_id)
+    user = getattr(g, "current_user", None)
+    if not (current_user_is_superadmin() or (user and user.department == "Finance" and can_view_billing_request(user, billing))):
+        abort(403, description="Your account cannot process this invoice request.")
+    previous = billing.status
+    status = request.form.get("status")
+    if status not in BILLING_STATUSES:
+        abort(403)
+    if request.form.get("finance_filter") is not None:
+        invoice_link = (request.form.get("invoice_link") or "").strip()
+        if status in {"Invoice cancelled", "Processing invoice"} and invoice_link:
+            flash("Invoice proof must be empty to cancel or process an invoice.", "error")
+            return finance_request_redirect("finance_payments", finance_filter=request.form.get("finance_filter") or None)
+        if status == "Invoice issued" and not invoice_link:
+            flash("Invoice proof is required to issue an invoice.", "error")
+            return finance_request_redirect("finance_payments", finance_filter=request.form.get("finance_filter") or None)
+        try:
+            billing.invoice_link = clean_optional_url(invoice_link, "Invoice proof")
+        except ValueError as exc:
+            flash(str(exc), "error")
+            return finance_request_redirect("finance_payments", finance_filter=request.form.get("finance_filter") or None)
+        billing.status = status
+        add_billing_event(billing, status, previous_status=previous, new_status=status)
+        db.session.commit()
+        flash("Invoice request updated.", "success")
+        if status in {"Invoice issued", "Invoice cancelled"}:
+            return finance_request_redirect("finance_payments", show_archived_invoices="1")
+        return finance_request_redirect("finance_payments", finance_filter=request.form.get("finance_filter") or None)
+    errors = apply_billing_form(billing, request.form)
+    if errors:
+        for error in errors:
+            flash(error, "error")
+        return finance_request_redirect("billing_requests")
+    billing.status = status
+    add_billing_event(billing, status, previous_status=previous, new_status=status, comment=billing.finance_comments)
+    db.session.commit()
+    flash("Invoice request updated.", "success")
+    return finance_request_redirect("billing_requests")
+
+
+@staff_bp.route("/finance-requests/contacts", methods=["POST"])
+@login_required
+def save_finance_contact():
+    require_menu_edit(FINANCE_REQUESTS_MENU_KEY)
+    contact = FinanceContact.query.get(request.form.get("contact_id") or 0) if request.form.get("contact_id") else FinanceContact()
+    contact.display_name = (request.form.get("display_name") or "").strip()
+    if not contact.display_name:
+        flash("Contact name is required.", "error")
+        return finance_request_redirect("contacts")
+    contact.default_concept_id = int(request.form.get("default_concept_id")) if request.form.get("default_concept_id") else None
+    contact.email = (request.form.get("email") or "").strip()
+    contact.phone = (request.form.get("phone") or "").strip()
+    contact.tax_id = (request.form.get("tax_id") or "").strip()
+    contact.bank_name = (request.form.get("bank_name") or "").strip()
+    contact.account_holder = (request.form.get("account_holder") or "").strip()
+    contact.account_number = (request.form.get("account_number") or "").strip()
+    contact.alias = (request.form.get("alias") or "").strip()
+    contact.default_currency = (request.form.get("default_currency") or "").strip().upper()
+    contact.default_payment_method = (request.form.get("default_payment_method") or "").strip()
+    contact.notes = (request.form.get("notes") or "").strip()
+    contact.documentation_url = (request.form.get("documentation_url") or "").strip()
+    contact.is_active = request.form.get("is_active") == "1"
+    db.session.add(contact)
+    db.session.commit()
+    flash("Finance contact saved.", "success")
+    return finance_request_redirect("contacts")
+
+
+@staff_bp.route("/finance-requests/contacts/<int:contact_id>/forget", methods=["POST"])
+@login_required
+def forget_finance_contact(contact_id):
+    require_menu_edit(FINANCE_REQUESTS_MENU_KEY)
+    contact = FinanceContact.query.get_or_404(contact_id)
+    contact.is_active = False
+    db.session.commit()
+    if request.headers.get("X-Requested-With") == "XMLHttpRequest":
+        return jsonify({"ok": True, "contact_id": contact.id})
+    flash("Finance contact removed from saved contacts.", "success")
+    return finance_request_redirect("contacts")
+
+
+@staff_bp.route("/finance-requests/client-contacts/<int:contact_id>/forget", methods=["POST"])
+@login_required
+def forget_finance_client_contact(contact_id):
+    require_menu_edit(FINANCE_REQUESTS_MENU_KEY)
+    contact = FinanceClientContact.query.get_or_404(contact_id)
+    contact.is_active = False
+    db.session.commit()
+    if request.headers.get("X-Requested-With") == "XMLHttpRequest":
+        return jsonify({"ok": True, "contact_id": contact.id})
+    flash("Client contact removed from saved clients.", "success")
+    return finance_request_redirect("billing_requests")
+
+
+@staff_bp.route("/finance-requests/concepts", methods=["POST"])
+@login_required
+def save_finance_concept():
+    require_menu_edit(FINANCE_REQUESTS_MENU_KEY)
+    if not current_user_is_superadmin():
+        abort(403, description="Only the Superadmin can manage finance concepts.")
+    concept = FinanceConcept.query.get(request.form.get("concept_id") or 0) if request.form.get("concept_id") else FinanceConcept()
+    concept.name = (request.form.get("name") or "").strip()
+    if not concept.name:
+        flash("Concept name is required.", "error")
+        return finance_request_redirect("concepts")
+    concept.description = (request.form.get("description") or "").strip()
+    concept.applies_to = request.form.get("applies_to") if request.form.get("applies_to") in {"Payments", "Billing", "Both"} else "Both"
+    concept.is_active = request.form.get("is_active") == "1"
+    db.session.add(concept)
+    db.session.commit()
+    flash("Finance concept saved.", "success")
+    return finance_request_redirect("concepts")
+
+
+@staff_bp.route("/finance-requests/concepts/<int:concept_id>/delete", methods=["POST"])
+@login_required
+def delete_finance_concept(concept_id):
+    require_menu_edit(FINANCE_REQUESTS_MENU_KEY)
+    if not current_user_is_superadmin():
+        abort(403, description="Only the Superadmin can manage finance concepts.")
+    concept = FinanceConcept.query.get_or_404(concept_id)
+    has_usage = (
+        PaymentRequest.query.filter_by(concept_id=concept.id).first()
+        or BillingRequest.query.filter_by(concept_id=concept.id).first()
+        or FinanceContact.query.filter_by(default_concept_id=concept.id).first()
+        or FinanceClientContact.query.filter_by(default_concept_id=concept.id).first()
+    )
+    if has_usage:
+        flash("This concept cannot be deleted because it is already used by finance records.", "error")
+        return finance_request_redirect("concepts")
+    db.session.delete(concept)
+    db.session.commit()
+    flash("Finance concept deleted.", "success")
+    return finance_request_redirect("concepts")
 
 
 @staff_bp.route("/")

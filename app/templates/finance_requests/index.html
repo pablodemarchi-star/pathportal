@@ -1,0 +1,918 @@
+{% extends "base.html" %}
+
+{% block title %}Finance requests · Path Examinations{% endblock %}
+
+{% block content %}
+
+{% macro status_chip(status) %}
+  <span class="finance-status-chip status-{{ status|lower|replace(' ', '-') }}">{{ 'Scheduled' if status == 'Management approved' else 'Processing payment' if status == 'Payment scheduled' else status }}</span>
+{% endmacro %}
+
+{% macro copy_button(text, success_message='Request information copied.', error_message='', label='') %}
+  <button class="copy-icon-button finance-copy-button" type="button" data-copy-text="{{ text|e }}" data-copy-success="{{ success_message|e }}" {% if error_message %}data-copy-error="{{ error_message|e }}"{% endif %} aria-label="Copy request information" title="Copy request information">
+    {% if label %}
+      <span class="copy-icon copy-language-label">{{ label }}</span>
+    {% else %}
+      <svg class="copy-icon" viewBox="0 0 24 24" aria-hidden="true">
+        <path d="M8 8h10v12H8z" />
+        <path d="M6 16H4V4h12v2" />
+      </svg>
+    {% endif %}
+    <svg class="check-icon" viewBox="0 0 24 24" aria-hidden="true">
+      <path d="m5 13 4 4L19 7" />
+    </svg>
+    <span class="copy-button-feedback">{{ success_message }}</span>
+  </button>
+{% endmacro %}
+
+{% macro copy_field_button(text, label) %}
+  <button class="copy-icon-button finance-field-copy-button" type="button" data-copy-text="{{ text|e }}" aria-label="Copy {{ label }}" title="Copy {{ label }}">
+    <svg class="copy-icon" viewBox="0 0 24 24" aria-hidden="true">
+      <path d="M8 8h10v12H8z" />
+      <path d="M6 16H4V4h12v2" />
+    </svg>
+    <svg class="check-icon" viewBox="0 0 24 24" aria-hidden="true">
+      <path d="m5 13 4 4L19 7" />
+    </svg>
+    <span class="copy-button-feedback">Copied.</span>
+  </button>
+{% endmacro %}
+
+{% macro archived_payment_sort_header(label, column) %}
+  <a class="table-sort {% if sort == column %}is-active{% endif %}" href="{{ finance_sort_url(column) }}">
+    {{ label }}
+    <span>{{ '↑' if sort == column and dir == 'asc' else '↓' if sort == column else '↕' }}</span>
+  </a>
+{% endmacro %}
+
+{% macro payment_comments_panel_content(payment) %}
+  {% if payment.requester_comments %}<p><strong>Requester:</strong> {{ payment.requester_comments }}</p>{% endif %}
+  {% if payment.management_comments %}<p><strong>Management:</strong> {{ payment.management_comments }}</p>{% endif %}
+  {% if payment.finance_comments %}<p><strong>Finance:</strong> {{ payment.finance_comments }}</p>{% endif %}
+{% endmacro %}
+
+{% macro billing_comments_panel_content(billing) %}
+  {% if billing.requester_comments %}<p><strong>Requester:</strong> {{ billing.requester_comments }}</p>{% endif %}
+  {% if billing.finance_comments %}<p><strong>Finance:</strong> {{ billing.finance_comments }}</p>{% endif %}
+{% endmacro %}
+
+{% macro payment_details_panel_content(payment) %}
+  {% set bank_snapshot = finance_bank_snapshot(payment) %}
+  <p><strong>Payment method:</strong> {{ payment.payment_method }}</p>
+  {% if payment.payment_method in ['Bank transfer', 'Deposit'] %}
+    {% if bank_snapshot.account_holder %}<p><strong>Account holder:</strong> {{ bank_snapshot.account_holder }}</p>{% endif %}
+    {% if bank_snapshot.account_number %}
+      <p class="finance-copyable-detail-row"><span><strong>CBU / CVU:</strong> {{ bank_snapshot.account_number }}</span>{{ copy_field_button(bank_snapshot.account_number, 'CBU / CVU') }}</p>
+    {% endif %}
+    {% if bank_snapshot.alias %}
+      <p class="finance-copyable-detail-row"><span><strong>Alias:</strong> {{ bank_snapshot.alias }}</span>{{ copy_field_button(bank_snapshot.alias, 'Alias') }}</p>
+    {% endif %}
+    {% if bank_snapshot.tax_id %}
+      <p class="finance-copyable-detail-row"><span><strong>Tax ID / CUIL / CUIT:</strong> {{ bank_snapshot.tax_id }}</span>{{ copy_field_button(bank_snapshot.tax_id, 'Tax ID') }}</p>
+    {% endif %}
+  {% elif payment.payment_method == 'Card' and bank_snapshot.card_payment_status %}
+    <p><strong>Card payment status:</strong> {{ bank_snapshot.card_payment_status }}</p>
+  {% endif %}
+{% endmacro %}
+
+{% macro billing_details_panel_content(billing) %}
+  <p><strong>Tax ID / CUIL / CUIT:</strong> {{ billing.client_tax_id or 'Not set' }}</p>
+  <p><strong>VAT status / Invoice type:</strong> {{ billing.vat_status_invoice_type or 'Not set' }}</p>
+  {% if billing.client_full_address %}<p><strong>Full address:</strong> {{ billing.client_full_address }}</p>{% endif %}
+{% endmacro %}
+
+{% macro payment_status_track_panel_content(payment) %}
+  {% if payment.events %}
+    <section class="finance-track">
+      {% for event in payment.events %}
+        <div class="finance-track-item">
+          <strong>{{ event.event_type }}</strong>
+          <span>{{ event.previous_status or '-' }} → {{ event.new_status or '-' }} · {{ event.created_by_department or 'Unknown department' }} · {{ event.created_on|status_track_dt }}</span>
+          {% if event.comment %}<p>{{ event.comment }}</p>{% endif %}
+        </div>
+      {% endfor %}
+    </section>
+  {% endif %}
+{% endmacro %}
+
+{% macro billing_status_track_panel_content(billing) %}
+  {% if billing.events %}
+    <section class="finance-track">
+      {% for event in billing.events %}
+        <div class="finance-track-item">
+          <strong>{{ event.event_type }}</strong>
+          <span>{{ event.previous_status or '-' }} → {{ event.new_status or '-' }} · {{ event.created_by_department or 'Unknown department' }} · {{ event.created_on|status_track_dt }}</span>
+          {% if event.comment %}<p>{{ event.comment }}</p>{% endif %}
+        </div>
+      {% endfor %}
+    </section>
+  {% endif %}
+{% endmacro %}
+
+{% macro billing_card(billing, show_edit=true, show_copy=true, show_archive=true) %}
+  {% set billing_completed_on = billing_completed_at(billing) %}
+  <article class="finance-request-card">
+    <div class="finance-card-main finance-invoice-card-main">
+      <div>
+        <div class="finance-card-kicker">
+          <span class="finance-payment-number-status">
+            <strong>{{ billing.request_number }}</strong>
+            {{ status_chip(billing.status) }}
+          </span>
+        </div>
+        <h3>Client: {{ billing.client_name_snapshot }}</h3>
+        <p class="finance-invoice-card-summary">{{ billing.currency }} {{ billing.amount }} · {{ billing.concept_name_snapshot }}</p>
+        <div class="finance-card-dates finance-invoice-card-dates">
+          <span>Requested: {{ billing.created_on|status_track_dt if billing.created_on else 'Not set' }}</span>
+          <span>Requester: {{ billing.requester.full_name if billing.requester else 'Unknown' }} · {{ billing.requester.department if billing.requester else billing.requester_department or 'Unknown' }}</span>
+          <span>Completed: {{ billing_completed_on|status_track_dt if billing_completed_on else 'not yet' }}</span>
+          <span>Invoice: {% if billing.invoice_link %}<a href="{{ billing.invoice_link }}" target="_blank" rel="noopener">click here</a>{% else %}not yet{% endif %}</span>
+        </div>
+      </div>
+    </div>
+    <details class="finance-detail-panel finance-payment-details-panel">
+      <summary>Invoice details</summary>
+      {{ billing_details_panel_content(billing) }}
+    </details>
+    {% if billing.supporting_documentation_url %}
+      <details class="finance-detail-panel">
+        <summary>Supporting documents</summary>
+        <a href="{{ billing.supporting_documentation_url }}" target="_blank" rel="noopener">View documents here</a>
+      </details>
+    {% endif %}
+    {% if billing.requester_comments or billing.finance_comments %}
+      {% set billing_comments_count = [billing.requester_comments, billing.finance_comments]|select|list|length %}
+      <details class="finance-detail-panel">
+        <summary>Comments ({{ billing_comments_count }})</summary>
+        {{ billing_comments_panel_content(billing) }}
+      </details>
+    {% endif %}
+    <details class="finance-detail-panel">
+      <summary>Status track</summary>
+      {{ billing_status_track_panel_content(billing) }}
+    </details>
+    {% if show_edit or show_copy or show_archive %}
+      <div class="finance-card-actions finance-invoice-card-actions">
+        {% if show_copy %}
+          {% set invoice_copy = billing_whatsapp_copy_contract(billing) %}
+          {% set invoice_copy_sp = billing_whatsapp_copy_contract(billing, 'sp') %}
+          <div class="finance-copy-language-actions">
+            {{ copy_button(invoice_copy.message, 'Invoice WhatsApp message copied.', invoice_copy.error, 'EN') }}
+            {{ copy_button(invoice_copy_sp.message, 'Mensaje de WhatsApp de la factura copiado.', invoice_copy_sp.error, 'SP') }}
+          </div>
+        {% endif %}
+        {% if show_edit and billing.status == 'Requested' and current_menu_can_edit and can_edit_billing_request(current_user, billing) %}
+          <button class="secondary-button compact-action" type="button" data-open-modal="edit-billing-request-{{ billing.id }}">Edit</button>
+        {% endif %}
+        {% if show_archive and current_menu_can_edit and can_archive_billing_request(current_user, billing) %}
+          <form method="post" action="{{ url_for('staff.archive_billing_request', billing_id=billing.id) }}">
+            <input type="hidden" name="tab" value="billing_requests">
+            <button class="secondary-button compact-action" type="submit" onclick="return window.confirm('Are you sure you want to archive this invoice request?')">Archive</button>
+          </form>
+        {% endif %}
+      </div>
+    {% endif %}
+  </article>
+{% endmacro %}
+
+{% macro archived_payment_table(payments, empty_message='No archived payment requests yet.') %}
+  <div class="finance-table-wrap">
+    <table class="finance-archive-table">
+      <thead>
+        <tr>
+          <th>{{ archived_payment_sort_header('Payment no.', 'payment_no') }}</th>
+          <th>{{ archived_payment_sort_header('Final date', 'final_date') }}</th>
+          <th>{{ archived_payment_sort_header('Status', 'status') }}</th>
+          <th>{{ archived_payment_sort_header('Payee', 'payee') }}</th>
+          <th>{{ archived_payment_sort_header('Concept', 'concept') }}</th>
+          <th>Description</th>
+          <th>Payment proof</th>
+          <th>Full info</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for payment in payments %}
+          <tr>
+            <td><strong>{{ payment.request_number }}</strong></td>
+            <td>{{ payment_finalized_at(payment)|display_date if payment_finalized_at(payment) else 'Not set' }}</td>
+            <td>{{ status_chip(payment.status) }}</td>
+            <td>{{ payment.payee_name_snapshot or 'Not specified' }}</td>
+            <td>{{ payment.concept_name_snapshot }}</td>
+            <td class="finance-archive-payment-description"><span>{{ payment.description }}</span></td>
+            <td>{% if payment.payment_proof_url %}<a href="{{ payment.payment_proof_url }}" target="_blank" rel="noopener">View proof</a>{% else %}not yet{% endif %}</td>
+            <td><button class="finance-archive-view-button" type="button" data-open-modal="archived-payment-request-{{ payment.id }}">View</button></td>
+          </tr>
+        {% else %}
+          <tr>
+            <td colspan="8" class="empty-state">{{ empty_message }}</td>
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% for payment in payments %}
+    <div class="modal" id="archived-payment-request-{{ payment.id }}" aria-hidden="true" role="dialog" aria-modal="true" aria-labelledby="archived-payment-request-title-{{ payment.id }}">
+      <div class="modal-panel large finance-request-modal-panel">
+        <div class="modal-header">
+          <div>
+            <h2 id="archived-payment-request-title-{{ payment.id }}" tabindex="-1">Payment request info</h2>
+            <p class="modal-subtitle">{{ payment.request_number }}</p>
+          </div>
+          <button class="icon-button" type="button" data-close-modal aria-label="Close modal">&times;</button>
+        </div>
+        {{ payment_card(payment, 'archived_payment_requests', true) }}
+        <div class="form-actions finance-archive-modal-actions">
+          <button class="secondary-button" type="button" data-close-modal>Close</button>
+        </div>
+      </div>
+    </div>
+  {% endfor %}
+{% endmacro %}
+
+{% macro archived_billing_table(billings, empty_message='No archived invoice requests yet.') %}
+  <div class="finance-table-wrap">
+    <table class="finance-archive-table">
+      <thead>
+        <tr>
+          <th>{{ archived_payment_sort_header('Invoice no.', 'invoice_no') }}</th>
+          <th>{{ archived_payment_sort_header('Final date', 'final_date') }}</th>
+          <th>{{ archived_payment_sort_header('Status', 'status') }}</th>
+          <th class="finance-archive-invoice-client-col">{{ archived_payment_sort_header('Client', 'client') }}</th>
+          <th>{{ archived_payment_sort_header('Concept', 'concept') }}</th>
+          <th>Invoice proof</th>
+          <th>Full info</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for billing in billings %}
+          <tr>
+            <td><strong>{{ billing.request_number }}</strong></td>
+            <td>{{ billing_finalized_at(billing)|display_date if billing_finalized_at(billing) else 'Not set' }}</td>
+            <td>{{ status_chip(billing.status) }}</td>
+            <td class="finance-archive-invoice-client-col">{{ billing.client_name_snapshot or 'Not specified' }}</td>
+            <td>{{ billing.concept_name_snapshot }}</td>
+            <td>{% if billing.invoice_link %}<a href="{{ billing.invoice_link }}" target="_blank" rel="noopener">View proof</a>{% else %}not yet{% endif %}</td>
+            <td><button class="finance-archive-view-button" type="button" data-open-modal="archived-billing-request-{{ billing.id }}">View</button></td>
+          </tr>
+        {% else %}
+          <tr>
+            <td colspan="7" class="empty-state">{{ empty_message }}</td>
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% for billing in billings %}
+    <div class="modal" id="archived-billing-request-{{ billing.id }}" aria-hidden="true" role="dialog" aria-modal="true" aria-labelledby="archived-billing-request-title-{{ billing.id }}">
+      <div class="modal-panel large finance-request-modal-panel">
+        <div class="modal-header">
+          <div>
+            <h2 id="archived-billing-request-title-{{ billing.id }}" tabindex="-1">Invoice request info</h2>
+            <p class="modal-subtitle">{{ billing.request_number }}</p>
+          </div>
+          <button class="icon-button" type="button" data-close-modal aria-label="Close modal">&times;</button>
+        </div>
+        {{ billing_card(billing, false, false, false) }}
+        <div class="form-actions detached-actions">
+          <button class="secondary-button" type="button" data-close-modal>Close</button>
+        </div>
+      </div>
+    </div>
+  {% endfor %}
+{% endmacro %}
+
+{% macro payment_card(payment, tab_name, readonly=false) %}
+  <article class="finance-request-card {% if tab_name == 'payment_requests' %}finance-payment-requests-card{% endif %} {% if payment.is_archived %}is-archived{% endif %}" data-payment-number="{{ payment.request_number }}">
+    <div class="finance-card-main">
+      <div>
+        <div class="finance-card-kicker">
+          <span class="finance-payment-number-status">
+            <strong>{{ payment.request_number }}</strong>
+            {{ status_chip(payment.status) }}
+          </span>
+          {% if payment.is_archived %}<span class="finance-status-chip status-archived">Archived</span>{% endif %}
+          {% if payment_is_delayed(payment, today_date) %}
+            <span class="finance-status-chip status-delayed">Delayed</span>
+          {% endif %}
+        </div>
+        <p class="finance-card-payee">Payee: {{ payment.payee_name_snapshot or 'Not specified' }}</p>
+        <p>{% if payment.amount %}{{ payment.currency }} {{ payment.amount }}{% else %}Amount in {{ payment.currency or 'selected currency' }} pending{% endif %} · {{ payment.concept_name_snapshot }} · {{ payment.payment_method }}</p>
+        <p class="finance-muted finance-card-description">{{ payment.description }}</p>
+      </div>
+      <div class="finance-card-dates">
+        <span>Requested: {{ payment.created_on|status_track_dt if payment.created_on else 'Not set' }}</span>
+        <span>Scheduled: {{ payment.scheduled_payment_date|display_date if payment.scheduled_payment_date else 'Not set' }}</span>
+        <span>Requester: {{ payment.requester.full_name if payment.requester else 'Unknown' }} · {{ payment.requester.department if payment.requester else payment.requester_department or 'Unknown' }}</span>
+        <span>Completed: {{ payment.payment_completed_at|status_track_dt if payment.payment_completed_at else 'not yet' }}</span>
+        <span>Receipt: {% if payment.payment_proof_url %}<a href="{{ payment.payment_proof_url }}" target="_blank" rel="noopener">click here</a>{% else %}not yet{% endif %}</span>
+      </div>
+    </div>
+
+    <details class="finance-detail-panel finance-payment-details-panel">
+      <summary>Payment details</summary>
+      {{ payment_details_panel_content(payment) }}
+    </details>
+
+    {% if payment.supporting_documentation_url %}
+      <details class="finance-detail-panel">
+        <summary>Supporting documents</summary>
+        <a href="{{ payment.supporting_documentation_url }}" target="_blank" rel="noopener">View documents here</a>
+      </details>
+    {% endif %}
+
+    {% if payment.requester_comments or payment.management_comments or payment.finance_comments %}
+      {% set comments_count = [payment.requester_comments, payment.management_comments, payment.finance_comments]|select|list|length %}
+      <details class="finance-detail-panel">
+        <summary>Comments ({{ comments_count }})</summary>
+        {{ payment_comments_panel_content(payment) }}
+      </details>
+    {% endif %}
+
+    <details class="finance-detail-panel">
+      <summary>Status track</summary>
+      {{ payment_status_track_panel_content(payment) }}
+    </details>
+
+    {% if not readonly %}
+      <div class="finance-card-actions">
+        {% set whatsapp_copy = payment_whatsapp_copy_contract(payment) %}
+        {% set whatsapp_copy_sp = payment_whatsapp_copy_contract(payment, 'sp') %}
+        <div class="finance-copy-language-actions">
+          {{ copy_button(whatsapp_copy.message, 'Payment WhatsApp message copied.', whatsapp_copy.error, 'EN') }}
+          {{ copy_button(whatsapp_copy_sp.message, 'Mensaje de WhatsApp del pago copiado.', whatsapp_copy_sp.error, 'SP') }}
+        </div>
+        {% if payment.status in ['Submitted', 'Needs correction'] and current_menu_can_edit and can_edit_payment_request(current_user, payment) %}
+          <button class="secondary-button compact-action" type="button" data-open-modal="edit-payment-request-{{ payment.id }}">{{ 'Update' if payment.status == 'Needs correction' else 'Edit' }}</button>
+        {% endif %}
+        {% if tab_name == 'management_review' and current_menu_can_edit and payment_amount_is_pending(payment) %}
+          <button class="secondary-button compact-action" type="button" data-open-modal="set-payment-amount-{{ payment.id }}">Set amount</button>
+        {% endif %}
+        {% if tab_name == 'payment_requests' and payment.status == 'Management approved' and current_menu_can_edit and can_hold_payment_request(current_user, payment) %}
+          <form method="post" action="{{ url_for('staff.hold_payment_request', payment_id=payment.id) }}">
+            <input type="hidden" name="tab" value="payment_requests">
+            <button class="secondary-button compact-action" type="submit" onclick="return window.confirm('Are you sure you want to put this payment on hold?')">Put on hold</button>
+          </form>
+        {% endif %}
+        {% if tab_name == 'payment_requests' and payment.status == 'On hold' and current_menu_can_edit and can_release_payment_hold(current_user, payment) %}
+          <div class="finance-card-action-pair">
+            <form method="post" action="{{ url_for('staff.release_payment_hold', payment_id=payment.id) }}">
+              <input type="hidden" name="tab" value="payment_requests">
+              <button class="secondary-button compact-action" type="submit" onclick="return window.confirm('Are you sure you want to release this payment that is currently on hold?')">Release</button>
+            </form>
+            <form method="post" action="{{ url_for('staff.cancel_payment_hold', payment_id=payment.id) }}">
+              <input type="hidden" name="tab" value="payment_requests">
+              <button class="secondary-button compact-action" type="submit" onclick="return window.confirm('Are you sure you want to delete this payment that is currently on hold?')">Cancel</button>
+            </form>
+          </div>
+        {% endif %}
+        {% if tab_name == 'payment_requests' and current_menu_can_edit and can_archive_payment_request(current_user, payment) %}
+          <form method="post" action="{{ url_for('staff.archive_payment_request', payment_id=payment.id) }}">
+            <input type="hidden" name="tab" value="payment_requests">
+            <button class="secondary-button compact-action" type="submit" onclick="return window.confirm('Are you sure you want to archive this payment request?')">Archive</button>
+          </form>
+        {% endif %}
+      </div>
+    {% endif %}
+  </article>
+
+  {% if not readonly and payment.status in ['Submitted', 'Needs correction'] and current_menu_can_edit and can_edit_payment_request(current_user, payment) %}
+    <div class="modal" id="edit-payment-request-{{ payment.id }}" aria-hidden="true" role="dialog" aria-modal="true" aria-labelledby="edit-payment-request-title-{{ payment.id }}">
+      <div class="modal-panel large finance-request-modal-panel">
+        <div class="modal-header">
+          <div>
+            <h2 id="edit-payment-request-title-{{ payment.id }}" tabindex="-1">Edit payment request</h2>
+            <p class="modal-subtitle">{{ payment.request_number }}</p>
+          </div>
+          <button class="icon-button" type="button" data-close-modal aria-label="Close modal">&times;</button>
+        </div>
+        <form id="edit-payment-request-form-{{ payment.id }}" class="finance-form-panel finance-modal-form" method="post" action="{{ url_for('staff.resubmit_payment_request', payment_id=payment.id) if payment.status == 'Needs correction' else url_for('staff.update_payment_request', payment_id=payment.id) }}">
+          <input type="hidden" name="tab" value="{{ 'management_review' if payment.status == 'Needs correction' else tab_name }}">
+          {{ payment_form_fields(payment) }}
+        </form>
+        {% if payment.status == 'Submitted' %}
+          <form id="delete-payment-request-form-{{ payment.id }}" method="post" action="{{ url_for('staff.delete_payment_request', payment_id=payment.id) }}"></form>
+        {% endif %}
+        <div class="form-actions">
+          <button class="secondary-button" type="button" data-close-modal>Close</button>
+          <button class="primary-button" type="submit" form="edit-payment-request-form-{{ payment.id }}">{{ 'Resubmit' if payment.status == 'Needs correction' else 'Save and close' }}</button>
+          {% if payment.status == 'Submitted' %}
+            <button class="danger-button" type="submit" form="delete-payment-request-form-{{ payment.id }}" onclick="return window.confirm('Are you sure you want to delete this payment request?')">Delete request</button>
+          {% endif %}
+        </div>
+      </div>
+    </div>
+  {% endif %}
+{% endmacro %}
+
+{% macro payment_form_fields(payment=none, amount_required=true) %}
+  {% set bank_snapshot = finance_bank_snapshot(payment) %}
+  {% set date_mode = payment.payment_date_mode if payment and payment.payment_date_mode else ('specific' if payment and payment.scheduled_payment_date else 'asap') %}
+  {% set asap_payment_date = payment.scheduled_payment_date if payment and date_mode == 'asap' and payment.scheduled_payment_date else next_payment_run_date %}
+  <div class="finance-payee-picker" data-finance-payee-picker>
+    <label>Contact / Payee
+      <input name="payee_name" value="{{ payment.payee_name_snapshot or '' if payment else '' }}" autocomplete="off" data-finance-payee-input>
+    </label>
+    <div class="finance-payee-menu" data-finance-payee-menu hidden>
+      {% for contact in contacts if contact.is_active %}
+        <div
+          class="finance-payee-option"
+          data-finance-payee-option
+          data-contact-kind="payee"
+          data-contact-id="{{ contact.id }}"
+          data-contact-name="{{ contact.display_name }}"
+          data-concept-id="{{ contact.default_concept_id or '' }}"
+          data-payment-method="{{ contact.default_payment_method or '' }}"
+          data-account-holder="{{ contact.account_holder or '' }}"
+          data-account-number="{{ contact.account_number or '' }}"
+          data-alias="{{ contact.alias or '' }}"
+          data-tax-id="{{ contact.tax_id or '' }}"
+        >
+          <button type="button" class="finance-payee-select" data-finance-payee-select>{{ contact.display_name }}</button>
+          <button type="button" class="finance-payee-forget" data-finance-payee-forget data-action="{{ url_for('staff.forget_finance_contact', contact_id=contact.id) }}" aria-label="Remove {{ contact.display_name }} from saved contacts" title="Remove from saved contacts">&times;</button>
+        </div>
+      {% else %}
+        <div class="finance-payee-empty" data-finance-payee-empty>No saved contacts.</div>
+      {% endfor %}
+    </div>
+  </div>
+  <label>Concept
+    <select name="concept_id" required>
+      <option value="">Select concept</option>
+      {% for concept in payment_concepts %}
+        <option value="{{ concept.id }}" {% if payment and payment.concept_id == concept.id %}selected{% endif %}>{{ concept.name }}</option>
+      {% endfor %}
+    </select>
+  </label>
+  <label>Description <textarea name="description" rows="3" maxlength="90" required>{{ payment.description if payment else '' }}</textarea></label>
+  <div class="finance-form-row">
+    <label>Currency <input name="currency" maxlength="10" value="{{ payment.currency if payment else 'ARS' }}" required></label>
+    <label>Amount <input name="amount" inputmode="decimal" pattern="[0-9]+([.][0-9]+)?" value="{{ payment.amount if payment and payment.amount else '' }}" data-finance-amount{% if amount_required %} required{% endif %}></label>
+  </div>
+  <label>Payment method
+    <select name="payment_method" required data-finance-payment-method>
+      <option value="">Select method</option>
+      {% for method in payment_methods %}
+        <option value="{{ method }}" {% if payment and payment.payment_method == method %}selected{% endif %}>{{ method }}</option>
+      {% endfor %}
+    </select>
+  </label>
+  <div class="finance-form-row" data-finance-bank-fields hidden>
+    <label>Account holder <input name="account_holder" value="{{ bank_snapshot.account_holder or '' }}"></label>
+    <label>CBU / CVU <input name="account_number" value="{{ bank_snapshot.account_number or '' }}"></label>
+    <label>Alias <input name="alias" value="{{ bank_snapshot.alias or '' }}"></label>
+    <label>Tax ID / CUIL / CUIT <input name="tax_id" value="{{ bank_snapshot.tax_id or '' }}"></label>
+  </div>
+  <div class="finance-card-payment-options" data-finance-card-fields hidden>
+    <span>Card payment status</span>
+    <label class="finance-radio-option">
+      <input name="card_payment_status" type="radio" value="Already paid" {% if bank_snapshot.card_payment_status == 'Already paid' %}checked{% endif %}>
+      <span>Already paid</span>
+    </label>
+    <label class="finance-radio-option">
+      <input name="card_payment_status" type="radio" value="To be paid" {% if not payment or bank_snapshot.card_payment_status == 'To be paid' %}checked{% endif %}>
+      <span>To be paid</span>
+    </label>
+  </div>
+  <fieldset class="finance-payment-date-options" data-finance-payment-date-options data-next-payment-run-date="{{ next_payment_run_date.isoformat() }}" data-next-payment-run-display="{{ next_payment_run_date|display_date }}" aria-hidden="false">
+    <legend>Payment date</legend>
+    <label class="finance-payment-date-option finance-radio-option">
+      <input name="payment_date_mode" type="radio" value="asap" {% if date_mode == 'asap' %}checked{% endif %} data-finance-payment-date-mode>
+      <span>In the next payment run <span class="finance-payment-run-separator">|</span> <span class="finance-payment-run-date" data-finance-payment-run-date>{{ asap_payment_date|display_date }}</span></span>
+    </label>
+    <input name="payment_date_recalculated" type="hidden" value="0" data-finance-payment-date-recalculated>
+    <div class="finance-payment-date-specific-row">
+      <label class="finance-payment-date-option finance-radio-option">
+        <input name="payment_date_mode" type="radio" value="specific" {% if date_mode == 'specific' %}checked{% endif %} data-finance-payment-date-mode>
+        <span>On a specific date</span>
+      </label>
+      <div class="finance-specific-date-field" data-finance-specific-payment-date aria-hidden="true">
+        <input name="scheduled_payment_date" inputmode="numeric" maxlength="10" placeholder="DD/MM/YYYY" value="{{ payment.scheduled_payment_date|display_date if payment and payment.scheduled_payment_date else '' }}" aria-label="Specific payment date" data-date-mask data-date-future-or-today data-finance-business-date>
+        <span class="finance-date-warning" data-finance-business-date-warning hidden>Payments cannot be processed on Saturdays, Sundays or public holidays.</span>
+      </div>
+    </div>
+  </fieldset>
+  <label>Supporting documentation link <input name="supporting_documentation_url" value="{{ payment.supporting_documentation_url if payment else '' }}"></label>
+  <label>Requester comments <textarea name="requester_comments" rows="3">{{ payment.requester_comments if payment else '' }}</textarea></label>
+  {% if can_manage_payment_visibility %}
+    <label>Visibility
+      <select name="visibility_mode">
+        {% for mode in visibility_modes %}
+          {% if mode != 'Superadmin only' or current_user_is_superadmin %}
+            <option value="{{ mode }}" {% if payment and payment.visibility_mode == mode %}selected{% endif %}>{{ mode }}</option>
+          {% endif %}
+        {% endfor %}
+      </select>
+    </label>
+  {% endif %}
+{% endmacro %}
+
+{% macro billing_form_fields(billing=none) %}
+  {% set selected_vat_status = billing.vat_status_invoice_type if billing else '' %}
+  {% set needs_full_address = selected_vat_status in vat_status_requires_full_address %}
+  <div class="finance-payee-picker" data-finance-payee-picker data-finance-contact-kind="client">
+    <label>Contact / Client
+      <input name="client_name" value="{{ billing.client_name_snapshot or '' if billing else '' }}" autocomplete="off" data-finance-payee-input required>
+    </label>
+    <div class="finance-payee-menu" data-finance-payee-menu hidden>
+      {% for contact in client_contacts if contact.is_active %}
+        <div
+          class="finance-payee-option"
+          data-finance-payee-option
+          data-contact-kind="client"
+          data-contact-id="{{ contact.id }}"
+          data-contact-name="{{ contact.display_name }}"
+          data-concept-id="{{ contact.default_concept_id or '' }}"
+          data-currency="{{ contact.default_currency or '' }}"
+          data-tax-id="{{ contact.client_tax_id or '' }}"
+          data-vat-status="{{ contact.vat_status_invoice_type or '' }}"
+          data-full-address="{{ contact.client_full_address or '' }}"
+        >
+          <button type="button" class="finance-payee-select" data-finance-payee-select>{{ contact.display_name }}</button>
+          <button type="button" class="finance-payee-forget" data-finance-payee-forget data-action="{{ url_for('staff.forget_finance_client_contact', contact_id=contact.id) }}" aria-label="Remove {{ contact.display_name }} from saved clients" title="Remove from saved clients">&times;</button>
+        </div>
+      {% else %}
+        <div class="finance-payee-empty" data-finance-payee-empty>No saved clients.</div>
+      {% endfor %}
+    </div>
+  </div>
+  <label>Concept
+    <select name="concept_id" required>
+      <option value="">Select concept</option>
+      {% for concept in billing_concepts %}<option value="{{ concept.id }}" {% if billing and billing.concept_id == concept.id %}selected{% endif %}>{{ concept.name }}</option>{% endfor %}
+    </select>
+  </label>
+  <div class="finance-form-row">
+    <label>Currency <input name="currency" value="{{ billing.currency if billing else 'ARS' }}" required></label>
+    <label>Amount <input name="amount" inputmode="decimal" pattern="[0-9]+([.][0-9]+)?" value="{{ billing.amount if billing else '' }}" data-finance-amount required></label>
+  </div>
+  <label>Tax ID / CUIL / CUIT <input name="client_tax_id" value="{{ billing.client_tax_id or '' if billing else '' }}" required></label>
+  <label>VAT status / Invoice type
+    <select name="vat_status_invoice_type" data-finance-vat-status required>
+      <option value="">Select option</option>
+      {% for option in vat_status_invoice_types %}<option value="{{ option }}" {% if selected_vat_status == option %}selected{% endif %}>{{ option }}</option>{% endfor %}
+    </select>
+  </label>
+  <label data-finance-full-address-field {% if not needs_full_address %}hidden{% endif %}>Full address <input name="client_full_address" value="{{ billing.client_full_address or '' if billing else '' }}" {% if not needs_full_address %}disabled{% else %}required{% endif %}></label>
+  <label>Supporting documentation link <input name="supporting_documentation_url" value="{{ billing.supporting_documentation_url or '' if billing else '' }}"></label>
+  <label>Requester comments <textarea name="requester_comments" rows="3">{{ billing.requester_comments or '' if billing else '' }}</textarea></label>
+{% endmacro %}
+
+<section class="page-hero finance-hero">
+  <div>
+    <p class="eyebrow">Internal finance workflow</p>
+    <h1>Finance requests</h1>
+    <p>Payment and invoice requests, editable concepts, and Finance payment tracking.</p>
+  </div>
+  {% if current_menu_can_edit and active_tab in ['payment_requests', 'finance_payments'] %}
+    <button class="primary-button" type="button" data-open-modal="new-payment-request-modal">New payment request</button>
+  {% endif %}
+</section>
+
+{% set path_bank_details_en %}*PATH EXAMINATIONS BANK ACCOUNT DETAILS:*
+
+- *Bank:* Banco Galicia 
+- *Account number:* 0001882-1 367-4 
+- *CUIT:* 30-71601631-1 
+- *Registered company name:* BELLIS IGNIS GROUP SRL 
+- *CBU:* 0070367120000001882140 
+- *Alias:* PATHEXAMINATIONS.G{% endset %}
+{% set path_bank_details_sp %}*DATOS DE LA CUENTA BANCARIA DE PATH EXAMINATIONS:*
+
+- *Entidad bancaria:* Banco Galicia
+- *Número de cuenta:* 0001882-1 367-4
+- *CUIT:* 30-71601631-1
+- *Razón Social:* BELLIS IGNIS GROUP SRL 
+- *CBU:* 0070367120000001882140
+- *Alias:* PATHEXAMINATIONS.G{% endset %}
+{% set path_invoicing_details_en %}*DETAILS FOR ISSUING INVOICES TO PATH EXAMINATIONS:*
+
+- *Registered company name:* Bellis Ignis Group S.R.L.
+- *CUIT:* 30-71601631-1
+- *Registered address:* Av. Corrientes 1383 (1043), CABA
+- *VAT status:* Responsable Inscripto{% endset %}
+{% set path_invoicing_details_sp %}*DATOS PARA EMITIR FACTURAS PARA PATH EXAMINATIONS:*
+
+- *Razón social:* Bellis Ignis Group S.R.L
+- *CUIT:* 30-71601631-1
+- *Domicilio legal:* Av. Corrientes 1383 (1043), CABA
+- *Condición frente al IVA:* Responsable Inscripto{% endset %}
+
+<nav class="finance-tabs" aria-label="Finance requests views">
+  <div class="finance-tab-links">
+    <a class="{% if active_tab == 'payment_requests' %}is-active{% endif %}" href="{{ url_for('staff.finance_requests', tab='payment_requests') }}">Payment requests</a>
+    <a class="{% if active_tab == 'billing_requests' %}is-active{% endif %}" href="{{ url_for('staff.finance_requests', tab='billing_requests') }}">Invoice requests</a>
+    {% if 'management_review' in valid_tabs %}<a class="{% if active_tab == 'management_review' %}is-active{% endif %}" href="{{ url_for('staff.finance_requests', tab='management_review') }}">Management review</a>{% endif %}
+    {% if 'finance_payments' in valid_tabs %}<a class="{% if active_tab == 'finance_payments' %}is-active{% endif %}" href="{{ url_for('staff.finance_requests', tab='finance_payments') }}">Finance actions</a>{% endif %}
+    {% if 'concepts' in valid_tabs %}<a class="{% if active_tab == 'concepts' %}is-active{% endif %}" href="{{ url_for('staff.finance_requests', tab='concepts') }}">Concepts</a>{% endif %}
+  </div>
+  <div class="finance-fixed-links">
+    <details class="finance-fixed-detail-dropdown">
+      <summary class="finance-fixed-detail-link">Path bank details</summary>
+      <div class="finance-bank-details-menu">
+        <section>
+          <div class="finance-bank-details-header">
+            <h3>PATH EXAMINATIONS BANK ACCOUNT DETAILS:</h3>
+            {{ copy_button(path_bank_details_en, 'Path bank details copied.', '', '') }}
+          </div>
+          <ul>
+            <li><strong>Bank:</strong> Banco Galicia</li>
+            <li><strong>Account number:</strong> 0001882-1 367-4</li>
+            <li><strong>CUIT:</strong> 30-71601631-1</li>
+            <li><strong>Registered company name:</strong> BELLIS IGNIS GROUP SRL</li>
+            <li><strong>CBU:</strong> 0070367120000001882140</li>
+            <li><strong>Alias:</strong> PATHEXAMINATIONS.G</li>
+          </ul>
+        </section>
+        <section>
+          <div class="finance-bank-details-header">
+            <h3>DATOS DE LA CUENTA BANCARIA DE PATH EXAMINATIONS:</h3>
+            {{ copy_button(path_bank_details_sp, 'Datos bancarios de Path copiados.', '', '') }}
+          </div>
+          <ul>
+            <li><strong>Entidad bancaria:</strong> Banco Galicia</li>
+            <li><strong>Número de cuenta:</strong> 0001882-1 367-4</li>
+            <li><strong>CUIT:</strong> 30-71601631-1</li>
+            <li><strong>Razón Social:</strong> BELLIS IGNIS GROUP SRL</li>
+            <li><strong>CBU:</strong> 0070367120000001882140</li>
+            <li><strong>Alias:</strong> PATHEXAMINATIONS.G</li>
+          </ul>
+        </section>
+      </div>
+    </details>
+    <details class="finance-fixed-detail-dropdown">
+      <summary class="finance-fixed-detail-link">Path invoicing details</summary>
+      <div class="finance-bank-details-menu">
+        <section>
+          <div class="finance-bank-details-header">
+            <h3>DETAILS FOR ISSUING INVOICES TO PATH EXAMINATIONS:</h3>
+            {{ copy_button(path_invoicing_details_en, 'Path invoicing details copied.', '', '') }}
+          </div>
+          <ul>
+            <li><strong>Registered company name:</strong> Bellis Ignis Group S.R.L.</li>
+            <li><strong>CUIT:</strong> 30-71601631-1</li>
+            <li><strong>Registered address:</strong> Av. Corrientes 1383 (1043), CABA</li>
+            <li><strong>VAT status:</strong> Responsable Inscripto</li>
+          </ul>
+        </section>
+        <section>
+          <div class="finance-bank-details-header">
+            <h3>DATOS PARA EMITIR FACTURAS PARA PATH EXAMINATIONS:</h3>
+            {{ copy_button(path_invoicing_details_sp, 'Datos de facturacion de Path copiados.', '', '') }}
+          </div>
+          <ul>
+            <li><strong>Razón social:</strong> Bellis Ignis Group S.R.L</li>
+            <li><strong>CUIT:</strong> 30-71601631-1</li>
+            <li><strong>Domicilio legal:</strong> Av. Corrientes 1383 (1043), CABA</li>
+            <li><strong>Condición frente al IVA:</strong> Responsable Inscripto</li>
+          </ul>
+        </section>
+      </div>
+    </details>
+  </div>
+</nav>
+
+{% if active_tab == 'payment_requests' %}
+  <section>
+    <div class="finance-panel">
+      <div class="finance-panel-header">
+        <h2>{{ 'Archived payment requests' if show_archived else 'Payment requests' }}</h2>
+        <a class="secondary-button compact-action" href="{{ url_for('staff.finance_requests', tab='payment_requests', show_archived='0' if show_archived else '1') }}">{{ 'Hide archived payments' if show_archived else 'Show archived payments' }}</a>
+      </div>
+      {% if show_archived %}
+        {{ archived_payment_table(payment_requests) }}
+      {% else %}
+        <div class="finance-card-list finance-payment-request-grid">
+          {% for payment in payment_requests %}
+            {{ payment_card(payment, 'payment_requests') }}
+          {% else %}
+            <p class="empty-state">No payment requests yet.</p>
+          {% endfor %}
+        </div>
+      {% endif %}
+    </div>
+  </section>
+{% elif active_tab == 'management_review' %}
+  <section class="finance-panel">
+    <h2>Management review</h2>
+    <p class="finance-muted">Default view shows requests that need Superadmin review.</p>
+    <div class="finance-card-list finance-payment-request-grid">
+      {% for payment in management_payments %}
+        <div class="finance-management-review-item">
+          {% set amount_pending = payment_amount_is_pending(payment) %}
+          {{ payment_card(payment, 'management_review') }}
+          <form class="finance-management-review-actions" method="post" action="{{ url_for('staff.manage_payment_request', payment_id=payment.id) }}">
+            <input type="hidden" name="scheduled_payment_date" value="{{ payment.scheduled_payment_date.isoformat() if payment.scheduled_payment_date else '' }}">
+            <textarea name="management_comments" rows="2" placeholder="Management comments" data-management-review-comments></textarea>
+            <div class="finance-management-review-buttons">
+              <button class="finance-review-button approve" type="submit" name="action" value="approve"{% if amount_pending %} disabled aria-disabled="true"{% endif %}>Approve</button>
+              <button class="finance-review-button discrepancy" type="submit" name="action" value="needs_correction" data-requires-management-comment>Mark discrepancy</button>
+              <button class="finance-review-button reject" type="submit" name="action" value="reject" data-requires-management-comment>Reject</button>
+            </div>
+          </form>
+          {% if amount_pending %}
+            <div class="modal" id="set-payment-amount-{{ payment.id }}" aria-hidden="true" role="dialog" aria-modal="true" aria-labelledby="set-payment-amount-title-{{ payment.id }}">
+              <div class="modal-panel">
+                <div class="modal-header">
+                  <div>
+                    <h2 id="set-payment-amount-title-{{ payment.id }}" tabindex="-1">Set amount</h2>
+                    <p class="modal-subtitle">{{ payment.request_number }}</p>
+                  </div>
+                  <button class="icon-button" type="button" data-close-modal aria-label="Close modal">&times;</button>
+                </div>
+                <form id="set-payment-amount-form-{{ payment.id }}" class="finance-form-panel finance-modal-form" method="post" action="{{ url_for('staff.set_payment_request_amount', payment_id=payment.id) }}">
+                  <label>Amount
+                    <span class="finance-prefixed-input">
+                      <strong>{{ payment.currency or 'Currency' }}</strong>
+                      <input name="amount" inputmode="decimal" pattern="[0-9]+([.][0-9]+)?" data-finance-amount required>
+                    </span>
+                  </label>
+                </form>
+                <div class="form-actions">
+                  <button class="secondary-button" type="button" data-close-modal>Close</button>
+                  <button class="primary-button" type="submit" form="set-payment-amount-form-{{ payment.id }}">Save amount</button>
+                </div>
+              </div>
+            </div>
+          {% endif %}
+        </div>
+      {% else %}
+        <p class="empty-state">No submitted requests need review.</p>
+      {% endfor %}
+    </div>
+  </section>
+{% elif active_tab == 'finance_payments' %}
+  <section class="finance-panel">
+    <div class="finance-panel-header">
+      <h2>{{ 'Archived invoice actions' if show_archived_invoices else 'Archived finance actions' if show_archived else 'Finance actions' }}</h2>
+      <div class="finance-button-row">
+        <a class="secondary-button compact-action" href="{{ url_for('staff.finance_requests', tab='finance_payments', show_archived_invoices='0' if show_archived_invoices else '1') }}">{{ 'Hide archived invoices' if show_archived_invoices else 'Show archived invoices' }}</a>
+        <a class="secondary-button compact-action" href="{{ url_for('staff.finance_requests', tab='finance_payments', show_archived='0' if show_archived else '1') }}">{{ 'Hide archived payments' if show_archived else 'Show archived payments' }}</a>
+      </div>
+    </div>
+    {% if show_archived_invoices %}
+      {{ archived_billing_table(finance_archived_billings) }}
+    {% elif show_archived %}
+      {{ archived_payment_table(finance_archived_payments) }}
+    {% else %}
+      <div class="finance-action-filter-bar" aria-label="Finance action filters">
+        {% for option in finance_filter_options %}
+          <a class="finance-action-filter{% if option.is_active %} is-active{% endif %}" href="{{ option.url }}">
+            {{ option.label }}{% if option.count is not none %} ({{ option.count }}){% endif %}
+          </a>
+        {% endfor %}
+      </div>
+      <div class="finance-card-list finance-payment-request-grid">
+        {% if active_finance_filter == 'today' %}
+          {% for billing in finance_billings %}
+            <div class="finance-action-payment-item finance-action-invoice-item">
+              {{ billing_card(billing, false, true, false) }}
+              {% if can_manage_finance %}
+                <form class="finance-payment-execution-actions" method="post" action="{{ url_for('staff.process_billing_request', billing_id=billing.id) }}" data-required-payment-proof-message="Invoice proof is required to issue an invoice." data-empty-payment-proof-message="Invoice proof must be empty to cancel or process an invoice.">
+                  <input type="hidden" name="finance_filter" value="{{ active_finance_filter }}">
+                  <label>Invoice proof
+                    <input name="invoice_link" value="{{ billing.invoice_link or '' }}" placeholder="https://" data-payment-proof-input>
+                  </label>
+                  <div class="finance-payment-execution-buttons">
+                    <button class="finance-review-button reject" type="submit" name="status" value="Invoice cancelled" data-requires-empty-payment-proof>Cancel invoice</button>
+                    <button class="finance-review-button discrepancy" type="submit" name="status" value="Processing invoice" {% if billing.status == 'Processing invoice' %}disabled aria-disabled="true"{% endif %} data-requires-empty-payment-proof>Processing invoice</button>
+                    <button class="finance-review-button approve" type="submit" name="status" value="Invoice issued" data-requires-payment-proof>Issue invoice</button>
+                  </div>
+                </form>
+              {% endif %}
+            </div>
+          {% endfor %}
+        {% endif %}
+        {% for payment in finance_payments %}
+          <div class="finance-action-payment-item">
+            {{ payment_card(payment, 'finance_payments') }}
+            {% if payment.status in ['Management approved', 'Payment scheduled'] and can_manage_finance %}
+              <form class="finance-payment-execution-actions" method="post" action="{{ url_for('staff.process_payment_request', payment_id=payment.id) }}" data-required-payment-proof-message="Payment proof is required to complete a payment." data-empty-payment-proof-message="Payment proof must be empty to cancel or process a payment.">
+                <input type="hidden" name="scheduled_payment_date" value="{{ payment.scheduled_payment_date.isoformat() if payment.scheduled_payment_date else '' }}">
+                <input type="hidden" name="finance_filter" value="{{ active_finance_filter }}">
+                <label>Payment proof
+                  <input name="payment_proof_url" value="{{ payment.payment_proof_url or '' }}" placeholder="https://" data-payment-proof-input>
+                </label>
+                <div class="finance-payment-execution-buttons">
+                  <button class="finance-review-button reject" type="submit" name="status" value="Payment cancelled" data-requires-empty-payment-proof>Cancel payment</button>
+                  <button class="finance-review-button discrepancy" type="submit" name="status" value="Payment scheduled" {% if payment.status == 'Payment scheduled' %}disabled aria-disabled="true"{% endif %} data-requires-empty-payment-proof>Processing payment</button>
+                  <button class="finance-review-button approve" type="submit" name="status" value="Payment completed" data-requires-payment-proof>Complete payment</button>
+                </div>
+              </form>
+            {% endif %}
+          </div>
+        {% endfor %}
+        {% if not finance_payments and not (active_finance_filter == 'today' and finance_billings) %}
+          <p class="empty-state">No finance actions to process.</p>
+        {% endif %}
+      </div>
+    {% endif %}
+  </section>
+{% elif active_tab == 'billing_requests' %}
+  <section{% if not show_archived_invoices %} class="finance-layout"{% endif %}>
+    {% if current_menu_can_edit and not show_archived_invoices %}
+    <form class="finance-panel finance-form-panel" method="post" action="{{ url_for('staff.create_billing_request') }}">
+      <h2>New invoice request</h2>
+      {{ billing_form_fields() }}
+      <button class="primary-button" type="submit">Create invoice request</button>
+    </form>
+    {% endif %}
+    <div class="finance-panel">
+      <div class="finance-panel-header">
+        <h2>{{ 'Archived invoice requests' if show_archived_invoices else 'Invoice requests' }}</h2>
+        <a class="secondary-button compact-action" href="{{ url_for('staff.finance_requests', tab='billing_requests', show_archived_invoices='0' if show_archived_invoices else '1') }}">{{ 'Hide archived invoices' if show_archived_invoices else 'Show archived invoices' }}</a>
+      </div>
+      {% if show_archived_invoices %}
+        {{ archived_billing_table(billing_requests) }}
+      {% else %}
+        <div class="finance-card-list finance-invoice-request-list">
+          {% for billing in billing_requests %}
+            {{ billing_card(billing) }}
+            {% if billing.status == 'Requested' and current_menu_can_edit and can_edit_billing_request(current_user, billing) %}
+              <div class="modal" id="edit-billing-request-{{ billing.id }}" aria-hidden="true" role="dialog" aria-modal="true" aria-labelledby="edit-billing-request-title-{{ billing.id }}">
+                <div class="modal-panel large finance-request-modal-panel">
+                  <div class="modal-header">
+                    <div>
+                      <h2 id="edit-billing-request-title-{{ billing.id }}" tabindex="-1">Edit invoice request</h2>
+                      <p class="modal-subtitle">{{ billing.request_number }}</p>
+                    </div>
+                    <button class="icon-button" type="button" data-close-modal aria-label="Close modal">&times;</button>
+                  </div>
+                  <form id="edit-billing-request-form-{{ billing.id }}" class="finance-form-panel finance-modal-form" method="post" action="{{ url_for('staff.update_billing_request', billing_id=billing.id) }}">
+                    {{ billing_form_fields(billing) }}
+                  </form>
+                  <form id="delete-billing-request-form-{{ billing.id }}" method="post" action="{{ url_for('staff.delete_billing_request', billing_id=billing.id) }}"></form>
+                  <div class="form-actions">
+                    <button class="secondary-button" type="button" data-close-modal>Close</button>
+                    <button class="primary-button" type="submit" form="edit-billing-request-form-{{ billing.id }}">Save and close</button>
+                    <button class="danger-button" type="submit" form="delete-billing-request-form-{{ billing.id }}" onclick="return window.confirm('Are you sure you want to delete this invoice request?')">Delete</button>
+                  </div>
+                </div>
+              </div>
+            {% endif %}
+          {% else %}
+            <p class="empty-state">No invoice requests yet.</p>
+          {% endfor %}
+        </div>
+      {% endif %}
+    </div>
+  </section>
+{% elif active_tab == 'concepts' %}
+  <section class="finance-layout">
+    <form class="finance-panel finance-form-panel" method="post" action="{{ url_for('staff.save_finance_concept') }}" data-finance-concept-form data-delete-action="{{ url_for('staff.delete_finance_concept', concept_id=0) }}">
+      <h2 data-finance-concept-form-title>New concept</h2>
+      <input name="concept_id" type="hidden" value="" data-finance-concept-id>
+      <label>Name <input name="name" required data-finance-concept-name></label>
+      <label>Description <textarea name="description" rows="3" data-finance-concept-description></textarea></label>
+      <label>Applies to <select name="applies_to" data-finance-concept-applies-to><option>Both</option><option>Payments</option><option value="Billing">Invoice</option></select></label>
+      <label class="checkbox-label"><input name="is_active" type="checkbox" value="1" checked> Active</label>
+      <div class="form-actions">
+        <button class="primary-button" type="submit" data-finance-concept-create-button>Save concept</button>
+        <button class="primary-button" type="submit" data-finance-concept-save-button hidden>Save changes</button>
+        <button class="danger-button" type="submit" formnovalidate data-finance-concept-delete-button hidden>Delete concept</button>
+      </div>
+    </form>
+    <div class="finance-panel">
+      <h2>Concepts</h2>
+      <div class="finance-contact-grid">
+        {% for concept in concepts %}
+          <article class="finance-request-card">
+            <div class="finance-card-kicker"><strong>{{ concept.name }}</strong><span class="finance-status-chip">{{ 'Invoice' if concept.applies_to == 'Billing' else concept.applies_to }}</span>{% if not concept.is_active %}<span class="finance-status-chip status-inactive">Inactive</span>{% endif %}</div>
+            <p>{{ concept.description or 'No description' }}</p>
+            <button
+              class="secondary-button compact-action"
+              type="button"
+              data-edit-finance-concept
+              data-concept-id="{{ concept.id }}"
+              data-concept-name="{{ concept.name|e }}"
+              data-concept-description="{{ (concept.description or '')|e }}"
+              data-concept-applies-to="{{ concept.applies_to }}"
+              data-concept-active="{{ '1' if concept.is_active else '0' }}"
+            >Edit</button>
+          </article>
+        {% endfor %}
+      </div>
+    </div>
+  </section>
+{% endif %}
+{% if current_menu_can_edit and active_tab in ['payment_requests', 'finance_payments'] %}
+  <div class="modal" id="new-payment-request-modal" aria-hidden="true" role="dialog" aria-modal="true" aria-labelledby="new-payment-request-title">
+    <div class="modal-panel large finance-request-modal-panel">
+      <div class="modal-header">
+        <div>
+          <h2 id="new-payment-request-title" tabindex="-1">New payment request</h2>
+          <p class="modal-subtitle">Create a payment request for Management review and Finance processing.</p>
+        </div>
+        <button class="icon-button" type="button" data-close-modal aria-label="Close modal">&times;</button>
+      </div>
+      <form class="finance-form-panel finance-modal-form" method="post" action="{{ url_for('staff.create_payment_request') }}">
+        <input type="hidden" name="source_tab" value="{{ active_tab }}">
+        {{ payment_form_fields(amount_required=active_tab != 'finance_payments') }}
+        <div class="form-actions">
+          <button class="secondary-button" type="button" data-close-modal>Cancel</button>
+          <button class="primary-button" type="submit">Create payment request</button>
+        </div>
+      </form>
+    </div>
+  </div>
+{% endif %}
+{% endblock %}

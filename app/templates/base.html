@@ -4,7 +4,7 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>{% block title %}Path Examinations Internal App{% endblock %}</title>
-    <link rel="stylesheet" href="{{ url_for('static', filename='css/styles.css', v='20260811-session-name-wrap-01') }}">
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/styles.css', v='20260816-finance-status-colors-02') }}">
   </head>
   <body>
     <div class="app-shell {% if request.args.get('session_fullscreen') == '1' %}session-fullscreen-shell{% endif %}">
@@ -130,6 +130,19 @@
               <path d="M14 17h4" />
             </svg>
             <span>Staff payments</span>
+          </a>
+          {% endif %}
+          {% if user_can_view('finance_requests') %}
+          <a class="nav-link standalone-nav-link {% if request.endpoint and request.endpoint.startswith('staff.') and request.path.startswith('/finance-requests') %}active{% endif %}" href="{{ url_for('staff.finance_requests') }}">
+            <svg class="nav-icon" viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M4 7h16v10H4z" />
+              <path d="M7 11h5" />
+              <path d="M16 10v4" />
+              <path d="M14 12h4" />
+              <path d="M8 17v3" />
+              <path d="M16 17v3" />
+            </svg>
+            <span>Finance requests</span>
           </a>
           {% endif %}
           {% if user_can_view('fees') %}

@@ -1,5 +1,5 @@
 import json
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 
 from app import db
 from sqlalchemy import event
@@ -16,6 +16,7 @@ MENU_PERMISSIONS = (
     ("pre_session_control_tower", "Pre onsite session control tower"),
     ("monthly_exam_session_registrations", "Monthly exam session registrations"),
     ("staff_payments", "Staff payments"),
+    ("finance_requests", "Finance requests"),
     ("fees", "Fees"),
     ("providers", "Providers"),
     ("users", "Users"),
@@ -2092,3 +2093,228 @@ class PotentialEntryStatusTrack(db.Model):
         "PotentialEntry",
         backref=db.backref("status_tracks", lazy=True, cascade="all, delete-orphan"),
     )
+
+
+class FinanceConcept(db.Model):
+    __tablename__ = "finance_concept"
+    __table_args__ = (
+        db.CheckConstraint("applies_to IN ('Payments', 'Billing', 'Both')", name="ck_finance_concept_applies_to"),
+    )
+
+    id = db.Column(db.Integer, primary_key=True)
+    name = db.Column(db.String(120), nullable=False, unique=True, index=True)
+    description = db.Column(db.Text, nullable=True)
+    applies_to = db.Column(db.String(20), nullable=False, default="Both", index=True)
+    is_active = db.Column(db.Boolean, nullable=False, default=True, index=True)
+    display_order = db.Column(db.Integer, nullable=False, default=0, index=True)
+    created_on = db.Column(db.DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))
+    updated_on = db.Column(
+        db.DateTime(timezone=True),
+        nullable=False,
+        default=lambda: datetime.now(timezone.utc),
+        onupdate=lambda: datetime.now(timezone.utc),
+    )
+
+
+class FinanceContact(db.Model):
+    __tablename__ = "finance_contact"
+
+    id = db.Column(db.Integer, primary_key=True)
+    display_name = db.Column(db.String(180), nullable=False, index=True)
+    default_concept_id = db.Column(db.Integer, db.ForeignKey("finance_concept.id"), nullable=True, index=True)
+    email = db.Column(db.String(180), nullable=True)
+    phone = db.Column(db.String(80), nullable=True)
+    tax_id = db.Column(db.String(80), nullable=True)
+    bank_name = db.Column(db.String(160), nullable=True)
+    account_holder = db.Column(db.String(180), nullable=True)
+    account_number = db.Column(db.String(180), nullable=True)
+    alias = db.Column(db.String(120), nullable=True)
+    default_currency = db.Column(db.String(10), nullable=True)
+    default_payment_method = db.Column(db.String(40), nullable=True)
+    notes = db.Column(db.Text, nullable=True)
+    documentation_url = db.Column(db.String(500), nullable=True)
+    is_active = db.Column(db.Boolean, nullable=False, default=True, index=True)
+    created_on = db.Column(db.DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))
+    updated_on = db.Column(
+        db.DateTime(timezone=True),
+        nullable=False,
+        default=lambda: datetime.now(timezone.utc),
+        onupdate=lambda: datetime.now(timezone.utc),
+    )
+
+    default_concept = db.relationship("FinanceConcept")
+
+
+class FinanceClientContact(db.Model):
+    __tablename__ = "finance_client_contact"
+
+    id = db.Column(db.Integer, primary_key=True)
+    display_name = db.Column(db.String(180), nullable=False, index=True)
+    default_concept_id = db.Column(db.Integer, db.ForeignKey("finance_concept.id"), nullable=True, index=True)
+    default_currency = db.Column(db.String(10), nullable=True)
+    client_tax_id = db.Column(db.String(80), nullable=True)
+    vat_status_invoice_type = db.Column(db.String(80), nullable=True)
+    client_full_address = db.Column(db.String(500), nullable=True)
+    notes = db.Column(db.Text, nullable=True)
+    is_active = db.Column(db.Boolean, nullable=False, default=True, index=True)
+    created_on = db.Column(db.DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))
+    updated_on = db.Column(
+        db.DateTime(timezone=True),
+        nullable=False,
+        default=lambda: datetime.now(timezone.utc),
+        onupdate=lambda: datetime.now(timezone.utc),
+    )
+
+    default_concept = db.relationship("FinanceConcept")
+
+
+class PaymentRequest(db.Model):
+    __tablename__ = "payment_request"
+    __table_args__ = (
+        db.UniqueConstraint("request_number", name="uq_payment_request_number"),
+    )
+
+    id = db.Column(db.Integer, primary_key=True)
+    request_number = db.Column(db.String(40), nullable=False, unique=True, index=True)
+    requester_user_id = db.Column(db.Integer, db.ForeignKey("app_user.id"), nullable=True, index=True)
+    requester_department = db.Column(db.String(40), nullable=True, index=True)
+    description = db.Column(db.Text, nullable=False)
+    concept_id = db.Column(db.Integer, db.ForeignKey("finance_concept.id"), nullable=False, index=True)
+    concept_name_snapshot = db.Column(db.String(120), nullable=False)
+    payee_contact_id = db.Column(db.Integer, db.ForeignKey("finance_contact.id"), nullable=True, index=True)
+    payee_name_snapshot = db.Column(db.String(180), nullable=True)
+    amount = db.Column(db.Numeric(14, 2), nullable=False)
+    currency = db.Column(db.String(10), nullable=False, index=True)
+    payment_method = db.Column(db.String(40), nullable=False)
+    requested_payment_date = db.Column(db.Date, nullable=True, index=True)
+    fixed_payment_date_required = db.Column(db.Boolean, nullable=False, default=False)
+    scheduled_payment_date = db.Column(db.Date, nullable=True, index=True)
+    payment_date_mode = db.Column(db.String(20), nullable=False, default="asap")
+    management_approved_at = db.Column(db.DateTime(timezone=True), nullable=True)
+    payment_completed_at = db.Column(db.DateTime(timezone=True), nullable=True)
+    bank_details_snapshot = db.Column(db.Text, nullable=True)
+    requester_comments = db.Column(db.Text, nullable=True)
+    management_comments = db.Column(db.Text, nullable=True)
+    finance_comments = db.Column(db.Text, nullable=True)
+    supporting_documentation_url = db.Column(db.String(500), nullable=True)
+    payment_proof_url = db.Column(db.String(500), nullable=True)
+    status = db.Column(db.String(40), nullable=False, default="Submitted", index=True)
+    visibility_mode = db.Column(db.String(40), nullable=False, default="Standard", index=True)
+    visible_to_management = db.Column(db.Boolean, nullable=False, default=True)
+    visible_to_finance = db.Column(db.Boolean, nullable=False, default=True)
+    previous_status_before_hold = db.Column(db.String(40), nullable=True)
+    hold_comment = db.Column(db.Text, nullable=True)
+    hold_set_at = db.Column(db.DateTime(timezone=True), nullable=True)
+    hold_set_by_user_id = db.Column(db.Integer, db.ForeignKey("app_user.id"), nullable=True)
+    hold_set_by_department = db.Column(db.String(40), nullable=True)
+    is_archived = db.Column(db.Boolean, nullable=False, default=False, index=True)
+    archived_at = db.Column(db.DateTime(timezone=True), nullable=True)
+    archived_by_user_id = db.Column(db.Integer, db.ForeignKey("app_user.id"), nullable=True)
+    archived_by_department = db.Column(db.String(40), nullable=True)
+    created_on = db.Column(db.DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc), index=True)
+    updated_on = db.Column(
+        db.DateTime(timezone=True),
+        nullable=False,
+        default=lambda: datetime.now(timezone.utc),
+        onupdate=lambda: datetime.now(timezone.utc),
+    )
+
+    requester = db.relationship("User", foreign_keys=[requester_user_id])
+    concept = db.relationship("FinanceConcept")
+    payee_contact = db.relationship("FinanceContact")
+
+
+class PaymentRequestEvent(db.Model):
+    __tablename__ = "payment_request_event"
+
+    id = db.Column(db.Integer, primary_key=True)
+    payment_request_id = db.Column(
+        db.Integer,
+        db.ForeignKey("payment_request.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    event_type = db.Column(db.String(120), nullable=False, index=True)
+    previous_status = db.Column(db.String(40), nullable=True)
+    new_status = db.Column(db.String(40), nullable=True)
+    comment = db.Column(db.Text, nullable=True)
+    created_by_user_id = db.Column(db.Integer, db.ForeignKey("app_user.id"), nullable=True, index=True)
+    created_by_department = db.Column(db.String(40), nullable=True)
+    created_on = db.Column(db.DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc), index=True)
+
+    payment_request = db.relationship(
+        "PaymentRequest",
+        backref=db.backref("events", lazy=True, cascade="all, delete-orphan", order_by="desc(PaymentRequestEvent.created_on)"),
+    )
+    created_by = db.relationship("User")
+
+
+class BillingRequest(db.Model):
+    __tablename__ = "billing_request"
+    __table_args__ = (
+        db.UniqueConstraint("request_number", name="uq_billing_request_number"),
+    )
+
+    id = db.Column(db.Integer, primary_key=True)
+    request_number = db.Column(db.String(40), nullable=False, unique=True, index=True)
+    requester_user_id = db.Column(db.Integer, db.ForeignKey("app_user.id"), nullable=True, index=True)
+    requester_department = db.Column(db.String(40), nullable=True, index=True)
+    client_contact_id = db.Column(db.Integer, db.ForeignKey("finance_client_contact.id"), nullable=True, index=True)
+    client_name_snapshot = db.Column(db.String(180), nullable=True)
+    concept_id = db.Column(db.Integer, db.ForeignKey("finance_concept.id"), nullable=False, index=True)
+    concept_name_snapshot = db.Column(db.String(120), nullable=False)
+    description = db.Column(db.Text, nullable=False)
+    currency = db.Column(db.String(10), nullable=False, index=True)
+    amount = db.Column(db.Numeric(14, 2), nullable=False)
+    client_tax_id = db.Column(db.String(80), nullable=True)
+    vat_status_invoice_type = db.Column(db.String(80), nullable=True)
+    client_full_address = db.Column(db.String(500), nullable=True)
+    requested_invoice_issue_date = db.Column(db.Date, nullable=True, index=True)
+    scheduled_invoice_issue_date = db.Column(db.Date, nullable=True, index=True)
+    invoice_number = db.Column(db.String(120), nullable=True)
+    invoice_link = db.Column(db.String(500), nullable=True)
+    supporting_documentation_url = db.Column(db.String(500), nullable=True)
+    requester_comments = db.Column(db.Text, nullable=True)
+    finance_comments = db.Column(db.Text, nullable=True)
+    status = db.Column(db.String(40), nullable=False, default="Requested", index=True)
+    visibility_mode = db.Column(db.String(40), nullable=False, default="Standard", index=True)
+    is_archived = db.Column(db.Boolean, nullable=False, default=False, index=True)
+    archived_at = db.Column(db.DateTime(timezone=True), nullable=True)
+    archived_by_user_id = db.Column(db.Integer, db.ForeignKey("app_user.id"), nullable=True)
+    archived_by_department = db.Column(db.String(40), nullable=True)
+    created_on = db.Column(db.DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc), index=True)
+    updated_on = db.Column(
+        db.DateTime(timezone=True),
+        nullable=False,
+        default=lambda: datetime.now(timezone.utc),
+        onupdate=lambda: datetime.now(timezone.utc),
+    )
+
+    requester = db.relationship("User", foreign_keys=[requester_user_id])
+    client_contact = db.relationship("FinanceClientContact")
+    concept = db.relationship("FinanceConcept")
+
+
+class BillingRequestEvent(db.Model):
+    __tablename__ = "billing_request_event"
+
+    id = db.Column(db.Integer, primary_key=True)
+    billing_request_id = db.Column(
+        db.Integer,
+        db.ForeignKey("billing_request.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    event_type = db.Column(db.String(120), nullable=False, index=True)
+    previous_status = db.Column(db.String(40), nullable=True)
+    new_status = db.Column(db.String(40), nullable=True)
+    comment = db.Column(db.Text, nullable=True)
+    created_by_user_id = db.Column(db.Integer, db.ForeignKey("app_user.id"), nullable=True, index=True)
+    created_by_department = db.Column(db.String(40), nullable=True)
+    created_on = db.Column(db.DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc), index=True)
+
+    billing_request = db.relationship(
+        "BillingRequest",
+        backref=db.backref("events", lazy=True, cascade="all, delete-orphan", order_by="desc(BillingRequestEvent.created_on)"),
+    )
+    created_by = db.relationship("User")
