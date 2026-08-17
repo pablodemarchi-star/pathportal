@@ -692,7 +692,7 @@ class FinanceRequestsTest(unittest.TestCase):
 
         self.assertIn("Today (1)", today_body)
         self.assertIn("Tomorrow (0)", today_body)
-        self.assertLess(today_body.index("Show archived invoices"), today_body.index(">Show archived payments</a>"))
+        self.assertLess(today_body.index(">Show archived payments</a>"), today_body.index("Show archived invoices"))
         self.assertIn("INVOICE-2026-0001", today_body)
         self.assertIn("<h3>Client: Client SA</h3>", today_body)
         self.assertIn("<summary>Invoice details</summary>", today_body)

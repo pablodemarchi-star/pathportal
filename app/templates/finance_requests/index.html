@@ -745,8 +745,8 @@
     <div class="finance-panel-header">
       <h2>{{ 'Archived invoice actions' if show_archived_invoices else 'Archived finance actions' if show_archived else 'Finance actions' }}</h2>
       <div class="finance-button-row">
-        <a class="secondary-button compact-action" href="{{ url_for('staff.finance_requests', tab='finance_payments', show_archived_invoices='0' if show_archived_invoices else '1') }}">{{ 'Hide archived invoices' if show_archived_invoices else 'Show archived invoices' }}</a>
         <a class="secondary-button compact-action" href="{{ url_for('staff.finance_requests', tab='finance_payments', show_archived='0' if show_archived else '1') }}">{{ 'Hide archived payments' if show_archived else 'Show archived payments' }}</a>
+        <a class="secondary-button compact-action" href="{{ url_for('staff.finance_requests', tab='finance_payments', show_archived_invoices='0' if show_archived_invoices else '1') }}">{{ 'Hide archived invoices' if show_archived_invoices else 'Show archived invoices' }}</a>
       </div>
     </div>
     {% if show_archived_invoices %}
