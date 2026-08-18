@@ -22002,7 +22002,7 @@ def finance_dashboard_action_link(label, count, url):
         "label": label,
         "count": count,
         "url": url,
-        "text": f"View action{'s' if count != 1 else ''} in {label}",
+        "text": f"View {count} action{'s' if count != 1 else ''} in {label}",
     }
 
 

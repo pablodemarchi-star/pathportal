@@ -240,7 +240,7 @@ class DashboardTest(unittest.TestCase):
         self.assertIn("<h2>Finance requests</h2>", body)
         self.assertIn("You have 4 actions to complete in this menu.", body)
         self.assertIn('aria-label="Finance requests counters"', body)
-        self.assertIn('href="/finance-requests?tab=payment_requests">View actions in Payment requests</a>', body)
+        self.assertIn('href="/finance-requests?tab=payment_requests">View 4 actions in Payment requests</a>', body)
 
     def test_dashboard_shows_admin_invoice_actions_for_requested_cards(self):
         client = self.permission_client({"finance_requests": {"view": True}}, department="Admin")
@@ -259,7 +259,7 @@ class DashboardTest(unittest.TestCase):
 
         self.assertEqual(response.status_code, 200)
         self.assertIn("You have 2 actions to complete in this menu.", body)
-        self.assertIn('href="/finance-requests?tab=billing_requests">View actions in Invoice requests</a>', body)
+        self.assertIn('href="/finance-requests?tab=billing_requests">View 2 actions in Invoice requests</a>', body)
 
     def test_dashboard_shows_finance_today_actions_for_finance_users(self):
         client = self.permission_client({"finance_requests": {"view": True}}, department="Finance")
@@ -290,7 +290,7 @@ class DashboardTest(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertIn("You have 3 actions to complete in this menu.", body)
         self.assertIn(
-            'href="/finance-requests?tab=finance_payments&amp;finance_filter=today">View actions in Finance actions</a>',
+            'href="/finance-requests?tab=finance_payments&amp;finance_filter=today">View 3 actions in Finance actions</a>',
             body,
         )
 
@@ -318,7 +318,7 @@ class DashboardTest(unittest.TestCase):
 
         self.assertEqual(response.status_code, 200)
         self.assertIn("You have 2 actions to complete in this menu.", body)
-        self.assertIn('href="/finance-requests?tab=management_review">View actions in Management review</a>', body)
+        self.assertIn('href="/finance-requests?tab=management_review">View 2 actions in Management review</a>', body)
         self.assertNotIn("View action in Payment requests", body)
         self.assertNotIn("View action in Invoice requests", body)
 
