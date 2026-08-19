@@ -4,7 +4,7 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>{% block title %}Path Examinations Internal App{% endblock %}</title>
-    <link rel="stylesheet" href="{{ url_for('static', filename='css/styles.css', v='20260816-finance-status-colors-02') }}">
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/styles.css', v='20260818-logistics-control-heights-01') }}">
   </head>
   <body>
     <div class="app-shell {% if request.args.get('session_fullscreen') == '1' %}session-fullscreen-shell{% endif %}">
@@ -214,6 +214,6 @@
         {% block content %}{% endblock %}
       </main>
     </div>
-    <script src="{{ url_for('static', filename='js/app.js', v='20260811-shipment-note-close-01') }}"></script>
+    <script src="{{ url_for('static', filename='js/app.js', v='20260818-logistics-staff-members-01') }}"></script>
   </body>
 </html>

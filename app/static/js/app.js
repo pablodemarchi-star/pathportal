@@ -1851,6 +1851,21 @@ document.addEventListener("click", (event) => {
     if (modal) modal.classList.toggle("is-finance-only", isFinanceOnlyMode);
     if (modal) modal.classList.toggle("is-sinapsis-only", isSinapsisOnlyMode);
     if (modal) modal.classList.toggle("is-communications-only", isCommunicationsOnlyMode);
+    if (modal) {
+      const returnInput = modal.querySelector("[data-payment-request-return-input]");
+      if (returnInput && opener.dataset.paymentRequestReturnSessionId) {
+        const returnUrl = new URL(window.location.href);
+        returnUrl.searchParams.set("open_schedule_modal", opener.dataset.paymentRequestReturnSessionId);
+        returnUrl.searchParams.set("open_modal_target", "logistics");
+        returnUrl.searchParams.set("logistics_only", "1");
+        returnUrl.hash = `logistics-${opener.dataset.paymentRequestReturnSessionId}`;
+        returnInput.value = `${returnUrl.pathname}${returnUrl.search}${returnUrl.hash}`;
+      }
+      const logisticsConceptInput = modal.querySelector("[data-payment-request-logistics-concept-input]");
+      if (logisticsConceptInput) {
+        logisticsConceptInput.value = opener.dataset.paymentRequestLogisticsConceptId || "";
+      }
+    }
     syncScheduleNoteContextInputs(modal);
     resetControlSectionsToDefault(modal);
     openModal(opener.dataset.openModal, { opener, focus: !opener.dataset.modalScrollTarget });
@@ -2031,43 +2046,47 @@ document.addEventListener("keydown", (event) => {
   }
 
   if (event.key === "Escape") {
-    const openSchedulePanel = document.querySelector(".modal.is-open [data-schedule-action-panel]:not([hidden])");
+    const openModals = document.querySelectorAll(".modal.is-open");
+    const topModal = openModals[openModals.length - 1];
+    if (!topModal) return;
+    const openSchedulePanel = topModal.querySelector("[data-schedule-action-panel]:not([hidden])");
     if (openSchedulePanel) {
       event.preventDefault();
       closeScheduleActionPanel(openSchedulePanel);
       return;
     }
-    const openStaffingControl = document.querySelector(".modal.is-open [data-staffing-control-form]:not([hidden])");
+    const openStaffingControl = topModal.querySelector("[data-staffing-control-form]:not([hidden])");
     if (openStaffingControl) {
       event.preventDefault();
       closeStaffingControlForm(openStaffingControl);
       return;
     }
-    const openLogisticsControl = document.querySelector(".modal.is-open [data-logistics-control-form]:not([hidden])");
+    const openLogisticsControl = topModal.querySelector("[data-logistics-control-form]:not([hidden])");
     if (openLogisticsControl) {
       event.preventDefault();
       closeLogisticsControlForm(openLogisticsControl);
       return;
     }
-    const openFinanceControl = document.querySelector(".modal.is-open [data-finance-control-form]:not([hidden])");
+    const openFinanceControl = topModal.querySelector("[data-finance-control-form]:not([hidden])");
     if (openFinanceControl) {
       event.preventDefault();
       closeFinanceControlForm(openFinanceControl);
       return;
     }
-    const openSinapsisControl = document.querySelector(".modal.is-open [data-sinapsis-control-form]:not([hidden])");
+    const openSinapsisControl = topModal.querySelector("[data-sinapsis-control-form]:not([hidden])");
     if (openSinapsisControl) {
       event.preventDefault();
       closeSinapsisControlForm(openSinapsisControl);
       return;
     }
-    const openCommunicationsControl = document.querySelector(".modal.is-open [data-communications-control-form]:not([hidden])");
+    const openCommunicationsControl = topModal.querySelector("[data-communications-control-form]:not([hidden])");
     if (openCommunicationsControl) {
       event.preventDefault();
       closeCommunicationsControlForm(openCommunicationsControl);
       return;
     }
-    document.querySelectorAll(".modal.is-open").forEach(closeModal);
+    event.preventDefault();
+    closeModal(topModal);
   }
 });
 
@@ -2089,6 +2108,101 @@ document.querySelectorAll("[data-communications-control-form]").forEach((form) =
   syncCommunicationsNoteRequirement(form);
   form.querySelector("[data-communications-status-select]")?.addEventListener("change", () => {
     syncCommunicationsNoteRequirement(form);
+  });
+});
+
+const syncStaffingRoleCheckRow = (checkbox) => {
+  const row = checkbox?.closest("tr");
+  if (!row) return;
+  const verified = checkbox.checked && !checkbox.disabled;
+  row.querySelectorAll("[data-role-check-dependent]").forEach((control) => {
+    const isCopyButton = control.matches("[data-copy-text]");
+    const targetHref = control.dataset.roleCheckHref || "";
+    const hasTarget = isCopyButton
+      ? Boolean((control.dataset.copyText || "").trim())
+      : control.matches("a")
+        ? Boolean(targetHref.trim() && targetHref.trim() !== "mailto:")
+        : true;
+    const enabled = verified && hasTarget;
+    if (control.matches("a")) {
+      control.href = enabled ? targetHref : "#";
+      control.setAttribute("aria-disabled", enabled ? "false" : "true");
+      if (enabled) {
+        control.removeAttribute("tabindex");
+      } else {
+        control.setAttribute("tabindex", "-1");
+      }
+    } else {
+      control.disabled = !enabled;
+    }
+    control.classList.toggle("is-disabled", !enabled);
+    if (control.classList.contains("staffing-action-chip")) {
+      control.classList.toggle("staffing-action-chip-blue", enabled);
+      control.classList.toggle("staffing-action-chip-grey", !enabled);
+    }
+  });
+};
+
+document.querySelectorAll("[data-role-check-form]").forEach((form) => {
+  const checkbox = form.querySelector("[data-role-check]");
+  if (!checkbox) return;
+  syncStaffingRoleCheckRow(checkbox);
+  checkbox.addEventListener("change", async () => {
+    const previousChecked = !checkbox.checked;
+    syncStaffingRoleCheckRow(checkbox);
+    if (!window.fetch) {
+      form.submit();
+      return;
+    }
+    try {
+      const response = await fetch(form.action, {
+        method: "POST",
+        body: new FormData(form),
+        headers: { Accept: "application/json" },
+      });
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok || payload.ok === false) {
+        throw new Error(payload.error || "Role check could not be updated.");
+      }
+      checkbox.checked = Boolean(payload.role_check_verified);
+    } catch (error) {
+      checkbox.checked = previousChecked;
+      window.alert(error.message || "Role check could not be updated.");
+    } finally {
+      syncStaffingRoleCheckRow(checkbox);
+    }
+  });
+});
+
+document.querySelectorAll("[data-pre-logistics-provider-remove-form]").forEach((form) => {
+  const checkbox = form.querySelector("[data-pre-logistics-provider-checkbox]");
+  if (!checkbox) return;
+  checkbox.addEventListener("change", () => {
+    if (checkbox.checked) return;
+    if (!window.confirm("Are you sure you want to remove this provider option?")) {
+      checkbox.checked = true;
+      return;
+    }
+    form.submit();
+  });
+});
+
+document.querySelectorAll("[data-pre-logistics-staff-remove-form]").forEach((form) => {
+  const checkbox = form.querySelector("[data-pre-logistics-staff-checkbox]");
+  if (!checkbox) return;
+  checkbox.addEventListener("change", () => {
+    if (checkbox.checked) return;
+    if (!window.confirm("Are you sure you want to remove this staff member from this concept?")) {
+      checkbox.checked = true;
+      return;
+    }
+    form.submit();
+  });
+});
+
+document.querySelectorAll("[data-pre-logistics-status-select]").forEach((select) => {
+  select.addEventListener("change", () => {
+    select.closest("form")?.submit();
   });
 });
 
@@ -4589,6 +4703,9 @@ document.addEventListener("click", (event) => {
   document.querySelectorAll("[data-potential-session-multiselect][open]").forEach((picker) => {
     if (!picker.contains(event.target)) picker.open = false;
   });
+  document.querySelectorAll("[data-logistics-provider-picker][open]").forEach((picker) => {
+    if (!picker.contains(event.target)) picker.open = false;
+  });
   document.querySelectorAll("[data-note-recipient-picker].is-open").forEach((picker) => {
     if (!picker.contains(event.target)) picker.classList.remove("is-open");
   });
@@ -4602,6 +4719,9 @@ document.addEventListener("keydown", (event) => {
   document.querySelectorAll("[data-potential-session-multiselect][open]").forEach((picker) => {
     picker.open = false;
   });
+  document.querySelectorAll("[data-logistics-provider-picker][open]").forEach((picker) => {
+    picker.open = false;
+  });
   document.querySelectorAll("[data-note-recipient-picker].is-open").forEach((picker) => {
     picker.classList.remove("is-open");
   });
@@ -4611,12 +4731,14 @@ window.addEventListener("resize", () => {
   document.querySelectorAll("[data-member-multiselect][open]").forEach(positionMemberMultiselectPanel);
   document.querySelectorAll("[data-potential-session-multiselect][open]").forEach(positionPotentialSessionMultiselectPanel);
   document.querySelectorAll("[data-team-member-picker][open]").forEach(positionTeamMemberPickerPanel);
+  document.querySelectorAll("[data-logistics-provider-picker][open]").forEach(positionLogisticsProviderPickerPanel);
 });
 
 window.addEventListener("scroll", () => {
   document.querySelectorAll("[data-member-multiselect][open]").forEach(positionMemberMultiselectPanel);
   document.querySelectorAll("[data-potential-session-multiselect][open]").forEach(positionPotentialSessionMultiselectPanel);
   document.querySelectorAll("[data-team-member-picker][open]").forEach(positionTeamMemberPickerPanel);
+  document.querySelectorAll("[data-logistics-provider-picker][open]").forEach(positionLogisticsProviderPickerPanel);
 }, true);
 
 const syncTeamMemberSelect = (select) => {
@@ -4638,6 +4760,7 @@ const syncTeamMemberSelect = (select) => {
     syncVehicleDep(staffAssignmentRow(select), { forceEmpty: true });
     syncSeniority(staffAssignmentRow(select));
     resetParticipationWithoutTeamMember(staffAssignmentRow(select));
+    syncLogisticsStaffMemberLists(select.closest("[data-session-members-form]"));
     return;
   }
   const state = option.dataset.state || "warning";
@@ -4662,6 +4785,7 @@ const syncTeamMemberSelect = (select) => {
   syncVehicleDep(staffAssignmentRow(select), { forceEmpty: true });
   syncSeniority(staffAssignmentRow(select));
   resetParticipationWithoutTeamMember(staffAssignmentRow(select));
+  syncLogisticsStaffMemberLists(select.closest("[data-session-members-form]"));
 };
 
 const syncStaffMemberEmailCell = (select) => {
@@ -8716,6 +8840,78 @@ const activeLogisticsControls = (form) => logisticsControls(form).filter(logisti
 
 const rowHasActiveLogisticsControl = (row) => Array.from(row?.querySelectorAll("[data-logistics-control]") || []).some(logisticsControlIsActive);
 
+function syncLogisticsStaffMemberLists(form) {
+  if (!form) return;
+  const complexStaffMembers = [];
+  const seenStaffMemberIds = new Set();
+  form.querySelectorAll("[data-supervisor-row]").forEach((row) => {
+    const logisticsControl = row.querySelector("[data-logistics-control]");
+    const teamInput = row.querySelector("[data-team-member-select]");
+    const selectedOption = selectedTeamMemberOption(teamInput);
+    const staffMemberId = teamInput?.value || "";
+    if (
+      logisticsControl?.value !== "Complex logistics"
+      || !staffMemberId
+      || staffMemberId.startsWith("potential:")
+      || selectedOption?.dataset.entryType === "potential"
+      || seenStaffMemberIds.has(staffMemberId)
+    ) {
+      return;
+    }
+    seenStaffMemberIds.add(staffMemberId);
+    complexStaffMembers.push({
+      id: staffMemberId,
+      name: selectedOption?.dataset.name || row.querySelector("[data-staff-card-title]")?.textContent.trim() || "Staff member",
+    });
+  });
+
+  form.querySelectorAll("[data-logistics-staff-list]").forEach((list) => {
+    const selectedIds = new Set(
+      Array.from(list.querySelectorAll("input[type='checkbox']:checked"))
+        .map((checkbox) => checkbox.value)
+        .concat((list.dataset.selectedStaffIds || "").split(","))
+        .map((value) => value.trim())
+        .filter(Boolean)
+    );
+    const row = list.closest("[data-logistics-concept-row]");
+    const rowKeyInput = row?.querySelector("input[name='logistics_concept_row_keys']");
+    const rowKey = rowKeyInput?.value || "";
+    list.innerHTML = "";
+    if (!complexStaffMembers.length || !rowKey) {
+      const empty = document.createElement("span");
+      empty.className = "logistics-staff-empty";
+      empty.textContent = "No Complex logistics staff";
+      list.appendChild(empty);
+      list.dataset.selectedStaffIds = "";
+      return;
+    }
+    complexStaffMembers.forEach((staffMember) => {
+      const label = document.createElement("label");
+      label.className = "logistics-staff-member-option";
+      const checkbox = document.createElement("input");
+      checkbox.type = "checkbox";
+      checkbox.name = `logistics_staff_member_ids_${rowKey}`;
+      checkbox.value = staffMember.id;
+      checkbox.checked = selectedIds.has(staffMember.id);
+      checkbox.addEventListener("change", () => {
+        list.dataset.selectedStaffIds = Array.from(list.querySelectorAll("input[type='checkbox']:checked"))
+          .map((item) => item.value)
+          .join(",");
+        syncLogisticsStatusSelect(row?.querySelector("[data-logistics-status]"));
+        markStaffChangesUnsaved(form);
+      });
+      const text = document.createElement("span");
+      text.textContent = staffMember.name;
+      text.title = staffMember.name;
+      label.append(checkbox, text);
+      list.appendChild(label);
+    });
+    list.dataset.selectedStaffIds = Array.from(list.querySelectorAll("input[type='checkbox']:checked"))
+      .map((item) => item.value)
+      .join(",");
+  });
+}
+
 const syncStaffLogisticsControl = (control) => {
   if (!control) return;
   control.classList.remove(
@@ -8732,6 +8928,7 @@ const syncStaffLogisticsControl = (control) => {
   syncStaffHeaderLogisticsTag(row, control.value);
   const hiddenInput = row?.querySelector("[data-logistics-enabled-input]");
   if (hiddenInput) hiddenInput.value = logisticsControlIsActive(control) ? "1" : "";
+  syncLogisticsStaffMemberLists(control.closest("[data-session-members-form]"));
 };
 
 const syncSessionLogisticsActivityBadge = (form) => {
@@ -8745,11 +8942,42 @@ const syncSessionLogisticsActivityBadge = (form) => {
     : '<span class="centered-dash muted">-</span>';
 };
 
+const syncLogisticsPlannedState = (section) => {
+  if (!section) return;
+  const checkbox = section.querySelector("[data-logistics-planned]");
+  const addButton = section.querySelector("[data-add-logistics-concept]");
+  if (!checkbox || !addButton) return;
+  const planned = checkbox.checked;
+  addButton.disabled = planned;
+  addButton.classList.toggle("is-disabled", planned);
+  addButton.setAttribute("aria-disabled", planned ? "true" : "false");
+  section.querySelectorAll("[data-logistics-concept-row]").forEach(syncLogisticsDeleteButton);
+};
+
+const syncLogisticsDeleteButton = (row) => {
+  const deleteButton = row?.querySelector("[data-delete-logistics-concept]");
+  if (!deleteButton) return;
+  const section = row.closest("[data-logistics-section]");
+  const planned = Boolean(section?.querySelector("[data-logistics-planned]")?.checked);
+  const status = row.querySelector("[data-logistics-status]")?.value || "Pending";
+  const canDelete = !planned && ["Pending", "In progress"].includes(status);
+  deleteButton.disabled = !canDelete;
+  deleteButton.setAttribute("aria-disabled", canDelete ? "false" : "true");
+};
+
+const logisticsRowCanBeConfirmed = (row) => {
+  const providerSelect = row?.querySelector("[data-logistics-provider-select]");
+  const hasProvider = Array.from(providerSelect?.selectedOptions || []).some((option) => option.value);
+  const hasStaffMember = Boolean(row?.querySelector("[data-logistics-staff-list] input[type='checkbox']:checked"));
+  return hasProvider && hasStaffMember;
+};
+
 const syncLogisticsSection = (form) => {
   if (!form) return;
   const section = form.querySelector("[data-logistics-section]");
   if (!section) return;
   section.hidden = activeLogisticsControls(form).length === 0 && !formHasLogisticsConcepts(form);
+  syncLogisticsPlannedState(section);
   syncSessionLogisticsActivityBadge(form);
 };
 
@@ -8788,6 +9016,15 @@ const syncLogisticsFilesLink = (section) => {
 };
 
 const syncLogisticsStatusSelect = (select) => {
+  if (!select) return;
+  const row = select.closest("[data-logistics-concept-row]");
+  const confirmedOption = Array.from(select.options || []).find((option) => option.value === "Confirmed");
+  const canConfirm = logisticsRowCanBeConfirmed(row);
+  if (confirmedOption) confirmedOption.disabled = !canConfirm;
+  if (select.value === "Confirmed" && !canConfirm) {
+    select.value = "Pending";
+    delete select.dataset.logisticsConfirmedAuthorized;
+  }
   select.classList.remove(
     "logistics-status-pending",
     "logistics-status-in-progress",
@@ -8801,7 +9038,6 @@ const syncLogisticsStatusSelect = (select) => {
     Confirmed: "logistics-status-confirmed",
   }[select.value] || "logistics-status-pending";
   select.classList.add(statusClass);
-  const row = select.closest("[data-logistics-concept-row]");
   const locked = ["Pre-confirmed", "Confirmed"].includes(select.value);
   row?.classList.toggle("is-row-locked", locked);
   const chip = row?.querySelector("[data-logistics-lock-chip]");
@@ -8813,7 +9049,7 @@ const syncLogisticsStatusSelect = (select) => {
       return;
     }
     if (button.matches("[data-provider-details-button]")) {
-      button.disabled = !button.dataset.openModal;
+      button.disabled = !button.dataset.providerDetailIds;
       delete button.dataset.rowLockDisabled;
       return;
     }
@@ -8825,7 +9061,36 @@ const syncLogisticsStatusSelect = (select) => {
       delete button.dataset.rowLockDisabled;
     }
   });
+  syncLogisticsDeleteButton(row);
   syncInvitationEmailCopyButtons(select.closest("[data-session-members-form]"));
+};
+
+const complexLogisticsCoverageError = (form) => {
+  if (!form) return "";
+  const requiredMembers = new Map();
+  form.querySelectorAll("[data-supervisor-row]").forEach((row) => {
+    const logisticsControl = row.querySelector("[data-logistics-control]");
+    const teamInput = row.querySelector("[data-team-member-select]");
+    const staffMemberId = teamInput?.value || "";
+    if (
+      logisticsControl?.value === "Complex logistics"
+      && staffMemberId
+      && !staffMemberId.startsWith("potential:")
+    ) {
+      requiredMembers.set(staffMemberId, row.querySelector("[data-staff-card-title]")?.textContent.trim() || "Staff member");
+    }
+  });
+  if (!requiredMembers.size) return "";
+  const coveredMemberIds = new Set(
+    Array.from(form.querySelectorAll("[data-logistics-staff-list] input[type='checkbox']:checked"))
+      .map((checkbox) => checkbox.value)
+      .filter(Boolean)
+  );
+  const missingNames = Array.from(requiredMembers)
+    .filter(([staffMemberId]) => !coveredMemberIds.has(staffMemberId))
+    .map(([, name]) => name);
+  if (!missingNames.length) return "";
+  return `Each Complex logistics staff member must be selected in at least one Logistics concept before saving: ${missingNames.join(", ")}`;
 };
 
 const LOGISTICS_CONFIRMED_PASSWORD = "Check";
@@ -8860,13 +9125,281 @@ const syncLogisticsProviderDetailsButton = (select) => {
   const row = select.closest("[data-logistics-concept-row]");
   const button = row?.querySelector("[data-provider-details-button]");
   if (!button) return;
-  if (select.value) {
-    button.dataset.openModal = `provider-details-${select.value}`;
+  const selectedValues = Array.from(select.selectedOptions || [])
+    .map((option) => option.value)
+    .filter(Boolean);
+  if (selectedValues.length > 0) {
+    delete button.dataset.openModal;
+    button.dataset.providerDetailIds = selectedValues.join(",");
     button.disabled = false;
+    button.title = selectedValues.length === 1
+      ? "Provider details"
+      : `Provider details for ${selectedValues.length} providers`;
   } else {
     delete button.dataset.openModal;
+    delete button.dataset.providerDetailIds;
     button.disabled = true;
+    button.title = "Provider details";
   }
+};
+
+const logisticsProviderDetailsModalId = "logistics-provider-details-selected";
+
+const ensureLogisticsProviderDetailsModal = () => {
+  let modal = document.getElementById(logisticsProviderDetailsModalId);
+  if (modal) return modal;
+  modal = document.createElement("div");
+  modal.className = "modal nested-modal logistics-provider-details-modal";
+  modal.id = logisticsProviderDetailsModalId;
+  modal.setAttribute("aria-hidden", "true");
+  modal.innerHTML = `
+    <div class="modal-panel">
+      <div class="modal-header">
+        <div>
+          <h2 data-logistics-provider-details-title>Provider details</h2>
+          <p data-logistics-provider-details-subtitle></p>
+        </div>
+        <button class="icon-button" type="button" data-close-modal>&times;</button>
+      </div>
+      <div class="logistics-provider-details-list" data-logistics-provider-details-list></div>
+    </div>
+  `;
+  document.body.appendChild(modal);
+  return modal;
+};
+
+const renderLogisticsProviderDetailsModal = (providerIds) => {
+  const modal = ensureLogisticsProviderDetailsModal();
+  const title = modal.querySelector("[data-logistics-provider-details-title]");
+  const subtitle = modal.querySelector("[data-logistics-provider-details-subtitle]");
+  const list = modal.querySelector("[data-logistics-provider-details-list]");
+  if (!list) return modal;
+  list.innerHTML = "";
+  const uniqueProviderIds = Array.from(new Set(providerIds.filter(Boolean)));
+  if (title) title.textContent = uniqueProviderIds.length === 1 ? "Provider details" : "Provider details";
+  if (subtitle) {
+    subtitle.textContent = uniqueProviderIds.length === 1
+      ? "1 selected provider"
+      : `${uniqueProviderIds.length} selected providers`;
+  }
+
+  uniqueProviderIds.forEach((providerId) => {
+    const sourceModal = document.getElementById(`provider-details-${providerId}`);
+    const sourcePanel = sourceModal?.querySelector(".modal-panel");
+    const sourceHeader = sourcePanel?.querySelector(".modal-header > div");
+    const sourceGrid = sourcePanel?.querySelector(".provider-details-grid");
+    if (!sourceHeader || !sourceGrid) return;
+
+    const article = document.createElement("article");
+    article.className = "logistics-provider-details-card";
+
+    const header = document.createElement("header");
+    header.className = "logistics-provider-details-card-header";
+    header.innerHTML = sourceHeader.innerHTML;
+
+    const grid = sourceGrid.cloneNode(true);
+    article.append(header, grid);
+    list.appendChild(article);
+  });
+
+  if (!list.children.length) {
+    const empty = document.createElement("p");
+    empty.className = "empty-history";
+    empty.textContent = "No provider details available.";
+    list.appendChild(empty);
+  }
+  return modal;
+};
+
+const selectedLogisticsProviderOptions = (select) => Array.from(select?.selectedOptions || [])
+  .filter((option) => option.value && !option.disabled && !option.hidden);
+
+const syncLogisticsProviderPicker = (select) => {
+  const picker = select?._logisticsProviderPicker;
+  if (!picker) return;
+  const selectedOptions = selectedLogisticsProviderOptions(select);
+  const buttonText = picker.querySelector("[data-logistics-provider-picker-text]");
+  const summary = picker.querySelector("summary");
+  const tags = picker.querySelector("[data-logistics-provider-picker-tags]");
+  const clearButton = picker.querySelector("[data-logistics-provider-clear]");
+  const checkboxes = picker.querySelectorAll("input[type='checkbox']");
+  const selectedProviderLabels = selectedOptions.map((option) => option.textContent.trim());
+  const selectedProviderTitle = selectedProviderLabels.join("\n");
+
+  checkboxes.forEach((checkbox) => {
+    const option = Array.from(select.options).find((item) => item.value === checkbox.value);
+    checkbox.checked = Boolean(option?.selected);
+    checkbox.disabled = Boolean(option?.disabled || option?.hidden || select.disabled);
+    checkbox.closest("[data-logistics-provider-option]")?.toggleAttribute("hidden", checkbox.disabled);
+  });
+
+  if (buttonText) {
+    if (select.disabled) {
+      buttonText.textContent = "Select type first";
+      buttonText.removeAttribute("title");
+    } else if (selectedOptions.length === 0) {
+      buttonText.textContent = "Select providers";
+      buttonText.removeAttribute("title");
+    } else if (selectedOptions.length === 1) {
+      buttonText.textContent = selectedProviderLabels[0];
+      buttonText.title = selectedProviderLabels[0];
+    } else {
+      buttonText.textContent = `${selectedOptions.length} providers selected`;
+      buttonText.title = selectedProviderTitle;
+    }
+  }
+  if (summary) {
+    if (selectedProviderTitle) summary.title = selectedProviderTitle;
+    else summary.removeAttribute("title");
+  }
+
+  if (clearButton) clearButton.hidden = selectedOptions.length === 0 || select.disabled;
+  picker.classList.toggle("has-selection", selectedOptions.length > 0);
+  picker.classList.toggle("is-disabled", select.disabled);
+
+  if (!tags) return;
+  tags.innerHTML = "";
+  selectedOptions.slice(0, 3).forEach((option) => {
+    const chip = document.createElement("span");
+    chip.className = "logistics-provider-chip";
+    chip.title = option.textContent.trim();
+    chip.textContent = option.textContent.trim();
+
+    const remove = document.createElement("button");
+    remove.type = "button";
+    remove.setAttribute("aria-label", `Remove ${option.textContent.trim()}`);
+    remove.textContent = "x";
+    remove.addEventListener("click", (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      option.selected = false;
+      select.dispatchEvent(new Event("change", { bubbles: true }));
+    });
+    chip.appendChild(remove);
+    tags.appendChild(chip);
+  });
+  if (selectedOptions.length > 3) {
+    const overflow = document.createElement("span");
+    overflow.className = "logistics-provider-chip is-overflow";
+    overflow.textContent = `+${selectedOptions.length - 3}`;
+    tags.appendChild(overflow);
+  }
+};
+
+const closeOtherLogisticsProviderPickers = (activePicker) => {
+  document.querySelectorAll("[data-logistics-provider-picker][open]").forEach((picker) => {
+    if (picker !== activePicker) picker.open = false;
+  });
+};
+
+const positionLogisticsProviderPickerPanel = (picker) => {
+  const panel = picker?.querySelector(".logistics-provider-picker-panel");
+  const summary = picker?.querySelector("summary");
+  if (!panel || !summary || !picker.open) return;
+  const rect = summary.getBoundingClientRect();
+  const viewportGap = 12;
+  const panelWidth = Math.min(Math.max(rect.width, 320), window.innerWidth - viewportGap * 2);
+  const left = Math.min(Math.max(rect.left, viewportGap), window.innerWidth - panelWidth - viewportGap);
+  const availableBelow = window.innerHeight - rect.bottom - viewportGap;
+  const availableAbove = rect.top - viewportGap;
+  const openAbove = availableBelow < 220 && availableAbove > availableBelow;
+  const maxHeight = Math.max(180, Math.min(320, openAbove ? availableAbove - 6 : availableBelow - 6));
+  panel.style.width = `${panelWidth}px`;
+  panel.style.maxHeight = `${maxHeight}px`;
+  panel.style.left = `${left}px`;
+  const panelHeight = Math.min(panel.scrollHeight || maxHeight, maxHeight);
+  panel.style.top = openAbove
+    ? `${Math.max(viewportGap, rect.top - panelHeight - 6)}px`
+    : `${Math.min(window.innerHeight - viewportGap, rect.bottom + 6)}px`;
+};
+
+const initLogisticsProviderPicker = (select) => {
+  if (select._logisticsProviderPicker) return;
+  select.classList.add("native-logistics-provider-select");
+
+  const picker = document.createElement("details");
+  picker.className = "logistics-provider-picker";
+  picker.dataset.logisticsProviderPicker = "true";
+
+  const summary = document.createElement("summary");
+  summary.innerHTML = '<span data-logistics-provider-picker-text>Select providers</span><span aria-hidden="true">⌄</span>';
+
+  const panel = document.createElement("div");
+  panel.className = "logistics-provider-picker-panel";
+  panel.setAttribute("role", "listbox");
+  panel.setAttribute("aria-multiselectable", "true");
+
+  const actions = document.createElement("div");
+  actions.className = "logistics-provider-picker-actions";
+  const clearButton = document.createElement("button");
+  clearButton.type = "button";
+  clearButton.dataset.logisticsProviderClear = "true";
+  clearButton.textContent = "Clear";
+  clearButton.addEventListener("click", (event) => {
+    event.preventDefault();
+    Array.from(select.options).forEach((option) => {
+      option.selected = false;
+    });
+    select.dispatchEvent(new Event("change", { bubbles: true }));
+  });
+  actions.appendChild(clearButton);
+  panel.appendChild(actions);
+
+  const options = Array.from(select.options).filter((option) => option.value);
+  if (options.length) {
+    options.forEach((option) => {
+      const row = document.createElement("label");
+      row.className = "logistics-provider-picker-option";
+      row.dataset.logisticsProviderOption = "true";
+      row.setAttribute("role", "option");
+
+      const checkbox = document.createElement("input");
+      checkbox.type = "checkbox";
+      checkbox.value = option.value;
+      checkbox.checked = option.selected;
+
+      const check = document.createElement("span");
+      check.className = "logistics-provider-option-check";
+      check.textContent = "✓";
+      check.setAttribute("aria-hidden", "true");
+
+      const text = document.createElement("span");
+      text.className = "logistics-provider-option-text";
+      text.textContent = option.textContent.trim();
+
+      checkbox.addEventListener("change", () => {
+        option.selected = checkbox.checked;
+        select.dispatchEvent(new Event("change", { bubbles: true }));
+      });
+
+      row.append(checkbox, check, text);
+      panel.appendChild(row);
+    });
+  } else {
+    const empty = document.createElement("span");
+    empty.className = "logistics-provider-picker-empty";
+    empty.textContent = "No providers available";
+    panel.appendChild(empty);
+  }
+
+  const tags = document.createElement("div");
+  tags.className = "logistics-provider-picker-tags";
+  tags.dataset.logisticsProviderPickerTags = "true";
+
+  picker.append(summary, panel, tags);
+  select.insertAdjacentElement("afterend", picker);
+  select._logisticsProviderPicker = picker;
+  summary.addEventListener("click", (event) => {
+    if (!select.disabled) return;
+    event.preventDefault();
+  });
+  picker.addEventListener("toggle", () => {
+    if (picker.open) {
+      closeOtherLogisticsProviderPickers(picker);
+      positionLogisticsProviderPickerPanel(picker);
+    }
+  });
+  syncLogisticsProviderPicker(select);
 };
 
 const syncLogisticsProviderForType = (typeSelect) => {
@@ -8874,7 +9407,7 @@ const syncLogisticsProviderForType = (typeSelect) => {
   const providerSelect = row?.querySelector("[data-logistics-provider-select]");
   if (!providerSelect) return;
   const selectedTypeId = typeSelect.value;
-  let selectedProviderIsAvailable = false;
+  let selectedProviderIsAvailable = true;
   Array.from(providerSelect.options).forEach((option) => {
     if (!option.value) {
       option.hidden = false;
@@ -8884,13 +9417,17 @@ const syncLogisticsProviderForType = (typeSelect) => {
     const matchesSelectedType = Boolean(selectedTypeId) && option.dataset.providerTypeId === selectedTypeId;
     option.hidden = !matchesSelectedType;
     option.disabled = !matchesSelectedType;
-    if (matchesSelectedType && option.selected) selectedProviderIsAvailable = true;
+    if (option.selected && !matchesSelectedType) selectedProviderIsAvailable = false;
   });
   providerSelect.disabled = !selectedTypeId;
   if (!selectedTypeId || !selectedProviderIsAvailable) {
-    providerSelect.value = "";
+    Array.from(providerSelect.options).forEach((option) => {
+      option.selected = false;
+    });
   }
   syncLogisticsProviderDetailsButton(providerSelect);
+  syncLogisticsProviderPicker(providerSelect);
+  syncLogisticsStatusSelect(row?.querySelector("[data-logistics-status]"));
 };
 
 const syncLogisticsCurrencySelect = (select) => {
@@ -9032,8 +9569,14 @@ const initLogisticsControls = (root = document) => {
   root.querySelectorAll(".logistics-provider-select").forEach((select) => {
     if (select.dataset.logisticsProviderInitialized === "true") return;
     select.dataset.logisticsProviderInitialized = "true";
-    select.addEventListener("change", () => syncLogisticsProviderDetailsButton(select));
+    initLogisticsProviderPicker(select);
+    select.addEventListener("change", () => {
+      syncLogisticsProviderDetailsButton(select);
+      syncLogisticsProviderPicker(select);
+      syncLogisticsStatusSelect(select.closest("[data-logistics-concept-row]")?.querySelector("[data-logistics-status]"));
+    });
     syncLogisticsProviderDetailsButton(select);
+    syncLogisticsProviderPicker(select);
   });
 
   root.querySelectorAll("[data-logistics-provider-type]").forEach((select) => {
@@ -9065,6 +9608,16 @@ const initLogisticsControls = (root = document) => {
     input.dataset.logisticsUrlInitialized = "true";
     input.addEventListener("input", () => syncLogisticsFilesLink(input.closest("[data-logistics-section]")));
     syncLogisticsFilesLink(input.closest("[data-logistics-section]"));
+  });
+
+  root.querySelectorAll("[data-logistics-planned]").forEach((checkbox) => {
+    if (checkbox.dataset.logisticsPlannedInitialized === "true") return;
+    checkbox.dataset.logisticsPlannedInitialized = "true";
+    checkbox.addEventListener("change", () => {
+      syncLogisticsPlannedState(checkbox.closest("[data-logistics-section]"));
+      markStaffChangesUnsaved(checkbox.closest("[data-session-members-form]"));
+    });
+    syncLogisticsPlannedState(checkbox.closest("[data-logistics-section]"));
   });
 
   root.querySelectorAll("[data-configure-logistics-link]").forEach((button) => {
@@ -9114,7 +9667,10 @@ const initLogisticsControls = (root = document) => {
     control.dataset.previousLogisticsValue = control.value;
   });
 
-  root.querySelectorAll("[data-session-members-form]").forEach(syncLogisticsSection);
+  root.querySelectorAll("[data-session-members-form]").forEach((form) => {
+    syncLogisticsSection(form);
+    syncLogisticsStaffMemberLists(form);
+  });
 };
 
 const initSessionMemberRows = (root = document) => {
@@ -9270,6 +9826,7 @@ document.querySelectorAll("[data-add-member-row]").forEach((button) => {
 
 document.querySelectorAll("[data-add-logistics-concept]").forEach((button) => {
   button.addEventListener("click", () => {
+    if (button.disabled) return;
     const section = button.closest("[data-logistics-section]");
     const form = button.closest("[data-session-members-form]");
     const template = section?.querySelector("[data-logistics-concept-template]");
@@ -9283,6 +9840,7 @@ document.querySelectorAll("[data-add-logistics-concept]").forEach((button) => {
     if (!row) return;
     target.appendChild(row);
     initLogisticsControls(row);
+    syncLogisticsStaffMemberLists(form);
     markStaffChangesUnsaved(form);
     syncLogisticsSection(form);
   });
@@ -9318,6 +9876,20 @@ document.addEventListener("click", (event) => {
   if (!event.target.closest("[data-logistics-confirm-cancel]")) return;
   event.preventDefault();
   closeLogisticsConfirmedPasswordModal();
+});
+
+document.addEventListener("click", (event) => {
+  const button = event.target.closest("[data-provider-details-button]");
+  if (!button || button.disabled) return;
+  const providerIds = (button.dataset.providerDetailIds || "")
+    .split(",")
+    .map((value) => value.trim())
+    .filter(Boolean);
+  if (!providerIds.length) return;
+  event.preventDefault();
+  event.stopPropagation();
+  const modal = renderLogisticsProviderDetailsModal(providerIds);
+  openModal(modal.id, { opener: button });
 });
 
 document.addEventListener("click", (event) => {
@@ -9438,6 +10010,13 @@ document.querySelectorAll("[data-session-members-form]").forEach((form) => {
       const field = logisticsSection.querySelector(".logistics-files-field");
       if (field) field.hidden = false;
       logisticsSection.querySelector("[data-logistics-files-url]")?.focus();
+    }
+    const coverageError = complexLogisticsCoverageError(form);
+    if (coverageError) {
+      event.preventDefault();
+      if (logisticsSection) logisticsSection.hidden = false;
+      window.alert(coverageError);
+      form.querySelector("[data-logistics-section]")?.scrollIntoView({ block: "start", behavior: "smooth" });
     }
     form.querySelectorAll("[data-logistics-fee]").forEach(roundLogisticsFeeInput);
     if (event.defaultPrevented) return;

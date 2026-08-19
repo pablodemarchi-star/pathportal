@@ -679,6 +679,7 @@ class ExamSession(db.Model):
     emergency_contact_status_due_at = db.Column(db.Date, nullable=True)
     emergency_contact_status_due_stage = db.Column(db.String(40), nullable=True)
     emergency_contact_status_due_started_at = db.Column(db.DateTime(timezone=True), nullable=True)
+    emergency_contact_role_check_verified = db.Column(db.Boolean, nullable=False, default=False)
     monthly_registrations_closed = db.Column(db.Boolean, nullable=False, default=False)
     monthly_registrations_closed_at = db.Column(db.DateTime(timezone=True), nullable=True)
     package_label_verification_status = db.Column(db.String(30), nullable=False, default="not_started", index=True)
@@ -1514,6 +1515,7 @@ class ExamSessionSupervisorAssignment(db.Model):
     team_member_id = db.Column(db.Integer, db.ForeignKey("academic_staff.id"), nullable=True, index=True)
     potential_entry_id = db.Column(db.Integer, db.ForeignKey("potential_entry.id"), nullable=True, index=True)
     participation_status = db.Column(db.String(40), nullable=False, default="Pending", index=True)
+    staffing_role_check_verified = db.Column(db.Boolean, nullable=False, default=False)
     staffing_status_due_at = db.Column(db.Date, nullable=True, index=True)
     staffing_status_due_stage = db.Column(db.String(40), nullable=True, index=True)
     staffing_status_due_started_at = db.Column(db.DateTime(timezone=True), nullable=True)
@@ -1628,6 +1630,7 @@ class ExamSessionExaminerAssignment(db.Model):
     team_member_id = db.Column(db.Integer, db.ForeignKey("academic_staff.id"), nullable=True, index=True)
     potential_entry_id = db.Column(db.Integer, db.ForeignKey("potential_entry.id"), nullable=True, index=True)
     participation_status = db.Column(db.String(40), nullable=False, default="Pending", index=True)
+    staffing_role_check_verified = db.Column(db.Boolean, nullable=False, default=False)
     staffing_status_due_at = db.Column(db.Date, nullable=True, index=True)
     staffing_status_due_stage = db.Column(db.String(40), nullable=True, index=True)
     staffing_status_due_started_at = db.Column(db.DateTime(timezone=True), nullable=True)
@@ -1741,6 +1744,7 @@ class ExamSessionInternAssignment(db.Model):
     team_member_id = db.Column(db.Integer, db.ForeignKey("academic_staff.id"), nullable=True, index=True)
     potential_entry_id = db.Column(db.Integer, db.ForeignKey("potential_entry.id"), nullable=True, index=True)
     participation_status = db.Column(db.String(40), nullable=False, default="Pending", index=True)
+    staffing_role_check_verified = db.Column(db.Boolean, nullable=False, default=False)
     staffing_status_due_at = db.Column(db.Date, nullable=True, index=True)
     staffing_status_due_stage = db.Column(db.String(40), nullable=True, index=True)
     staffing_status_due_started_at = db.Column(db.DateTime(timezone=True), nullable=True)
@@ -1896,6 +1900,7 @@ class ExamSessionLogistics(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     exam_session_id = db.Column(db.Integer, db.ForeignKey("exam_session.id"), nullable=False, index=True)
     logistics_files_url = db.Column(db.String(500), nullable=True)
+    logistics_planned = db.Column(db.Boolean, nullable=False, default=False)
     created_on = db.Column(db.DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))
     updated_on = db.Column(
         db.DateTime(timezone=True),
@@ -1911,6 +1916,7 @@ class ExamSessionLogisticsConcept(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     exam_session_id = db.Column(db.Integer, db.ForeignKey("exam_session.id"), nullable=False, index=True)
     status = db.Column(db.String(30), nullable=False, default="Pending", index=True)
+    provider_type_id = db.Column(db.Integer, db.ForeignKey("provider_type.id"), nullable=True, index=True)
     provider_id = db.Column(db.Integer, db.ForeignKey("provider.id"), nullable=True, index=True)
     provider = db.Column(db.String(160), nullable=False, default="", index=True)
     currency = db.Column(db.String(3), nullable=False, default="ARS", index=True)
@@ -1924,7 +1930,66 @@ class ExamSessionLogisticsConcept(db.Model):
     )
 
     exam_session = db.relationship("ExamSession", backref=db.backref("logistics_concepts", lazy=True))
+    provider_type = db.relationship("ProviderType", foreign_keys=[provider_type_id])
     provider_record = db.relationship("Provider", foreign_keys=[provider_id])
+    provider_records = db.relationship(
+        "Provider",
+        secondary="exam_session_logistics_concept_provider",
+        backref=db.backref("logistics_concept_links", lazy=True),
+        order_by="Provider.name",
+    )
+    staff_members = db.relationship(
+        "AcademicStaff",
+        secondary="exam_session_logistics_concept_staff_member",
+        backref=db.backref("logistics_concept_staff_links", lazy=True),
+        order_by="AcademicStaff.full_name",
+    )
+
+    def provider_display_label(self):
+        providers = list(self.provider_records or [])
+        if providers:
+            return ", ".join(provider.display_label for provider in providers)
+        return self.provider or ""
+
+
+class ExamSessionLogisticsConceptProvider(db.Model):
+    __table_args__ = (
+        db.UniqueConstraint(
+            "logistics_concept_id",
+            "provider_id",
+            name="uq_logistics_concept_provider",
+        ),
+    )
+
+    id = db.Column(db.Integer, primary_key=True)
+    logistics_concept_id = db.Column(
+        db.Integer,
+        db.ForeignKey("exam_session_logistics_concept.id"),
+        nullable=False,
+        index=True,
+    )
+    provider_id = db.Column(db.Integer, db.ForeignKey("provider.id"), nullable=False, index=True)
+    created_on = db.Column(db.DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))
+
+
+class ExamSessionLogisticsConceptStaffMember(db.Model):
+    __table_args__ = (
+        db.UniqueConstraint(
+            "logistics_concept_id",
+            "staff_member_id",
+            name="uq_logistics_concept_staff_member",
+        ),
+    )
+
+    id = db.Column(db.Integer, primary_key=True)
+    logistics_concept_id = db.Column(
+        db.Integer,
+        db.ForeignKey("exam_session_logistics_concept.id"),
+        nullable=False,
+        index=True,
+    )
+    staff_member_id = db.Column(db.Integer, db.ForeignKey("academic_staff.id"), nullable=False, index=True)
+    created_on = db.Column(db.DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))
 
 
 class ExamSessionLogisticsConceptNote(db.Model):
@@ -2180,6 +2245,7 @@ class PaymentRequest(db.Model):
     requester_department = db.Column(db.String(40), nullable=True, index=True)
     description = db.Column(db.Text, nullable=False)
     concept_id = db.Column(db.Integer, db.ForeignKey("finance_concept.id"), nullable=False, index=True)
+    logistics_concept_id = db.Column(db.Integer, db.ForeignKey("exam_session_logistics_concept.id"), nullable=True, index=True)
     concept_name_snapshot = db.Column(db.String(120), nullable=False)
     payee_contact_id = db.Column(db.Integer, db.ForeignKey("finance_contact.id"), nullable=True, index=True)
     payee_name_snapshot = db.Column(db.String(180), nullable=True)
@@ -2221,6 +2287,7 @@ class PaymentRequest(db.Model):
 
     requester = db.relationship("User", foreign_keys=[requester_user_id])
     concept = db.relationship("FinanceConcept")
+    logistics_concept = db.relationship("ExamSessionLogisticsConcept", backref=db.backref("payment_requests", lazy=True))
     payee_contact = db.relationship("FinanceContact")
 
 

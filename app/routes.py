@@ -48,6 +48,8 @@ from app.models import (
     ExamSessionLogisticsControl,
     ExamSessionLogisticsConcept,
     ExamSessionLogisticsConceptNote,
+    ExamSessionLogisticsConceptProvider,
+    ExamSessionLogisticsConceptStaffMember,
     ExamSessionMonthlyCandidateTotal,
     ExamSessionMonthlyRegistration,
     ExamSessionPackageChecklistItem,
@@ -1280,6 +1282,8 @@ def normalize_logistics_fee(value):
 def logistics_concepts_have_data(concepts):
     return any(
         concept.provider
+        or concept.provider_id
+        or getattr(concept, "provider_records", None)
         or concept.fee is not None
         or concept.status != "Pending"
         or concept.currency != "ARS"
@@ -1309,7 +1313,7 @@ def logistics_readiness_contract(assignments, concepts, logistics_config=None):
         {
             "id": concept.id,
             "status": concept.status,
-            "provider": concept.provider,
+            "provider": concept.provider_display_label() if hasattr(concept, "provider_display_label") else concept.provider,
         }
         for concept in active_concepts
         if concept.status != "Confirmed"
@@ -1417,40 +1421,53 @@ def staffing_readiness_contract(supervisor_assignments=None, examiner_assignment
     open_position_details = []
     blockers = []
     invalid_found = False
-    if session_record and session_record.emergency_contact_member_id:
+    if session_record and session_record.emergency_contact_required and not session_record.emergency_contact_not_required:
         counts = empty_staffing_counts()
-        participation_status = normalize_participation_status(session_record.emergency_contact_participation_status)
         counts["required"] = 1
-        counts["assigned"] = 1
-        if participation_status == "Pending":
-            counts["pending_assigned"] = 1
-        elif participation_status == "Declined":
-            counts["pending_assigned"] = 1
-            blockers.append({
-                "code": "STAFF_DECLINED",
-                "role": "Emergency contact",
-                "assignment_id": session_record.id,
-                "message": "Emergency contact declined participation and needs follow-up.",
-            })
-        elif participation_status == "Cancelled":
-            counts["pending_assigned"] = 1
-            blockers.append({
-                "code": "STAFF_CANCELLED",
-                "role": "Emergency contact",
-                "assignment_id": session_record.id,
-                "message": "Emergency contact participation was cancelled and needs follow-up.",
-            })
-        elif participation_status_is_in_progress(participation_status):
-            counts["sent"] = 1
-        elif participation_status == "Confirmed":
-            counts["confirmed"] = 1
+        if session_record.emergency_contact_member_id:
+            participation_status = normalize_participation_status(session_record.emergency_contact_participation_status)
+            counts["assigned"] = 1
+            if participation_status == "Pending":
+                counts["pending_assigned"] = 1
+            elif participation_status == "Declined":
+                counts["pending_assigned"] = 1
+                blockers.append({
+                    "code": "STAFF_DECLINED",
+                    "role": "Emergency contact",
+                    "assignment_id": session_record.id,
+                    "message": "Emergency contact declined participation and needs follow-up.",
+                })
+            elif participation_status == "Cancelled":
+                counts["pending_assigned"] = 1
+                blockers.append({
+                    "code": "STAFF_CANCELLED",
+                    "role": "Emergency contact",
+                    "assignment_id": session_record.id,
+                    "message": "Emergency contact participation was cancelled and needs follow-up.",
+                })
+            elif participation_status_is_in_progress(participation_status):
+                counts["sent"] = 1
+            elif participation_status == "Confirmed":
+                counts["confirmed"] = 1
+            else:
+                invalid_found = True
+                blockers.append({
+                    "code": "INVALID_PARTICIPATION_STATUS",
+                    "role": "Emergency contact",
+                    "assignment_id": session_record.id,
+                    "message": "Emergency contact has an invalid participation status.",
+                })
         else:
-            invalid_found = True
+            counts["open_positions"] = 1
+            open_position_details.append({
+                "assignment_id": session_record.id,
+                "role": "Emergency contact",
+            })
             blockers.append({
-                "code": "INVALID_PARTICIPATION_STATUS",
+                "code": "OPEN_STAFF_POSITION",
                 "role": "Emergency contact",
                 "assignment_id": session_record.id,
-                "message": "Emergency contact has an invalid participation status.",
+                "message": "An Emergency contact position still needs to be filled.",
             })
         counts["ready"] = counts["confirmed"] == counts["required"]
         by_role["Emergency contact"] = counts
@@ -2411,6 +2428,16 @@ def delete_exam_session_dependencies(session_id):
     ExamSessionPackageUnit.query.filter_by(exam_session_id=session_id).delete(synchronize_session=False)
 
     ExamSessionShipmentBundleSession.query.filter_by(exam_session_id=session_id).delete(synchronize_session=False)
+    ExamSessionLogisticsConceptProvider.query.filter(
+        ExamSessionLogisticsConceptProvider.logistics_concept_id.in_(
+            db.session.query(ExamSessionLogisticsConcept.id).filter_by(exam_session_id=session_id)
+        )
+    ).delete(synchronize_session=False)
+    ExamSessionLogisticsConceptStaffMember.query.filter(
+        ExamSessionLogisticsConceptStaffMember.logistics_concept_id.in_(
+            db.session.query(ExamSessionLogisticsConcept.id).filter_by(exam_session_id=session_id)
+        )
+    ).delete(synchronize_session=False)
     ExamSessionLogisticsConceptNote.query.filter(
         ExamSessionLogisticsConceptNote.logistics_concept_id.in_(
             db.session.query(ExamSessionLogisticsConcept.id).filter_by(exam_session_id=session_id)
@@ -2436,6 +2463,7 @@ def delete_archived_member(member):
         model.query.filter_by(member_id=member.id).delete(synchronize_session=False)
     for model in (ExamSessionSupervisorAssignment, ExamSessionExaminerAssignment, ExamSessionInternAssignment):
         model.query.filter_by(team_member_id=member.id).delete(synchronize_session=False)
+    ExamSessionLogisticsConceptStaffMember.query.filter_by(staff_member_id=member.id).delete(synchronize_session=False)
     bundle_ids = [
         bundle_id for (bundle_id,) in ExamSessionShipmentBundle.query.with_entities(ExamSessionShipmentBundle.id).filter_by(supervisor_staff_id=member.id).all()
     ]
@@ -6180,7 +6208,7 @@ def schedule_locked_by_staffing_assignments(session_record):
     )
 
 
-def staffing_assignment_row(role, assignment=None, assignment_type="", status="Pending", staff_name="", staff_email="", receives_shipment=False, updatable=True, assignment_id=None, due_at=None):
+def staffing_assignment_row(role, assignment=None, assignment_type="", status="Pending", staff_name="", staff_email="", receives_shipment=False, updatable=True, assignment_id=None, due_at=None, role_check_verified=False):
     clean_status = staffing_participation_status_label(status)
     resolved_name = staff_name or staffing_assignment_person_name(assignment)
     has_staff_member = bool(
@@ -6199,6 +6227,7 @@ def staffing_assignment_row(role, assignment=None, assignment_type="", status="P
         "deadline": due_at if due_at is not None else getattr(assignment, "staffing_status_due_at", None),
         "deadline_label": staffing_assignment_deadline_label(due_at if due_at is not None else getattr(assignment, "staffing_status_due_at", None), clean_status),
         "deadline_status": staffing_assignment_deadline_status(due_at if due_at is not None else getattr(assignment, "staffing_status_due_at", None), clean_status),
+        "role_check_verified": bool(role_check_verified or getattr(assignment, "staffing_role_check_verified", False)),
         "receives_shipment": receives_shipment or bool(getattr(assignment, "is_shipment_recipient", False)),
         "has_staff_member": has_staff_member,
         "updatable": bool(updatable and (assignment_id is not None or (assignment and assignment.id))),
@@ -6207,15 +6236,18 @@ def staffing_assignment_row(role, assignment=None, assignment_type="", status="P
 
 def staffing_assignment_rows(session_record, supervisor_assignments=None, examiner_assignments=None, intern_assignments=None):
     rows = []
-    if session_record and session_record.emergency_contact_member:
+    if session_record and session_record.emergency_contact_required and not session_record.emergency_contact_not_required:
+        emergency_contact = session_record.emergency_contact_member
         rows.append(staffing_assignment_row(
             "Emergency contact",
             assignment_type="emergency_contact",
             assignment_id=session_record.id,
-            status=session_record.emergency_contact_participation_status,
-            staff_name=session_record.emergency_contact_member.full_name,
-            staff_email=session_record.emergency_contact_member.email,
+            status=session_record.emergency_contact_participation_status if emergency_contact else "Pending",
+            staff_name=emergency_contact.full_name if emergency_contact else "",
+            staff_email=emergency_contact.email if emergency_contact else "",
             due_at=session_record.emergency_contact_status_due_at,
+            role_check_verified=session_record.emergency_contact_role_check_verified if emergency_contact else False,
+            updatable=bool(emergency_contact),
         ))
     for assignment in supervisor_assignments or []:
         rows.append(staffing_assignment_row(
@@ -7804,7 +7836,11 @@ def logistics_contract_blocker_messages(contract, concepts=None):
     if "LOGISTICS_CONCEPTS_PENDING" in blocker_codes:
         for blocker in contract.get("blocking_concepts", []):
             concept = concept_by_id.get(blocker.get("id"))
-            concept_label = (getattr(concept, "provider", "") or "").strip()
+            concept_label = (
+                concept.provider_display_label()
+                if concept and hasattr(concept, "provider_display_label")
+                else (getattr(concept, "provider", "") or "").strip()
+            )
             if not concept_label:
                 concept_label = "A logistics concept"
             status = blocker.get("status") or "Pending"
@@ -7849,9 +7885,16 @@ def logistics_presentation_state(contract):
     return "needs_review"
 
 
-def logistics_presentation_from_contract(contract, assignments_by_role=None, concepts=None, logistics_config=None):
+def logistics_presentation_from_contract(
+    contract,
+    assignments_by_role=None,
+    concepts=None,
+    logistics_config=None,
+    payment_requests_by_concept=None,
+):
     assignments_by_role = assignments_by_role or {}
     concepts = concepts or []
+    payment_requests_by_concept = payment_requests_by_concept or {}
     total = contract.get("total_concepts", 0)
     confirmed = contract.get("confirmed_concepts", 0)
     required_count = len(contract.get("required_member_ids", []))
@@ -7901,10 +7944,45 @@ def logistics_presentation_from_contract(contract, assignments_by_role=None, con
 
     concept_rows = []
     for index, concept in enumerate(concepts, start=1):
-        label = (concept.provider or "").strip() or f"Logistics concept {index}"
+        label = concept.provider_display_label() if hasattr(concept, "provider_display_label") else (concept.provider or "").strip()
+        label = label or f"Logistics concept {index}"
+        providers = list(concept.provider_records or [])
+        if concept.provider_record and all(provider.id != concept.provider_record.id for provider in providers):
+            providers.insert(0, concept.provider_record)
+        provider_rows = [
+            {
+                "id": provider.id,
+                "name": provider.name,
+                "type_name": provider.provider_type.name if provider.provider_type else "Provider",
+                "full_address": provider.full_address or "-",
+                "experience_rating": provider.experience_rating or 0,
+            }
+            for provider in providers
+        ]
+        if not provider_rows and concept.provider:
+            provider_rows.append({
+                "id": None,
+                "name": concept.provider,
+                "type_name": concept.provider_type.name if concept.provider_type else "Provider",
+                "full_address": "-",
+                "experience_rating": 0,
+            })
+        staff_member_rows = [
+            {"id": member.id, "name": member.full_name}
+            for member in (concept.staff_members or [])
+        ]
         concept_rows.append({
+            "id": concept.id,
             "label": label,
             "status": concept.status,
+            "can_confirm": bool(provider_rows) and bool(staff_member_rows),
+            "provider_type": concept.provider_type.name if concept.provider_type else (
+                provider_rows[0]["type_name"] if provider_rows else "-"
+            ),
+            "providers": provider_rows,
+            "staff_members": staff_member_rows,
+            "note_count": len(concept.notes or []),
+            "payment_requests": payment_requests_by_concept.get(concept.id, []),
         })
 
     files_url = (logistics_config.logistics_files_url or "").strip() if logistics_config else ""
@@ -7937,6 +8015,17 @@ def logistics_presentation_from_contract(contract, assignments_by_role=None, con
         "ready": contract.get("ready", False),
         "final_email_ready": contract.get("final_email_ready", False),
     }
+
+
+def logistics_concept_can_be_confirmed(concept):
+    providers = list(getattr(concept, "provider_records", None) or [])
+    provider_label = (getattr(concept, "provider", "") or "").strip()
+    staff_members = list(getattr(concept, "staff_members", None) or [])
+    return bool(providers or provider_label) and bool(staff_members)
+
+
+def logistics_concept_form_can_be_confirmed(provider_records, staff_member_records):
+    return bool(provider_records) and bool(staff_member_records)
 
 
 def normalize_package_text(value):
@@ -13254,7 +13343,7 @@ def staffing_control_redirect(session_record, status_filter="", edit=False):
 
 def logistics_control_redirect(session_record, status_filter="", edit=False):
     args = {
-        "session_year": session_record.session_date.year,
+        **pre_session_control_tower_return_args(session_record),
         "open_schedule_modal": session_record.id,
         "open_modal_target": "logistics",
         "logistics_only": "1",
@@ -14975,7 +15064,7 @@ def delete_provider(provider_id):
             ExamSessionLogisticsConcept.provider_id == provider.id,
             ExamSessionLogisticsConcept.provider == provider.display_label,
         )
-    ).first():
+    ).first() or ExamSessionLogisticsConceptProvider.query.filter_by(provider_id=provider.id).first():
         return jsonify({
             "ok": False,
             "message": "This provider cannot be deleted because it is currently assigned to one or more Logistics concepts. Remove or replace those references before deleting it.",
@@ -15746,6 +15835,30 @@ def pre_session_control_tower():
         .all()
         if session_ids else []
     )
+    logistics_concept_ids = [concept.id for concept in logistics_concept_records]
+    logistics_note_records = (
+        ExamSessionLogisticsConceptNote.query.filter(
+            ExamSessionLogisticsConceptNote.logistics_concept_id.in_(logistics_concept_ids)
+        )
+        .order_by(ExamSessionLogisticsConceptNote.created_on.asc())
+        .all()
+        if logistics_concept_ids else []
+    )
+    logistics_notes_by_concept = {}
+    for note in logistics_note_records:
+        logistics_notes_by_concept.setdefault(note.logistics_concept_id, []).append(note)
+    logistics_payment_request_records = (
+        PaymentRequest.query.filter(
+            PaymentRequest.logistics_concept_id.in_(logistics_concept_ids),
+            PaymentRequest.is_archived.is_(False),
+        )
+        .order_by(PaymentRequest.created_on.asc(), PaymentRequest.id.asc())
+        .all()
+        if logistics_concept_ids else []
+    )
+    logistics_payment_requests_by_concept = {}
+    for payment_request in logistics_payment_request_records:
+        logistics_payment_requests_by_concept.setdefault(payment_request.logistics_concept_id, []).append(payment_request)
     logistics_concepts_by_session = {}
     for concept in logistics_concept_records:
         logistics_concepts_by_session.setdefault(concept.exam_session_id, []).append(concept)
@@ -15987,6 +16100,7 @@ def pre_session_control_tower():
             },
             concepts=logistics_concepts_by_session.get(session_record.id, []),
             logistics_config=logistics_by_session.get(session_record.id),
+            payment_requests_by_concept=logistics_payment_requests_by_concept,
         )
         package_units = package_units_by_session.get(session_record.id, [])
         package_session_items = package_session_items_by_session.get(session_record.id, [])
@@ -16286,6 +16400,9 @@ def pre_session_control_tower():
         view["session"].exam_session_name.lower(),
     ))
     modal_views = list(schedule_views)
+    ensure_default_finance_concepts()
+    finance_contacts = FinanceContact.query.order_by(FinanceContact.is_active.desc(), FinanceContact.display_name.asc()).all()
+    finance_concepts = FinanceConcept.query.order_by(FinanceConcept.name.asc()).all()
 
     return render_template(
         "pre_session_control_tower/index.html",
@@ -16323,6 +16440,19 @@ def pre_session_control_tower():
         incident_status_options=INCIDENT_STATUSES,
         incident_responsible_department_options=INCIDENT_RESPONSIBLE_DEPARTMENTS,
         incident_default_departments=INCIDENT_TYPE_DEFAULT_DEPARTMENT,
+        logistics_status_options=LOGISTICS_STATUS_OPTIONS,
+        logistics_notes=logistics_notes_by_concept,
+        contacts=finance_contacts,
+        payment_concepts=[
+            concept for concept in finance_concepts
+            if concept.is_active and concept.applies_to in {"Payments", "Both"}
+        ],
+        payment_methods=PAYMENT_METHODS,
+        visibility_modes=FINANCE_VISIBILITY_MODES,
+        next_payment_run_date=finance_next_payment_run_date(),
+        can_manage_payment_visibility=can_manage_payment_visibility(),
+        finance_bank_snapshot=finance_bank_snapshot,
+        current_user_is_superadmin=current_user_is_superadmin(),
         selected_schedule_status=status_filter,
         events_by_workflow=events_by_workflow,
         schedule_notes_by_workflow=notes_by_workflow,
@@ -16694,6 +16824,7 @@ def clear_staffing_assignment_for_decline(assignment):
     assignment.team_member_id = None
     assignment.potential_entry_id = None
     assignment.participation_status = "Pending"
+    assignment.staffing_role_check_verified = False
     assignment.logistics_enabled = False
     assignment.logistics_type = "Does not apply"
     assignment.is_shipment_recipient = False
@@ -16737,6 +16868,21 @@ def clear_staffing_assignment_for_decline(assignment):
     assignment.fee_frozen_on = None
 
 
+def emergency_contact_member_ref(session_record):
+    if session_record.emergency_contact_member_id:
+        return str(session_record.emergency_contact_member_id)
+    return ""
+
+
+def clear_emergency_contact_for_decline(session_record):
+    session_record.emergency_contact_member_id = None
+    session_record.emergency_contact_participation_status = "Pending"
+    session_record.emergency_contact_role_check_verified = False
+    session_record.emergency_contact_start_time = ""
+    session_record.emergency_contact_end_time = ""
+    session_record.emergency_contact_additional_contacts = "[]"
+
+
 def record_emergency_contact_status_change(session_record, previous_status, new_status, note=None):
     previous_label = staffing_participation_status_label(previous_status)
     new_label = staffing_participation_status_label(new_status)
@@ -16770,6 +16916,58 @@ def clear_emergency_contact_deadline(session_record):
     session_record.emergency_contact_status_due_stage = None
 
 
+def staffing_assignment_role_check_is_verified(session_record, assignment_type, assignment):
+    if assignment_type == "emergency_contact":
+        return bool(getattr(session_record, "emergency_contact_role_check_verified", False))
+    return bool(getattr(assignment, "staffing_role_check_verified", False))
+
+
+@staff_bp.route("/pre-session-control-tower/sessions/<int:session_id>/staffing-assignments/<assignment_type>/<int:assignment_id>/role-check", methods=["POST"])
+@login_required
+def update_staffing_assignment_role_check(session_id, assignment_type, assignment_id):
+    session_record = ExamSession.query.get_or_404(session_id)
+    status_filter = request.form.get("schedule_status", "").strip()
+    if status_filter not in SCHEDULE_WORKFLOW_STATUSES:
+        status_filter = ""
+    if not validate_csrf():
+        if request.headers.get("Accept") == "application/json":
+            return jsonify({"ok": False, "error": "Security token expired. Please try again."}), 400
+        flash("Security token expired. Please try again.", "error")
+        return staffing_control_redirect(session_record, status_filter)
+
+    verified = request.form.get("role_check_verified") == "1"
+    if assignment_type == "emergency_contact":
+        if assignment_id != session_record.id or not session_record.emergency_contact_member_id:
+            if request.headers.get("Accept") == "application/json":
+                return jsonify({"ok": False, "error": "Staffing assignment not found."}), 404
+            flash("Staffing assignment not found.", "error")
+            return staffing_control_redirect(session_record, status_filter)
+        session_record.emergency_contact_role_check_verified = verified
+    else:
+        assignment_model = staffing_assignment_model(assignment_type)
+        if not assignment_model:
+            if request.headers.get("Accept") == "application/json":
+                return jsonify({"ok": False, "error": "Please select a valid staffing assignment."}), 400
+            flash("Please select a valid staffing assignment.", "error")
+            return staffing_control_redirect(session_record, status_filter)
+        assignment = assignment_model.query.filter_by(
+            id=assignment_id,
+            exam_session_id=session_record.id,
+        ).first()
+        if not assignment or not (assignment.team_member_id or assignment.potential_entry_id):
+            if request.headers.get("Accept") == "application/json":
+                return jsonify({"ok": False, "error": "Staffing assignment not found."}), 404
+            flash("Staffing assignment not found.", "error")
+            return staffing_control_redirect(session_record, status_filter)
+        assignment.staffing_role_check_verified = verified
+
+    db.session.commit()
+    if request.headers.get("Accept") == "application/json":
+        return jsonify({"ok": True, "role_check_verified": verified})
+    flash("Role check updated successfully.", "success")
+    return staffing_control_redirect(session_record, status_filter)
+
+
 @staff_bp.route("/pre-session-control-tower/sessions/<int:session_id>/staffing-assignments/<assignment_type>/<int:assignment_id>/status", methods=["POST"])
 @login_required
 def update_staffing_assignment_status(session_id, assignment_type, assignment_id):
@@ -16799,17 +16997,29 @@ def update_staffing_assignment_status(session_id, assignment_type, assignment_id
         workflow = ExamSessionScheduleWorkflow.query.filter_by(exam_session_id=session_record.id).first()
         schedule_unlocked = workflow and workflow.status == "Approved"
         previous_status = session_record.emergency_contact_participation_status
+        if next_status == "Official confirmation sent" and not session_record.emergency_contact_role_check_verified:
+            flash("Verify the role check before sending the official confirmation.", "error")
+            return staffing_control_redirect(session_record, status_filter)
         record_emergency_contact_status_change(session_record, previous_status, next_status)
-        session_record.emergency_contact_participation_status = next_status
         now = datetime.now(timezone.utc)
-        if next_status == "Official confirmation sent":
-            set_emergency_contact_deadline(session_record, 3, now, stage="Official confirmation sent")
-        elif next_status == "Pending" and schedule_unlocked:
-            set_emergency_contact_deadline(session_record, 2, now, stage="Pending")
-        elif next_status == "Confirmed":
-            pass
-        else:
+        if next_status in {"Declined", "Cancelled"}:
+            add_session_non_available_ref(session_record, emergency_contact_member_ref(session_record))
+            clear_emergency_contact_for_decline(session_record)
             clear_emergency_contact_deadline(session_record)
+        else:
+            session_record.emergency_contact_participation_status = next_status
+            if next_status == "Pending":
+                session_record.emergency_contact_role_check_verified = False
+            elif next_status == "Confirmed":
+                session_record.emergency_contact_role_check_verified = True
+            if next_status == "Official confirmation sent":
+                set_emergency_contact_deadline(session_record, 3, now, stage="Official confirmation sent")
+            elif next_status == "Pending" and schedule_unlocked:
+                set_emergency_contact_deadline(session_record, 2, now, stage="Pending")
+            elif next_status == "Confirmed":
+                pass
+            else:
+                clear_emergency_contact_deadline(session_record)
         db.session.commit()
         flash("Staffing participation status updated successfully.", "success")
         return staffing_control_redirect(session_record, status_filter)
@@ -16837,6 +17047,9 @@ def update_staffing_assignment_status(session_id, assignment_type, assignment_id
     workflow = ExamSessionScheduleWorkflow.query.filter_by(exam_session_id=session_record.id).first()
     schedule_unlocked = workflow and workflow.status == "Approved"
     previous_status = assignment.participation_status
+    if next_status == "Official confirmation sent" and not staffing_assignment_role_check_is_verified(session_record, assignment_type, assignment):
+        flash("Verify the role check before sending the official confirmation.", "error")
+        return staffing_control_redirect(session_record, status_filter)
     record_staffing_status_change(
         session_record,
         assignment,
@@ -16850,6 +17063,10 @@ def update_staffing_assignment_status(session_id, assignment_type, assignment_id
         clear_staffing_assignment_deadline(assignment)
     else:
         assignment.participation_status = next_status
+        if next_status in {"Pending", "Cancelled"}:
+            assignment.staffing_role_check_verified = False
+        elif next_status == "Confirmed":
+            assignment.staffing_role_check_verified = True
         now = datetime.now(timezone.utc)
         if next_status == "Official confirmation sent":
             set_staffing_assignment_deadline(assignment, 3, now, stage="Official confirmation sent")
@@ -16898,6 +17115,95 @@ def update_logistics_control(session_id):
     control_record.updated_by = session.get("user")
     db.session.commit()
     flash("Logistics ownership and deadline saved successfully.", "success")
+    return logistics_control_redirect(session_record, status_filter)
+
+
+@staff_bp.route("/pre-session-control-tower/logistics-concepts/<int:concept_id>/status", methods=["POST"])
+@login_required
+def update_pre_session_logistics_concept_status(concept_id):
+    concept = ExamSessionLogisticsConcept.query.get_or_404(concept_id)
+    session_record = concept.exam_session
+    status_filter = request.form.get("schedule_status", "").strip()
+    if status_filter not in SCHEDULE_WORKFLOW_STATUSES:
+        status_filter = ""
+    if not validate_csrf():
+        flash("Security token expired. Please try again.", "error")
+        return logistics_control_redirect(session_record, status_filter)
+    status = request.form.get("status", "").strip()
+    if status not in LOGISTICS_STATUS_OPTIONS:
+        flash("Please select a valid Status.", "error")
+        return logistics_control_redirect(session_record, status_filter)
+    if status == "Confirmed" and not logistics_concept_can_be_confirmed(concept):
+        flash("Select at least one Provider and one Staff member before confirming this Logistics concept.", "error")
+        return logistics_control_redirect(session_record, status_filter)
+    concept.status = status
+    db.session.commit()
+    flash("Logistics concept status updated.", "success")
+    return logistics_control_redirect(session_record, status_filter)
+
+
+@staff_bp.route("/pre-session-control-tower/logistics-concepts/<int:concept_id>/providers/<int:provider_id>/remove", methods=["POST"])
+@login_required
+def remove_pre_session_logistics_concept_provider(concept_id, provider_id):
+    concept = ExamSessionLogisticsConcept.query.get_or_404(concept_id)
+    session_record = concept.exam_session
+    status_filter = request.form.get("schedule_status", "").strip()
+    if status_filter not in SCHEDULE_WORKFLOW_STATUSES:
+        status_filter = ""
+    if not validate_csrf():
+        flash("Security token expired. Please try again.", "error")
+        return logistics_control_redirect(session_record, status_filter)
+    providers = [provider for provider in (concept.provider_records or []) if provider.id != provider_id]
+    if concept.provider_id == provider_id:
+        concept.provider_id = providers[0].id if providers else None
+    concept.provider_records = providers
+    concept.provider = ", ".join(provider.display_label for provider in providers)
+    if concept.status == "Confirmed" and not logistics_concept_can_be_confirmed(concept):
+        concept.status = "Pending"
+        flash("Provider option removed. Logistics concept status changed to Pending because it has no provider or staff member selected.", "success")
+    else:
+        flash("Provider option removed.", "success")
+    db.session.commit()
+    return logistics_control_redirect(session_record, status_filter)
+
+
+@staff_bp.route("/pre-session-control-tower/logistics-concepts/<int:concept_id>/staff-members/<int:staff_member_id>/remove", methods=["POST"])
+@login_required
+def remove_pre_session_logistics_concept_staff_member(concept_id, staff_member_id):
+    concept = ExamSessionLogisticsConcept.query.get_or_404(concept_id)
+    session_record = concept.exam_session
+    status_filter = request.form.get("schedule_status", "").strip()
+    if status_filter not in SCHEDULE_WORKFLOW_STATUSES:
+        status_filter = ""
+    if not validate_csrf():
+        flash("Security token expired. Please try again.", "error")
+        return logistics_control_redirect(session_record, status_filter)
+    other_logistics_concept_count = (
+        ExamSessionLogisticsConceptStaffMember.query
+        .join(
+            ExamSessionLogisticsConcept,
+            ExamSessionLogisticsConcept.id == ExamSessionLogisticsConceptStaffMember.logistics_concept_id,
+        )
+        .filter(
+            ExamSessionLogisticsConcept.exam_session_id == session_record.id,
+            ExamSessionLogisticsConcept.id != concept.id,
+            ExamSessionLogisticsConceptStaffMember.staff_member_id == staff_member_id,
+        )
+        .count()
+    )
+    if other_logistics_concept_count == 0:
+        flash("Update the Logistics status in the Exam Session Planner menu before removing this staff member from all logistics concepts.", "error")
+        return logistics_control_redirect(session_record, status_filter)
+    concept.staff_members = [
+        staff_member for staff_member in (concept.staff_members or [])
+        if staff_member.id != staff_member_id
+    ]
+    if concept.status == "Confirmed" and not logistics_concept_can_be_confirmed(concept):
+        concept.status = "Pending"
+        flash("Staff member removed. Logistics concept status changed to Pending because it has no provider or staff member selected.", "success")
+    else:
+        flash("Staff member removed.", "success")
+    db.session.commit()
     return logistics_control_redirect(session_record, status_filter)
 
 
@@ -19175,6 +19481,27 @@ def exam_session_planner():
             logistics_activity_by_session[assignment.exam_session_id] = True
     for concept in logistics_concept_records:
         logistics_activity_by_session[concept.exam_session_id] = True
+    complex_logistics_staff_members = {}
+    for session_id in session_ids:
+        complex_members_by_id = {}
+        for assignment in (
+            supervisor_assignments.get(session_id, [])
+            + examiner_assignments.get(session_id, [])
+            + intern_assignments.get(session_id, [])
+        ):
+            if (
+                assignment.team_member_id is not None
+                and assignment.team_member
+                and normalize_assignment_logistics_type(
+                    getattr(assignment, "logistics_type", ""),
+                    getattr(assignment, "logistics_enabled", False),
+                ) == "Complex logistics"
+            ):
+                complex_members_by_id[assignment.team_member_id] = assignment.team_member
+        complex_logistics_staff_members[session_id] = sorted(
+            complex_members_by_id.values(),
+            key=lambda member: (member.full_name or "").lower(),
+        )
     staffing_readiness_by_session = {}
     logistics_readiness_by_session = {}
     pending_status_tooltips_by_session = {}
@@ -19224,9 +19551,13 @@ def exam_session_planner():
     logistics_available_providers = logistics_available_provider_options()
     logistics_provider_ids = {provider.id for provider in logistics_available_providers}
     for concept in logistics_concept_records:
-        if concept.provider_record and concept.provider_record.id not in logistics_provider_ids:
-            logistics_available_providers.append(concept.provider_record)
-            logistics_provider_ids.add(concept.provider_record.id)
+        concept_providers = list(concept.provider_records or [])
+        if concept.provider_record:
+            concept_providers.append(concept.provider_record)
+        for provider_record in concept_providers:
+            if provider_record.id not in logistics_provider_ids:
+                logistics_available_providers.append(provider_record)
+                logistics_provider_ids.add(provider_record.id)
     logistics_provider_history_records = ProviderHistory.query.filter(
         ProviderHistory.provider_id.in_([provider.id for provider in logistics_provider_options])
     ).order_by(ProviderHistory.created_on.asc()).all() if logistics_provider_options else []
@@ -19350,6 +19681,7 @@ def exam_session_planner():
         logistics_provider_type_options=logistics_provider_type_records,
         logistics_provider_options=logistics_available_providers,
         logistics_provider_history=logistics_provider_history,
+        complex_logistics_staff_members=complex_logistics_staff_members,
         logistics_currency_options=FEE_CURRENCY_OPTIONS,
         logistics_by_session=logistics_by_session,
         logistics_concepts=logistics_concepts,
@@ -20131,6 +20463,27 @@ def exam_session_staff_member_ids(session_id):
     return member_ids
 
 
+def complex_logistics_staff_members_for_session(session_id):
+    staff_members_by_id = {}
+    for model in (ExamSessionSupervisorAssignment, ExamSessionExaminerAssignment, ExamSessionInternAssignment):
+        assignments = (
+            model.query.filter_by(exam_session_id=session_id)
+            .options(joinedload(model.team_member))
+            .all()
+        )
+        for assignment in assignments:
+            if (
+                assignment.team_member_id is not None
+                and assignment.team_member
+                and normalize_assignment_logistics_type(
+                    getattr(assignment, "logistics_type", ""),
+                    getattr(assignment, "logistics_enabled", False),
+                ) == "Complex logistics"
+            ):
+                staff_members_by_id[assignment.team_member_id] = assignment.team_member
+    return sorted(staff_members_by_id.values(), key=lambda member: (member.full_name or "").lower())
+
+
 def save_exam_session_logistics(session_record):
     config = ExamSessionLogistics.query.filter_by(exam_session_id=session_record.id).first()
     if config is None:
@@ -20142,11 +20495,15 @@ def save_exam_session_logistics(session_record):
         flash("Please enter a valid link.", "error")
         return False
     config.logistics_files_url = logistics_files_url
+    config.logistics_planned = request.form.get("logistics_planned") == "1"
 
     existing_concepts = {
         concept.id: concept
         for concept in ExamSessionLogisticsConcept.query.filter_by(exam_session_id=session_record.id).all()
     }
+    valid_complex_staff_members = complex_logistics_staff_members_for_session(session_record.id)
+    valid_complex_staff_member_ids = {member.id for member in valid_complex_staff_members}
+    selected_complex_staff_member_ids = set()
     deleted_ids = [
         int(value) for value in request.form.getlist("deleted_logistics_concept_ids")
         if value.isdigit()
@@ -20154,6 +20511,8 @@ def save_exam_session_logistics(session_record):
     for concept_id in deleted_ids:
         concept = existing_concepts.get(concept_id)
         if concept:
+            ExamSessionLogisticsConceptProvider.query.filter_by(logistics_concept_id=concept.id).delete(synchronize_session=False)
+            ExamSessionLogisticsConceptStaffMember.query.filter_by(logistics_concept_id=concept.id).delete(synchronize_session=False)
             ExamSessionLogisticsConceptNote.query.filter_by(logistics_concept_id=concept.id).delete(synchronize_session=False)
             db.session.delete(concept)
 
@@ -20170,34 +20529,42 @@ def save_exam_session_logistics(session_record):
         if status not in LOGISTICS_STATUS_OPTIONS:
             status = "Pending"
         previous_status = LEGACY_LOGISTICS_STATUS_MAP.get(concept.status, concept.status) if concept else None
-        if (
-            status == "Confirmed"
-            and previous_status != "Confirmed"
-            and request.form.get("logistics_confirmation_password", "").strip() != LOGISTICS_CONFIRMED_PASSWORD
-        ):
-            flash("Confirmation password is required to confirm logistics concepts.", "error")
-            return False
         provider_type_id_value = request.form.get(f"logistics_provider_type_id_{row_key}", "").strip()
         provider_type_id = int(provider_type_id_value) if provider_type_id_value.isdigit() else None
         if status != "Pending" and provider_type_id is None:
             flash("Select a Type of provider before changing a Logistics concept from Pending.", "error")
             return False
-        provider_id_value = request.form.get(f"logistics_provider_id_{row_key}", "").strip()
-        provider_record = Provider.query.get(int(provider_id_value)) if provider_id_value.isdigit() else None
-        if provider_record and not provider_type_id:
+        provider_id_values = [
+            value
+            for value in request.form.getlist(f"logistics_provider_ids_{row_key}")
+            if value.isdigit()
+        ]
+        if not provider_id_values:
+            legacy_provider_id_value = request.form.get(f"logistics_provider_id_{row_key}", "").strip()
+            provider_id_values = [legacy_provider_id_value] if legacy_provider_id_value.isdigit() else []
+        provider_ids = []
+        for provider_id_value in provider_id_values:
+            provider_id = int(provider_id_value)
+            if provider_id not in provider_ids:
+                provider_ids.append(provider_id)
+        provider_records = Provider.query.filter(Provider.id.in_(provider_ids)).all() if provider_ids else []
+        provider_records_by_id = {provider.id: provider for provider in provider_records}
+        provider_records = [provider_records_by_id[provider_id] for provider_id in provider_ids if provider_id in provider_records_by_id]
+        if provider_records and not provider_type_id:
             flash("Please select the provider type before selecting a provider.", "error")
             return False
-        if provider_record and provider_type_id and provider_record.provider_type_id != provider_type_id:
+        if provider_records and provider_type_id and any(provider.provider_type_id != provider_type_id for provider in provider_records):
             flash("Please select a provider matching the selected provider type.", "error")
             return False
-        provider_id = provider_record.id if provider_record else None
-        provider = provider_record.display_label if provider_record else ""
-        if not provider_record and concept and concept.provider and concept.provider_id is None:
+        provider_id = provider_records[0].id if provider_records else None
+        provider = ", ".join(provider.display_label for provider in provider_records)
+        if not provider_records and concept and concept.provider and concept.provider_id is None:
             provider = concept.provider
-        currency = request.form.get(f"logistics_currency_{row_key}", "ARS").strip()
+        currency = request.form.get(f"logistics_currency_{row_key}", concept.currency if concept else "ARS").strip()
         if currency not in FEE_CURRENCY_OPTIONS:
             currency = "ARS"
-        fee, fee_error = normalize_logistics_fee(request.form.get(f"logistics_fee_{row_key}", ""))
+        fee_value = request.form.get(f"logistics_fee_{row_key}", "")
+        fee, fee_error = normalize_logistics_fee(fee_value)
         if fee_error:
             flash(fee_error, "error")
             return False
@@ -20206,8 +20573,32 @@ def save_exam_session_logistics(session_record):
             for note in request.form.getlist(f"logistics_note_{row_key}")
             if note.strip()
         ]
+        staff_member_ids = []
+        for staff_member_id_value in request.form.getlist(f"logistics_staff_member_ids_{row_key}"):
+            if not staff_member_id_value.isdigit():
+                continue
+            staff_member_id = int(staff_member_id_value)
+            if staff_member_id in valid_complex_staff_member_ids and staff_member_id not in staff_member_ids:
+                staff_member_ids.append(staff_member_id)
+        staff_member_records = (
+            AcademicStaff.query.filter(AcademicStaff.id.in_(staff_member_ids)).all()
+            if staff_member_ids else []
+        )
+        staff_members_by_id = {member.id: member for member in staff_member_records}
+        staff_member_records = [staff_members_by_id[member_id] for member_id in staff_member_ids if member_id in staff_members_by_id]
+        selected_complex_staff_member_ids.update(member.id for member in staff_member_records)
+        if status == "Confirmed" and not logistics_concept_form_can_be_confirmed(provider_records, staff_member_records):
+            status = "Pending"
+            flash("Logistics concept status changed to Pending because Confirmed requires at least one provider and one staff member.", "info")
+        if (
+            status == "Confirmed"
+            and previous_status != "Confirmed"
+            and request.form.get("logistics_confirmation_password", "").strip() != LOGISTICS_CONFIRMED_PASSWORD
+        ):
+            flash("Confirmation password is required to confirm logistics concepts.", "error")
+            return False
 
-        is_blank_new_row = concept is None and status == "Pending" and provider_id is None and currency == "ARS" and fee is None and not pending_notes
+        is_blank_new_row = concept is None and status == "Pending" and provider_type_id is None and provider_id is None and currency == "ARS" and fee is None and not pending_notes and not staff_member_records
         if is_blank_new_row:
             continue
 
@@ -20215,10 +20606,13 @@ def save_exam_session_logistics(session_record):
             concept = ExamSessionLogisticsConcept(exam_session_id=session_record.id)
             db.session.add(concept)
         concept.status = status
+        concept.provider_type_id = provider_type_id
         concept.provider_id = provider_id
         concept.provider = provider
         concept.currency = currency
-        concept.fee = fee
+        concept.fee = fee if f"logistics_fee_{row_key}" in request.form else (concept.fee if concept else None)
+        concept.provider_records = provider_records
+        concept.staff_members = staff_member_records
         for note in pending_notes:
             concept_note = ExamSessionLogisticsConceptNote(
                 logistics_concept=concept,
@@ -20226,6 +20620,18 @@ def save_exam_session_logistics(session_record):
             )
             apply_note_metadata(concept_note, request.form)
             db.session.add(concept_note)
+    missing_complex_staff_members = [
+        member.full_name
+        for member in valid_complex_staff_members
+        if member.id not in selected_complex_staff_member_ids
+    ]
+    if missing_complex_staff_members:
+        flash(
+            "Each Complex logistics staff member must be selected in at least one Logistics concept before saving: "
+            + ", ".join(missing_complex_staff_members),
+            "error",
+        )
+        return False
     return True
 
 
@@ -20832,6 +21238,7 @@ def duplicate_exam_session_year():
                 ExamSessionLogistics(
                     exam_session_id=session_map[logistics.exam_session_id],
                     logistics_files_url=logistics.logistics_files_url,
+                    logistics_planned=logistics.logistics_planned,
                 )
             )
         source_concepts = ExamSessionLogisticsConcept.query.filter(
@@ -20842,6 +21249,7 @@ def duplicate_exam_session_year():
             new_concept = ExamSessionLogisticsConcept(
                 exam_session_id=session_map[concept.exam_session_id],
                 status=concept.status,
+                provider_type_id=concept.provider_type_id,
                 provider_id=concept.provider_id,
                 provider=concept.provider,
                 currency=concept.currency,
@@ -20849,6 +21257,8 @@ def duplicate_exam_session_year():
             )
             db.session.add(new_concept)
             db.session.flush()
+            new_concept.provider_records = list(concept.provider_records or [])
+            new_concept.staff_members = list(concept.staff_members or [])
             concept_map[concept.id] = new_concept.id
         if concept_map:
             source_notes = ExamSessionLogisticsConceptNote.query.filter(
@@ -20928,6 +21338,12 @@ def delete_exam_session_year(year):
             ).all()
         ]
         if concept_ids:
+            ExamSessionLogisticsConceptProvider.query.filter(
+                ExamSessionLogisticsConceptProvider.logistics_concept_id.in_(concept_ids)
+            ).delete(synchronize_session=False)
+            ExamSessionLogisticsConceptStaffMember.query.filter(
+                ExamSessionLogisticsConceptStaffMember.logistics_concept_id.in_(concept_ids)
+            ).delete(synchronize_session=False)
             ExamSessionLogisticsConceptNote.query.filter(
                 ExamSessionLogisticsConceptNote.logistics_concept_id.in_(concept_ids)
             ).delete(synchronize_session=False)
@@ -21421,6 +21837,14 @@ def can_manage_payment_visibility():
 def finance_request_redirect(tab="payment_requests", **params):
     params = {key: value for key, value in params.items() if value not in (None, "")}
     return redirect(url_for("staff.finance_requests", tab=tab, **params))
+
+
+def finance_payment_request_return_url():
+    return_to = (request.form.get("return_to") or "").strip()
+    parsed_return = urlparse(return_to)
+    if not parsed_return.netloc and parsed_return.path == url_for("staff.pre_session_control_tower"):
+        return return_to
+    return ""
 
 
 def parse_finance_date(value):
@@ -22563,6 +22987,7 @@ def create_payment_request():
     actor = current_actor()
     source_tab = request.form.get("source_tab") if request.form.get("source_tab") in {"payment_requests", "finance_payments"} else "payment_requests"
     is_finance_action_request = source_tab == "finance_payments"
+    return_url = finance_payment_request_return_url()
     initial_status = "Pending approval" if is_finance_action_request else ("Management approved" if actor["is_superadmin"] else "Submitted")
     payment = PaymentRequest(
         request_number=next_finance_request_number(PaymentRequest, "PAY"),
@@ -22572,9 +22997,14 @@ def create_payment_request():
         management_approved_at=datetime.now(timezone.utc) if initial_status == "Management approved" else None,
     )
     errors = apply_payment_form(payment, request.form, save_payee_contact=True, allow_empty_amount=is_finance_action_request)
+    logistics_concept = ExamSessionLogisticsConcept.query.get(request.form.get("logistics_concept_id") or 0)
+    if logistics_concept:
+        payment.logistics_concept_id = logistics_concept.id
     if errors:
         for error in errors:
             flash(error, "error")
+        if return_url:
+            return redirect(return_url)
         redirect_params = {"open_staff_modal": "new-payment-request-modal"}
         if source_tab == "finance_payments":
             redirect_params["finance_filter"] = "pending_approval"
@@ -22586,6 +23016,8 @@ def create_payment_request():
         add_payment_event(payment, "Approved by Management", previous_status="Submitted", new_status="Management approved")
     db.session.commit()
     flash("Payment request created.", "success")
+    if return_url:
+        return redirect(return_url)
     if source_tab == "finance_payments":
         return finance_request_redirect("finance_payments", finance_filter="pending_approval")
     return finance_request_redirect("payment_requests")

@@ -56,6 +56,8 @@ def create_app():
         ExamSessionLogisticsControl,
         ExamSessionLogisticsConcept,
         ExamSessionLogisticsConceptNote,
+        ExamSessionLogisticsConceptProvider,
+        ExamSessionLogisticsConceptStaffMember,
         ExamSessionMonthlyCandidateTotal,
         ExamSessionMonthlyRegistration,
         ExamSessionPackageChecklistItem,
@@ -283,6 +285,11 @@ def create_app():
             db.session.execute(text("ALTER TABLE payment_request ADD COLUMN payment_date_mode VARCHAR(20) NOT NULL DEFAULT 'asap'"))
             db.session.execute(text("UPDATE payment_request SET payment_date_mode = 'specific' WHERE scheduled_payment_date IS NOT NULL"))
             db.session.commit()
+            payment_request_columns.add("payment_date_mode")
+        if payment_request_columns and "logistics_concept_id" not in payment_request_columns:
+            db.session.execute(text("ALTER TABLE payment_request ADD COLUMN logistics_concept_id INTEGER"))
+            db.session.commit()
+            payment_request_columns.add("logistics_concept_id")
         billing_request_columns = {
             row[1] for row in db.session.execute(text("PRAGMA table_info(billing_request)"))
         }
@@ -761,6 +768,9 @@ def create_app():
         if exam_session_columns and "emergency_contact_status_due_started_at" not in exam_session_columns:
             db.session.execute(text("ALTER TABLE exam_session ADD COLUMN emergency_contact_status_due_started_at DATETIME"))
             db.session.commit()
+        if exam_session_columns and "emergency_contact_role_check_verified" not in exam_session_columns:
+            db.session.execute(text("ALTER TABLE exam_session ADD COLUMN emergency_contact_role_check_verified BOOLEAN NOT NULL DEFAULT 0"))
+            db.session.commit()
         if exam_session_columns and "monthly_registrations_closed" not in exam_session_columns:
             db.session.execute(text("ALTER TABLE exam_session ADD COLUMN monthly_registrations_closed BOOLEAN NOT NULL DEFAULT 0"))
             db.session.commit()
@@ -967,6 +977,10 @@ def create_app():
                 db.session.execute(text(f"ALTER TABLE {table_name} ADD COLUMN staffing_status_due_started_at DATETIME"))
                 db.session.commit()
                 table_columns.add("staffing_status_due_started_at")
+            if table_columns and "staffing_role_check_verified" not in table_columns:
+                db.session.execute(text(f"ALTER TABLE {table_name} ADD COLUMN staffing_role_check_verified BOOLEAN NOT NULL DEFAULT 0"))
+                db.session.commit()
+                table_columns.add("staffing_role_check_verified")
             if table_columns and "logistics_type" in table_columns and "logistics_enabled" in table_columns:
                 db.session.execute(
                     text(
@@ -983,6 +997,60 @@ def create_app():
         if logistics_concept_columns and "provider_id" not in logistics_concept_columns:
             db.session.execute(text("ALTER TABLE exam_session_logistics_concept ADD COLUMN provider_id INTEGER"))
             db.session.commit()
+            logistics_concept_columns.add("provider_id")
+        logistics_columns = {
+            row[1] for row in db.session.execute(text("PRAGMA table_info(exam_session_logistics)"))
+        }
+        if logistics_columns and "logistics_planned" not in logistics_columns:
+            db.session.execute(text("ALTER TABLE exam_session_logistics ADD COLUMN logistics_planned BOOLEAN NOT NULL DEFAULT 0"))
+            db.session.commit()
+            logistics_columns.add("logistics_planned")
+        if logistics_concept_columns and "provider_type_id" not in logistics_concept_columns:
+            db.session.execute(text("ALTER TABLE exam_session_logistics_concept ADD COLUMN provider_type_id INTEGER"))
+            db.session.execute(text("""
+                UPDATE exam_session_logistics_concept
+                SET provider_type_id = (
+                    SELECT provider.provider_type_id
+                    FROM provider
+                    WHERE provider.id = exam_session_logistics_concept.provider_id
+                )
+                WHERE provider_id IS NOT NULL
+            """))
+            db.session.commit()
+            logistics_concept_columns.add("provider_type_id")
+        db.session.execute(text("""
+            CREATE TABLE IF NOT EXISTS exam_session_logistics_concept_provider (
+                id INTEGER PRIMARY KEY,
+                logistics_concept_id INTEGER NOT NULL,
+                provider_id INTEGER NOT NULL,
+                created_on DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY(logistics_concept_id) REFERENCES exam_session_logistics_concept (id),
+                FOREIGN KEY(provider_id) REFERENCES provider (id),
+                CONSTRAINT uq_logistics_concept_provider UNIQUE (logistics_concept_id, provider_id)
+            )
+        """))
+        db.session.execute(text("CREATE INDEX IF NOT EXISTS ix_exam_session_logistics_concept_provider_logistics_concept_id ON exam_session_logistics_concept_provider (logistics_concept_id)"))
+        db.session.execute(text("CREATE INDEX IF NOT EXISTS ix_exam_session_logistics_concept_provider_provider_id ON exam_session_logistics_concept_provider (provider_id)"))
+        db.session.execute(text("""
+            INSERT OR IGNORE INTO exam_session_logistics_concept_provider (logistics_concept_id, provider_id)
+            SELECT id, provider_id
+            FROM exam_session_logistics_concept
+            WHERE provider_id IS NOT NULL
+        """))
+        db.session.execute(text("""
+            CREATE TABLE IF NOT EXISTS exam_session_logistics_concept_staff_member (
+                id INTEGER PRIMARY KEY,
+                logistics_concept_id INTEGER NOT NULL,
+                staff_member_id INTEGER NOT NULL,
+                created_on DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY(logistics_concept_id) REFERENCES exam_session_logistics_concept (id),
+                FOREIGN KEY(staff_member_id) REFERENCES academic_staff (id),
+                CONSTRAINT uq_logistics_concept_staff_member UNIQUE (logistics_concept_id, staff_member_id)
+            )
+        """))
+        db.session.execute(text("CREATE INDEX IF NOT EXISTS ix_exam_session_logistics_concept_staff_member_logistics_concept_id ON exam_session_logistics_concept_staff_member (logistics_concept_id)"))
+        db.session.execute(text("CREATE INDEX IF NOT EXISTS ix_exam_session_logistics_concept_staff_member_staff_member_id ON exam_session_logistics_concept_staff_member (staff_member_id)"))
+        db.session.commit()
         provider_columns = {
             row[1] for row in db.session.execute(text("PRAGMA table_info(provider)"))
         }

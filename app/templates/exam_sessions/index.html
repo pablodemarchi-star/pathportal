@@ -133,11 +133,15 @@
   {%- endif -%}
 {%- endmacro %}
 
-{% macro logistics_concept_row(concept, row_key, status_options, provider_type_options, provider_options, currency_options) -%}
+{% macro logistics_concept_row(concept, row_key, status_options, provider_type_options, provider_options, staff_member_options, logistics_planned=false) -%}
   {% set selected_status = 'Pre-confirmed' if concept and concept.status == 'Payment scheduled' else (concept.status if concept else 'Pending') %}
-  {% set selected_provider_id = concept.provider_id if concept and concept.provider_id else none %}
-  {% set selected_provider_type_id = concept.provider_record.provider_type_id if concept and concept.provider_record else none %}
-  {% set selected_currency = concept.currency if concept else 'ARS' %}
+  {% set selected_provider_ids = concept.provider_records|map(attribute='id')|list if concept and concept.provider_records else ([concept.provider_id] if concept and concept.provider_id else []) %}
+  {% set selected_staff_member_ids = concept.staff_members|map(attribute='id')|list if concept and concept.staff_members else [] %}
+  {% set can_confirm_logistics = selected_provider_ids|length > 0 and selected_staff_member_ids|length > 0 %}
+  {% if selected_status == 'Confirmed' and not can_confirm_logistics %}
+    {% set selected_status = 'Pending' %}
+  {% endif %}
+  {% set selected_provider_type_id = concept.provider_type_id if concept and concept.provider_type_id else (concept.provider_record.provider_type_id if concept and concept.provider_record else none) %}
   <tr data-logistics-concept-row>
     <td class="row-status-cell logistics-status-cell">
       <input type="hidden" name="logistics_concept_row_keys" value="{{ row_key }}">
@@ -145,7 +149,7 @@
       <div class="logistics-status-stack">
         <select name="logistics_status_{{ row_key }}" class="logistics-chip-select {{ logistics_status_badge_class(selected_status) }}" data-logistics-status>
           {% for status in status_options %}
-            <option value="{{ status }}" {% if selected_status == status %}selected{% endif %}>{{ status }}</option>
+            <option value="{{ status }}" {% if selected_status == status %}selected{% endif %}{% if status == 'Confirmed' and not can_confirm_logistics %} disabled{% endif %}>{{ status }}</option>
           {% endfor %}
         </select>
         <span class="fee-state-chip is-locked logistics-lock-chip" data-logistics-lock-chip {% if selected_status not in ['Pre-confirmed', 'Confirmed'] %}hidden{% endif %}>Locked</span>
@@ -160,32 +164,35 @@
       </select>
     </td>
     <td>
-      <select name="logistics_provider_id_{{ row_key }}" class="logistics-provider-select" data-logistics-provider-select {% if not selected_provider_type_id %}disabled{% endif %}>
-        <option value="">Select provider</option>
+      <select name="logistics_provider_ids_{{ row_key }}" class="logistics-provider-select" data-logistics-provider-select multiple size="3" {% if not selected_provider_type_id %}disabled{% endif %}>
         {% if concept and concept.provider and not concept.provider_id %}
           <option value="" selected>{{ concept.provider }}</option>
         {% endif %}
         {% for provider in provider_options %}
-          {% if provider.available_in_logistics or selected_provider_id == provider.id %}
-            <option value="{{ provider.id }}" data-provider-type-id="{{ provider.provider_type_id }}" {% if selected_provider_id == provider.id %}selected{% endif %}>
-              {{ provider.name }}{% if selected_provider_id == provider.id and not provider.available_in_logistics %} — No longer available for new Logistics concepts{% endif %}
+          {% if provider.available_in_logistics or provider.id in selected_provider_ids %}
+            <option value="{{ provider.id }}" data-provider-type-id="{{ provider.provider_type_id }}" {% if provider.id in selected_provider_ids %}selected{% endif %}>
+              {{ provider.name }}{% if provider.id in selected_provider_ids and not provider.available_in_logistics %} — No longer available for new Logistics concepts{% endif %}
             </option>
           {% endif %}
         {% endfor %}
       </select>
     </td>
-    <td>
-      <select name="logistics_currency_{{ row_key }}" class="logistics-chip-select logistics-currency-chip logistics-currency-{{ selected_currency|lower }}" data-logistics-currency>
-        {% for currency in currency_options %}
-          <option value="{{ currency }}" {% if selected_currency == currency %}selected{% endif %}>{{ currency }}</option>
-        {% endfor %}
-      </select>
-    </td>
-    <td>
-      <input class="logistics-fee-input" name="logistics_fee_{{ row_key }}" value="{{ concept.fee if concept and concept.fee is not none else '' }}" inputmode="decimal" pattern="[0-9]+(,[0-9]+)?" placeholder="0" data-logistics-fee>
+    <td class="logistics-staff-members-cell">
+      <div class="logistics-staff-member-list" data-logistics-staff-list data-selected-staff-ids="{{ selected_staff_member_ids|join(',') }}">
+        {% if staff_member_options %}
+          {% for staff_member in staff_member_options %}
+            <label class="logistics-staff-member-option">
+              <input type="checkbox" name="logistics_staff_member_ids_{{ row_key }}" value="{{ staff_member.id }}" {% if staff_member.id in selected_staff_member_ids %}checked{% endif %}>
+              <span>{{ staff_member.full_name }}</span>
+            </label>
+          {% endfor %}
+        {% else %}
+          <span class="logistics-staff-empty">No Complex logistics staff</span>
+        {% endif %}
+      </div>
     </td>
     <td class="logistics-provider-details-cell">
-      <button class="mini-button provider-details-button" type="button" data-provider-details-button {% if selected_provider_id %}data-open-modal="provider-details-{{ selected_provider_id }}"{% else %}disabled{% endif %} aria-label="Provider details" title="Provider details">i</button>
+      <button class="mini-button provider-details-button" type="button" data-provider-details-button {% if selected_provider_ids|length > 0 %}data-provider-detail-ids="{{ selected_provider_ids|join(',') }}"{% else %}disabled{% endif %} aria-label="Provider details" title="{% if selected_provider_ids|length > 1 %}Provider details for {{ selected_provider_ids|length }} providers{% else %}Provider details{% endif %}">i</button>
     </td>
     <td class="logistics-notes-cell">
       {% if concept %}
@@ -196,7 +203,7 @@
       {% endif %}
     </td>
     <td>
-      <button class="danger-button compact-action" type="button" data-delete-logistics-concept>Delete</button>
+      <button class="danger-button compact-action" type="button" data-delete-logistics-concept {% if logistics_planned or selected_status not in ['Pending', 'In progress'] %}disabled aria-disabled="true"{% endif %}>Delete</button>
     </td>
   </tr>
 {%- endmacro %}
@@ -1230,7 +1237,13 @@
                 {% endif %}
                 <button class="logistics-link-edit-button" type="button" data-edit-logistics-link aria-label="Edit logistics files link" title="Edit logistics files link" {% if not (session_logistics_config and session_logistics_config.logistics_files_url) %}hidden{% endif %}>Edit</button>
               </div>
-              <button class="secondary-button compact-action" type="button" data-add-logistics-concept>Add concept</button>
+              <div class="logistics-add-action-stack">
+                <button class="secondary-button compact-action{% if session_logistics_config and session_logistics_config.logistics_planned %} is-disabled{% endif %}" type="button" data-add-logistics-concept {% if session_logistics_config and session_logistics_config.logistics_planned %}disabled{% endif %}>Add concept</button>
+                <label class="logistics-planned-check">
+                  <input type="checkbox" name="logistics_planned" value="1" data-logistics-planned {% if session_logistics_config and session_logistics_config.logistics_planned %}checked{% endif %}>
+                  <span>Planned</span>
+                </label>
+              </div>
             </div>
           </div>
           <label class="logistics-files-field" {% if not (session_logistics_config and session_logistics_config.logistics_files_url) %}hidden{% endif %}>
@@ -1243,8 +1256,7 @@
                 <col class="logistics-status-col">
                 <col class="logistics-provider-type-col">
                 <col class="logistics-provider-col">
-                <col class="logistics-currency-col">
-                <col class="logistics-fee-col">
+                <col class="logistics-staff-members-col">
                 <col class="logistics-provider-details-col">
                 <col class="logistics-history-col">
                 <col class="logistics-delete-col">
@@ -1254,22 +1266,21 @@
                   <th>Status</th>
                   <th>Type of provider</th>
                   <th>Provider</th>
-                  <th>Currency</th>
-                  <th>Fee</th>
+                  <th>Staff members</th>
                   <th>Provider details</th>
                   <th>History</th>
-                  <th>Delete</th>
+                  <th aria-label="Delete"></th>
                 </tr>
               </thead>
               <tbody data-logistics-concepts>
                 {% for concept in session_logistics_concepts %}
-                  {{ logistics_concept_row(concept, 'existing-' ~ concept.id, logistics_status_options, logistics_provider_type_options, logistics_provider_options, logistics_currency_options) }}
+                  {{ logistics_concept_row(concept, 'existing-' ~ concept.id, logistics_status_options, logistics_provider_type_options, logistics_provider_options, complex_logistics_staff_members.get(session.id, []), session_logistics_config and session_logistics_config.logistics_planned) }}
                 {% endfor %}
               </tbody>
             </table>
           </div>
           <template data-logistics-concept-template>
-            {{ logistics_concept_row(none, '__KEY__', logistics_status_options, logistics_provider_type_options, logistics_provider_options, logistics_currency_options) }}
+            {{ logistics_concept_row(none, '__KEY__', logistics_status_options, logistics_provider_type_options, logistics_provider_options, complex_logistics_staff_members.get(session.id, []), false) }}
           </template>
         </section>
       </form>

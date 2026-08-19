@@ -1,5 +1,6 @@
 {% extends "base.html" %}
 {% from "staff/_badges.html" import role_badge %}
+{% from "finance_requests/_payment_form_fields.html" import payment_form_fields with context %}
 
 {% macro schedule_status_badge(status) -%}
   <span class="badge schedule-status-{{ status|lower|replace(' ', '-') }}">{{ status }}</span>
@@ -7,6 +8,18 @@
 
 {% macro schedule_health_badge(health) -%}
   <span class="badge schedule-health-{{ health|lower|replace(' ', '-') }}">{{ health }}</span>
+{%- endmacro %}
+
+{% macro logistics_status_badge_class(status) -%}
+  {%- if status == 'Confirmed' -%}logistics-status-confirmed
+  {%- elif status == 'In progress' -%}logistics-status-in-progress
+  {%- elif status == 'Pre-confirmed' -%}logistics-status-pre-confirmed
+  {%- else -%}logistics-status-pending
+  {%- endif -%}
+{%- endmacro %}
+
+{% macro finance_status_chip(status) -%}
+  <span class="finance-status-chip status-{{ status|lower|replace(' ', '-') }}">{{ 'Scheduled' if status == 'Management approved' else 'Processing payment' if status == 'Payment scheduled' else status }}</span>
 {%- endmacro %}
 
 {% macro workflow_deadline_chip(deadline_badge, extra_class='') -%}
@@ -746,6 +759,31 @@
         </div>
       {% else %}
         <p class="status-track-empty">No staffing status changes recorded yet.</p>
+      {% endif %}
+    </div>
+  </section>
+{%- endmacro %}
+
+{% macro logistics_status_track_panel(session, concepts) -%}
+  <section class="status-track-panel logistics-status-track-panel" aria-label="Logistics status track">
+    <button
+      class="status-track-toggle"
+      type="button"
+      aria-expanded="false"
+      aria-controls="logistics-status-track-{{ session.id }}"
+      data-status-track-toggle
+    >Status track</button>
+    <div id="logistics-status-track-{{ session.id }}" class="status-track-content" hidden>
+      {% if concepts %}
+        <div class="status-track-list">
+          {% for concept in concepts %}
+            <article class="status-track-item">
+              <strong>{{ concept.label }}: {{ concept.status }}</strong>
+            </article>
+          {% endfor %}
+        </div>
+      {% else %}
+        <p class="status-track-empty">No logistics status changes recorded yet.</p>
       {% endif %}
     </div>
   </section>
@@ -1683,12 +1721,18 @@
                   <th>Staff member</th>
                   <th>Status</th>
                   <th>Deadline</th>
+                  <th>Role check</th>
                   <th>Official confirmation</th>
                   <th>Update status</th>
                 </tr>
               </thead>
               <tbody>
                 {% for row in view.staffing_rows %}
+                  {% set role_is_confirmed = row.status == 'Confirmed' %}
+                  {% set role_confirmation_was_sent = row.status == 'Official confirmation sent' %}
+                  {% set role_check_checked = row.role_check_verified or role_is_confirmed %}
+                  {% set role_check_input_disabled = staffing_actions_disabled or not row.has_staff_member or role_confirmation_was_sent or role_is_confirmed %}
+                  {% set role_check_actions_disabled = staffing_actions_disabled or role_is_confirmed or not row.role_check_verified %}
                   <tr>
                     <th scope="row">{{ row.role }}</th>
                     <td>
@@ -1708,9 +1752,20 @@
                       <span class="staffing-deadline-chip staffing-deadline-{{ row.deadline_status }}">{{ row.deadline_label }}</span>
                     </td>
                     <td>
+                      <form method="post" action="{{ url_for('staff.update_staffing_assignment_role_check', session_id=session.id, assignment_type=row.assignment_type, assignment_id=row.assignment_id) }}" class="staffing-role-check-form" data-role-check-form>
+                        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                        <input type="hidden" name="schedule_status" value="{{ selected_schedule_status }}">
+                        {{ pre_session_return_fields(selected_view, selected_bundle) }}
+                        <label class="staffing-role-check-label {% if role_check_input_disabled %}is-disabled{% endif %}">
+                          <input type="checkbox" name="role_check_verified" value="1" data-role-check {% if role_check_checked %}checked{% endif %}{% if role_check_input_disabled %} disabled{% endif %}>
+                          <span>verified</span>
+                        </label>
+                      </form>
+                    </td>
+                    <td>
                       <div class="staffing-inline-actions">
-                        <a class="staffing-action-chip {% if staffing_actions_disabled %}staffing-action-chip-grey is-disabled{% else %}staffing-action-chip-blue{% if not row.staff_email %} is-disabled{% endif %}{% endif %}" href="{% if staffing_actions_disabled or not row.staff_email %}#{% else %}mailto:{{ row.staff_email }}{% endif %}"{% if staffing_actions_disabled or not row.staff_email %} aria-disabled="true" tabindex="-1"{% endif %}>Send email</a>
-                        <button class="copy-icon-button email-invitation-copy-button" type="button" data-copy-text="{{ row.staff_email }}" aria-label="Copy staff email" title="Copy staff email"{% if staffing_actions_disabled or not row.staff_email %} disabled{% endif %}>
+                        <a class="staffing-action-chip {% if role_check_actions_disabled or not row.staff_email %}staffing-action-chip-grey is-disabled{% else %}staffing-action-chip-blue{% endif %}" href="{% if role_check_actions_disabled or not row.staff_email %}#{% else %}mailto:{{ row.staff_email }}{% endif %}" data-role-check-dependent data-role-check-href="mailto:{{ row.staff_email }}" data-role-check-kind="link"{% if role_check_actions_disabled or not row.staff_email %} aria-disabled="true" tabindex="-1"{% endif %}>Send email</a>
+                        <button class="copy-icon-button email-invitation-copy-button" type="button" data-copy-text="{{ row.staff_email }}" data-role-check-dependent data-role-check-kind="button" aria-label="Copy staff email" title="Copy staff email"{% if role_check_actions_disabled or not row.staff_email %} disabled{% endif %}>
                           <svg class="copy-icon" viewBox="0 0 24 24" aria-hidden="true">
                             <rect x="9" y="9" width="10" height="10" rx="2"></rect>
                             <path d="M5 15V7a2 2 0 0 1 2-2h8"></path>
@@ -1785,7 +1840,7 @@
                           <input type="hidden" name="schedule_status" value="{{ selected_schedule_status }}">
                           <input type="hidden" name="participation_status" value="Official confirmation sent">
                           {{ pre_session_return_fields(selected_view, selected_bundle) }}
-                          <button class="staffing-action-chip staffing-action-chip-blue" type="submit">Mark as sent</button>
+                          <button class="staffing-action-chip {% if role_check_actions_disabled %}staffing-action-chip-grey is-disabled{% else %}staffing-action-chip-blue{% endif %}" type="submit" data-role-check-dependent data-role-check-kind="button"{% if role_check_actions_disabled %} disabled{% endif %}>Mark as sent</button>
                         </form>
                       {% else %}
                         <span class="muted">—</span>
@@ -1824,16 +1879,34 @@
         {% endif %}
         {{ review_flags_block(view.review_flags.by_area.get('logistics', []), session, selected_schedule_status, selected_view, csrf_token) }}
         <section class="staffing-control-metadata" aria-label="Logistics ownership and deadline">
+          {% set logistics_next = namespace(label='Review logistics') %}
+          {% if not view.schedule_gate.is_ready %}
+            {% set logistics_next.label = 'Wait for schedule approval' %}
+          {% elif view.logistics.status == 'not_applicable' %}
+            {% set logistics_next.label = 'No logistics required' %}
+          {% elif view.logistics.final_email_ready %}
+            {% set logistics_next.label = 'Logistics completed' %}
+          {% elif view.logistics.status == 'configuration_required' %}
+            {% set logistics_next.label = 'Configure logistics requirements' %}
+          {% elif view.logistics.status == 'in_progress' %}
+            {% set logistics_next.label = 'Complete pending logistics arrangements' %}
+          {% elif view.logistics.status == 'files_link_missing' %}
+            {% set logistics_next.label = 'Add logistics files link' %}
+          {% endif %}
           <div>
-            <span>Responsible department</span>
+            <span>Current status</span>
+            <strong>{{ logistics_status_badge(view.logistics) }}</strong>
+          </div>
+          <div>
+            <span>Recommended next action</span>
+            <strong>{{ logistics_next.label }}</strong>
+          </div>
+          <div>
+            <span>Responsible</span>
             <strong>{{ view.logistics_control.department }}</strong>
           </div>
           <div>
-            <span>Responsible person</span>
-            <strong>{{ view.logistics_control.responsible_person_label }}</strong>
-          </div>
-          <div>
-            <span>Logistics deadline</span>
+            <span>Current deadline</span>
             <strong>
               {% if view.logistics_control.deadline_status in ['due_today', 'overdue', 'completed'] %}
                 {{ view.logistics_control.deadline_label }}
@@ -1847,49 +1920,10 @@
               <small>Saved deadline: {{ view.logistics_control.deadline|session_date }}</small>
             {% endif %}
           </div>
-          <div>
-            <span>Operational note</span>
-            <strong>{{ view.logistics_control.note if view.logistics_control.note else 'Not set' }}</strong>
-          </div>
         </section>
-        <button class="secondary-button compact-action staffing-control-edit-button" type="button" data-logistics-control-toggle aria-controls="logistics-control-form-{{ session.id }}" aria-expanded="false">Edit ownership and deadline</button>
-        <form method="post" action="{{ url_for('staff.update_logistics_control', session_id=session.id) }}" id="logistics-control-form-{{ session.id }}" class="staffing-control-form" data-logistics-control-form data-disable-on-submit hidden>
-          <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-          <input type="hidden" name="schedule_status" value="{{ selected_schedule_status }}">
-          <div class="schedule-form-error" data-logistics-control-error hidden></div>
-          <label>
-            Responsible department
-            <input value="ADMIN" readonly>
-          </label>
-          <label>
-            Logistics deadline
-            <input type="date" name="logistics_due_at" value="{{ view.logistics_control.deadline.isoformat() if view.logistics_control.deadline else '' }}">
-          </label>
-          <label>
-            Operational note
-            <textarea name="note" rows="3" maxlength="2000" placeholder="Add an operational logistics note">{{ view.logistics_control.note }}</textarea>
-          </label>
-          <div class="form-actions">
-            <button class="secondary-button compact-action" type="button" data-logistics-control-cancel>Cancel</button>
-            <button class="primary-button compact-action" type="submit">Save logistics details</button>
-          </div>
-        </form>
+        {{ logistics_status_track_panel(session, view.logistics.concept_rows) }}
 
         <section class="logistics-detail-grid" aria-label="Logistics summary">
-          <div>
-            <span>Members requiring logistics</span>
-            <strong>{{ view.logistics.required_members }}</strong>
-          </div>
-          <div>
-            <span>Concepts</span>
-            <strong>
-              {% if view.logistics.total_concepts %}
-                {{ view.logistics.confirmed_concepts }} / {{ view.logistics.total_concepts }} confirmed
-              {% else %}
-                None configured
-              {% endif %}
-            </strong>
-          </div>
           <div>
             <span>Logistics files</span>
             {% if view.logistics.has_files_url %}
@@ -1900,16 +1934,7 @@
           </div>
         </section>
 
-        {% if view.logistics.member_rows %}
-          <section class="logistics-readonly-list" aria-label="Members requiring logistics">
-            <h4>Members requiring logistics</h4>
-            <ul>
-              {% for member in view.logistics.member_rows %}
-                <li>{{ member.name }} &mdash; {{ member.role }}</li>
-              {% endfor %}
-            </ul>
-          </section>
-        {% elif view.logistics.required_members == 0 %}
+        {% if view.logistics.required_members == 0 %}
           <p class="empty-history">Logistics is not required for this session.</p>
         {% endif %}
 
@@ -1918,20 +1943,150 @@
             <table class="staffing-role-table logistics-concepts-readonly-table">
               <thead>
                 <tr>
-                  <th>Concept</th>
+                  <th>Type of provider</th>
+                  <th>Providers</th>
+                  <th>Staff members</th>
+                  <th>Notes</th>
+                  <th>Payment requests</th>
                   <th>Status</th>
                 </tr>
               </thead>
               <tbody>
                 {% for concept in view.logistics.concept_rows %}
                   <tr>
-                    <th scope="row">{{ concept.label }}</th>
-                    <td>{{ concept.status }}</td>
+                    <th scope="row">{{ concept.provider_type or '-' }}</th>
+                    <td>
+                      <div class="pre-logistics-provider-list">
+                        {% for provider in concept.providers %}
+                          <div class="pre-logistics-provider-line">
+                            {% if provider.id %}
+                              <form method="post" action="{{ url_for('staff.remove_pre_session_logistics_concept_provider', concept_id=concept.id, provider_id=provider.id) }}" class="pre-logistics-provider-remove-form" data-pre-logistics-provider-remove-form>
+                                <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                                <input type="hidden" name="schedule_status" value="{{ selected_schedule_status }}">
+                                {{ pre_session_return_fields(selected_view, selected_bundle) }}
+                                <label>
+                                  <input type="checkbox" checked data-pre-logistics-provider-checkbox>
+                                  <span>{{ provider.name }}</span>
+                                </label>
+                              </form>
+                              <button class="mini-button provider-details-button" type="button" data-open-modal="pre-logistics-provider-{{ concept.id }}-{{ provider.id }}" aria-label="Provider details for {{ provider.name }}" title="Provider details">i</button>
+                            {% else %}
+                              <span>{{ provider.name }}</span>
+                            {% endif %}
+                          </div>
+                        {% else %}
+                          <span class="muted">No providers selected</span>
+                        {% endfor %}
+                      </div>
+                    </td>
+                    <td>
+                      <div class="pre-logistics-readonly-list">
+                        {% for staff_member in concept.staff_members %}
+                          <form method="post" action="{{ url_for('staff.remove_pre_session_logistics_concept_staff_member', concept_id=concept.id, staff_member_id=staff_member.id) }}" class="pre-logistics-staff-remove-form" data-pre-logistics-staff-remove-form>
+                            <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                            <input type="hidden" name="schedule_status" value="{{ selected_schedule_status }}">
+                            {{ pre_session_return_fields(selected_view, selected_bundle) }}
+                            <label>
+                              <input type="checkbox" checked data-pre-logistics-staff-checkbox>
+                              <span>{{ staff_member.name }}</span>
+                            </label>
+                          </form>
+                        {% else %}
+                          <span class="muted">No staff members selected</span>
+                        {% endfor %}
+                      </div>
+                    </td>
+                    <td>
+                      <div class="pre-logistics-actions">
+                        <button class="mini-button logistics-action-chip" type="button" data-open-modal="pre-logistics-notes-{{ concept.id }}">View notes ({{ concept.note_count }})</button>
+                      </div>
+                    </td>
+                    <td>
+                      <div class="pre-logistics-actions">
+                        <button class="secondary-button compact-action logistics-action-chip" type="button" data-open-modal="new-payment-request-modal" data-payment-request-return-session-id="{{ session.id }}" data-payment-request-logistics-concept-id="{{ concept.id }}"{% if not user_can_edit('finance_requests') %} disabled aria-disabled="true"{% endif %}>New request</button>
+                        {% if concept.payment_requests %}
+                          <div class="pre-logistics-payment-list">
+                            {% for payment_request in concept.payment_requests %}
+                              <div class="pre-logistics-payment-line">
+                                <a href="{{ url_for('staff.finance_requests', tab='payment_requests') }}" target="_blank" rel="noopener noreferrer">{{ payment_request.request_number }}</a>
+                                {{ finance_status_chip(payment_request.status) }}
+                              </div>
+                            {% endfor %}
+                          </div>
+                        {% endif %}
+                      </div>
+                    </td>
+                    <td>
+                      <form method="post" action="{{ url_for('staff.update_pre_session_logistics_concept_status', concept_id=concept.id) }}" class="pre-logistics-status-form">
+                        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                        <input type="hidden" name="schedule_status" value="{{ selected_schedule_status }}">
+                        {{ pre_session_return_fields(selected_view, selected_bundle) }}
+                        <select name="status" class="logistics-chip-select {{ logistics_status_badge_class(concept.status) }}" data-pre-logistics-status-select>
+                          {% for status in logistics_status_options %}
+                            <option value="{{ status }}" {% if concept.status == status %}selected{% endif %}{% if status == 'Confirmed' and not concept.can_confirm %} disabled{% endif %}>{{ status }}</option>
+                          {% endfor %}
+                        </select>
+                      </form>
+                    </td>
                   </tr>
                 {% endfor %}
               </tbody>
             </table>
           </div>
+          {% for concept in view.logistics.concept_rows %}
+            <div class="modal nested-modal" id="pre-logistics-notes-{{ concept.id }}" aria-hidden="true">
+              <div class="modal-panel">
+                <div class="modal-header">
+                  <h2>Logistics notes</h2>
+                  <button class="icon-button" type="button" data-close-modal>&times;</button>
+                </div>
+                {% set concept_notes = logistics_notes.get(concept.id, []) %}
+                {% if concept_notes %}
+                  <div class="history-list">
+                    {% for note in concept_notes|reverse %}
+                      <article class="history-entry">
+                        <time>Created on: {{ note.created_on|localdt }} h</time>
+                        <small>From: {{ history_from_label(note) }}</small>
+                        {% if history_to_label(note) != '-' %}<small>To: {{ history_to_label(note) }}</small>{% endif %}
+                        <p>{{ note.comment }}</p>
+                      </article>
+                    {% endfor %}
+                  </div>
+                {% else %}
+                  <p class="empty-history">No history recorded.</p>
+                {% endif %}
+              </div>
+            </div>
+            {% for provider in concept.providers %}
+              {% if provider.id %}
+                <div class="modal nested-modal" id="pre-logistics-provider-{{ concept.id }}-{{ provider.id }}" aria-hidden="true">
+                  <div class="modal-panel">
+                    <div class="modal-header">
+                      <div>
+                        <h2>{{ provider.name }}</h2>
+                        <p>{{ provider.type_name }}</p>
+                      </div>
+                      <button class="icon-button" type="button" data-close-modal>&times;</button>
+                    </div>
+                    <div class="provider-details-grid">
+                      <section>
+                        <h3>Full address</h3>
+                        <p>{{ provider.full_address }}</p>
+                      </section>
+                      <section>
+                        <h3>Experience</h3>
+                        <div class="provider-rating is-readonly" aria-label="Experience rating: {{ provider.experience_rating }} out of 5">
+                          {% for rating in range(1, 6) %}
+                            <span class="provider-star-static">{{ '★' if rating <= provider.experience_rating else '☆' }}</span>
+                          {% endfor %}
+                        </div>
+                      </section>
+                    </div>
+                  </div>
+                </div>
+              {% endif %}
+            {% endfor %}
+          {% endfor %}
         {% elif view.logistics.required_members > 0 %}
           <p class="empty-history">Logistics requirements need to be configured.</p>
         {% endif %}
@@ -4250,4 +4405,28 @@ This stage has already been marked as complete. Reopening it may affect package 
     </div>
   </div>
 {% endfor %}
+
+{% if user_can_edit('finance_requests') %}
+  <div class="modal" id="new-payment-request-modal" aria-hidden="true" role="dialog" aria-modal="true" aria-labelledby="new-payment-request-title">
+    <div class="modal-panel large finance-request-modal-panel">
+      <div class="modal-header">
+        <div>
+          <h2 id="new-payment-request-title" tabindex="-1">New payment request</h2>
+          <p class="modal-subtitle">Create a payment request for Management review and Finance processing.</p>
+        </div>
+        <button class="icon-button" type="button" data-close-modal aria-label="Close modal">&times;</button>
+      </div>
+      <form class="finance-form-panel finance-modal-form" method="post" action="{{ url_for('staff.create_payment_request') }}">
+        <input type="hidden" name="source_tab" value="payment_requests">
+        <input type="hidden" name="return_to" value="{{ request.full_path.rstrip('?') }}" data-payment-request-return-input>
+        <input type="hidden" name="logistics_concept_id" value="" data-payment-request-logistics-concept-input>
+        {{ payment_form_fields() }}
+        <div class="form-actions">
+          <button class="secondary-button" type="button" data-close-modal>Cancel</button>
+          <button class="primary-button" type="submit">Create payment request</button>
+        </div>
+      </form>
+    </div>
+  </div>
+{% endif %}
 {% endblock %}

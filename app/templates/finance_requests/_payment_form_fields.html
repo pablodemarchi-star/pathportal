@@ -1,0 +1,101 @@
+{% macro payment_form_fields(payment=none, amount_required=true) %}
+  {% set bank_snapshot = finance_bank_snapshot(payment) %}
+  {% set date_mode = payment.payment_date_mode if payment and payment.payment_date_mode else ('specific' if payment and payment.scheduled_payment_date else 'asap') %}
+  {% set asap_payment_date = payment.scheduled_payment_date if payment and date_mode == 'asap' and payment.scheduled_payment_date else next_payment_run_date %}
+  <div class="finance-payee-picker" data-finance-payee-picker>
+    <label>Contact / Payee
+      <input name="payee_name" value="{{ payment.payee_name_snapshot or '' if payment else '' }}" autocomplete="off" data-finance-payee-input>
+    </label>
+    <div class="finance-payee-menu" data-finance-payee-menu hidden>
+      {% for contact in contacts if contact.is_active %}
+        <div
+          class="finance-payee-option"
+          data-finance-payee-option
+          data-contact-kind="payee"
+          data-contact-id="{{ contact.id }}"
+          data-contact-name="{{ contact.display_name }}"
+          data-concept-id="{{ contact.default_concept_id or '' }}"
+          data-payment-method="{{ contact.default_payment_method or '' }}"
+          data-account-holder="{{ contact.account_holder or '' }}"
+          data-account-number="{{ contact.account_number or '' }}"
+          data-alias="{{ contact.alias or '' }}"
+          data-tax-id="{{ contact.tax_id or '' }}"
+        >
+          <button type="button" class="finance-payee-select" data-finance-payee-select>{{ contact.display_name }}</button>
+          <button type="button" class="finance-payee-forget" data-finance-payee-forget data-action="{{ url_for('staff.forget_finance_contact', contact_id=contact.id) }}" aria-label="Remove {{ contact.display_name }} from saved contacts" title="Remove from saved contacts">&times;</button>
+        </div>
+      {% else %}
+        <div class="finance-payee-empty" data-finance-payee-empty>No saved contacts.</div>
+      {% endfor %}
+    </div>
+  </div>
+  <label>Concept
+    <select name="concept_id" required>
+      <option value="">Select concept</option>
+      {% for concept in payment_concepts %}
+        <option value="{{ concept.id }}" {% if payment and payment.concept_id == concept.id %}selected{% endif %}>{{ concept.name }}</option>
+      {% endfor %}
+    </select>
+  </label>
+  <label>Description <textarea name="description" rows="3" maxlength="90" required>{{ payment.description if payment else '' }}</textarea></label>
+  <div class="finance-form-row">
+    <label>Currency <input name="currency" maxlength="10" value="{{ payment.currency if payment else 'ARS' }}" required></label>
+    <label>Amount <input name="amount" inputmode="decimal" pattern="[0-9]+([.][0-9]+)?" value="{{ payment.amount if payment and payment.amount else '' }}" data-finance-amount{% if amount_required %} required{% endif %}></label>
+  </div>
+  <label>Payment method
+    <select name="payment_method" required data-finance-payment-method>
+      <option value="">Select method</option>
+      {% for method in payment_methods %}
+        <option value="{{ method }}" {% if payment and payment.payment_method == method %}selected{% endif %}>{{ method }}</option>
+      {% endfor %}
+    </select>
+  </label>
+  <div class="finance-form-row" data-finance-bank-fields hidden>
+    <label>Account holder <input name="account_holder" value="{{ bank_snapshot.account_holder or '' }}"></label>
+    <label>CBU / CVU <input name="account_number" value="{{ bank_snapshot.account_number or '' }}"></label>
+    <label>Alias <input name="alias" value="{{ bank_snapshot.alias or '' }}"></label>
+    <label>Tax ID / CUIL / CUIT <input name="tax_id" value="{{ bank_snapshot.tax_id or '' }}"></label>
+  </div>
+  <div class="finance-card-payment-options" data-finance-card-fields hidden>
+    <span>Card payment status</span>
+    <label class="finance-radio-option">
+      <input name="card_payment_status" type="radio" value="Already paid" {% if bank_snapshot.card_payment_status == 'Already paid' %}checked{% endif %}>
+      <span>Already paid</span>
+    </label>
+    <label class="finance-radio-option">
+      <input name="card_payment_status" type="radio" value="To be paid" {% if not payment or bank_snapshot.card_payment_status == 'To be paid' %}checked{% endif %}>
+      <span>To be paid</span>
+    </label>
+  </div>
+  <fieldset class="finance-payment-date-options" data-finance-payment-date-options data-next-payment-run-date="{{ next_payment_run_date.isoformat() }}" data-next-payment-run-display="{{ next_payment_run_date|display_date }}" aria-hidden="false">
+    <legend>Payment date</legend>
+    <label class="finance-payment-date-option finance-radio-option">
+      <input name="payment_date_mode" type="radio" value="asap" {% if date_mode == 'asap' %}checked{% endif %} data-finance-payment-date-mode>
+      <span>In the next payment run <span class="finance-payment-run-separator">|</span> <span class="finance-payment-run-date" data-finance-payment-run-date>{{ asap_payment_date|display_date }}</span></span>
+    </label>
+    <input name="payment_date_recalculated" type="hidden" value="0" data-finance-payment-date-recalculated>
+    <div class="finance-payment-date-specific-row">
+      <label class="finance-payment-date-option finance-radio-option">
+        <input name="payment_date_mode" type="radio" value="specific" {% if date_mode == 'specific' %}checked{% endif %} data-finance-payment-date-mode>
+        <span>On a specific date</span>
+      </label>
+      <div class="finance-specific-date-field" data-finance-specific-payment-date aria-hidden="true">
+        <input name="scheduled_payment_date" inputmode="numeric" maxlength="10" placeholder="DD/MM/YYYY" value="{{ payment.scheduled_payment_date|display_date if payment and payment.scheduled_payment_date else '' }}" aria-label="Specific payment date" data-date-mask data-date-future-or-today data-finance-business-date>
+        <span class="finance-date-warning" data-finance-business-date-warning hidden>Payments cannot be processed on Saturdays, Sundays or public holidays.</span>
+      </div>
+    </div>
+  </fieldset>
+  <label>Supporting documentation link <input name="supporting_documentation_url" value="{{ payment.supporting_documentation_url if payment else '' }}"></label>
+  <label>Requester comments <textarea name="requester_comments" rows="3">{{ payment.requester_comments if payment else '' }}</textarea></label>
+  {% if can_manage_payment_visibility %}
+    <label>Visibility
+      <select name="visibility_mode">
+        {% for mode in visibility_modes %}
+          {% if mode != 'Superadmin only' or current_user_is_superadmin %}
+            <option value="{{ mode }}" {% if payment and payment.visibility_mode == mode %}selected{% endif %}>{{ mode }}</option>
+          {% endif %}
+        {% endfor %}
+      </select>
+    </label>
+  {% endif %}
+{% endmacro %}
