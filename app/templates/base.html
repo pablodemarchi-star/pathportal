@@ -22,10 +22,10 @@
             </svg>
             <span>Dashboard</span>
           </a>
-          {% if user_can_view('staff_members') or user_can_view('examiner_certification') or user_can_view('supervisor_certification') or user_can_view('internship_stages') %}
+          {% if user_can_view('potential_entries') or user_can_view('staff_members') or user_can_view('examiner_certification') or user_can_view('supervisor_certification') or user_can_view('internship_stages') %}
           <section class="nav-group" aria-label="External staff">
             <div class="nav-section-title">External staff</div>
-            {% if user_can_view('staff_members') %}
+            {% if user_can_view('potential_entries') %}
             <a class="nav-link {% if request.endpoint in ['staff.potential_entries', 'staff.create_potential_entry', 'staff.update_potential_entry', 'staff.update_potential_interview_invitation_sent', 'staff.add_potential_cv_review_note', 'staff.save_potential_cv_review', 'staff.delete_potential_cv_review_note', 'staff.reject_potential_cv_review', 'staff.proceed_potential_cv_review', 'staff.reject_potential_entry', 'staff.delete_rejected_potential_entry', 'staff.accept_potential_entry', 'staff.save_potential_acceptance_draft', 'staff.add_potential_note'] %}active{% endif %}" href="{{ url_for('staff.potential_entries') }}">
               <svg class="nav-icon" viewBox="0 0 24 24" aria-hidden="true">
                 <path d="M8 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8Z" />

@@ -8,6 +8,7 @@ from werkzeug.security import check_password_hash, generate_password_hash
 
 USER_DEPARTMENTS = ("Admin", "Admissions", "Finance", "Logistics", "Management")
 MENU_PERMISSIONS = (
+    ("potential_entries", "Potential entries"),
     ("staff_members", "Staff members"),
     ("examiner_certification", "Examiner certification"),
     ("supervisor_certification", "Supervisor certification"),

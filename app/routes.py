@@ -229,7 +229,8 @@ PERMANENT_DELETE_PASSWORD = "Path1234"
 EXAM_SESSION_DELETE_PASSWORD = "Path1234"
 REJECTED_POTENTIAL_ENTRY_DELETE_PASSWORD = "Path1234"
 MENU_PERMISSION_PATHS = (
-    ("staff_members", ("/members", "/potential-entries", "/staff-members")),
+    ("potential_entries", ("/potential-entries",)),
+    ("staff_members", ("/members", "/staff-members")),
     ("examiner_certification", ("/annual-certification-programme",)),
     ("supervisor_certification", ("/supervisor-certification",)),
     ("internship_stages", ("/intern-stages",)),
@@ -498,7 +499,7 @@ def require_menu_permission_for_request():
     if request.endpoint == "staff.session_journey_public":
         return None
     if request.endpoint == "staff.mark_potential_note_read":
-        require_menu_view("staff_members")
+        require_menu_view("potential_entries")
         return None
     if request.endpoint == "staff.mark_schedule_note_read":
         require_menu_view("pre_session_control_tower")
@@ -23617,7 +23618,7 @@ def delete_finance_concept(concept_id):
 @staff_bp.route("/")
 @login_required
 def dashboard():
-    potential_entries_allowed = user_can_view("staff_members")
+    potential_entries_allowed = user_can_view("potential_entries")
     pre_session_control_tower_allowed = user_can_view("pre_session_control_tower")
     finance_requests_allowed = False
     potential_entries_pending_count = 0

@@ -433,7 +433,11 @@ class UsersTest(unittest.TestCase):
         self.assertIsNone(User.query.filter_by(email="blocked@example.com").first())
 
     def test_users_edit_can_create_permissions_and_backend_corrects_view(self):
-        client, _user = self.permission_client({"users": {"edit": True, "manage": True}, "fees": {"view": True, "manage": True}})
+        client, _user = self.permission_client({
+            "users": {"edit": True, "manage": True},
+            "potential_entries": {"view": True, "manage": True},
+            "fees": {"view": True, "manage": True},
+        })
         response = client.post(
             "/users",
             data={
@@ -442,6 +446,7 @@ class UsersTest(unittest.TestCase):
                 "email": "permitted@example.com",
                 "department": "Finance",
                 "password": "secret123",
+                "permissions[potential_entries][view]": "1",
                 "permissions[users][edit]": "1",
                 "permissions[fees][edit]": "1",
                 "scope[fees][manage]": "1",
@@ -450,10 +455,32 @@ class UsersTest(unittest.TestCase):
         )
         self.assertEqual(response.status_code, 200)
         user = User.query.filter_by(email="permitted@example.com").first()
+        potential_permission = UserMenuPermission.query.filter_by(user_id=user.id, menu_key="potential_entries").first()
         fee_permission = UserMenuPermission.query.filter_by(user_id=user.id, menu_key="fees").first()
+        self.assertTrue(potential_permission.can_view)
+        self.assertFalse(potential_permission.can_edit)
         self.assertTrue(fee_permission.can_view)
         self.assertTrue(fee_permission.can_edit)
         self.assertTrue(fee_permission.can_manage_permissions)
+
+    def test_potential_entries_permission_controls_menu_separately_from_staff_members(self):
+        client, _user = self.permission_client({
+            "potential_entries": {"view": True},
+            "staff_members": {"view": False},
+            "users": {"view": True},
+        })
+        response = client.get("/users")
+        body = response.get_data(as_text=True)
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("<span>Potential entries</span>", body)
+        self.assertNotIn("<span>Staff members</span>", body)
+
+        response = client.get("/potential-entries")
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("Potential entries", response.get_data(as_text=True))
+
+        response = client.get("/staff-members")
+        self.assertEqual(response.status_code, 403)
 
     def test_self_permissions_are_read_only_and_post_is_blocked(self):
         client, user = self.permission_client({

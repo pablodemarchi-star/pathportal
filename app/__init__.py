@@ -228,9 +228,13 @@ def create_app():
         user_menu_permission_sql = db.session.execute(
             text("SELECT sql FROM sqlite_master WHERE type='table' AND name='user_menu_permission'")
         ).scalar()
-        if user_menu_permission_sql and "'finance_requests'" not in user_menu_permission_sql:
+        menu_permission_key_sql = ", ".join(f"'{menu_key}'" for menu_key in VALID_MENU_PERMISSION_KEYS)
+        if user_menu_permission_sql and (
+            "'finance_requests'" not in user_menu_permission_sql
+            or "'potential_entries'" not in user_menu_permission_sql
+        ):
             db.session.execute(text("ALTER TABLE user_menu_permission RENAME TO user_menu_permission_legacy"))
-            db.session.execute(text("""
+            db.session.execute(text(f"""
                 CREATE TABLE user_menu_permission (
                     id INTEGER NOT NULL,
                     user_id INTEGER NOT NULL,
@@ -243,17 +247,25 @@ def create_app():
                     PRIMARY KEY (id),
                     CONSTRAINT uq_user_menu_permission_user_menu UNIQUE (user_id, menu_key),
                     FOREIGN KEY(user_id) REFERENCES app_user (id),
-                    CONSTRAINT ck_user_menu_permission_menu_key CHECK (menu_key IN ('staff_members', 'examiner_certification', 'supervisor_certification', 'internship_stages', 'exam_session_planner', 'pre_session_control_tower', 'monthly_exam_session_registrations', 'staff_payments', 'finance_requests', 'fees', 'providers', 'users')),
+                    CONSTRAINT ck_user_menu_permission_menu_key CHECK (menu_key IN ({menu_permission_key_sql})),
                     CONSTRAINT ck_user_menu_permission_edit_implies_view CHECK (can_edit = 0 OR can_view = 1)
                 )
             """))
-            db.session.execute(text("""
+            db.session.execute(text(f"""
                 INSERT INTO user_menu_permission (
                     id, user_id, menu_key, can_view, can_edit, can_manage_permissions, created_at, updated_at
                 )
                 SELECT id, user_id, menu_key, can_view, can_edit, can_manage_permissions, created_at, updated_at
                 FROM user_menu_permission_legacy
-                WHERE menu_key IN ('staff_members', 'examiner_certification', 'supervisor_certification', 'internship_stages', 'exam_session_planner', 'pre_session_control_tower', 'monthly_exam_session_registrations', 'staff_payments', 'finance_requests', 'fees', 'providers', 'users')
+                WHERE menu_key IN ({menu_permission_key_sql})
+            """))
+            db.session.execute(text("""
+                INSERT OR IGNORE INTO user_menu_permission (
+                    user_id, menu_key, can_view, can_edit, can_manage_permissions, created_at, updated_at
+                )
+                SELECT user_id, 'potential_entries', can_view, can_edit, can_manage_permissions, created_at, updated_at
+                FROM user_menu_permission_legacy
+                WHERE menu_key = 'staff_members'
             """))
             db.session.execute(text("DROP TABLE user_menu_permission_legacy"))
             db.session.commit()

@@ -67,7 +67,7 @@ class StaffMemberSettingsTest(unittest.TestCase):
             "/staff-members/settings",
             data={
                 "csrf_token": "token",
-                "upcoming_induction_session_date": "15/08/2026",
+                "upcoming_induction_session_date": "15/08/2099",
                 "upcoming_induction_session_start_time": "09:30",
                 "upcoming_induction_session_end_time": "11:00",
             },
@@ -76,19 +76,19 @@ class StaffMemberSettingsTest(unittest.TestCase):
 
         self.assertEqual(response.status_code, 302)
         settings = StaffMembersSettings.query.one()
-        self.assertEqual(settings.upcoming_induction_session_date, date(2026, 8, 15))
+        self.assertEqual(settings.upcoming_induction_session_date, date(2099, 8, 15))
         self.assertEqual(settings.upcoming_induction_session_start_time, time(9, 30))
         self.assertEqual(settings.upcoming_induction_session_end_time, time(11, 0))
         self.assertEqual(
             json.loads(settings.upcoming_induction_session_options),
-            [{"date": "15/08/2026", "start_time": "09:30", "end_time": "11:00"}],
+            [{"date": "15/08/2099", "start_time": "09:30", "end_time": "11:00"}],
         )
 
         self.assertEqual(response.headers["Location"], "/potential-entries")
 
         response = client.get("/potential-entries")
         html = response.get_data(as_text=True)
-        self.assertIn('value="15/08/2026"', html)
+        self.assertIn('value="15/08/2099"', html)
         self.assertIn('value="09:30"', html)
         self.assertIn('value="11:00"', html)
 
@@ -98,7 +98,7 @@ class StaffMemberSettingsTest(unittest.TestCase):
             "/staff-members/settings",
             data={
                 "csrf_token": "token",
-                "upcoming_induction_session_date": ["15/08/2026", "16/08/2026"],
+                "upcoming_induction_session_date": ["15/08/2099", "16/08/2099"],
                 "upcoming_induction_session_start_time": ["09:30", "14:00"],
                 "upcoming_induction_session_end_time": ["11:00", "15:30"],
             },
@@ -107,12 +107,12 @@ class StaffMemberSettingsTest(unittest.TestCase):
 
         self.assertEqual(response.status_code, 302)
         settings = StaffMembersSettings.query.one()
-        self.assertEqual(settings.upcoming_induction_session_date, date(2026, 8, 15))
+        self.assertEqual(settings.upcoming_induction_session_date, date(2099, 8, 15))
         self.assertEqual(
             json.loads(settings.upcoming_induction_session_options),
             [
-                {"date": "15/08/2026", "start_time": "09:30", "end_time": "11:00"},
-                {"date": "16/08/2026", "start_time": "14:00", "end_time": "15:30"},
+                {"date": "15/08/2099", "start_time": "09:30", "end_time": "11:00"},
+                {"date": "16/08/2099", "start_time": "14:00", "end_time": "15:30"},
             ],
         )
 
@@ -121,7 +121,7 @@ class StaffMemberSettingsTest(unittest.TestCase):
         response = client.get("/potential-entries")
         html = response.get_data(as_text=True)
         self.assertEqual(html.count('data-induction-option-row'), 2)
-        self.assertIn('value="16/08/2026"', html)
+        self.assertIn('value="16/08/2099"', html)
         self.assertIn('value="14:00"', html)
         self.assertIn('value="15:30"', html)
 
@@ -131,7 +131,7 @@ class StaffMemberSettingsTest(unittest.TestCase):
             "/staff-members/settings",
             data={
                 "csrf_token": "token",
-                "upcoming_induction_session_date": ["15/08/2026"] * 11,
+                "upcoming_induction_session_date": ["15/08/2099"] * 11,
                 "upcoming_induction_session_start_time": ["09:30"] * 11,
                 "upcoming_induction_session_end_time": ["11:00"] * 11,
             },
@@ -178,7 +178,7 @@ class StaffMemberSettingsTest(unittest.TestCase):
             StaffMembersSettings(
                 upcoming_induction_session_options=json.dumps([
                     {"date": "17/07/2026", "start_time": "09:30", "end_time": "11:00"},
-                    {"date": "15/08/2026", "start_time": "14:00", "end_time": "15:30"},
+                    {"date": "15/08/2099", "start_time": "14:00", "end_time": "15:30"},
                 ])
             )
         )
@@ -187,7 +187,7 @@ class StaffMemberSettingsTest(unittest.TestCase):
         html = self.client().get("/potential-entries").get_data(as_text=True)
 
         self.assertNotIn('value="17/07/2026"', html)
-        self.assertIn('value="15/08/2026"', html)
+        self.assertIn('value="15/08/2099"', html)
         self.assertEqual(html.count('data-induction-option-row'), 1)
 
     def test_staff_members_settings_leaves_empty_row_when_all_induction_options_are_past(self):
@@ -212,27 +212,27 @@ class StaffMemberSettingsTest(unittest.TestCase):
         client = self.client()
         invalid_payloads = [
             {
-                "upcoming_induction_session_date": "15/08/2026",
+                "upcoming_induction_session_date": "15/08/2099",
                 "upcoming_induction_session_start_time": "11:00",
                 "upcoming_induction_session_end_time": "11:00",
             },
             {
-                "upcoming_induction_session_date": "15/08/2026",
+                "upcoming_induction_session_date": "15/08/2099",
                 "upcoming_induction_session_start_time": "12:00",
                 "upcoming_induction_session_end_time": "11:00",
             },
             {
-                "upcoming_induction_session_date": "15/08/2026",
+                "upcoming_induction_session_date": "15/08/2099",
                 "upcoming_induction_session_start_time": "",
                 "upcoming_induction_session_end_time": "11:00",
             },
             {
-                "upcoming_induction_session_date": "15/08/2026",
+                "upcoming_induction_session_date": "15/08/2099",
                 "upcoming_induction_session_start_time": "24:00",
                 "upcoming_induction_session_end_time": "25:00",
             },
             {
-                "upcoming_induction_session_date": "15/08/2026",
+                "upcoming_induction_session_date": "15/08/2099",
                 "upcoming_induction_session_start_time": "09:60",
                 "upcoming_induction_session_end_time": "11:00",
             },
@@ -257,7 +257,7 @@ class StaffMemberSettingsTest(unittest.TestCase):
             "/staff-members/settings",
             data={
                 "csrf_token": "token",
-                "upcoming_induction_session_date": "15/08/2026",
+                "upcoming_induction_session_date": "15/08/2099",
                 "upcoming_induction_session_start_time": "09:30",
                 "upcoming_induction_session_end_time": "11:00",
             },
