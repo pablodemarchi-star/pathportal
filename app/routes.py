@@ -2633,6 +2633,7 @@ ACADEMIC_STAFF_EXPORT_HEADERS = [
     "Account owner",
     "Profile picture",
     "Dietary requirements",
+    "Govt. ID",
     "Started in",
     "Sessions",
     "Seniority",
@@ -2659,6 +2660,7 @@ def academic_staff_export_row(member, session_counts=None):
         member.account_owner or "",
         member.profile_picture or "",
         member.dietary_requirements or "",
+        member.govt_id or "",
         member.started_in or "",
         session_counts.get(member.id, 0),
         "Yes" if member.seniority else "No",
@@ -3004,6 +3006,7 @@ IMPORT_REQUIRED_HEADERS = {
     "Started in",
 }
 IMPORT_OPTIONAL_HEADERS = {
+    "Govt. ID",
     "Street name",
     "Street number",
     "Postcode",
@@ -3131,7 +3134,7 @@ def parse_import_workbook(file_storage, update_empty_fields):
             errors.append("Has a car must be Yes or No.")
         row_data["Has a car"] = has_car
 
-        for url_header in ("CV", "Location point", "Profile picture"):
+        for url_header in ("CV", "Location point", "Profile picture", "Govt. ID"):
             if row_data.get(url_header) and not is_valid_url(row_data[url_header]):
                 errors.append(f"{url_header} must be a valid URL.")
 
@@ -3209,6 +3212,7 @@ def apply_import_row(member, row_data, update_empty_fields):
         "Account owner": "account_owner",
         "Profile picture": "profile_picture",
         "Dietary requirements": "dietary_requirements",
+        "Govt. ID": "govt_id",
         "Started in": "started_in",
     }
     for header, attr in mapping.items():
@@ -4046,6 +4050,12 @@ def provider_payload(provider):
         "provider_type_color_key": provider_type.color_key if provider_type else "provider-type-0",
         "name": provider.name,
         "full_address": provider.full_address,
+        "email": provider.email or "",
+        "telephone": provider.telephone or "",
+        "whatsapp": provider.whatsapp or "",
+        "website": provider.website or "",
+        "instagram": provider.instagram or "",
+        "linkedin": provider.linkedin or "",
         "experience_rating": provider.experience_rating,
         "available_in_logistics": provider.available_in_logistics,
         "created_on": local_datetime(provider.created_on),
@@ -4062,6 +4072,12 @@ def validate_provider_form(form):
     provider_type = ProviderType.query.get(provider_type_id) if provider_type_id else None
     name = re.sub(r"\s+", " ", form.get("name", "").strip())
     full_address = re.sub(r"\s+", " ", form.get("full_address", "").strip())
+    email = re.sub(r"\s+", " ", form.get("email", "").strip())
+    telephone = re.sub(r"\s+", " ", form.get("telephone", "").strip())
+    whatsapp = re.sub(r"\s+", " ", form.get("whatsapp", "").strip())
+    website = re.sub(r"\s+", " ", form.get("website", "").strip())
+    instagram = re.sub(r"\s+", " ", form.get("instagram", "").strip())
+    linkedin = re.sub(r"\s+", " ", form.get("linkedin", "").strip())
     available_value = form.get("available_in_logistics", "").strip().lower()
     if available_value not in {"1", "yes", "true", "on", "0", "no", "false", "off"}:
         errors.append("Please select whether this provider is available in Logistics.")
@@ -4070,12 +4086,16 @@ def validate_provider_form(form):
         errors.append("Please select a valid provider type.")
     if not name:
         errors.append("Name of provider is required.")
-    if not full_address:
-        errors.append("Full address is required.")
     return errors, {
         "provider_type": provider_type,
         "name": name,
         "full_address": full_address,
+        "email": email,
+        "telephone": telephone,
+        "whatsapp": whatsapp,
+        "website": website,
+        "instagram": instagram,
+        "linkedin": linkedin,
         "available_in_logistics": available_in_logistics,
     }
 
@@ -7885,12 +7905,65 @@ def logistics_presentation_state(contract):
     return "needs_review"
 
 
+def official_arrival_minutes_for_role(role):
+    return "50" if role == "Supervisor" else "30"
+
+
+def assignment_schedule_contract(role, assignment):
+    time_ranges = []
+    if assignment and hasattr(assignment, "time_ranges_list"):
+        time_ranges = assignment.time_ranges_list()
+    clean_ranges = [
+        {
+            "start": (time_range.get("start") or "").strip(),
+            "end": (time_range.get("end") or "").strip(),
+        }
+        for time_range in time_ranges
+        if isinstance(time_range, dict)
+    ]
+    starts = [time_range["start"] for time_range in clean_ranges if time_range["start"]]
+    ends = [time_range["end"] for time_range in clean_ranges if time_range["end"]]
+    start_time = starts[0] if starts else (getattr(assignment, "start_time", None) or "")
+    end_time = ends[-1] if ends else (getattr(assignment, "end_time", None) or "")
+    return {
+        "role": role or "",
+        "role_start_time": start_time,
+        "role_end_time": end_time,
+        "arrival_minutes": official_arrival_minutes_for_role(role),
+    }
+
+
+def emergency_contact_schedules_by_member_id(session_record):
+    if not session_record or not getattr(session_record, "emergency_contact_required", False):
+        return {}
+    schedules = {}
+    if getattr(session_record, "emergency_contact_member_id", None):
+        schedules[session_record.emergency_contact_member_id] = {
+            "role": "Emergency contact",
+            "role_start_time": session_record.emergency_contact_start_time or "",
+            "role_end_time": session_record.emergency_contact_end_time or "",
+            "arrival_minutes": official_arrival_minutes_for_role("Emergency contact"),
+        }
+    for contact in session_record.additional_emergency_contacts_list():
+        member_id = contact.get("member_id")
+        if not member_id:
+            continue
+        schedules[member_id] = {
+            "role": "Emergency contact",
+            "role_start_time": contact.get("start_time") or "",
+            "role_end_time": contact.get("end_time") or "",
+            "arrival_minutes": official_arrival_minutes_for_role("Emergency contact"),
+        }
+    return schedules
+
+
 def logistics_presentation_from_contract(
     contract,
     assignments_by_role=None,
     concepts=None,
     logistics_config=None,
     payment_requests_by_concept=None,
+    session_record=None,
 ):
     assignments_by_role = assignments_by_role or {}
     concepts = concepts or []
@@ -7928,6 +8001,8 @@ def logistics_presentation_from_contract(
         secondary_lines.append(f"{confirmed} / {total} concepts confirmed")
 
     member_rows = []
+    assignment_schedule_by_member_id = {}
+    emergency_schedule_by_member_id = emergency_contact_schedules_by_member_id(session_record)
     for role, assignments in assignments_by_role.items():
         for assignment in assignments:
             member = getattr(assignment, "team_member", None)
@@ -7937,6 +8012,10 @@ def logistics_presentation_from_contract(
                 and member
                 and member.status == "Active"
             ):
+                assignment_schedule_by_member_id.setdefault(
+                    member.id,
+                    assignment_schedule_contract(role, assignment),
+                )
                 member_rows.append({
                     "name": member.full_name,
                     "role": role,
@@ -7944,6 +8023,7 @@ def logistics_presentation_from_contract(
 
     concept_rows = []
     for index, concept in enumerate(concepts, start=1):
+        concept_session = session_record or getattr(concept, "exam_session", None)
         label = concept.provider_display_label() if hasattr(concept, "provider_display_label") else (concept.provider or "").strip()
         label = label or f"Logistics concept {index}"
         providers = list(concept.provider_records or [])
@@ -7955,6 +8035,12 @@ def logistics_presentation_from_contract(
                 "name": provider.name,
                 "type_name": provider.provider_type.name if provider.provider_type else "Provider",
                 "full_address": provider.full_address or "-",
+                "email": provider.email or "",
+                "telephone": provider.telephone or "",
+                "whatsapp": provider.whatsapp or "",
+                "website": provider.website or "",
+                "instagram": provider.instagram or "",
+                "linkedin": provider.linkedin or "",
                 "experience_rating": provider.experience_rating or 0,
             }
             for provider in providers
@@ -7965,12 +8051,51 @@ def logistics_presentation_from_contract(
                 "name": concept.provider,
                 "type_name": concept.provider_type.name if concept.provider_type else "Provider",
                 "full_address": "-",
+                "email": "",
+                "telephone": "",
+                "whatsapp": "",
+                "website": "",
+                "instagram": "",
+                "linkedin": "",
                 "experience_rating": 0,
             })
-        staff_member_rows = [
-            {"id": member.id, "name": member.full_name}
-            for member in (concept.staff_members or [])
-        ]
+        staff_member_rows = []
+        for member in (concept.staff_members or []):
+            assignment_schedule = (
+                emergency_schedule_by_member_id.get(member.id)
+                or assignment_schedule_by_member_id.get(member.id, {})
+            )
+            staff_member_rows.append({
+                "id": member.id,
+                "name": member.full_name,
+                "title": member.title or "",
+                "status": member.status or "",
+                "roles": member.roles or "",
+                "phone": member.phone or "",
+                "email": member.email or "",
+                "has_car": member.has_car or "",
+                "govt_id": member.govt_id or "",
+                "started_in": member.started_in or "",
+                "full_address": member.full_address_google_maps or "",
+                "street_name": member.street_name or "",
+                "street_number": member.street_number or "",
+                "city": member.city or "",
+                "postcode": member.postcode or "",
+                "province": member.province or "",
+                "country": member.country or "",
+                "location_point": member.location_point or "",
+                "cv": member.cv or "",
+                "account_id": member.account_id or "",
+                "account_owner": member.account_owner or "",
+                "profile_picture": member.profile_picture or "",
+                "dietary_requirements": member.dietary_requirements or "",
+                "session_date": display_session_date(getattr(concept_session, "session_date", None)),
+                "session_address": getattr(concept_session, "full_address_google_maps", None) or "",
+                "assignment_role": assignment_schedule.get("role", ""),
+                "role_start_time": assignment_schedule.get("role_start_time", ""),
+                "role_end_time": assignment_schedule.get("role_end_time", ""),
+                "arrival_minutes": assignment_schedule.get("arrival_minutes", ""),
+            })
         concept_rows.append({
             "id": concept.id,
             "label": label,
@@ -14588,6 +14713,7 @@ def apply_form(member, form):
     member.phone = form.get("phone", "").strip()
     member.email = form.get("email", "").strip()
     member.has_car = form.get("has_car", "").strip()
+    member.govt_id = form.get("govt_id", "").strip()
     member.started_in = form.get("started_in", "").strip()
     member.full_address_google_maps = form.get("full_address_google_maps", "").strip()
     if "street_name" in form:
@@ -14620,6 +14746,7 @@ def member_draft_payload(form):
         "phone": form.get("phone", "").strip(),
         "email": form.get("email", "").strip(),
         "has_car": form.get("has_car", "").strip(),
+        "govt_id": form.get("govt_id", "").strip(),
         "started_in": form.get("started_in", "").strip(),
         "full_address_google_maps": form.get("full_address_google_maps", "").strip(),
         "city": form.get("city", "").strip(),
@@ -14948,8 +15075,6 @@ def delete_provider_type(type_id):
     if not validate_csrf():
         return jsonify({"ok": False, "message": "Security token expired. Please try again."}), 400
     provider_type = ProviderType.query.get_or_404(type_id)
-    if provider_type.is_system:
-        return jsonify({"ok": False, "message": "System provider types cannot be deleted."}), 400
     if Provider.query.filter_by(provider_type_id=provider_type.id).first():
         return jsonify({"ok": False, "message": "This provider type cannot be deleted because it is currently assigned to one or more providers."}), 400
     db.session.delete(provider_type)
@@ -14969,6 +15094,12 @@ def create_provider():
         provider_type_id=data["provider_type"].id,
         name=data["name"],
         full_address=data["full_address"],
+        email=data["email"],
+        telephone=data["telephone"],
+        whatsapp=data["whatsapp"],
+        website=data["website"],
+        instagram=data["instagram"],
+        linkedin=data["linkedin"],
         available_in_logistics=data["available_in_logistics"],
         experience_rating=0,
     )
@@ -14993,6 +15124,12 @@ def update_provider(provider_id):
     provider.provider_type_id = data["provider_type"].id
     provider.name = data["name"]
     provider.full_address = data["full_address"]
+    provider.email = data["email"]
+    provider.telephone = data["telephone"]
+    provider.whatsapp = data["whatsapp"]
+    provider.website = data["website"]
+    provider.instagram = data["instagram"]
+    provider.linkedin = data["linkedin"]
     provider.available_in_logistics = data["available_in_logistics"]
     db.session.commit()
     return jsonify({
@@ -16101,6 +16238,7 @@ def pre_session_control_tower():
             concepts=logistics_concepts_by_session.get(session_record.id, []),
             logistics_config=logistics_by_session.get(session_record.id),
             payment_requests_by_concept=logistics_payment_requests_by_concept,
+            session_record=session_record,
         )
         package_units = package_units_by_session.get(session_record.id, [])
         package_session_items = package_session_items_by_session.get(session_record.id, [])

@@ -472,6 +472,7 @@ def create_app():
             "seniority": "BOOLEAN NOT NULL DEFAULT 0",
             "acceptance_roles": "TEXT",
             "has_car": "VARCHAR(10)",
+            "govt_id": "VARCHAR(500)",
             "started_in": "VARCHAR(4)",
             "full_address_google_maps": "VARCHAR(500)",
             "country": "VARCHAR(120)",
@@ -634,6 +635,9 @@ def create_app():
         }
         if "location_point" not in existing_columns:
             db.session.execute(text("ALTER TABLE academic_staff ADD COLUMN location_point VARCHAR(500)"))
+            db.session.commit()
+        if "govt_id" not in existing_columns:
+            db.session.execute(text("ALTER TABLE academic_staff ADD COLUMN govt_id VARCHAR(500)"))
             db.session.commit()
         if "started_in" not in existing_columns:
             db.session.execute(text("ALTER TABLE academic_staff ADD COLUMN started_in VARCHAR(4)"))
@@ -1057,6 +1061,18 @@ def create_app():
         if provider_columns and "available_in_logistics" not in provider_columns:
             db.session.execute(text("ALTER TABLE provider ADD COLUMN available_in_logistics BOOLEAN NOT NULL DEFAULT 1"))
             db.session.commit()
+        provider_optional_columns = {
+            "email": "VARCHAR(254)",
+            "telephone": "VARCHAR(80)",
+            "whatsapp": "VARCHAR(80)",
+            "website": "VARCHAR(300)",
+            "instagram": "VARCHAR(120)",
+            "linkedin": "VARCHAR(300)",
+        }
+        for column_name, column_type in provider_optional_columns.items():
+            if provider_columns and column_name not in provider_columns:
+                db.session.execute(text(f"ALTER TABLE provider ADD COLUMN {column_name} {column_type}"))
+        db.session.commit()
         if not ExaminerCertificationYear.query.filter_by(year=2026).first():
             db.session.add(ExaminerCertificationYear(year=2026, is_archived=False))
             db.session.commit()
@@ -1073,29 +1089,25 @@ def create_app():
             if not Role.query.filter_by(name=role_name).first():
                 db.session.add(Role(name=role_name))
         db.session.commit()
-        provider_type_names = [
-            "Hotel",
-            "AirBnb",
-            "Booking.com",
-            "Airline",
-            "Bus",
-            "BusBud",
-            "BusPlus",
-            "Car rental",
-            "Restaurant",
-        ]
-        provider_type_colors = [f"provider-type-{index}" for index in range(12)]
-        for index, type_name in enumerate(provider_type_names):
-            existing_type = ProviderType.query.filter(db.func.lower(ProviderType.name) == type_name.lower()).first()
-            if existing_type:
-                existing_type.is_system = True
-                if not existing_type.color_key:
-                    existing_type.color_key = provider_type_colors[index % len(provider_type_colors)]
-            else:
+        ProviderType.query.filter_by(is_system=True).update({"is_system": False})
+        if not ProviderType.query.first():
+            provider_type_names = [
+                "Hotel",
+                "AirBnb",
+                "Booking.com",
+                "Airline",
+                "Bus",
+                "BusBud",
+                "BusPlus",
+                "Car rental",
+                "Restaurant",
+            ]
+            provider_type_colors = [f"provider-type-{index}" for index in range(12)]
+            for index, type_name in enumerate(provider_type_names):
                 db.session.add(
                     ProviderType(
                         name=type_name,
-                        is_system=True,
+                        is_system=False,
                         color_key=provider_type_colors[index % len(provider_type_colors)],
                     )
                 )

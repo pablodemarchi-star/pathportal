@@ -10193,15 +10193,14 @@ const syncProviderFormValidity = (form) => {
   if (!submit) return;
   const providerType = form.querySelector("[name='provider_type_id']")?.value || "";
   const name = form.querySelector("[name='name']")?.value.trim() || "";
-  const address = form.querySelector("[name='full_address']")?.value.trim() || "";
   const availability = form.querySelector("[name='available_in_logistics']:checked")?.value || "";
-  submit.disabled = !(providerType && name && address && availability);
+  submit.disabled = !(providerType && name && availability);
   syncProviderTypePreview(form);
 };
 
 const providerFormData = (form) => {
   const data = new FormData(form);
-  ["name", "full_address", "type_name"].forEach((name) => {
+  ["name", "full_address", "email", "telephone", "whatsapp", "website", "instagram", "linkedin", "type_name"].forEach((name) => {
     if (data.has(name)) data.set(name, (data.get(name) || "").trim());
   });
   return data;
@@ -10259,6 +10258,27 @@ const setProviderAddressCell = (cell, address) => {
   initCopyTextButtons(cell);
 };
 
+const setProviderStackCell = (cell, values) => {
+  if (!cell) return;
+  cell.textContent = "";
+  const visibleValues = values.filter((value) => value);
+  if (!visibleValues.length) {
+    const empty = document.createElement("span");
+    empty.className = "muted";
+    empty.textContent = "-";
+    cell.append(empty);
+    return;
+  }
+  const stack = document.createElement("div");
+  stack.className = "provider-info-stack";
+  visibleValues.forEach((value) => {
+    const line = document.createElement("span");
+    line.textContent = value;
+    stack.append(line);
+  });
+  cell.append(stack);
+};
+
 const renderProviderRow = (provider) => {
   const row = document.createElement("tr");
   row.dataset.providerRow = "";
@@ -10267,7 +10287,9 @@ const renderProviderRow = (provider) => {
     <td data-provider-type-cell>${providerTypeCellHtml(provider)}</td>
     <td class="strong" data-provider-name-cell></td>
     <td class="provider-address-cell" data-provider-address-cell></td>
-    <td><button class="mini-button" type="button" data-provider-history-button>Notes</button></td>
+    <td class="provider-contact-cell" data-provider-contact-cell></td>
+    <td class="provider-contact-cell" data-provider-social-cell></td>
+    <td><button class="mini-button" type="button" data-open-modal="provider-history-${provider.id}" data-provider-history-button>Notes</button></td>
     <td>
       <div class="provider-rating" role="radiogroup" aria-label="Experience rating" data-provider-rating data-provider-id="${provider.id}" data-rating="${provider.experience_rating}" data-action="/providers/${provider.id}/experience">
         ${[1, 2, 3, 4, 5].map((rating) => `<button type="button" class="provider-star" data-rating-value="${rating}" aria-label="${rating} star${rating === 1 ? "" : "s"}" aria-pressed="false">☆</button>`).join("")}
@@ -10279,6 +10301,8 @@ const renderProviderRow = (provider) => {
   row.dataset.availableInLogistics = provider.available_in_logistics ? "true" : "false";
   row.querySelector("[data-provider-name-cell]").textContent = provider.name;
   setProviderAddressCell(row.querySelector("[data-provider-address-cell]"), provider.full_address);
+  setProviderStackCell(row.querySelector("[data-provider-contact-cell]"), [provider.email, provider.telephone, provider.whatsapp]);
+  setProviderStackCell(row.querySelector("[data-provider-social-cell]"), [provider.website, provider.instagram, provider.linkedin]);
   setProviderStars(row.querySelector("[data-provider-rating]"), provider.experience_rating);
   return row;
 };
@@ -10318,7 +10342,31 @@ const ensureProviderModals = (provider) => {
           </label>
           <label class="full-span">
             Full address
-            <input name="full_address" value="" maxlength="500" required>
+            <input name="full_address" value="" maxlength="500">
+          </label>
+          <label>
+            Email
+            <input type="email" name="email" value="" maxlength="254">
+          </label>
+          <label>
+            Telephone
+            <input type="tel" name="telephone" value="" maxlength="80">
+          </label>
+          <label>
+            WhatsApp
+            <input type="tel" name="whatsapp" value="" maxlength="80">
+          </label>
+          <label>
+            Website
+            <input name="website" value="" maxlength="300">
+          </label>
+          <label>
+            Instagram
+            <input name="instagram" value="" maxlength="120">
+          </label>
+          <label>
+            LinkedIn
+            <input name="linkedin" value="" maxlength="300">
           </label>
           <label class="full-span provider-availability-field">
             Available in Logistics
@@ -10343,6 +10391,12 @@ const ensureProviderModals = (provider) => {
     `;
     editModal.querySelector("[name='name']").value = provider.name;
     editModal.querySelector("[name='full_address']").value = provider.full_address;
+    editModal.querySelector("[name='email']").value = provider.email || "";
+    editModal.querySelector("[name='telephone']").value = provider.telephone || "";
+    editModal.querySelector("[name='whatsapp']").value = provider.whatsapp || "";
+    editModal.querySelector("[name='website']").value = provider.website || "";
+    editModal.querySelector("[name='instagram']").value = provider.instagram || "";
+    editModal.querySelector("[name='linkedin']").value = provider.linkedin || "";
     editModal.querySelector(`[name='available_in_logistics'][value='${provider.available_in_logistics ? "yes" : "no"}']`).checked = true;
     document.body.append(editModal);
     initProviderForm(editModal.querySelector("[data-provider-form]"));
@@ -10413,6 +10467,12 @@ const updateProviderEditForm = (provider) => {
   form.querySelector("[name='provider_type_id']").value = provider.provider_type_id;
   form.querySelector("[name='name']").value = provider.name;
   form.querySelector("[name='full_address']").value = provider.full_address;
+  form.querySelector("[name='email']").value = provider.email || "";
+  form.querySelector("[name='telephone']").value = provider.telephone || "";
+  form.querySelector("[name='whatsapp']").value = provider.whatsapp || "";
+  form.querySelector("[name='website']").value = provider.website || "";
+  form.querySelector("[name='instagram']").value = provider.instagram || "";
+  form.querySelector("[name='linkedin']").value = provider.linkedin || "";
   form.querySelector(`[name='available_in_logistics'][value='${provider.available_in_logistics ? "yes" : "no"}']`).checked = true;
   syncProviderFormValidity(form);
 };
@@ -10460,6 +10520,8 @@ const initProviderForm = (form) => {
         existingRow.querySelector("[data-provider-type-cell]").innerHTML = providerTypeCellHtml(payload.provider);
         existingRow.querySelector("[data-provider-name-cell]").textContent = payload.provider.name;
         setProviderAddressCell(existingRow.querySelector("[data-provider-address-cell]"), payload.provider.full_address);
+        setProviderStackCell(existingRow.querySelector("[data-provider-contact-cell]"), [payload.provider.email, payload.provider.telephone, payload.provider.whatsapp]);
+        setProviderStackCell(existingRow.querySelector("[data-provider-social-cell]"), [payload.provider.website, payload.provider.instagram, payload.provider.linkedin]);
         existingRow.dataset.availableInLogistics = payload.provider.available_in_logistics ? "true" : "false";
         updateProviderEditForm(payload.provider);
       } else if (table) {

@@ -22,6 +22,16 @@
   <span class="finance-status-chip status-{{ status|lower|replace(' ', '-') }}">{{ 'Scheduled' if status == 'Management approved' else 'Processing payment' if status == 'Payment scheduled' else status }}</span>
 {%- endmacro %}
 
+{% macro provider_copy_button(value, label) -%}
+  <button class="copy-icon-button provider-detail-copy-button" type="button" data-copy-text="{{ value }}" aria-label="Copy {{ label }}" title="Copy {{ label }}">
+    <svg viewBox="0 0 24 24" aria-hidden="true">
+      <rect x="9" y="9" width="10" height="10" rx="2"></rect>
+      <path d="M5 15V7a2 2 0 0 1 2-2h8"></path>
+    </svg>
+    <span class="copy-button-feedback">Copied</span>
+  </button>
+{%- endmacro %}
+
 {% macro workflow_deadline_chip(deadline_badge, extra_class='') -%}
   {% if deadline_badge %}
     <span class="workflow-deadline-chip workflow-deadline-{{ deadline_badge.status }} {{ extra_class }}" title="{{ deadline_badge.label }}" aria-label="{{ deadline_badge.label }}: {{ deadline_badge.date|session_date }}">
@@ -1392,6 +1402,8 @@
                 {% else %}
                   <span class="session-shipment-progress-chip session-shipment-progress-in-progress">Bundle in progress</span>
                 {% endif %}
+              {% elif selected_view != 'bundle' %}
+                <span class="session-shipment-progress-chip session-shipment-progress-not-assigned">Not bundle-assigned</span>
               {% endif %}
             </span>
           </td>
@@ -1982,15 +1994,18 @@
                     <td>
                       <div class="pre-logistics-readonly-list">
                         {% for staff_member in concept.staff_members %}
-                          <form method="post" action="{{ url_for('staff.remove_pre_session_logistics_concept_staff_member', concept_id=concept.id, staff_member_id=staff_member.id) }}" class="pre-logistics-staff-remove-form" data-pre-logistics-staff-remove-form>
-                            <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-                            <input type="hidden" name="schedule_status" value="{{ selected_schedule_status }}">
-                            {{ pre_session_return_fields(selected_view, selected_bundle) }}
-                            <label>
-                              <input type="checkbox" checked data-pre-logistics-staff-checkbox>
-                              <span>{{ staff_member.name }}</span>
-                            </label>
-                          </form>
+                          <div class="pre-logistics-staff-line">
+                            <form method="post" action="{{ url_for('staff.remove_pre_session_logistics_concept_staff_member', concept_id=concept.id, staff_member_id=staff_member.id) }}" class="pre-logistics-staff-remove-form" data-pre-logistics-staff-remove-form>
+                              <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                              <input type="hidden" name="schedule_status" value="{{ selected_schedule_status }}">
+                              {{ pre_session_return_fields(selected_view, selected_bundle) }}
+                              <label>
+                                <input type="checkbox" checked data-pre-logistics-staff-checkbox>
+                                <span>{{ staff_member.name }}</span>
+                              </label>
+                            </form>
+                            <button class="mini-button provider-details-button" type="button" data-open-modal="pre-logistics-staff-{{ concept.id }}-{{ staff_member.id }}" aria-label="Staff member details for {{ staff_member.name }}" title="Staff member details">i</button>
+                          </div>
                         {% else %}
                           <span class="muted">No staff members selected</span>
                         {% endfor %}
@@ -2071,8 +2086,63 @@
                     <div class="provider-details-grid">
                       <section>
                         <h3>Full address</h3>
-                        <p>{{ provider.full_address }}</p>
+                        <div class="provider-detail-copy-line">
+                          <p>{{ provider.full_address }}</p>
+                          {% if provider.full_address and provider.full_address != '-' %}
+                            {{ provider_copy_button(provider.full_address, 'full address') }}
+                          {% endif %}
+                        </div>
                       </section>
+                      {% if provider.email or provider.telephone or provider.whatsapp %}
+                        <section>
+                          <h3>Contact information</h3>
+                          <div class="provider-info-stack">
+                            {% if provider.email %}
+                              <div class="provider-detail-copy-line">
+                                <p><strong>Email:</strong> {{ provider.email }}</p>
+                                {{ provider_copy_button(provider.email, 'email') }}
+                              </div>
+                            {% endif %}
+                            {% if provider.telephone %}
+                              <div class="provider-detail-copy-line">
+                                <p><strong>Telephone:</strong> {{ provider.telephone }}</p>
+                                {{ provider_copy_button(provider.telephone, 'telephone') }}
+                              </div>
+                            {% endif %}
+                            {% if provider.whatsapp %}
+                              <div class="provider-detail-copy-line">
+                                <p><strong>WhatsApp:</strong> {{ provider.whatsapp }}</p>
+                                {{ provider_copy_button(provider.whatsapp, 'WhatsApp') }}
+                              </div>
+                            {% endif %}
+                          </div>
+                        </section>
+                      {% endif %}
+                      {% if provider.website or provider.instagram or provider.linkedin %}
+                        <section>
+                          <h3>Social media</h3>
+                          <div class="provider-info-stack">
+                            {% if provider.website %}
+                              <div class="provider-detail-copy-line">
+                                <p><strong>Website:</strong> {{ provider.website }}</p>
+                                {{ provider_copy_button(provider.website, 'website') }}
+                              </div>
+                            {% endif %}
+                            {% if provider.instagram %}
+                              <div class="provider-detail-copy-line">
+                                <p><strong>Instagram:</strong> {{ provider.instagram }}</p>
+                                {{ provider_copy_button(provider.instagram, 'Instagram') }}
+                              </div>
+                            {% endif %}
+                            {% if provider.linkedin %}
+                              <div class="provider-detail-copy-line">
+                                <p><strong>LinkedIn:</strong> {{ provider.linkedin }}</p>
+                                {{ provider_copy_button(provider.linkedin, 'LinkedIn') }}
+                              </div>
+                            {% endif %}
+                          </div>
+                        </section>
+                      {% endif %}
                       <section>
                         <h3>Experience</h3>
                         <div class="provider-rating is-readonly" aria-label="Experience rating: {{ provider.experience_rating }} out of 5">
@@ -2085,6 +2155,106 @@
                   </div>
                 </div>
               {% endif %}
+            {% endfor %}
+            {% for staff_member in concept.staff_members %}
+              <div class="modal nested-modal" id="pre-logistics-staff-{{ concept.id }}-{{ staff_member.id }}" aria-hidden="true">
+                <div class="modal-panel">
+                  <div class="modal-header">
+                    <div>
+                      <h2>{{ staff_member.name }}</h2>
+                      {% if staff_member.assignment_role %}
+                        <span class="staff-session-role-chip">{{ staff_member.assignment_role }}</span>
+                      {% endif %}
+                    </div>
+                    <button class="icon-button" type="button" data-close-modal>&times;</button>
+                  </div>
+                  <div class="provider-details-grid staff-member-details-grid">
+                    <section>
+                      <h3>Basic information</h3>
+                      <div class="provider-info-stack">
+                        {% if staff_member.status %}<p><strong>Status:</strong> {{ staff_member.status }}</p>{% endif %}
+                        {% if staff_member.email %}
+                          <div class="provider-detail-copy-line">
+                            <p><strong>Email:</strong> {{ staff_member.email }}</p>
+                            {{ provider_copy_button(staff_member.email, 'staff email') }}
+                          </div>
+                        {% endif %}
+                        {% if staff_member.phone %}
+                          <div class="provider-detail-copy-line">
+                            <p><strong>Phone:</strong> {{ staff_member.phone }}</p>
+                            {{ provider_copy_button(staff_member.phone, 'staff phone') }}
+                          </div>
+                        {% endif %}
+                        {% if staff_member.has_car %}<p><strong>Has a car:</strong> {{ staff_member.has_car }}</p>{% endif %}
+                        <p class="staff-govt-id-detail-line">
+                          <strong>Govt. ID:</strong>
+                          {% if staff_member.govt_id %}
+                            <a class="staff-detail-status-chip is-see" href="{{ staff_member.govt_id }}" target="_blank" rel="noopener noreferrer">see</a>
+                          {% else %}
+                            <span class="staff-detail-status-chip is-missing">missing</span>
+                          {% endif %}
+                        </p>
+                      </div>
+                    </section>
+                    <section>
+                      <h3>Exam session information</h3>
+                      <div class="provider-info-stack">
+                        <p><strong>Session date:</strong> {{ staff_member.session_date or '-' }}</p>
+                        <div class="provider-detail-copy-line">
+                          <p><strong>Session address:</strong> {{ staff_member.session_address or '-' }}</p>
+                          {% if staff_member.session_address %}
+                            {{ provider_copy_button(staff_member.session_address, 'session address') }}
+                          {% endif %}
+                        </div>
+                        <p><strong>Role starts at:</strong> {{ staff_member.role_start_time or '-' }}</p>
+                        <p><strong>Role finishes at:</strong> {{ staff_member.role_end_time or '-' }}</p>
+                        {% if staff_member.arrival_minutes %}
+                          <p class="staff-session-info-note">Needs to be at the venue {{ staff_member.arrival_minutes }} minutes before the start time.</p>
+                        {% endif %}
+                      </div>
+                    </section>
+                    {% if staff_member.full_address or staff_member.street_name or staff_member.street_number or staff_member.city or staff_member.postcode or staff_member.province or staff_member.country or staff_member.location_point %}
+                      <section>
+                        <h3>Address</h3>
+                        <div class="provider-info-stack">
+                          {% if staff_member.full_address %}
+                            <div class="provider-detail-copy-line">
+                              <p><strong>Full address:</strong> {{ staff_member.full_address }}</p>
+                              {{ provider_copy_button(staff_member.full_address, 'staff full address') }}
+                            </div>
+                          {% endif %}
+                          {% if staff_member.street_name or staff_member.street_number %}<p><strong>Street:</strong> {{ staff_member.street_name }} {{ staff_member.street_number }}</p>{% endif %}
+                          {% if staff_member.city %}<p><strong>City:</strong> {{ staff_member.city }}</p>{% endif %}
+                          {% if staff_member.postcode %}<p><strong>Postcode:</strong> {{ staff_member.postcode }}</p>{% endif %}
+                          {% if staff_member.province %}<p><strong>Province:</strong> {{ staff_member.province }}</p>{% endif %}
+                          {% if staff_member.country %}<p><strong>Country:</strong> {{ staff_member.country }}</p>{% endif %}
+                          {% if staff_member.location_point %}
+                            <div class="provider-detail-copy-line">
+                              <p><strong>Location point:</strong> {{ staff_member.location_point }}</p>
+                              {{ provider_copy_button(staff_member.location_point, 'staff location point') }}
+                            </div>
+                          {% endif %}
+                        </div>
+                      </section>
+                    {% endif %}
+                    {% if staff_member.account_id or staff_member.account_owner %}
+                      <section>
+                        <h3>Administrative details</h3>
+                        <div class="provider-info-stack">
+                          {% if staff_member.account_id %}<p><strong>Account ID:</strong> {{ staff_member.account_id }}</p>{% endif %}
+                          {% if staff_member.account_owner %}<p><strong>Account owner:</strong> {{ staff_member.account_owner }}</p>{% endif %}
+                        </div>
+                      </section>
+                    {% endif %}
+                    {% if staff_member.dietary_requirements %}
+                      <section>
+                        <h3>Dietary requirements</h3>
+                        <p>{{ staff_member.dietary_requirements }}</p>
+                      </section>
+                    {% endif %}
+                  </div>
+                </div>
+              </div>
             {% endfor %}
           {% endfor %}
         {% elif view.logistics.required_members > 0 %}

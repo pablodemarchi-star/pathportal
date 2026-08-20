@@ -529,6 +529,7 @@
         <th>Account owner</th>
         <th>Profile picture</th>
         <th>Dietary requirements</th>
+        <th>Govt. ID</th>
         <th>
           <a class="table-sort {% if filters.sort == 'started_in' %}is-active{% endif %}" href="{{ sort_url('started_in') }}">
             Started in
@@ -630,6 +631,13 @@
           {% endif %}
         </td>
         <td>
+          {% if member.govt_id %}
+            <a class="mini-button link-button" href="{{ member.govt_id }}" target="_blank" rel="noopener noreferrer">See</a>
+          {% else %}
+            <span class="muted">-</span>
+          {% endif %}
+        </td>
+        <td>
           {% if member.started_in %}
             <div class="started-cell">
               <span>{{ member.started_in }}</span>
@@ -672,7 +680,7 @@
       </tr>
       {% else %}
       <tr>
-        <td colspan="21" class="empty-state">No members found.</td>
+        <td colspan="22" class="empty-state">No members found.</td>
       </tr>
       {% endfor %}
     </tbody>
@@ -748,7 +756,7 @@
           <li>Profile picture</li>
           <li>Started in</li>
         </ul>
-        <p>Seniority and History are optional.</p>
+        <p>Seniority, History and Govt. ID are optional.</p>
       </section>
 
       <div class="form-actions">

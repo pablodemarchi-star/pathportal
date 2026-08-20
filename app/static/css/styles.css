@@ -9065,6 +9065,11 @@ span.session-marker-chip {
   color: var(--badge-green-text);
 }
 
+.session-shipment-progress-not-assigned {
+  background: #fee2e2;
+  color: #991b1b;
+}
+
 .shipment-summary-cell > .shipment-deadline-chip {
   display: inline-flex;
   align-items: center;
@@ -13402,7 +13407,7 @@ span.session-marker-chip {
 
 .providers-table {
   table-layout: fixed;
-  min-width: 1020px;
+  min-width: 1220px;
   width: 100%;
 }
 
@@ -13418,24 +13423,34 @@ span.session-marker-chip {
 
 .providers-table th:nth-child(3),
 .providers-table td:nth-child(3) {
-  width: 300px;
+  width: 280px;
 }
 
 .providers-table th:nth-child(4),
 .providers-table td:nth-child(4) {
-  width: 92px;
-}
-
-.providers-table th:nth-child(6),
-.providers-table td:nth-child(6),
-.providers-table th:nth-child(7),
-.providers-table td:nth-child(7) {
-  width: 64px;
+  width: 180px;
 }
 
 .providers-table th:nth-child(5),
 .providers-table td:nth-child(5) {
-  width: 120px;
+  width: 180px;
+}
+
+.providers-table th:nth-child(6),
+.providers-table td:nth-child(6) {
+  width: 92px;
+}
+
+.providers-table th:nth-child(7),
+.providers-table td:nth-child(7) {
+  width: 150px;
+}
+
+.providers-table th:nth-child(8),
+.providers-table td:nth-child(8),
+.providers-table th:nth-child(9),
+.providers-table td:nth-child(9) {
+  width: 72px;
 }
 
 .providers-table th,
@@ -13446,22 +13461,28 @@ span.session-marker-chip {
   overflow-wrap: anywhere;
 }
 
-.providers-table th:nth-child(4),
-.providers-table td:nth-child(4),
-.providers-table th:nth-child(5),
-.providers-table td:nth-child(5),
 .providers-table th:nth-child(6),
 .providers-table td:nth-child(6),
 .providers-table th:nth-child(7),
-.providers-table td:nth-child(7) {
+.providers-table td:nth-child(7),
+.providers-table th:nth-child(8),
+.providers-table td:nth-child(8),
+.providers-table th:nth-child(9),
+.providers-table td:nth-child(9) {
   text-align: center;
   white-space: nowrap;
 }
 
-.provider-address-cell {
+.provider-address-cell,
+.provider-contact-cell {
   white-space: normal;
   overflow-wrap: anywhere;
   line-height: 1.35;
+}
+
+.provider-info-stack {
+  display: grid;
+  gap: 4px;
 }
 
 .provider-type-cell-content {
@@ -13580,7 +13601,9 @@ span.session-marker-chip {
 .provider-rating {
   display: inline-flex;
   align-items: center;
+  justify-content: center;
   gap: 2px;
+  min-width: 118px;
   white-space: nowrap;
 }
 
@@ -13631,7 +13654,8 @@ span.session-marker-chip {
   gap: 6px;
 }
 
-.pre-logistics-provider-line {
+.pre-logistics-provider-line,
+.pre-logistics-staff-line {
   display: inline-flex;
   align-items: center;
   gap: 4px;
@@ -13661,7 +13685,8 @@ span.session-marker-chip {
   margin: 0;
 }
 
-.pre-logistics-provider-line .provider-details-button {
+.pre-logistics-provider-line .provider-details-button,
+.pre-logistics-staff-line .provider-details-button {
   width: 20px;
   min-width: 20px;
   height: 20px;
@@ -13720,6 +13745,10 @@ span.session-marker-chip {
   gap: 16px;
 }
 
+.nested-modal .provider-details-grid {
+  margin-top: 24px;
+}
+
 .provider-details-grid section {
   border: 1px solid var(--color-border);
   border-radius: 8px;
@@ -13738,6 +13767,77 @@ span.session-marker-chip {
   color: var(--color-text);
   line-height: 1.5;
   overflow-wrap: anywhere;
+}
+
+.provider-details-grid .provider-info-stack {
+  gap: 6px;
+}
+
+.provider-detail-copy-line {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 28px;
+  align-items: start;
+  gap: 8px;
+}
+
+.provider-detail-copy-button {
+  align-self: start;
+  margin-top: -1px;
+}
+
+.staff-govt-id-detail-line {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  flex-wrap: wrap;
+}
+
+.staff-session-info-note {
+  color: var(--color-primary-dark);
+  font-style: italic;
+  font-weight: 400;
+}
+
+.staff-session-role-chip {
+  display: inline-flex;
+  align-items: center;
+  width: fit-content;
+  margin-top: 6px;
+  border-radius: 999px;
+  background: var(--path-cyan-50);
+  color: var(--badge-blue-text);
+  padding: 5px 10px;
+  font-size: 11px;
+  font-weight: 900;
+  line-height: 1;
+}
+
+.staff-detail-status-chip {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 999px;
+  padding: 4px 9px;
+  font-size: 11px;
+  font-weight: 900;
+  line-height: 1;
+  text-decoration: none;
+  text-transform: lowercase;
+  white-space: nowrap;
+}
+
+.staff-detail-status-chip.is-missing {
+  background: var(--badge-red-bg);
+  color: var(--badge-red-text);
+}
+
+.staff-detail-status-chip.is-see {
+  background: var(--path-cyan-50);
+  color: var(--badge-blue-text);
+}
+
+.staff-detail-status-chip.is-see:hover {
+  color: var(--color-primary-dark);
 }
 
 .logistics-provider-details-list {

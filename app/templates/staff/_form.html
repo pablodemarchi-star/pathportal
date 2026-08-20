@@ -51,6 +51,10 @@
     </select>
   </label>
   <label>
+    Govt. ID
+    <input name="govt_id" type="url" value="{{ member.govt_id if member else '' }}" placeholder="https://example.com/government-id" maxlength="500">
+  </label>
+  <label>
     Started in{% if require_complete %} *{% endif %}
     <input name="started_in" type="text" inputmode="numeric" pattern="\d{4}" value="{{ member.started_in if member else '' }}" placeholder="2026" maxlength="4" {% if require_complete %}required{% endif %}>
   </label>

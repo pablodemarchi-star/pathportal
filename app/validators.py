@@ -70,6 +70,7 @@ def validate_member_form(form, allow_archived=False, require_complete=False):
     email = form.get("email", "").strip()
     cv = form.get("cv", "").strip()
     profile_picture = form.get("profile_picture", "").strip()
+    govt_id = form.get("govt_id", "").strip()
     location_point = form.get("location_point", "").strip()
     started_in = form.get("started_in", "").strip()
     full_address_google_maps = form.get("full_address_google_maps", "").strip()
@@ -120,6 +121,8 @@ def validate_member_form(form, allow_archived=False, require_complete=False):
         errors.append("CV must be a valid http or https URL.")
     if profile_picture and not is_valid_url(profile_picture):
         errors.append("Profile picture must be a valid http or https URL.")
+    if govt_id and not is_valid_url(govt_id):
+        errors.append("Govt. ID must be a valid http or https URL.")
     if location_point and not is_valid_google_maps_url(location_point):
         errors.append("Location point must be a valid Google Maps URL.")
     if started_in and not YEAR_RE.match(started_in):
