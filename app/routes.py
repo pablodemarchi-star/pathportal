@@ -1615,6 +1615,42 @@ def final_email_ready(staffing_contract, logistics_contract):
     )
 
 
+def logistics_gate_contract(staffing_contract=None):
+    staffing_confirmed = (staffing_contract or {}).get("status") == "confirmed"
+    return {
+        "is_unblocked": staffing_confirmed,
+        "status": "unblocked" if staffing_confirmed else "blocked",
+        "label": "Unblocked" if staffing_confirmed else "Blocked",
+        "message": (
+            "Staffing is Confirmed. Logistics actions are available."
+            if staffing_confirmed
+            else "Staffing must be Confirmed before Logistics actions are available."
+        ),
+    }
+
+
+def logistics_gate_for_session(session_record):
+    supervisor_assignments = ExamSessionSupervisorAssignment.query.filter_by(
+        exam_session_id=session_record.id
+    ).all()
+    examiner_assignments = ExamSessionExaminerAssignment.query.filter_by(
+        exam_session_id=session_record.id
+    ).all()
+    intern_assignments = ExamSessionInternAssignment.query.filter_by(
+        exam_session_id=session_record.id
+    ).all()
+    return logistics_gate_contract(staffing_readiness_contract(
+        supervisor_assignments,
+        examiner_assignments,
+        intern_assignments,
+        session_record=session_record,
+    ))
+
+
+def logistics_actions_are_blocked(session_record):
+    return not logistics_gate_for_session(session_record).get("is_unblocked")
+
+
 def pluralize_count(count, singular, plural=None):
     label = singular if count == 1 else (plural or f"{singular}s")
     return f"{count} {label}"
@@ -5817,6 +5853,38 @@ def deadline_badge_contract(deadline, completed=False, completed_date=None, toda
     }
 
 
+def logistics_session_deadline(session_record):
+    if not session_record or not session_record.session_date:
+        return None
+    return argentina_subtract_business_days(session_record.session_date, 12)
+
+
+def logistics_completed_date(concepts=None):
+    concepts = list(concepts or [])
+    if not concepts or any(concept.status != "Confirmed" for concept in concepts):
+        return None
+    dates = [
+        local_date(getattr(concept, "updated_on", None) or getattr(concept, "created_on", None))
+        for concept in concepts
+    ]
+    dates = [value for value in dates if value]
+    return max(dates) if dates else None
+
+
+def logistics_deadline_badge_contract(session_record, logistics=None, concepts=None, today=None):
+    deadline = logistics_session_deadline(session_record)
+    state = (logistics or {}).get("status")
+    if state == "not_applicable":
+        return None
+    completed = state == "completed"
+    return deadline_badge_contract(
+        deadline,
+        completed=completed,
+        completed_date=logistics_completed_date(concepts) if completed else None,
+        today=today,
+    )
+
+
 def schedule_deadline_badge_contract(workflow, status=None, today=None):
     status = status or schedule_workflow_status(workflow)
     deadline = schedule_workflow_latest_recorded_deadline(workflow) if status == "Approved" else schedule_workflow_current_deadline(workflow)
@@ -7883,26 +7951,24 @@ def logistics_presentation_state(contract):
     confirmed = contract.get("confirmed_concepts", 0)
     applies = contract.get("applies", False)
     ready = contract.get("ready", False)
-    final_email_ready_value = contract.get("final_email_ready", False)
-    has_files_url = contract.get("has_files_url", False)
     blocker_codes = {blocker.get("code") for blocker in contract.get("blockers", [])}
+    blocking_concepts = contract.get("blocking_concepts", [])
 
     if not applies and total == 0:
         return "not_applicable"
     if status == "configuration_required" and "LOGISTICS_CONCEPTS_MISSING" in blocker_codes:
         return "configuration_required"
-    if total > 0 and confirmed < total and not ready:
-        return "in_progress"
-    if total > 0 and confirmed == total and ready and final_email_ready_value:
-        return "ready"
+    if total > 0 and confirmed == total and ready:
+        return "completed"
     if (
         total > 0
-        and confirmed == total
-        and ready
-        and not final_email_ready_value
-        and not has_files_url
+        and confirmed == 0
+        and len(blocking_concepts) == total
+        and all((concept.get("status") or "Pending") == "Pending" for concept in blocking_concepts)
     ):
-        return "files_link_missing"
+        return "not_started"
+    if total > 0 and confirmed < total:
+        return "in_progress"
     return "needs_review"
 
 
@@ -7976,29 +8042,27 @@ def logistics_presentation_from_contract(
     labels = {
         "not_applicable": "Not applicable",
         "configuration_required": "Configuration required",
+        "not_started": "Not started",
         "in_progress": "In progress",
-        "ready": "Ready",
-        "files_link_missing": "Files link missing",
+        "completed": "Completed",
         "needs_review": "Needs review",
     }
     descriptions = {
         "not_applicable": "No logistics required",
         "configuration_required": "Logistics is required but its concepts have not been configured.",
+        "not_started": f"0 / {total} concepts confirmed",
         "in_progress": f"{confirmed} / {total} concepts confirmed",
-        "ready": "All applicable logistics concepts are confirmed.",
-        "files_link_missing": "All logistics concepts are confirmed, but the logistics files link is missing.",
+        "completed": "All applicable logistics concepts are confirmed.",
         "needs_review": "Logistics data needs to be reviewed.",
     }
-    if state == "ready" and total:
+    if state == "completed" and total:
         table_summary = f"{confirmed} / {total} concepts confirmed"
-    elif state == "files_link_missing":
-        table_summary = "All concepts confirmed"
     else:
         table_summary = descriptions[state]
     secondary_lines = []
     if required_count:
         secondary_lines.append(f"{pluralize_phrase(required_count, 'member')} require{'s' if required_count == 1 else ''} logistics")
-    if total and state not in {"ready", "in_progress"}:
+    if total and state not in {"not_started", "in_progress", "completed"}:
         secondary_lines.append(f"{confirmed} / {total} concepts confirmed")
 
     member_rows = []
@@ -8869,11 +8933,17 @@ def bundle_detail_action_items(
     package_preparation_status=None,
     schedule_deadline_badge=None,
     staffing_deadline_badge=None,
+    logistics=None,
+    logistics_gate=None,
+    logistics_deadline_badge=None,
+    logistics_control=None,
     package_deadline_badge=None,
+    sessions_logistics_action_mode=False,
 ):
     actions = []
     schedule_overdue = deadline_badge_is_red(schedule_deadline_badge)
     staffing_overdue = deadline_badge_is_red(staffing_deadline_badge)
+    logistics_overdue = deadline_badge_is_red(logistics_deadline_badge)
     package_overdue = deadline_badge_is_red(package_deadline_badge)
     if not monthly_registrations_closed:
         actions.append({
@@ -8911,6 +8981,47 @@ def bundle_detail_action_items(
                 "description": staffing_messages[0] if staffing_messages else "Complete staff participation and confirmation.",
                 "overdue": staffing_overdue,
             })
+
+    logistics = logistics or {}
+    if sessions_logistics_action_mode:
+        logistics_status = logistics.get("status")
+        logistics_unblocked = (logistics_gate or {}).get("is_unblocked")
+        if logistics_status == "not_applicable":
+            return [{
+                "department": "",
+                "description": "Logistics is not needed for this session",
+            }]
+        if not logistics_unblocked:
+            return [{
+                "department": "",
+                "description": "Staffing must be confirmed before proceeding with Logistics planning.",
+                "preserve_period": True,
+            }]
+        if logistics_status == "not_started":
+            return [{
+                "department": "LOGISTICS",
+                "description": "Start Logistics planning",
+                "overdue": logistics_overdue,
+            }]
+        if logistics_status == "in_progress":
+            return [{
+                "department": "LOGISTICS",
+                "description": "Continue with Logistics planning",
+                "overdue": logistics_overdue,
+            }]
+        if logistics_status == "completed":
+            return [{
+                "department": "",
+                "description": "Logistics planning has been finalised",
+            }]
+
+    if logistics_overdue and logistics.get("status") in {"not_started", "in_progress"}:
+        logistics_blockers = logistics.get("blockers") or []
+        actions.append({
+            "department": (logistics_control or {}).get("responsible_label", "ADMIN"),
+            "description": logistics_blockers[0] if logistics_blockers else "Complete pending logistics arrangements.",
+            "overdue": True,
+        })
 
     if packages_action and not packages_action.get("is_complete"):
         actions.append({
@@ -10266,6 +10377,16 @@ def argentina_add_business_days(value, business_days):
     remaining = business_days
     while remaining > 0:
         current += timedelta(days=1)
+        if is_argentina_business_day(current):
+            remaining -= 1
+    return current
+
+
+def argentina_subtract_business_days(value, business_days):
+    current = value
+    remaining = business_days
+    while remaining > 0:
+        current -= timedelta(days=1)
         if is_argentina_business_day(current):
             remaining -= 1
     return current
@@ -13004,7 +13125,7 @@ def render_journey_unavailable(status_code=404):
     ), status_code
 
 
-def schedule_workflow_view(session_record, workflow=None, today=None, staffing=None, logistics=None, core_readiness=None, operational_readiness=None, session_readiness=None, incidents=None, review_flags=None, priority_action=None, staffing_control=None, staffing_deadline_badge=None, logistics_control=None, finance=None, finance_events=None, sinapsis=None, sinapsis_checklist_items=None, sinapsis_events=None, communications=None, communications_checklist_items=None, communications_events=None, schedule_gate=None, packages=None, shipments=None, activity_timeline=None, journey_shares=None, staffing_rows=None, staffing_events=None, bundle_detail_actions=None, schedule_locked_by_staffing=False):
+def schedule_workflow_view(session_record, workflow=None, today=None, staffing=None, logistics=None, logistics_gate=None, logistics_deadline_badge=None, core_readiness=None, operational_readiness=None, session_readiness=None, incidents=None, review_flags=None, priority_action=None, staffing_control=None, staffing_deadline_badge=None, logistics_control=None, finance=None, finance_events=None, sinapsis=None, sinapsis_checklist_items=None, sinapsis_events=None, communications=None, communications_checklist_items=None, communications_events=None, schedule_gate=None, packages=None, shipments=None, activity_timeline=None, journey_shares=None, staffing_rows=None, staffing_events=None, bundle_detail_actions=None, schedule_locked_by_staffing=False):
     status = schedule_workflow_status(workflow)
     deadline = schedule_workflow_current_deadline(workflow)
     sinapsis_url = (session_record.details_url or "").strip()
@@ -13014,6 +13135,7 @@ def schedule_workflow_view(session_record, workflow=None, today=None, staffing=N
     staffing_control_view = staffing_control or staffing_control_contract(None, fallback_staffing_contract, today=today)
     fallback_logistics_contract = logistics_readiness_contract([], [], None)
     logistics_control_view = logistics_control or logistics_control_contract(None, fallback_logistics_contract, today=today)
+    logistics_gate_view = logistics_gate or logistics_gate_contract(fallback_staffing_contract)
     finance_view = finance or finance_readiness_contract(None, today=today)
     sinapsis_view = sinapsis or sinapsis_readiness_contract(session_record, None, today=today)
     communications_view = communications or communications_readiness_contract(None, today=today)
@@ -13048,6 +13170,8 @@ def schedule_workflow_view(session_record, workflow=None, today=None, staffing=N
         "bundle_detail_actions": bundle_detail_actions or [],
         "staffing_control": staffing_control_view,
         "logistics": logistics or logistics_presentation_from_contract(logistics_readiness_contract([], [], None)),
+        "logistics_gate": logistics_gate_view,
+        "logistics_deadline_badge": logistics_deadline_badge,
         "logistics_control": logistics_control_view,
         "finance": finance_view,
         "finance_events": finance_events or [],
@@ -16229,6 +16353,7 @@ def pre_session_control_tower():
             logistics_contract,
             today=today,
         )
+        logistics_gate = logistics_gate_contract(staffing_contract)
         logistics_presentation = logistics_presentation_from_contract(
             logistics_contract,
             assignments_by_role={
@@ -16240,6 +16365,12 @@ def pre_session_control_tower():
             logistics_config=logistics_by_session.get(session_record.id),
             payment_requests_by_concept=logistics_payment_requests_by_concept,
             session_record=session_record,
+        )
+        logistics_deadline_badge = logistics_deadline_badge_contract(
+            session_record,
+            logistics_presentation,
+            logistics_concepts_by_session.get(session_record.id, []),
+            today=today,
         )
         package_units = package_units_by_session.get(session_record.id, [])
         package_session_items = package_session_items_by_session.get(session_record.id, [])
@@ -16406,6 +16537,8 @@ def pre_session_control_tower():
             staffing_control=staffing_control_presentation,
             staffing_deadline_badge=staffing_deadline_badge,
             logistics=logistics_presentation,
+            logistics_gate=logistics_gate,
+            logistics_deadline_badge=logistics_deadline_badge,
             logistics_control=logistics_control_presentation,
             finance=finance_contract,
             finance_events=finance_events,
@@ -16472,7 +16605,12 @@ def pre_session_control_tower():
                 package_preparation_status=package_preparation_status,
                 schedule_deadline_badge=schedule_deadline_badge,
                 staffing_deadline_badge=staffing_deadline_badge,
+                logistics=logistics_presentation,
+                logistics_gate=logistics_gate,
+                logistics_deadline_badge=logistics_deadline_badge,
+                logistics_control=logistics_control_presentation,
                 package_deadline_badge=package_deadline_badge,
+                sessions_logistics_action_mode=selected_view == "sessions",
             ),
             schedule_locked_by_staffing=schedule_status == "Approved" and any(
                 normalize_participation_status(assignment.participation_status) != "Pending"
@@ -17230,6 +17368,9 @@ def update_logistics_control(session_id):
     if not validate_csrf():
         flash("Security token expired. Please try again.", "error")
         return logistics_control_redirect(session_record, status_filter, edit=True)
+    if logistics_actions_are_blocked(session_record):
+        flash("Logistics is blocked until Staffing is Confirmed.", "error")
+        return logistics_control_redirect(session_record, status_filter)
 
     due_value = request.form.get("logistics_due_at", "").strip()
     logistics_due_at = None
@@ -17268,6 +17409,9 @@ def update_pre_session_logistics_concept_status(concept_id):
     if not validate_csrf():
         flash("Security token expired. Please try again.", "error")
         return logistics_control_redirect(session_record, status_filter)
+    if logistics_actions_are_blocked(session_record):
+        flash("Logistics is blocked until Staffing is Confirmed.", "error")
+        return logistics_control_redirect(session_record, status_filter)
     status = request.form.get("status", "").strip()
     if status not in LOGISTICS_STATUS_OPTIONS:
         flash("Please select a valid Status.", "error")
@@ -17291,6 +17435,9 @@ def remove_pre_session_logistics_concept_provider(concept_id, provider_id):
         status_filter = ""
     if not validate_csrf():
         flash("Security token expired. Please try again.", "error")
+        return logistics_control_redirect(session_record, status_filter)
+    if logistics_actions_are_blocked(session_record):
+        flash("Logistics is blocked until Staffing is Confirmed.", "error")
         return logistics_control_redirect(session_record, status_filter)
     providers = [provider for provider in (concept.provider_records or []) if provider.id != provider_id]
     if concept.provider_id == provider_id:
@@ -17316,6 +17463,9 @@ def remove_pre_session_logistics_concept_staff_member(concept_id, staff_member_i
         status_filter = ""
     if not validate_csrf():
         flash("Security token expired. Please try again.", "error")
+        return logistics_control_redirect(session_record, status_filter)
+    if logistics_actions_are_blocked(session_record):
+        flash("Logistics is blocked until Staffing is Confirmed.", "error")
         return logistics_control_redirect(session_record, status_filter)
     other_logistics_concept_count = (
         ExamSessionLogisticsConceptStaffMember.query
@@ -20670,9 +20820,6 @@ def save_exam_session_logistics(session_record):
         previous_status = LEGACY_LOGISTICS_STATUS_MAP.get(concept.status, concept.status) if concept else None
         provider_type_id_value = request.form.get(f"logistics_provider_type_id_{row_key}", "").strip()
         provider_type_id = int(provider_type_id_value) if provider_type_id_value.isdigit() else None
-        if status != "Pending" and provider_type_id is None:
-            flash("Select a Type of provider before changing a Logistics concept from Pending.", "error")
-            return False
         provider_id_values = [
             value
             for value in request.form.getlist(f"logistics_provider_ids_{row_key}")
@@ -20725,6 +20872,16 @@ def save_exam_session_logistics(session_record):
         )
         staff_members_by_id = {member.id: member for member in staff_member_records}
         staff_member_records = [staff_members_by_id[member_id] for member_id in staff_member_ids if member_id in staff_members_by_id]
+        is_blank_new_row = concept is None and status == "Pending" and provider_type_id is None and provider_id is None and currency == "ARS" and fee is None and not pending_notes and not staff_member_records
+        if is_blank_new_row:
+            continue
+        if logistics_enabled_for_session(session_record.id):
+            if provider_type_id is None:
+                flash("Select a Type of provider for each Logistics concept.", "error")
+                return False
+            if not staff_member_records:
+                flash("Select at least one Staff member for each Logistics concept.", "error")
+                return False
         selected_complex_staff_member_ids.update(member.id for member in staff_member_records)
         if status == "Confirmed" and not logistics_concept_form_can_be_confirmed(provider_records, staff_member_records):
             status = "Pending"
@@ -20736,10 +20893,6 @@ def save_exam_session_logistics(session_record):
         ):
             flash("Confirmation password is required to confirm logistics concepts.", "error")
             return False
-
-        is_blank_new_row = concept is None and status == "Pending" and provider_type_id is None and provider_id is None and currency == "ARS" and fee is None and not pending_notes and not staff_member_records
-        if is_blank_new_row:
-            continue
 
         if concept is None:
             concept = ExamSessionLogisticsConcept(exam_session_id=session_record.id)
@@ -21546,15 +21699,11 @@ def pre_session_dashboard_department_actions(department):
     shipment_links_by_session = {link.exam_session_id: link for link in shipment_links}
     bundles = {link.bundle for link in shipment_links if link.bundle}
     action_links = []
+    bundle_shipment_action_count = 0
+    bundle_detail_action_counts = {}
 
-    def add_department_action(action, label, url):
-        if (action.get("department") or "").strip().upper() != department:
-            return
-        action_links.append({
-            "label": label,
-            "description": (action.get("description") or "").rstrip("."),
-            "url": url,
-        })
+    def action_mentions_department(action):
+        return (action.get("department") or "").strip().upper() == department
 
     # Bundles view: visible Department chips for configured bundles.
     visible_bundle_ids = set()
@@ -21564,15 +21713,8 @@ def pre_session_dashboard_department_actions(department):
             continue
         visible_bundle_ids.add(bundle_view.get("id"))
         for action in bundle_view.get("action_items", []):
-            add_department_action(
-                action,
-                bundle_view.get("label") or f"Bundle {bundle_view.get('number')}",
-                url_for(
-                    "staff.pre_session_control_tower",
-                    session_year=selected_year,
-                    view="bundles",
-                ),
-            )
+            if action_mentions_department(action):
+                bundle_shipment_action_count += 1
 
     # Bundles view: the visible Pending bundles row always shows MANAGEMENT.
     if department == "MANAGEMENT":
@@ -21615,15 +21757,7 @@ def pre_session_dashboard_department_actions(department):
             )
         ]
         if pending_sessions:
-            action_links.append({
-                "label": "Pending bundles",
-                "description": "Assign recipient to these exam sessions",
-                "url": url_for(
-                    "staff.pre_session_control_tower",
-                    session_year=selected_year,
-                    view="bundles",
-                ),
-            })
+            bundle_shipment_action_count += 1
 
     # Bundle detail view: visible Department chips beside each session.
     workflow_records = (
@@ -21751,21 +21885,184 @@ def pre_session_dashboard_department_actions(department):
             package_preparation_status=package_preparation_status,
         )
         for action in detail_actions:
-            add_department_action(
-                action,
-                session_record.exam_session_name,
-                url_for(
-                    "staff.pre_session_control_tower",
-                    session_year=selected_year,
-                    view="bundle",
-                    bundle_id=bundle.id,
-                ),
-            )
+            if not action_mentions_department(action):
+                continue
+            bundle_key = bundle.id
+            bundle_label = (shipment_bundle_view(bundle) or {}).get("label") or f"Bundle {bundle.bundle_number or bundle.id}"
+            if bundle_key not in bundle_detail_action_counts:
+                bundle_detail_action_counts[bundle_key] = {
+                    "label": bundle_label,
+                    "url": url_for(
+                        "staff.pre_session_control_tower",
+                        session_year=selected_year,
+                        view="bundle",
+                        bundle_id=bundle.id,
+                    ),
+                    "count": 0,
+                }
+            bundle_detail_action_counts[bundle_key]["count"] += 1
+    if bundle_shipment_action_count:
+        action_label = "action" if bundle_shipment_action_count == 1 else "actions"
+        action_links.append({
+            "label": "Bundle shipments",
+            "description": "",
+            "url": url_for(
+                "staff.pre_session_control_tower",
+                session_year=selected_year,
+                view="bundles",
+            ),
+            "count": bundle_shipment_action_count,
+            "text": f"View {bundle_shipment_action_count} {action_label} in Bundle shipments",
+        })
+    for bundle_action in bundle_detail_action_counts.values():
+        action_label = "action" if bundle_action["count"] == 1 else "actions"
+        action_links.append({
+            "label": bundle_action["label"],
+            "description": "",
+            "url": bundle_action["url"],
+            "count": bundle_action["count"],
+            "text": f"View {bundle_action['count']} {action_label} in {bundle_action['label']}",
+        })
+    sessions_action_count = pre_session_dashboard_sessions_department_action_count(department, selected_year)
+    if sessions_action_count:
+        action_label = "action" if sessions_action_count == 1 else "actions"
+        action_links.append({
+            "label": "sessions",
+            "description": "",
+            "url": url_for(
+                "staff.pre_session_control_tower",
+                session_year=selected_year,
+                view="sessions",
+            ),
+            "count": sessions_action_count,
+            "text": f"View {sessions_action_count} {action_label} in Sessions",
+        })
     return action_links
 
 
+def pre_session_dashboard_sessions_department_action_count(department, selected_year):
+    department = (department or "").strip().upper()
+    if not department:
+        return 0
+    sessions = (
+        ExamSession.query.filter(db.extract("year", ExamSession.session_date) == selected_year)
+        .order_by(ExamSession.session_date.asc(), ExamSession.exam_session_name.asc())
+        .all()
+    )
+    visible_sessions = [
+        session_record
+        for session_record in sessions
+        if pre_session_sessions_view_visible(session_record)
+    ]
+    session_ids = [session_record.id for session_record in visible_sessions]
+    if not session_ids:
+        return 0
+    workflow_records = (
+        ExamSessionScheduleWorkflow.query.filter(
+            ExamSessionScheduleWorkflow.exam_session_id.in_(session_ids)
+        ).all()
+    )
+    workflows_by_session = {workflow.exam_session_id: workflow for workflow in workflow_records}
+    supervisor_records = (
+        ExamSessionSupervisorAssignment.query.filter(
+            ExamSessionSupervisorAssignment.exam_session_id.in_(session_ids)
+        )
+        .options(joinedload(ExamSessionSupervisorAssignment.team_member), joinedload(ExamSessionSupervisorAssignment.potential_entry))
+        .all()
+    )
+    examiner_records = (
+        ExamSessionExaminerAssignment.query.filter(
+            ExamSessionExaminerAssignment.exam_session_id.in_(session_ids)
+        )
+        .options(joinedload(ExamSessionExaminerAssignment.team_member), joinedload(ExamSessionExaminerAssignment.potential_entry))
+        .all()
+    )
+    intern_records = (
+        ExamSessionInternAssignment.query.filter(
+            ExamSessionInternAssignment.exam_session_id.in_(session_ids)
+        )
+        .options(joinedload(ExamSessionInternAssignment.team_member), joinedload(ExamSessionInternAssignment.potential_entry))
+        .all()
+    )
+    assignments_by_session = {session_id: [] for session_id in session_ids}
+    for assignment in supervisor_records + examiner_records + intern_records:
+        assignments_by_session.setdefault(assignment.exam_session_id, []).append(assignment)
+    logistics_records = (
+        ExamSessionLogistics.query.filter(
+            ExamSessionLogistics.exam_session_id.in_(session_ids)
+        ).all()
+    )
+    logistics_by_session = {record.exam_session_id: record for record in logistics_records}
+    logistics_concept_records = (
+        ExamSessionLogisticsConcept.query.filter(
+            ExamSessionLogisticsConcept.exam_session_id.in_(session_ids)
+        )
+        .order_by(ExamSessionLogisticsConcept.id.asc())
+        .all()
+    )
+    logistics_concepts_by_session = {}
+    for concept in logistics_concept_records:
+        logistics_concepts_by_session.setdefault(concept.exam_session_id, []).append(concept)
+    today = datetime.now(LOCAL_TZ).date()
+    count = 0
+    for session_record in visible_sessions:
+        assignments = assignments_by_session.get(session_record.id, [])
+        staffing_contract = staffing_readiness_contract(
+            [assignment for assignment in assignments if isinstance(assignment, ExamSessionSupervisorAssignment)],
+            [assignment for assignment in assignments if isinstance(assignment, ExamSessionExaminerAssignment)],
+            [assignment for assignment in assignments if isinstance(assignment, ExamSessionInternAssignment)],
+            session_record=session_record,
+        )
+        workflow = workflows_by_session.get(session_record.id)
+        schedule_status = schedule_workflow_status(workflow)
+        schedule_gate = schedule_gate_status(workflow)
+        logistics_concepts = logistics_concepts_by_session.get(session_record.id, [])
+        logistics_contract = logistics_readiness_contract(
+            assignments,
+            logistics_concepts,
+            logistics_by_session.get(session_record.id),
+        )
+        logistics_presentation = logistics_presentation_from_contract(
+            logistics_contract,
+            assignments_by_role={
+                "Supervisor": [assignment for assignment in assignments if isinstance(assignment, ExamSessionSupervisorAssignment)],
+                "Examiner": [assignment for assignment in assignments if isinstance(assignment, ExamSessionExaminerAssignment)],
+                "Intern": [assignment for assignment in assignments if isinstance(assignment, ExamSessionInternAssignment)],
+            },
+            concepts=logistics_concepts,
+            logistics_config=logistics_by_session.get(session_record.id),
+            payment_requests_by_concept={},
+            session_record=session_record,
+        )
+        logistics_gate = logistics_gate_contract(staffing_contract)
+        logistics_deadline_badge = logistics_deadline_badge_contract(
+            session_record,
+            logistics_presentation,
+            logistics_concepts,
+            today=today,
+        )
+        actions = bundle_detail_action_items(
+            schedule_status,
+            schedule_gate,
+            schedule_workflow_next_action(status=schedule_status),
+            schedule_workflow_responsible(schedule_status),
+            monthly_registrations_closed=bool(getattr(session_record, "monthly_registrations_closed", False)),
+            staffing_contract=staffing_contract,
+            logistics=logistics_presentation,
+            logistics_gate=logistics_gate,
+            logistics_deadline_badge=logistics_deadline_badge,
+            sessions_logistics_action_mode=True,
+        )
+        count += sum(
+            1
+            for action in actions
+            if (action.get("department") or "").strip().upper() == department
+        )
+    return count
+
+
 def pre_session_dashboard_pending_action_count(department):
-    return len(pre_session_dashboard_department_actions(department))
+    return sum(action.get("count", 1) for action in pre_session_dashboard_department_actions(department))
 
 
 def pre_session_note_mentions_for_current_user(limit=None):
@@ -23138,6 +23435,11 @@ def create_payment_request():
     errors = apply_payment_form(payment, request.form, save_payee_contact=True, allow_empty_amount=is_finance_action_request)
     logistics_concept = ExamSessionLogisticsConcept.query.get(request.form.get("logistics_concept_id") or 0)
     if logistics_concept:
+        if logistics_actions_are_blocked(logistics_concept.exam_session):
+            flash("Logistics is blocked until Staffing is Confirmed.", "error")
+            if return_url:
+                return redirect(return_url)
+            return finance_request_redirect(source_tab, open_staff_modal="new-payment-request-modal")
         payment.logistics_concept_id = logistics_concept.id
     if errors:
         for error in errors:
@@ -23650,7 +23952,7 @@ def dashboard():
         potential_entries_note_mentions = potential_entry_mentions_for_current_user(limit=3)
     if pre_session_control_tower_allowed:
         pre_session_action_links = pre_session_dashboard_department_actions(dashboard_department)
-        pre_session_pending_count = len(pre_session_action_links)
+        pre_session_pending_count = sum(action.get("count", 1) for action in pre_session_action_links)
     if pre_session_control_tower_allowed and current_user:
         pre_session_note_mentions_count = pre_session_note_mentions_count_for_current_user()
         pre_session_note_mentions = pre_session_note_mentions_for_current_user(limit=3)

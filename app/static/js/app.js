@@ -1096,6 +1096,11 @@ const syncScheduleNoteContextInputs = (modal) => {
   modal.querySelectorAll("[data-schedule-note-focused-context]").forEach((input) => {
     input.value = focusedContext;
   });
+  modal.querySelectorAll("[data-schedule-note-textarea]").forEach((textarea) => {
+    textarea.placeholder = focusedContext === "logistics"
+      ? textarea.dataset.logisticsPlaceholder || "Add a logistics note"
+      : textarea.dataset.schedulePlaceholder || "Add a schedule note";
+  });
 };
 
 const clearFocusedMode = (modal) => {

@@ -8,6 +8,7 @@ from app import create_app, db
 from app.models import (
     BillingRequest,
     ExamSession,
+    ExamSessionLogisticsConcept,
     ExamSessionScheduleNoteMention,
     ExamSessionScheduleWorkflow,
     ExamSessionShipmentBundle,
@@ -345,7 +346,7 @@ class DashboardTest(unittest.TestCase):
         self.assertIn('aria-label="Pre onsite session control tower counters"', body)
         self.assertIn('aria-label="Pre onsite session control tower department actions"', body)
         self.assertIn('href="/pre-session-control-tower?session_year=2026&amp;view=bundles"', body)
-        self.assertIn(">View action in Pending bundles</a>", body)
+        self.assertIn(">View 1 action in Bundle shipments</a>", body)
         self.assertNotIn('href="/pre-session-control-tower?view=my-actions&amp;action_responsible=MANAGEMENT"', body)
 
     def test_dashboard_pre_session_count_ignores_sessions_without_visible_department_chip(self):
@@ -390,6 +391,48 @@ class DashboardTest(unittest.TestCase):
         self.assertIn("Everything is up to date in this menu.", body)
         self.assertNotIn("action to complete in this menu.", body)
 
+    def test_dashboard_pre_session_counts_department_mentions_in_sessions_view(self):
+        sessions = [
+            ExamSession(
+                exam_session_name=f"Logistics dashboard session {index}",
+                category="Path School",
+                status="Pending",
+                session_date=date(2026, 8, 22 + index),
+                shifts="Morning",
+                modules="Speaking",
+                format="Onsite",
+            )
+            for index in range(1, 4)
+        ]
+        db.session.add_all(sessions)
+        db.session.flush()
+        for index, session_record in enumerate(sessions, start=1):
+            db.session.add_all([
+                ExamSessionScheduleWorkflow(exam_session_id=session_record.id, status="Approved"),
+                ExamSessionSupervisorAssignment(
+                    exam_session_id=session_record.id,
+                    team_member_id=index,
+                    participation_status="Confirmed",
+                    logistics_enabled=True,
+                ),
+                ExamSessionLogisticsConcept(
+                    exam_session_id=session_record.id,
+                    provider="Flight",
+                    status="Pending",
+                ),
+            ])
+        db.session.commit()
+        client = self.permission_client({"pre_session_control_tower": {"view": True}}, department="Logistics")
+
+        response = client.get("/?session_year=2026")
+        body = response.get_data(as_text=True)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("You have 3 actions to complete in this menu.", body)
+        self.assertIn('href="/pre-session-control-tower?session_year=2026&amp;view=sessions"', body)
+        self.assertIn(">View 3 actions in Sessions</a>", body)
+        self.assertNotIn(">View action in Logistics dashboard session", body)
+
     def test_dashboard_pre_session_action_links_match_visible_department_chip_count(self):
         session_record = ExamSession(
             exam_session_name="Pending bundle session",
@@ -414,7 +457,7 @@ class DashboardTest(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertIn("You have 1 action to complete in this menu.", body)
         self.assertEqual(body.count('href="/pre-session-control-tower?session_year=2026&amp;view=bundles"'), 1)
-        self.assertIn(">View action in Pending bundles</a>", body)
+        self.assertIn(">View 1 action in Bundle shipments</a>", body)
         self.assertNotIn("Go to menu", body)
 
     def test_dashboard_bundle_action_link_opens_bundles_list(self):
@@ -458,10 +501,62 @@ class DashboardTest(unittest.TestCase):
         body = response.get_data(as_text=True)
 
         self.assertEqual(response.status_code, 200)
-        self.assertIn(">View action in Bundle 6-26</a>", body)
+        self.assertIn(">View 1 action in Bundle shipments</a>", body)
         self.assertIn('href="/pre-session-control-tower?session_year=2026&amp;view=bundles"', body)
-        self.assertNotIn(
-            f'href="/pre-session-control-tower?session_year=2026&amp;view=bundle&amp;bundle_id={bundle.id}">View action in Bundle 6-26</a>',
+        self.assertIn(
+            f'href="/pre-session-control-tower?session_year=2026&amp;view=bundle&amp;bundle_id={bundle.id}">View 1 action in Bundle 6-26</a>',
+            body,
+        )
+
+    def test_dashboard_groups_bundle_detail_department_mentions_by_bundle(self):
+        sessions = [
+            ExamSession(
+                exam_session_name=f"Bundle detail session {index}",
+                category="Path School",
+                status="Pending",
+                session_date=date(2026, 8, 26 + index),
+                shifts="Morning",
+                modules="Speaking",
+                format="Onsite",
+            )
+            for index in range(1, 4)
+        ]
+        db.session.add_all(sessions)
+        db.session.flush()
+        bundle = ExamSessionShipmentBundle(
+            supervisor_staff_id=1,
+            delivery_address="Test address",
+            courier="Correo Argentino",
+            status="Preparing bundle",
+            dispatch_due_at=date(2026, 8, 12),
+            bundle_number="8-26",
+        )
+        db.session.add(bundle)
+        db.session.flush()
+        for index, session_record in enumerate(sessions, start=1):
+            db.session.add_all([
+                ExamSessionShipmentBundleSession(
+                    bundle_id=bundle.id,
+                    exam_session_id=session_record.id,
+                ),
+                ExamSessionSupervisorAssignment(
+                    exam_session_id=session_record.id,
+                    team_member_id=index,
+                    participation_status="Confirmed",
+                    is_shipment_recipient=True,
+                ),
+            ])
+        db.session.commit()
+
+        client = self.permission_client({"pre_session_control_tower": {"view": True}}, department="Admin")
+        response = client.get("/?session_year=2026")
+        body = response.get_data(as_text=True)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("You have 4 actions to complete in this menu.", body)
+        self.assertIn(">View 1 action in Bundle shipments</a>", body)
+        self.assertIn(
+            f'href="/pre-session-control-tower?session_year=2026&amp;view=bundle&amp;bundle_id={bundle.id}">View 3 actions in Bundle 8-26</a>',
             body,
         )
 

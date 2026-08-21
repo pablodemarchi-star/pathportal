@@ -79,6 +79,7 @@ from app.routes import (
     apply_schedule_workflow_transition,
     argentina_add_business_days,
     argentina_next_business_day,
+    argentina_subtract_business_days,
     available_schedule_transitions,
     communications_readiness_contract,
     core_readiness_contract,
@@ -95,6 +96,7 @@ from app.routes import (
     incidents_readiness_contract,
     journey_countdown,
     logistics_control_contract,
+    logistics_deadline_badge_contract,
     logistics_readiness_contract,
     monthly_candidate_requirement_contracts,
     my_action_row_from_schedule_view,
@@ -1583,6 +1585,61 @@ class ScheduleWorkflowTest(unittest.TestCase):
         self.assertEqual(completed["deadline_status"], "completed")
         self.assertEqual(completed["deadline_label"], "Completed")
         self.assertFalse(completed["is_overdue"])
+
+    def test_logistics_session_deadline_badge_uses_twelve_business_days_before_session(self):
+        session_record = ExamSession(
+            exam_session_name="Logistics deadline",
+            category="Path School",
+            status="Pending",
+            session_date=date(2026, 9, 1),
+            shifts="Morning",
+            modules="Speaking",
+            format="Onsite",
+        )
+        deadline = argentina_subtract_business_days(session_record.session_date, 12)
+        pending_concept = ExamSessionLogisticsConcept(status="Pending")
+
+        on_track = logistics_deadline_badge_contract(
+            session_record,
+            {"status": "not_started"},
+            [pending_concept],
+            today=deadline - timedelta(days=1),
+        )
+        overdue = logistics_deadline_badge_contract(
+            session_record,
+            {"status": "in_progress"},
+            [pending_concept],
+            today=deadline + timedelta(days=1),
+        )
+        met_concept = ExamSessionLogisticsConcept(
+            status="Confirmed",
+            updated_on=datetime.combine(deadline, time(12, 0), tzinfo=timezone.utc),
+        )
+        missed_concept = ExamSessionLogisticsConcept(
+            status="Confirmed",
+            updated_on=datetime.combine(deadline + timedelta(days=1), time(12, 0), tzinfo=timezone.utc),
+        )
+        met = logistics_deadline_badge_contract(
+            session_record,
+            {"status": "completed"},
+            [met_concept],
+            today=deadline + timedelta(days=2),
+        )
+        missed = logistics_deadline_badge_contract(
+            session_record,
+            {"status": "completed"},
+            [missed_concept],
+            today=deadline + timedelta(days=2),
+        )
+
+        self.assertEqual(deadline, date(2026, 8, 13))
+        self.assertEqual(on_track["status"], "on-track")
+        self.assertEqual(on_track["date"], deadline)
+        self.assertEqual(overdue["status"], "overdue")
+        self.assertEqual(met["status"], "met")
+        self.assertEqual(met["label"], "Deadline met on 13/08/2026")
+        self.assertEqual(missed["status"], "missed")
+        self.assertEqual(missed["label"], "Deadline not met on 14/08/2026")
 
     def test_finance_readiness_contract_statuses_and_deadlines(self):
         not_reviewed = finance_readiness_contract(None, today=date(2026, 6, 25))
@@ -6251,7 +6308,7 @@ class ScheduleWorkflowTest(unittest.TestCase):
             team_member_id=supervisor.id,
             participation_status="Confirmed",
             logistics_enabled=True,
-            logistics_type="Uber",
+            logistics_type="Complex logistics",
         ))
         provider_type = ProviderType(name="Transport", is_system=False, color_key="provider-type-1")
         db.session.add(provider_type)
@@ -6283,6 +6340,7 @@ class ScheduleWorkflowTest(unittest.TestCase):
                 "logistics_concept_id_new-1": "",
                 "logistics_status_new-1": "In progress",
                 "logistics_provider_type_id_new-1": str(provider_type.id),
+                "logistics_staff_member_ids_new-1": str(supervisor.id),
             },
             follow_redirects=False,
         )
@@ -6305,6 +6363,7 @@ class ScheduleWorkflowTest(unittest.TestCase):
                 f"logistics_status_existing-{concept.id}": "In progress",
                 f"logistics_provider_type_id_existing-{concept.id}": str(provider_type.id),
                 f"logistics_provider_ids_existing-{concept.id}": [str(first_provider.id), str(second_provider.id)],
+                f"logistics_staff_member_ids_existing-{concept.id}": str(supervisor.id),
             },
             follow_redirects=False,
         )
@@ -6322,6 +6381,56 @@ class ScheduleWorkflowTest(unittest.TestCase):
             html,
         )
         self.assertIn('title="Provider details for 2 providers"', html)
+
+    def test_exam_session_logistics_concepts_require_provider_type_and_staff_member(self):
+        supervisor = self.create_supervisor(staff_id=1, name="Laura Mendez")
+        db.session.add(ExamSessionSupervisorAssignment(
+            exam_session_id=self.session_record.id,
+            team_member_id=supervisor.id,
+            participation_status="Confirmed",
+            logistics_enabled=True,
+            logistics_type="Complex logistics",
+        ))
+        provider_type = ProviderType(name="Transport", is_system=False, color_key="provider-type-1")
+        db.session.add(provider_type)
+        db.session.commit()
+        client = self.login_client()
+
+        response = client.post(
+            f"/exam-session-planner/sessions/{self.session_record.id}/members",
+            data={
+                "csrf_token": "token",
+                "session_year": "2026",
+                "modal_action": "save",
+                "logistics_concept_row_keys": "new-1",
+                "logistics_concept_id_new-1": "",
+                "logistics_status_new-1": "Pending",
+                "logistics_staff_member_ids_new-1": str(supervisor.id),
+            },
+            follow_redirects=True,
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("Select a Type of provider for each Logistics concept.", response.get_data(as_text=True))
+        self.assertEqual(ExamSessionLogisticsConcept.query.count(), 0)
+
+        response = client.post(
+            f"/exam-session-planner/sessions/{self.session_record.id}/members",
+            data={
+                "csrf_token": "token",
+                "session_year": "2026",
+                "modal_action": "save",
+                "logistics_concept_row_keys": "new-1",
+                "logistics_concept_id_new-1": "",
+                "logistics_status_new-1": "Pending",
+                "logistics_provider_type_id_new-1": str(provider_type.id),
+            },
+            follow_redirects=True,
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("Select at least one Staff member for each Logistics concept.", response.get_data(as_text=True))
+        self.assertEqual(ExamSessionLogisticsConcept.query.count(), 0)
 
     def test_exam_session_logistics_planned_disables_add_concept(self):
         supervisor = self.create_supervisor(staff_id=1, name="Laura Mendez")
@@ -6352,19 +6461,21 @@ class ScheduleWorkflowTest(unittest.TestCase):
         )
         confirmed_concept.provider_records = [provider]
         confirmed_concept.staff_members = [supervisor]
-        db.session.add_all([
-            ExamSessionLogisticsConcept(
-                exam_session_id=self.session_record.id,
-                status="Pending",
-                provider="Pending trip",
-            ),
-            ExamSessionLogisticsConcept(
-                exam_session_id=self.session_record.id,
-                status="In progress",
-                provider="Progress trip",
-            ),
-            confirmed_concept,
-        ])
+        pending_concept = ExamSessionLogisticsConcept(
+            exam_session_id=self.session_record.id,
+            status="Pending",
+            provider_type_id=provider_type.id,
+            provider="Pending trip",
+        )
+        pending_concept.staff_members = [supervisor]
+        progress_concept = ExamSessionLogisticsConcept(
+            exam_session_id=self.session_record.id,
+            status="In progress",
+            provider_type_id=provider_type.id,
+            provider="Progress trip",
+        )
+        progress_concept.staff_members = [supervisor]
+        db.session.add_all([pending_concept, progress_concept, confirmed_concept])
         db.session.commit()
         client = self.login_client()
 
@@ -6407,6 +6518,24 @@ class ScheduleWorkflowTest(unittest.TestCase):
                 "modal_action": "save",
                 "logistics_planned": "1",
                 "logistics_files_url": "",
+                "logistics_concept_row_keys": [
+                    f"existing-{pending_concept.id}",
+                    f"existing-{progress_concept.id}",
+                    f"existing-{confirmed_concept.id}",
+                ],
+                f"logistics_concept_id_existing-{pending_concept.id}": str(pending_concept.id),
+                f"logistics_status_existing-{pending_concept.id}": "Pending",
+                f"logistics_provider_type_id_existing-{pending_concept.id}": str(provider_type.id),
+                f"logistics_staff_member_ids_existing-{pending_concept.id}": str(supervisor.id),
+                f"logistics_concept_id_existing-{progress_concept.id}": str(progress_concept.id),
+                f"logistics_status_existing-{progress_concept.id}": "In progress",
+                f"logistics_provider_type_id_existing-{progress_concept.id}": str(provider_type.id),
+                f"logistics_staff_member_ids_existing-{progress_concept.id}": str(supervisor.id),
+                f"logistics_concept_id_existing-{confirmed_concept.id}": str(confirmed_concept.id),
+                f"logistics_status_existing-{confirmed_concept.id}": "Confirmed",
+                f"logistics_provider_type_id_existing-{confirmed_concept.id}": str(provider_type.id),
+                f"logistics_provider_ids_existing-{confirmed_concept.id}": str(provider.id),
+                f"logistics_staff_member_ids_existing-{confirmed_concept.id}": str(supervisor.id),
             },
             follow_redirects=False,
         )
@@ -6436,6 +6565,24 @@ class ScheduleWorkflowTest(unittest.TestCase):
                 "session_year": "2026",
                 "modal_action": "save",
                 "logistics_files_url": "",
+                "logistics_concept_row_keys": [
+                    f"existing-{pending_concept.id}",
+                    f"existing-{progress_concept.id}",
+                    f"existing-{confirmed_concept.id}",
+                ],
+                f"logistics_concept_id_existing-{pending_concept.id}": str(pending_concept.id),
+                f"logistics_status_existing-{pending_concept.id}": "Pending",
+                f"logistics_provider_type_id_existing-{pending_concept.id}": str(provider_type.id),
+                f"logistics_staff_member_ids_existing-{pending_concept.id}": str(supervisor.id),
+                f"logistics_concept_id_existing-{progress_concept.id}": str(progress_concept.id),
+                f"logistics_status_existing-{progress_concept.id}": "In progress",
+                f"logistics_provider_type_id_existing-{progress_concept.id}": str(provider_type.id),
+                f"logistics_staff_member_ids_existing-{progress_concept.id}": str(supervisor.id),
+                f"logistics_concept_id_existing-{confirmed_concept.id}": str(confirmed_concept.id),
+                f"logistics_status_existing-{confirmed_concept.id}": "Confirmed",
+                f"logistics_provider_type_id_existing-{confirmed_concept.id}": str(provider_type.id),
+                f"logistics_provider_ids_existing-{confirmed_concept.id}": str(provider.id),
+                f"logistics_staff_member_ids_existing-{confirmed_concept.id}": str(supervisor.id),
             },
             follow_redirects=False,
         )
@@ -6579,7 +6726,7 @@ class ScheduleWorkflowTest(unittest.TestCase):
                 f"logistics_concept_id_existing-{concept.id}": str(concept.id),
                 f"logistics_status_existing-{concept.id}": "Confirmed",
                 f"logistics_provider_type_id_existing-{concept.id}": str(provider_type.id),
-                f"logistics_provider_ids_existing-{concept.id}": str(provider.id),
+                f"logistics_staff_member_ids_existing-{concept.id}": str(complex_supervisor.id),
                 f"logistics_concept_id_existing-{other_concept.id}": str(other_concept.id),
                 f"logistics_status_existing-{other_concept.id}": "Pending",
                 f"logistics_provider_type_id_existing-{other_concept.id}": str(provider_type.id),
@@ -6591,10 +6738,13 @@ class ScheduleWorkflowTest(unittest.TestCase):
         self.assertEqual(response.status_code, 302)
         db.session.refresh(concept)
         self.assertEqual(concept.status, "Pending")
-        self.assertEqual(concept.staff_members, [])
+        self.assertEqual([member.id for member in concept.staff_members], [complex_supervisor.id])
 
     def test_exam_session_member_logistics_type_persists_complex_state(self):
         supervisor = self.create_supervisor(staff_id=1, name="Laura Mendez")
+        provider_type = ProviderType(name="Transport", is_system=False, color_key="provider-type-1")
+        db.session.add(provider_type)
+        db.session.commit()
         client = self.login_client()
 
         response = client.post(
@@ -6633,6 +6783,7 @@ class ScheduleWorkflowTest(unittest.TestCase):
                 "logistics_concept_row_keys": "new-1",
                 "logistics_concept_id_new-1": "",
                 "logistics_status_new-1": "Pending",
+                "logistics_provider_type_id_new-1": str(provider_type.id),
                 "logistics_currency_new-1": "ARS",
                 "logistics_fee_new-1": "",
                 "logistics_staff_member_ids_new-1": str(supervisor.id),
@@ -9110,6 +9261,9 @@ class ScheduleWorkflowTest(unittest.TestCase):
         self.assertIn(f'id="overview-{session_id}"', modal)
         self.assertIn(f'id="schedule-notes-{session_id}"', modal)
         self.assertIn('data-schedule-note-focused-context', modal)
+        self.assertIn("Schedule notes and read tracking.", modal)
+        self.assertIn("Logistics notes and read tracking.", modal)
+        self.assertIn('data-logistics-placeholder="Add a logistics note"', modal)
         self.assertIn(f'id="logistics-{session_id}"', modal)
         with open("app/static/css/styles.css", encoding="utf-8") as css_file:
             css = css_file.read()
@@ -9119,10 +9273,13 @@ class ScheduleWorkflowTest(unittest.TestCase):
         )
         self.assertIn(".modal.is-logistics-only .modal-title-schedule", css)
         self.assertIn(".modal.is-logistics-only .modal-title-logistics", css)
+        self.assertIn(".modal.is-logistics-only .schedule-note-context-schedule", css)
+        self.assertIn(".modal.is-logistics-only .schedule-note-context-logistics", css)
         with open("app/static/js/app.js", encoding="utf-8") as js_file:
             js = js_file.read()
         self.assertIn('const logisticsOnly = params.get("logistics_only") === "1";', js)
         self.assertIn('modal.classList.toggle("is-logistics-only", logisticsOnly);', js)
+        self.assertIn('textarea.dataset.logisticsPlaceholder || "Add a logistics note"', js)
         self.assertIn('const isLogisticsOnlyMode = opener.dataset.modalLogisticsOnly === "true";', js)
         self.assertIn("syncScheduleNoteContextInputs(modal);", js)
 
@@ -11850,7 +12007,8 @@ class ScheduleWorkflowTest(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(ExamSessionSinapsisControl.query.count(), 0)
         html = response.data.decode()
-        self.assertIn("<th>Sinapsis</th>", html)
+        self.assertIn("<th>Final actions</th>", html)
+        self.assertNotIn("<th>Sinapsis</th>", html)
         self.assertNotIn("<th>Sinapsis readiness</th>", html)
         self.assertIn("Sinapsis readiness", html)
         self.assertIn("Edit Sinapsis status", html)
@@ -12063,7 +12221,10 @@ class ScheduleWorkflowTest(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(ExamSessionCommunicationsControl.query.count(), 0)
         html = response.data.decode()
-        self.assertIn("<th>Communications</th>", html)
+        table_start = html.index('aria-label="Schedule preparation and approval"')
+        table_end = html.index('<div class="modal"', table_start)
+        sessions_table = html[table_start:table_end]
+        self.assertNotIn("<th>Communications</th>", sessions_table)
         self.assertIn("Edit communications status", html)
         self.assertIn("Save communications status", html)
         self.assertIn("Staff communications", html)
@@ -13356,7 +13517,7 @@ class ScheduleWorkflowTest(unittest.TestCase):
         table_start = html.index('aria-label="Schedule preparation and approval"')
         table_end = html.index('<div class="modal"', table_start)
         sessions_table = html[table_start:table_end]
-        self.assertNotIn("<th>Session readiness</th>", sessions_table)
+        self.assertIn("<th>Session readiness</th>", sessions_table)
         self.assertNotIn("<th>Incidents</th>", sessions_table)
         self.assertNotIn("<th>Priority action</th>", sessions_table)
         self.assertIn("Create incident", html)
@@ -13539,7 +13700,7 @@ class ScheduleWorkflowTest(unittest.TestCase):
         self.assertNotIn("<th>Staffing</th>", sessions_table)
         self.assertNotIn("<th>Package</th>", sessions_table)
         self.assertNotIn("<th>Shipment</th>", sessions_table)
-        self.assertNotIn("<th>Session readiness</th>", sessions_table)
+        self.assertIn("<th>Session readiness</th>", sessions_table)
         self.assertNotIn("<th>Incidents</th>", sessions_table)
         self.assertNotIn("<th>Priority action</th>", sessions_table)
         self.assertIn(f"<strong>{self.session_record.exam_session_name}</strong>", sessions_table)
@@ -13715,18 +13876,20 @@ class ScheduleWorkflowTest(unittest.TestCase):
         self.assertIn("Operationally ready", all_sessions_html)
         self.assertIn("Session ready", all_sessions_html)
         self.assertIn("No active incidents", all_sessions_html)
-        self.assertIn("No active review flags", all_sessions_html)
-
-        response = client.get("/pre-session-control-tower?session_year=2026&view=my-actions")
-        my_actions_html = response.data.decode()
-        self.assertEqual(response.status_code, 200)
-        self.assertEqual(self.pre_session_data_counts(), counts_before)
-        actions_start = my_actions_html.index('aria-label="My actions"')
-        actions_end = my_actions_html.index('<div class="modal"', actions_start)
-        actions_table = my_actions_html[actions_start:actions_end]
-        self.assertIn("No pending actions for the selected year.", actions_table)
-        self.assertNotIn("Ready for next stage", actions_table)
-        self.assertNotIn("June exam session", actions_table)
+        self.assertIn("No active incident review flags", all_sessions_html)
+        table_start = all_sessions_html.index('aria-label="Schedule preparation and approval"')
+        table_end = all_sessions_html.index('<div class="modal"', table_start)
+        sessions_table = all_sessions_html[table_start:table_end]
+        self.assertIn("<th>Session readiness</th>", sessions_table)
+        session_row = sessions_table[sessions_table.index("June exam session"):]
+        self.assertIn("session-readiness-final-ready", session_row)
+        self.assertIn("session-readiness-final-frame-ready", session_row)
+        self.assertIn(">Ready</span>", session_row)
+        self.assertIn("Register incidents", session_row)
+        self.assertIn("session-readiness-incidents-button-ready", session_row)
+        self.assertNotIn('disabled aria-disabled="true">Register incidents</button>', session_row)
+        self.assertIn(f'data-open-modal="schedule-workflow-{self.session_record.id}"', session_row)
+        self.assertIn(f'data-modal-scroll-target="incidents-{self.session_record.id}"', session_row)
 
         response = client.get(f"/pre-session-control-tower?session_year=2026&open_schedule_modal={self.session_record.id}")
         manage_html = response.data.decode()
@@ -14539,7 +14702,12 @@ class ScheduleWorkflowTest(unittest.TestCase):
         self.assertNotIn("<th>Schedule</th>", sessions_table)
         self.assertNotIn("<th>Staffing</th>", sessions_table)
         self.assertNotIn("<th>Package</th>", sessions_table)
-        self.assertLess(sessions_table.index("<th>Session</th>"), sessions_table.index("<th>Logistics</th>"))
+        self.assertLess(sessions_table.index("<th>Session</th>"), sessions_table.index("<th>Department</th>"))
+        self.assertLess(sessions_table.index("<th>Department</th>"), sessions_table.index("<th>Action description</th>"))
+        self.assertLess(sessions_table.index("<th>Action description</th>"), sessions_table.index("<th>Logistics</th>"))
+        self.assertLess(sessions_table.index("<th>Finance</th>"), sessions_table.index("<th>Final actions</th>"))
+        self.assertLess(sessions_table.index("<th>Final actions</th>"), sessions_table.index("<th>Session readiness</th>"))
+        self.assertNotIn("<th>Communications</th>", sessions_table)
         self.assertIn("control-tower-session-name-cell", sessions_table)
         self.assertNotIn("staffing-gate-blocked", sessions_table)
         self.assertNotIn("staffing-gate-unblocked", sessions_table)
@@ -15571,11 +15739,56 @@ class ScheduleWorkflowTest(unittest.TestCase):
         self.assertNotIn("<th>Staffing</th>", sessions_table)
         self.assertNotIn("<th>Package</th>", sessions_table)
         self.assertNotIn("<th>Shipment</th>", sessions_table)
-        self.assertNotIn("<th>Session readiness</th>", sessions_table)
         self.assertNotIn("<th>Incidents</th>", sessions_table)
         self.assertNotIn("<th>Priority action</th>", sessions_table)
-        self.assertLess(sessions_table.index("<th>Session</th>"), sessions_table.index("<th>Logistics</th>"))
+        self.assertLess(sessions_table.index("<th>Session</th>"), sessions_table.index("<th>Department</th>"))
+        self.assertLess(sessions_table.index("<th>Department</th>"), sessions_table.index("<th>Action description</th>"))
+        self.assertLess(sessions_table.index("<th>Action description</th>"), sessions_table.index("<th>Logistics</th>"))
         self.assertLess(sessions_table.index("<th>Logistics</th>"), sessions_table.index("<th>Finance</th>"))
+        self.assertLess(sessions_table.index("<th>Finance</th>"), sessions_table.index("<th>Final actions</th>"))
+        self.assertLess(sessions_table.index("<th>Final actions</th>"), sessions_table.index("<th>Session readiness</th>"))
+        self.assertNotIn("<th>Communications</th>", sessions_table)
+        no_logistics_row = sessions_table[
+            sessions_table.index("No logistics"):
+            sessions_table.index("Needs logistics setup")
+        ]
+        pending_row = sessions_table[
+            sessions_table.index("Pending logistics"):
+            sessions_table.index("Payment logistics")
+        ]
+        payment_row = sessions_table[
+            sessions_table.index("Payment logistics"):
+            sessions_table.index("Ready logistics")
+        ]
+        ready_row = sessions_table[
+            sessions_table.index("Ready logistics"):
+            sessions_table.index("Missing link logistics")
+        ]
+        missing_link_row = sessions_table[sessions_table.index("Missing link logistics"):]
+        self.assertIn('<span class="muted">-</span>', no_logistics_row)
+        self.assertIn("<span>Logistics is not needed for this session</span>", no_logistics_row)
+        self.assertIn(">Not applicable</span>", no_logistics_row)
+        self.assertIn("No logistics required", no_logistics_row)
+        self.assertIn("session-readiness-final-not-ready", no_logistics_row)
+        self.assertIn("session-readiness-final-frame-not-ready", no_logistics_row)
+        self.assertIn(">Not ready</span>", no_logistics_row)
+        self.assertIn("Register incidents", no_logistics_row)
+        self.assertIn("session-readiness-incidents-button-disabled", no_logistics_row)
+        self.assertIn('disabled aria-disabled="true">Register incidents</button>', no_logistics_row)
+        self.assertNotIn("BLOCKED", no_logistics_row)
+        self.assertNotIn("UNBLOCKED", no_logistics_row)
+        self.assertNotIn("Deadline", no_logistics_row)
+        self.assertIn("shipment-deadline-overdue", pending_row)
+        self.assertIn("Deadline 16/06/2026", pending_row)
+        self.assertIn('<span class="responsible-chip users-department-chip">LOGISTICS</span>', pending_row)
+        self.assertIn("<span>Start Logistics planning</span>", pending_row)
+        self.assertIn('<span class="bundle-action-overdue-chip">Overdue</span>', pending_row)
+        self.assertIn('<span class="responsible-chip users-department-chip">LOGISTICS</span>', payment_row)
+        self.assertIn("<span>Continue with Logistics planning</span>", payment_row)
+        self.assertIn('<span class="muted">-</span>', ready_row)
+        self.assertIn("<span>Logistics planning has been finalised</span>", ready_row)
+        self.assertIn('<span class="muted">-</span>', missing_link_row)
+        self.assertIn("<span>Logistics planning has been finalised</span>", missing_link_row)
         self.assertIn("Not applicable", html)
         self.assertIn("No logistics required", html)
         self.assertNotIn("0 / 0 concepts confirmed", html)
@@ -15585,10 +15798,43 @@ class ScheduleWorkflowTest(unittest.TestCase):
         self.assertIn("0 / 1 concepts confirmed", html)
         self.assertIn("Pre-confirmed", html)
         self.assertNotIn("Payment scheduled", html)
-        self.assertIn("Ready", html)
+        self.assertIn("Completed", html)
         self.assertIn("1 / 1 concepts confirmed", html)
-        self.assertIn("Files link missing", html)
-        self.assertIn("logistics-control-status-files-link-missing", html)
+        self.assertIn("All concepts are confirmed, but the logistics files link is missing.", html)
+        self.assertIn("logistics-control-status-completed", html)
+        pending_modal = html[
+            html.index(f'id="logistics-{pending_session.id}"'):
+            html.index(f'id="shipments-{pending_session.id}"')
+        ]
+        payment_modal = html[
+            html.index(f'id="logistics-{payment_session.id}"'):
+            html.index(f'id="shipments-{payment_session.id}"')
+        ]
+        ready_modal = html[
+            html.index(f'id="logistics-{ready_session.id}"'):
+            html.index(f'id="shipments-{ready_session.id}"')
+        ]
+        missing_link_modal = html[
+            html.index(f'id="logistics-{missing_link_session.id}"'):
+            html.index(f'id="shipments-{missing_link_session.id}"')
+        ]
+        self.assertIn('logistics-control-status-not-started', pending_modal)
+        self.assertIn(">Not started</span>", pending_modal)
+        self.assertNotIn("<span>Logistics gate</span>", pending_modal)
+        self.assertIn("<span>Recommended next action</span>\n            <strong>Start Logistics planning</strong>", pending_modal)
+        self.assertIn("<span>Responsible</span>\n            <strong>LOGISTICS</strong>", pending_modal)
+        self.assertIn("<span>Current deadline</span>\n            <strong>16/06/2026</strong>", pending_modal)
+        self.assertIn('logistics-control-status-in-progress', payment_modal)
+        self.assertIn(">In progress</span>", payment_modal)
+        self.assertIn("<span>Recommended next action</span>\n            <strong>Continue with Logistics planning</strong>", payment_modal)
+        self.assertIn("<span>Responsible</span>\n            <strong>LOGISTICS</strong>", payment_modal)
+        self.assertIn('logistics-control-status-completed', ready_modal)
+        self.assertIn(">Completed</span>", ready_modal)
+        self.assertIn("<span>Recommended next action</span>\n            <strong>-</strong>", ready_modal)
+        self.assertIn("<span>Responsible</span>\n            <strong>-</strong>", ready_modal)
+        self.assertIn("<span>Current deadline</span>\n            <strong>-</strong>", ready_modal)
+        self.assertIn('logistics-control-status-completed', missing_link_modal)
+        self.assertIn(">Completed</span>", missing_link_modal)
 
     def test_control_tower_logistics_manage_detail_and_links(self):
         staff_one = AcademicStaff(
@@ -15670,12 +15916,6 @@ class ScheduleWorkflowTest(unittest.TestCase):
             ExamSessionInternAssignment(
                 exam_session_id=detail_session.id,
                 team_member_id=inactive_staff.id,
-                participation_status="Confirmed",
-                logistics_enabled=True,
-            ),
-            ExamSessionInternAssignment(
-                exam_session_id=detail_session.id,
-                team_member_id=None,
                 participation_status="Confirmed",
                 logistics_enabled=True,
             ),
@@ -15959,6 +16199,113 @@ class ScheduleWorkflowTest(unittest.TestCase):
         ready_modal_start = html.index(f'id="schedule-workflow-{ready_session.id}"')
         self.assertNotIn(notice, html[ready_modal_start:])
 
+    def test_control_tower_logistics_gate_follows_staffing_confirmed(self):
+        blocked_session = ExamSession(
+            exam_session_name="Staffing pending logistics gate",
+            category="Path School",
+            status="Pending",
+            session_date=date(2026, 9, 3),
+            shifts="Morning",
+            modules="Speaking",
+            format="Onsite",
+        )
+        ready_session = ExamSession(
+            exam_session_name="Staffing confirmed logistics gate",
+            category="Path School",
+            status="Pending",
+            session_date=date(2026, 9, 4),
+            shifts="Morning",
+            modules="Speaking",
+            format="Onsite",
+        )
+        db.session.add_all([blocked_session, ready_session])
+        db.session.flush()
+        blocked_concept = ExamSessionLogisticsConcept(
+            exam_session_id=blocked_session.id,
+            provider="Flight",
+            status="Pending",
+        )
+        ready_concept = ExamSessionLogisticsConcept(
+            exam_session_id=ready_session.id,
+            provider="Hotel",
+            status="Pending",
+        )
+        db.session.add_all([
+            ExamSessionScheduleWorkflow(exam_session_id=blocked_session.id, status="Approved"),
+            ExamSessionScheduleWorkflow(exam_session_id=ready_session.id, status="Approved"),
+            ExamSessionSupervisorAssignment(
+                exam_session_id=blocked_session.id,
+                team_member_id=1,
+                participation_status="Official confirmation sent",
+                logistics_enabled=True,
+            ),
+            ExamSessionSupervisorAssignment(
+                exam_session_id=ready_session.id,
+                team_member_id=2,
+                participation_status="Confirmed",
+                logistics_enabled=True,
+            ),
+            blocked_concept,
+            ready_concept,
+        ])
+        db.session.commit()
+        client = self.login_client()
+
+        response = client.get("/pre-session-control-tower?session_year=2026&view=sessions")
+        html = response.get_data(as_text=True)
+        table_start = html.index('aria-label="Schedule preparation and approval"')
+        table_end = html.index('<div class="modal"', table_start)
+        sessions_table = html[table_start:table_end]
+        blocked_row = sessions_table[
+            sessions_table.index("Staffing pending logistics gate"):
+            sessions_table.index("Staffing confirmed logistics gate")
+        ]
+        ready_row = sessions_table[sessions_table.index("Staffing confirmed logistics gate"):]
+        blocked_section = html[
+            html.index(f'id="logistics-{blocked_session.id}"'):
+            html.index(f'id="shipments-{blocked_session.id}"')
+        ]
+        ready_section = html[
+            html.index(f'id="logistics-{ready_session.id}"'):
+            html.index(f'id="shipments-{ready_session.id}"')
+        ]
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("BLOCKED", sessions_table)
+        self.assertIn("UNBLOCKED", sessions_table)
+        self.assertIn('<span class="muted">-</span>', blocked_row)
+        self.assertIn("<span>Staffing must be confirmed before proceeding with Logistics planning.</span>", blocked_row)
+        self.assertIn('<span class="responsible-chip users-department-chip">LOGISTICS</span>', ready_row)
+        self.assertIn("<span>Start Logistics planning</span>", ready_row)
+        self.assertIn('data-logistics-actions-disabled="true"', blocked_section)
+        self.assertIn("Staffing must be Confirmed before Logistics actions are available.", blocked_section)
+        self.assertNotIn("<span>Logistics gate</span>", blocked_section)
+        self.assertIn("<span>Recommended next action</span>\n            <strong>-</strong>", blocked_section)
+        self.assertIn("<span>Responsible</span>\n            <strong>-</strong>", blocked_section)
+        self.assertIn("<span>Current deadline</span>\n            <strong>-</strong>", blocked_section)
+        self.assertIn('data-pre-logistics-status-select disabled aria-disabled="true"', blocked_section)
+        self.assertIn('data-open-modal="new-payment-request-modal"', blocked_section)
+        self.assertIn('disabled aria-disabled="true">New request</button>', blocked_section)
+        self.assertNotIn('data-logistics-actions-disabled="true"', ready_section)
+        self.assertIn("Staffing is Confirmed. Logistics actions are available.", ready_section)
+        self.assertIn('data-pre-logistics-status-select>', ready_section)
+
+        response = client.post(
+            f"/pre-session-control-tower/logistics-concepts/{blocked_concept.id}/status",
+            data={
+                "csrf_token": "token",
+                "view": "sessions",
+                "schedule_status": "",
+                "status": "In progress",
+            },
+            follow_redirects=True,
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("Logistics is blocked until Staffing is Confirmed.", response.get_data(as_text=True))
+        db.session.refresh(blocked_concept)
+        self.assertEqual(blocked_concept.status, "Pending")
+
     def test_control_tower_core_readiness_column_modal_and_no_persistence(self):
         blocked_session = ExamSession(
             exam_session_name="Blocked core readiness",
@@ -16092,10 +16439,12 @@ class ScheduleWorkflowTest(unittest.TestCase):
         self.assertNotIn("<th>Staffing</th>", sessions_table)
         self.assertNotIn("<th>Package</th>", sessions_table)
         self.assertNotIn("<th>Shipment</th>", sessions_table)
-        self.assertNotIn("<th>Session readiness</th>", sessions_table)
         self.assertNotIn("<th>Incidents</th>", sessions_table)
         self.assertNotIn("<th>Priority action</th>", sessions_table)
-        self.assertLess(sessions_table.index("<th>Session</th>"), sessions_table.index("<th>Logistics</th>"))
+        self.assertLess(sessions_table.index("<th>Session</th>"), sessions_table.index("<th>Department</th>"))
+        self.assertLess(sessions_table.index("<th>Department</th>"), sessions_table.index("<th>Action description</th>"))
+        self.assertLess(sessions_table.index("<th>Action description</th>"), sessions_table.index("<th>Logistics</th>"))
+        self.assertLess(sessions_table.index("<th>Final actions</th>"), sessions_table.index("<th>Session readiness</th>"))
         self.assertNotIn("<th>Core readiness</th>", sessions_table)
         self.assertNotIn("<th>Operational readiness</th>", sessions_table)
         self.assertNotIn("<th>Next action</th>", html)
@@ -16103,7 +16452,6 @@ class ScheduleWorkflowTest(unittest.TestCase):
         self.assertIn("Core readiness", html)
         self.assertIn("This status only covers schedule approval, staffing and logistics.", html)
         self.assertIn("Blocked", html)
-        self.assertIn("2 of 3 requirements are ready.", html)
         self.assertIn("Schedule approval is required", html)
         self.assertIn("In progress", html)
         self.assertIn("Ready for next stage", html)
@@ -16160,10 +16508,12 @@ class ScheduleWorkflowTest(unittest.TestCase):
         sessions_table = html[table_start:table_end]
         self.assertNotIn("<th>Core readiness</th>", sessions_table)
         self.assertNotIn("<th>Operational readiness</th>", sessions_table)
-        self.assertNotIn("<th>Session readiness</th>", sessions_table)
         self.assertNotIn("<th>Incidents</th>", sessions_table)
         self.assertNotIn("<th>Priority action</th>", sessions_table)
-        self.assertLess(sessions_table.index("<th>Sinapsis</th>"), sessions_table.index("<th>Communications</th>"))
+        self.assertLess(sessions_table.index("<th>Finance</th>"), sessions_table.index("<th>Final actions</th>"))
+        self.assertLess(sessions_table.index("<th>Final actions</th>"), sessions_table.index("<th>Session readiness</th>"))
+        self.assertNotIn("<th>Sinapsis</th>", sessions_table)
+        self.assertNotIn("<th>Communications</th>", sessions_table)
         self.assertIn("Operational readiness", html)
         self.assertIn("Session readiness", html)
         self.assertIn("This status covers schedule approval, staffing, staff logistics, packages and shipments. It does not include Finance, Sinapsis readiness, Communications, Incidents or Incident review flags.", html)

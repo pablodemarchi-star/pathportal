@@ -97,7 +97,7 @@
         {% if pre_session_action_links %}
           <div class="dashboard-mention-links" aria-label="Pre onsite session control tower department actions">
             {% for action in pre_session_action_links %}
-              <a href="{{ action.url }}">View action in {{ action.label }}</a>
+              <a href="{{ action.url }}">{{ action.text if action.text else 'View action in ' ~ action.label }}</a>
             {% endfor %}
           </div>
         {% endif %}

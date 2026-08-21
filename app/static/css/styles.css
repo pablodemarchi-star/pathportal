@@ -6294,7 +6294,8 @@ span.session-marker-chip {
   color: var(--badge-red-text);
 }
 
-.logistics-control-status-not-applicable {
+.logistics-control-status-not-applicable,
+.logistics-control-status-not-started {
   background: var(--badge-grey-bg);
   color: var(--badge-grey-text);
 }
@@ -6305,7 +6306,8 @@ span.session-marker-chip {
   color: var(--badge-yellow-text);
 }
 
-.logistics-control-status-ready {
+.logistics-control-status-ready,
+.logistics-control-status-completed {
   background: var(--badge-green-bg);
   color: var(--badge-green-text);
 }
@@ -6536,34 +6538,56 @@ span.session-marker-chip {
 
 .control-tower-table.sessions-table {
   table-layout: fixed;
+  min-width: 1380px;
 }
 
 .control-tower-table.sessions-table th:nth-child(1),
 .control-tower-table.sessions-table td:nth-child(1) {
-  width: 24%;
+  width: 18%;
   max-width: 0;
 }
 
 .control-tower-table.sessions-table th:nth-child(2),
-.control-tower-table.sessions-table td:nth-child(2),
+.control-tower-table.sessions-table td:nth-child(2) {
+  width: 12%;
+}
+
 .control-tower-table.sessions-table th:nth-child(3),
 .control-tower-table.sessions-table td:nth-child(3) {
-  width: 19%;
+  width: 18%;
 }
 
 .control-tower-table.sessions-table th:nth-child(4),
-.control-tower-table.sessions-table td:nth-child(4),
+.control-tower-table.sessions-table td:nth-child(4) {
+  width: 15%;
+}
+
 .control-tower-table.sessions-table th:nth-child(5),
 .control-tower-table.sessions-table td:nth-child(5) {
-  width: 19%;
+  width: 12%;
+}
+
+.control-tower-table.sessions-table th:nth-child(6),
+.control-tower-table.sessions-table td:nth-child(6) {
+  width: 13%;
+}
+
+.control-tower-table.sessions-table th:nth-child(7),
+.control-tower-table.sessions-table td:nth-child(7) {
+  width: 12%;
+}
+
+.control-tower-table.sessions-table th:nth-child(7) {
+  text-align: center;
 }
 
 .control-tower-table.sessions-table .contextual-cell-trigger,
 .control-tower-table.sessions-table .control-tower-session-name-cell,
+.control-tower-table.sessions-table .bundle-action-stack,
 .control-tower-table.sessions-table .logistics-summary-cell,
 .control-tower-table.sessions-table .finance-summary-cell,
 .control-tower-table.sessions-table .sinapsis-readiness-summary-cell,
-.control-tower-table.sessions-table .communications-summary-cell {
+.control-tower-table.sessions-table .session-readiness-final-cell {
   min-width: 0;
 }
 
@@ -6589,23 +6613,84 @@ span.session-marker-chip {
   overflow-wrap: anywhere;
 }
 
+.control-tower-table.sessions-table .bundle-action-stack,
+.control-tower-table.sessions-table .bundle-action-stack > span,
+.control-tower-table.sessions-table .bundle-action-stack small {
+  max-width: 100%;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  word-break: normal;
+}
+
 .control-tower-table.sessions-table .badge {
   max-width: 100%;
   white-space: normal;
   text-align: left;
 }
 
-.control-tower-table.sessions-table .logistics-summary-cell > span:not(.badge),
+.control-tower-table.sessions-table .logistics-summary-cell > span:not(.badge):not(.workflow-deadline-chip),
 .control-tower-table.sessions-table .logistics-summary-cell small,
 .control-tower-table.sessions-table .finance-summary-cell > span:not(.badge),
 .control-tower-table.sessions-table .finance-summary-cell small,
 .control-tower-table.sessions-table .sinapsis-readiness-summary-cell > span:not(.badge),
-.control-tower-table.sessions-table .sinapsis-readiness-summary-cell small,
-.control-tower-table.sessions-table .communications-summary-cell > span:not(.badge),
-.control-tower-table.sessions-table .communications-summary-cell small {
+.control-tower-table.sessions-table .sinapsis-readiness-summary-cell small {
   white-space: normal;
   overflow-wrap: anywhere;
   word-break: normal;
+}
+
+.session-readiness-final-cell {
+  display: grid;
+  gap: 8px;
+  justify-items: center;
+  width: 100%;
+}
+
+.session-readiness-final-frame {
+  display: grid;
+  justify-items: center;
+  align-content: center;
+  width: 100%;
+  min-height: 44px;
+  padding: 10px;
+  border: 1px solid transparent;
+  border-radius: 6px;
+}
+
+.session-readiness-final-frame-ready {
+  background: var(--badge-green-bg);
+  border-color: #cfe4cc;
+}
+
+.session-readiness-final-frame-not-ready {
+  background: var(--badge-red-bg);
+  border-color: #f1bdb8;
+}
+
+.session-readiness-final-ready {
+  background: var(--badge-green-bg);
+  color: var(--badge-green-text);
+}
+
+.session-readiness-final-not-ready {
+  background: var(--badge-red-bg);
+  color: var(--badge-red-text);
+}
+
+.session-readiness-incidents-button {
+  width: 100%;
+  white-space: normal;
+}
+
+.session-readiness-incidents-button-ready {
+  background: var(--badge-blue-bg);
+  color: var(--badge-blue-text);
+}
+
+.session-readiness-incidents-button-disabled:disabled {
+  background: var(--badge-grey-bg);
+  color: var(--badge-grey-text);
+  opacity: 1;
 }
 
 .contextual-cell-trigger {
@@ -6763,6 +6848,7 @@ span.session-marker-chip {
 
 .workflow-gate-chip,
 .staffing-gate-chip,
+.logistics-gate-chip,
 .packages-gate-chip,
 .shipment-gate-chip {
   display: inline-flex;
@@ -6779,6 +6865,7 @@ span.session-marker-chip {
 
 .workflow-gate-chip svg,
 .staffing-gate-chip svg,
+.logistics-gate-chip svg,
 .packages-gate-chip svg,
 .shipment-gate-chip svg {
   width: 15px;
@@ -6791,13 +6878,15 @@ span.session-marker-chip {
 }
 
 .workflow-gate-unblocked,
-.staffing-gate-unblocked {
+.staffing-gate-unblocked,
+.logistics-gate-unblocked {
   background: #d9f0df;
   color: #1f6a35;
 }
 
 .workflow-gate-blocked,
-.staffing-gate-blocked {
+.staffing-gate-blocked,
+.logistics-gate-blocked {
   background: #f7d4d8;
   color: #9f2635;
 }
@@ -6842,7 +6931,7 @@ span.session-marker-chip {
 .schedule-summary-cell small,
 .staffing-summary-cell > span:not(.badge),
 .staffing-summary-cell small,
-.logistics-summary-cell > span:not(.badge),
+.logistics-summary-cell > span:not(.badge):not(.workflow-deadline-chip),
 .logistics-summary-cell small,
 .packages-summary-cell > span:not(.badge),
 .packages-summary-cell small,
@@ -6874,6 +6963,26 @@ span.session-marker-chip {
 .staffing-summary-cell > .workflow-deadline-chip,
 .packages-summary-cell > .workflow-deadline-chip {
   font-size: 11px;
+}
+
+.staffing-column-deadline-chip.workflow-deadline-on-track,
+.package-column-deadline-chip.workflow-deadline-on-track {
+  background: var(--badge-grey-bg) !important;
+  color: var(--badge-grey-text) !important;
+}
+
+.staffing-column-deadline-chip.workflow-deadline-met,
+.package-column-deadline-chip.workflow-deadline-met {
+  background: var(--badge-green-bg) !important;
+  color: var(--badge-green-text) !important;
+}
+
+.staffing-column-deadline-chip.workflow-deadline-missed,
+.staffing-column-deadline-chip.workflow-deadline-overdue,
+.package-column-deadline-chip.workflow-deadline-missed,
+.package-column-deadline-chip.workflow-deadline-overdue {
+  background: var(--badge-red-bg) !important;
+  color: var(--badge-red-text) !important;
 }
 
 .schedule-summary-cell > .workflow-deadline-chip.workflow-deadline-met,
@@ -7635,6 +7744,18 @@ span.session-marker-chip {
 
 .schedule-notes-section {
   order: 2;
+}
+
+.schedule-note-context-logistics {
+  display: none;
+}
+
+.modal.is-logistics-only .schedule-note-context-schedule {
+  display: none;
+}
+
+.modal.is-logistics-only .schedule-note-context-logistics {
+  display: inline;
 }
 
 .staffing-notes-section {
@@ -8535,6 +8656,32 @@ span.session-marker-chip {
   font-weight: 900;
 }
 
+.logistics-control-section.is-logistics-blocked .logistics-concepts-readonly-table,
+.logistics-control-section.is-logistics-blocked .pre-logistics-provider-list,
+.logistics-control-section.is-logistics-blocked .pre-logistics-readonly-list,
+.logistics-control-section.is-logistics-blocked .pre-logistics-actions {
+  color: var(--color-muted);
+}
+
+.logistics-control-section.is-logistics-blocked button:disabled,
+.logistics-control-section.is-logistics-blocked select:disabled,
+.logistics-control-section.is-logistics-blocked input:disabled + span,
+.logistics-control-section.is-logistics-blocked a.is-disabled {
+  opacity: 0.62;
+  cursor: not-allowed;
+}
+
+.logistics-control-section.is-logistics-blocked a.is-disabled {
+  color: var(--color-muted);
+  pointer-events: none;
+}
+
+.logistics-control-section.is-logistics-blocked .logistics-chip-select:disabled {
+  border-color: var(--color-border);
+  background: var(--badge-grey-bg);
+  color: var(--badge-grey-text);
+}
+
 .logistics-readonly-list {
   display: grid;
   gap: 8px;
@@ -9070,7 +9217,8 @@ span.session-marker-chip {
   color: #991b1b;
 }
 
-.shipment-summary-cell > .shipment-deadline-chip {
+.shipment-summary-cell > .shipment-deadline-chip,
+.logistics-summary-cell > .shipment-deadline-chip {
   display: inline-flex;
   align-items: center;
   width: fit-content;
@@ -9084,18 +9232,22 @@ span.session-marker-chip {
   white-space: nowrap;
 }
 
-.shipment-summary-cell > .shipment-deadline-on-track {
+.shipment-summary-cell > .shipment-deadline-on-track,
+.logistics-summary-cell > .shipment-deadline-on-track {
   background: var(--badge-grey-bg);
   color: var(--badge-grey-text);
 }
 
 .shipment-summary-cell > .shipment-deadline-overdue,
-.shipment-summary-cell > .shipment-deadline-missed {
+.shipment-summary-cell > .shipment-deadline-missed,
+.logistics-summary-cell > .shipment-deadline-overdue,
+.logistics-summary-cell > .shipment-deadline-missed {
   background: var(--badge-red-bg);
   color: var(--badge-red-text);
 }
 
-.shipment-summary-cell > .shipment-deadline-met {
+.shipment-summary-cell > .shipment-deadline-met,
+.logistics-summary-cell > .shipment-deadline-met {
   background: var(--badge-green-bg);
   color: var(--badge-green-text);
 }

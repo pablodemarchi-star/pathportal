@@ -40,6 +40,12 @@
   {% endif %}
 {%- endmacro %}
 
+{% macro shipment_deadline_chip(deadline_badge, extra_class='') -%}
+  {% if deadline_badge %}
+    <span class="shipment-deadline-chip shipment-deadline-{{ deadline_badge.status }} {{ extra_class }}" title="{{ deadline_badge.label }}" aria-label="{{ deadline_badge.label }}: {{ deadline_badge.date|session_date }}">Deadline {{ deadline_badge.date|session_date }}</span>
+  {% endif %}
+{%- endmacro %}
+
 {% macro schedule_gate_badge(gate, focusable=true) -%}
   <span class="badge schedule-gate-{{ gate.status }}" title="{{ gate.message }}" aria-label="Schedule gate {{ gate.label }}: {{ gate.message }}"{% if focusable %} tabindex="0"{% endif %}>{{ gate.label }}</span>
 {%- endmacro %}
@@ -142,13 +148,39 @@
   <span class="badge logistics-control-status-{{ logistics.status|replace('_', '-') }}" title="{{ logistics.tooltip }}" aria-label="Logistics {{ logistics.label }}: {{ logistics.tooltip }}"{% if focusable %} tabindex="0"{% endif %}>{{ logistics.label }}</span>
 {%- endmacro %}
 
-{% macro logistics_table_cell(logistics, focusable=true) -%}
+{% macro logistics_gate_chip(logistics_gate) -%}
+  {% if logistics_gate.is_unblocked %}
+    <span class="logistics-gate-chip logistics-gate-unblocked" title="{{ logistics_gate.message }}" aria-label="Logistics gate unblocked: {{ logistics_gate.message }}">
+      <svg viewBox="0 0 24 24" aria-hidden="true">
+        <rect x="5" y="10" width="14" height="10" rx="2"></rect>
+        <path d="M8 10V7a4 4 0 0 1 7.4-2.1"></path>
+      </svg>
+      UNBLOCKED
+    </span>
+  {% else %}
+    <span class="logistics-gate-chip logistics-gate-blocked" title="{{ logistics_gate.message }}" aria-label="Logistics gate blocked: {{ logistics_gate.message }}">
+      <svg viewBox="0 0 24 24" aria-hidden="true">
+        <rect x="5" y="10" width="14" height="10" rx="2"></rect>
+        <path d="M8 10V7a4 4 0 0 1 8 0v3"></path>
+      </svg>
+      BLOCKED
+    </span>
+  {% endif %}
+{%- endmacro %}
+
+{% macro logistics_table_cell(logistics, logistics_gate, focusable=true, deadline_badge=none) -%}
   <span class="logistics-summary-cell">
+    {% if logistics.status != 'not_applicable' %}
+      {{ logistics_gate_chip(logistics_gate) }}
+    {% endif %}
     {{ logistics_status_badge(logistics, focusable) }}
     <span>{{ logistics.table_summary }}</span>
     {% for line in logistics.secondary_lines %}
       <small>{{ line }}</small>
     {% endfor %}
+    {% if logistics.status != 'not_applicable' %}
+      {{ shipment_deadline_chip(deadline_badge, 'logistics-column-deadline-chip') }}
+    {% endif %}
   </span>
 {%- endmacro %}
 
@@ -343,6 +375,20 @@
   </span>
 {%- endmacro %}
 
+{% macro session_readiness_sessions_cell(session, session_readiness) -%}
+  {% set is_session_ready = session_readiness.status == 'session_ready' %}
+  <span class="session-readiness-final-cell">
+    <span class="session-readiness-final-frame {{ 'session-readiness-final-frame-ready' if is_session_ready else 'session-readiness-final-frame-not-ready' }}">
+      {% if is_session_ready %}
+        <span class="badge session-readiness-final-ready" title="{{ session_readiness.tooltip }}" aria-label="Session readiness Ready: {{ session_readiness.tooltip }}">Ready</span>
+      {% else %}
+        <span class="badge session-readiness-final-not-ready" title="{{ session_readiness.tooltip }}" aria-label="Session readiness Not ready: {{ session_readiness.tooltip }}">Not ready</span>
+      {% endif %}
+    </span>
+    <button class="secondary-button compact-action session-readiness-incidents-button {{ 'session-readiness-incidents-button-ready' if is_session_ready else 'session-readiness-incidents-button-disabled' }}" type="button" data-open-modal="schedule-workflow-{{ session.id }}" data-modal-scroll-target="incidents-{{ session.id }}" data-modal-target-label="Register incidents" aria-label="Register incidents for {{ session.exam_session_name }}"{% if not is_session_ready %} disabled aria-disabled="true"{% endif %}>Register incidents</button>
+  </span>
+{%- endmacro %}
+
 {% macro incidents_status_badge(incidents, focusable=true) -%}
   <span class="badge incidents-status-{{ incidents.status|replace('_', '-') }}" title="{{ incidents.tooltip }}" aria-label="Incidents {{ incidents.label }}: {{ incidents.tooltip }}"{% if focusable %} tabindex="0"{% endif %}>{{ incidents.label }}</span>
 {%- endmacro %}
@@ -435,11 +481,12 @@
     <span class="bundle-action-stack bundle-action-description-stack">
       {% for action in actions %}
         {% set description = action.description|trim %}
+        {% set display_description = description if action.preserve_period else description[:-1] if description.endswith('.') else description %}
         <span>
           {% if action.risk %}
-            <span class="bundle-action-risk-chip">{{ description[:-1] if description.endswith('.') else description }}</span>
+            <span class="bundle-action-risk-chip">{{ display_description }}</span>
           {% else %}
-            <span>{{ description[:-1] if description.endswith('.') else description }}</span>
+            <span>{{ display_description }}</span>
           {% endif %}
           {% if action.overdue %}
             <span class="bundle-action-overdue-chip">Overdue</span>
@@ -856,7 +903,10 @@
     <div class="staffing-control-header">
       <div>
         <h3 id="schedule-notes-title-{{ session.id }}" tabindex="-1">Notes</h3>
-        <p>Schedule notes and read tracking.</p>
+        <p>
+          <span class="schedule-note-context-copy schedule-note-context-schedule">Schedule notes and read tracking.</span>
+          <span class="schedule-note-context-copy schedule-note-context-logistics">Logistics notes and read tracking.</span>
+        </p>
       </div>
       <strong class="responsible-chip">{{ notes|length }} notes</strong>
     </div>
@@ -868,7 +918,7 @@
       <label for="schedule-free-note-{{ session.id }}">
         Note <span class="required-marker">*</span>
       </label>
-      <textarea id="schedule-free-note-{{ session.id }}" name="note" rows="3" required placeholder="Add a schedule note"></textarea>
+      <textarea id="schedule-free-note-{{ session.id }}" name="note" rows="3" required placeholder="Add a schedule note" data-schedule-note-textarea data-schedule-placeholder="Add a schedule note" data-logistics-placeholder="Add a logistics note"></textarea>
       <div class="cv-review-note-actions schedule-note-routing">
         <div class="note-from-field">
           <span>From</span>
@@ -1378,10 +1428,12 @@
           <th>Package</th>
         {% endif %}
         {% if selected_view != 'bundle' %}
+          <th>Department</th>
+          <th>Action description</th>
           <th>Logistics</th>
           <th>Finance</th>
-          <th>Sinapsis</th>
-          <th>Communications</th>
+          <th>Final actions</th>
+          <th>Session readiness</th>
         {% endif %}
       </tr>
     </thead>
@@ -1427,9 +1479,11 @@
             </td>
           {% endif %}
           {% if selected_view != 'bundle' %}
+            <td>{{ bundle_detail_departments_cell(view.bundle_detail_actions) }}</td>
+            <td>{{ bundle_detail_action_descriptions_cell(view.bundle_detail_actions) }}</td>
             <td>
               {% call contextual_cell_trigger(session, 'logistics', 'Review logistics', logistics_only=true) %}
-                {{ logistics_table_cell(view.logistics, false) }}
+                {{ logistics_table_cell(view.logistics, view.logistics_gate, false, view.logistics_deadline_badge) }}
               {% endcall %}
             </td>
             <td>
@@ -1447,16 +1501,12 @@
                 {% endif %}
               </div>
             </td>
-            <td>
-              {% call contextual_cell_trigger(session, 'communications', 'Review communications', communications_only=true) %}
-                {{ communications_table_cell(view.communications, false) }}
-              {% endcall %}
-            </td>
+            <td>{{ session_readiness_sessions_cell(session, view.session_readiness) }}</td>
           {% endif %}
         </tr>
       {% else %}
         <tr>
-          <td colspan="{{ 6 if selected_view == 'bundle' else 5 }}" class="empty-state">No exam sessions found.</td>
+          <td colspan="{{ 6 if selected_view == 'bundle' else 7 }}" class="empty-state">No exam sessions found.</td>
         </tr>
       {% endfor %}
     </tbody>
@@ -1878,32 +1928,37 @@
         {% endif %}
       </section>
 
-      <section class="staffing-control-section logistics-control-section" id="logistics-{{ session.id }}" data-control-section data-default-collapsed="true" aria-labelledby="logistics-title-{{ session.id }}">
+      {% set logistics_actions_disabled = not view.logistics_gate.is_unblocked %}
+      <section class="staffing-control-section logistics-control-section{% if logistics_actions_disabled %} is-logistics-blocked{% endif %}" id="logistics-{{ session.id }}" data-control-section data-default-collapsed="true"{% if logistics_actions_disabled %} data-logistics-actions-disabled="true" aria-disabled="true"{% endif %} aria-labelledby="logistics-title-{{ session.id }}">
         <div class="staffing-control-header">
           <div>
             <h3 id="logistics-title-{{ session.id }}" tabindex="-1">Logistics</h3>
             {{ logistics_status_badge(view.logistics) }}
             <p>{{ view.logistics.description }}</p>
           </div>
+          {{ logistics_gate_chip(view.logistics_gate) }}
         </div>
+        {% if logistics_actions_disabled %}
+          <p class="staffing-schedule-notice">{{ view.logistics_gate.message }}</p>
+        {% endif %}
         {% if not view.schedule_gate.is_ready %}
           <p class="staffing-schedule-notice">Schedule approval is required before proceeding with the operational logistics stage.</p>
         {% endif %}
         {{ review_flags_block(view.review_flags.by_area.get('logistics', []), session, selected_schedule_status, selected_view, csrf_token) }}
         <section class="staffing-control-metadata" aria-label="Logistics ownership and deadline">
-          {% set logistics_next = namespace(label='Review logistics') %}
-          {% if not view.schedule_gate.is_ready %}
-            {% set logistics_next.label = 'Wait for schedule approval' %}
-          {% elif view.logistics.status == 'not_applicable' %}
-            {% set logistics_next.label = 'No logistics required' %}
-          {% elif view.logistics.final_email_ready %}
-            {% set logistics_next.label = 'Logistics completed' %}
-          {% elif view.logistics.status == 'configuration_required' %}
-            {% set logistics_next.label = 'Configure logistics requirements' %}
-          {% elif view.logistics.status == 'in_progress' %}
-            {% set logistics_next.label = 'Complete pending logistics arrangements' %}
-          {% elif view.logistics.status == 'files_link_missing' %}
-            {% set logistics_next.label = 'Add logistics files link' %}
+          {% set logistics_metadata = namespace(next_action='-', responsible='-', deadline='-') %}
+          {% if not logistics_actions_disabled and view.logistics.status == 'not_started' %}
+            {% set logistics_metadata.next_action = 'Start Logistics planning' %}
+            {% set logistics_metadata.responsible = 'LOGISTICS' %}
+            {% if view.logistics_deadline_badge %}
+              {% set logistics_metadata.deadline = view.logistics_deadline_badge.date|session_date %}
+            {% endif %}
+          {% elif not logistics_actions_disabled and view.logistics.status == 'in_progress' %}
+            {% set logistics_metadata.next_action = 'Continue with Logistics planning' %}
+            {% set logistics_metadata.responsible = 'LOGISTICS' %}
+            {% if view.logistics_deadline_badge %}
+              {% set logistics_metadata.deadline = view.logistics_deadline_badge.date|session_date %}
+            {% endif %}
           {% endif %}
           <div>
             <span>Current status</span>
@@ -1911,26 +1966,15 @@
           </div>
           <div>
             <span>Recommended next action</span>
-            <strong>{{ logistics_next.label }}</strong>
+            <strong>{{ logistics_metadata.next_action }}</strong>
           </div>
           <div>
             <span>Responsible</span>
-            <strong>{{ view.logistics_control.department }}</strong>
+            <strong>{{ logistics_metadata.responsible }}</strong>
           </div>
           <div>
             <span>Current deadline</span>
-            <strong>
-              {% if view.logistics_control.deadline_status in ['due_today', 'overdue', 'completed'] %}
-                {{ view.logistics_control.deadline_label }}
-              {% elif view.logistics_control.deadline %}
-                {{ view.logistics_control.deadline|session_date }}
-              {% else %}
-                {{ view.logistics_control.deadline_label }}
-              {% endif %}
-            </strong>
-            {% if view.logistics_control.deadline and view.logistics_control.deadline_status == 'completed' %}
-              <small>Saved deadline: {{ view.logistics_control.deadline|session_date }}</small>
-            {% endif %}
+            <strong>{{ logistics_metadata.deadline }}</strong>
           </div>
         </section>
         {{ logistics_status_track_panel(session, view.logistics.concept_rows) }}
@@ -1939,7 +1983,7 @@
           <div>
             <span>Logistics files</span>
             {% if view.logistics.has_files_url %}
-              <a class="sinapsis-chip-link" href="{{ view.logistics.files_url }}" target="_blank" rel="noopener noreferrer">Open logistics files</a>
+              <a class="sinapsis-chip-link{% if logistics_actions_disabled %} is-disabled{% endif %}" href="{{ view.logistics.files_url if not logistics_actions_disabled else '#' }}" target="_blank" rel="noopener noreferrer"{% if logistics_actions_disabled %} aria-disabled="true" tabindex="-1"{% endif %}>Open logistics files</a>
             {% else %}
               <strong class="muted">Missing</strong>
             {% endif %}
@@ -1951,7 +1995,7 @@
         {% endif %}
 
         {% if view.logistics.concept_rows %}
-          <div class="staffing-role-table-wrap logistics-concepts-readonly-wrap">
+          <div class="staffing-role-table-wrap logistics-concepts-readonly-wrap{% if logistics_actions_disabled %} is-logistics-actions-disabled{% endif %}">
             <table class="staffing-role-table logistics-concepts-readonly-table">
               <thead>
                 <tr>
@@ -1977,11 +2021,11 @@
                                 <input type="hidden" name="schedule_status" value="{{ selected_schedule_status }}">
                                 {{ pre_session_return_fields(selected_view, selected_bundle) }}
                                 <label>
-                                  <input type="checkbox" checked data-pre-logistics-provider-checkbox>
+                                  <input type="checkbox" checked data-pre-logistics-provider-checkbox{% if logistics_actions_disabled %} disabled{% endif %}>
                                   <span>{{ provider.name }}</span>
                                 </label>
                               </form>
-                              <button class="mini-button provider-details-button" type="button" data-open-modal="pre-logistics-provider-{{ concept.id }}-{{ provider.id }}" aria-label="Provider details for {{ provider.name }}" title="Provider details">i</button>
+                              <button class="mini-button provider-details-button" type="button" data-open-modal="pre-logistics-provider-{{ concept.id }}-{{ provider.id }}" aria-label="Provider details for {{ provider.name }}" title="Provider details"{% if logistics_actions_disabled %} disabled aria-disabled="true"{% endif %}>i</button>
                             {% else %}
                               <span>{{ provider.name }}</span>
                             {% endif %}
@@ -2000,11 +2044,11 @@
                               <input type="hidden" name="schedule_status" value="{{ selected_schedule_status }}">
                               {{ pre_session_return_fields(selected_view, selected_bundle) }}
                               <label>
-                                <input type="checkbox" checked data-pre-logistics-staff-checkbox>
+                                <input type="checkbox" checked data-pre-logistics-staff-checkbox{% if logistics_actions_disabled %} disabled{% endif %}>
                                 <span>{{ staff_member.name }}</span>
                               </label>
                             </form>
-                            <button class="mini-button provider-details-button" type="button" data-open-modal="pre-logistics-staff-{{ concept.id }}-{{ staff_member.id }}" aria-label="Staff member details for {{ staff_member.name }}" title="Staff member details">i</button>
+                            <button class="mini-button provider-details-button" type="button" data-open-modal="pre-logistics-staff-{{ concept.id }}-{{ staff_member.id }}" aria-label="Staff member details for {{ staff_member.name }}" title="Staff member details"{% if logistics_actions_disabled %} disabled aria-disabled="true"{% endif %}>i</button>
                           </div>
                         {% else %}
                           <span class="muted">No staff members selected</span>
@@ -2013,17 +2057,17 @@
                     </td>
                     <td>
                       <div class="pre-logistics-actions">
-                        <button class="mini-button logistics-action-chip" type="button" data-open-modal="pre-logistics-notes-{{ concept.id }}">View notes ({{ concept.note_count }})</button>
+                        <button class="mini-button logistics-action-chip" type="button" data-open-modal="pre-logistics-notes-{{ concept.id }}"{% if logistics_actions_disabled %} disabled aria-disabled="true"{% endif %}>View notes ({{ concept.note_count }})</button>
                       </div>
                     </td>
                     <td>
                       <div class="pre-logistics-actions">
-                        <button class="secondary-button compact-action logistics-action-chip" type="button" data-open-modal="new-payment-request-modal" data-payment-request-return-session-id="{{ session.id }}" data-payment-request-logistics-concept-id="{{ concept.id }}"{% if not user_can_edit('finance_requests') %} disabled aria-disabled="true"{% endif %}>New request</button>
+                        <button class="secondary-button compact-action logistics-action-chip" type="button" data-open-modal="new-payment-request-modal" data-payment-request-return-session-id="{{ session.id }}" data-payment-request-logistics-concept-id="{{ concept.id }}"{% if logistics_actions_disabled or not user_can_edit('finance_requests') %} disabled aria-disabled="true"{% endif %}>New request</button>
                         {% if concept.payment_requests %}
                           <div class="pre-logistics-payment-list">
                             {% for payment_request in concept.payment_requests %}
                               <div class="pre-logistics-payment-line">
-                                <a href="{{ url_for('staff.finance_requests', tab='payment_requests') }}" target="_blank" rel="noopener noreferrer">{{ payment_request.request_number }}</a>
+                                <a class="{% if logistics_actions_disabled %}is-disabled{% endif %}" href="{{ url_for('staff.finance_requests', tab='payment_requests') if not logistics_actions_disabled else '#' }}" target="_blank" rel="noopener noreferrer"{% if logistics_actions_disabled %} aria-disabled="true" tabindex="-1"{% endif %}>{{ payment_request.request_number }}</a>
                                 {{ finance_status_chip(payment_request.status) }}
                               </div>
                             {% endfor %}
@@ -2036,7 +2080,7 @@
                         <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
                         <input type="hidden" name="schedule_status" value="{{ selected_schedule_status }}">
                         {{ pre_session_return_fields(selected_view, selected_bundle) }}
-                        <select name="status" class="logistics-chip-select {{ logistics_status_badge_class(concept.status) }}" data-pre-logistics-status-select>
+                        <select name="status" class="logistics-chip-select {{ logistics_status_badge_class(concept.status) }}" data-pre-logistics-status-select{% if logistics_actions_disabled %} disabled aria-disabled="true"{% endif %}>
                           {% for status in logistics_status_options %}
                             <option value="{{ status }}" {% if concept.status == status %}selected{% endif %}{% if status == 'Confirmed' and not concept.can_confirm %} disabled{% endif %}>{{ status }}</option>
                           {% endfor %}

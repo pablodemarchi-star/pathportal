@@ -156,7 +156,7 @@
       </div>
     </td>
     <td>
-      <select name="logistics_provider_type_id_{{ row_key }}" class="logistics-provider-type-select" data-logistics-provider-type>
+      <select name="logistics_provider_type_id_{{ row_key }}" class="logistics-provider-type-select" data-logistics-provider-type required>
         <option value="">Select type</option>
         {% for provider_type in provider_type_options %}
           <option value="{{ provider_type.id }}" {% if selected_provider_type_id == provider_type.id %}selected{% endif %}>{{ provider_type.name }}</option>
@@ -178,7 +178,7 @@
       </select>
     </td>
     <td class="logistics-staff-members-cell">
-      <div class="logistics-staff-member-list" data-logistics-staff-list data-selected-staff-ids="{{ selected_staff_member_ids|join(',') }}">
+      <div class="logistics-staff-member-list" data-logistics-staff-list data-selected-staff-ids="{{ selected_staff_member_ids|join(',') }}" role="group" aria-required="true">
         {% if staff_member_options %}
           {% for staff_member in staff_member_options %}
             <label class="logistics-staff-member-option">
