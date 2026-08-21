@@ -1,6 +1,95 @@
 const modalOpeners = new WeakMap();
 
 (() => {
+  const rootSelector = "[data-interview-options-root]";
+  const listSelector = "[data-interview-options-list]";
+  const rowSelector = "[data-interview-option-row]";
+  const addSelector = "[data-add-interview-option]";
+  const removeSelector = "[data-remove-interview-option]";
+
+  const optionsList = (root) => root?.querySelector(listSelector);
+  const optionRows = (root) => {
+    const list = optionsList(root);
+    if (!list) return [];
+    return Array.from(list.children).filter((child) => child.matches?.(rowSelector));
+  };
+
+  const syncOptionRows = (root) => {
+    const rows = optionRows(root);
+    const maxOptions = Number(root?.dataset?.maxOptions || 5);
+    const addButton = root?.querySelector(addSelector);
+    if (addButton) addButton.disabled = rows.length >= maxOptions;
+    rows.forEach((row, index) => {
+      const removeButton = row.querySelector(removeSelector);
+      if (!removeButton) return;
+      removeButton.hidden = index === 0;
+      removeButton.disabled = false;
+    });
+    window.syncPotentialProceedInterviewButton?.(root?.closest("form"));
+  };
+
+  const addOption = (button) => {
+    if (!button || button.disabled) return false;
+    const root = button.closest(rootSelector);
+    const list = optionsList(root);
+    const rows = optionRows(root);
+    const maxOptions = Number(root?.dataset?.maxOptions || 5);
+    if (!root || !list || !rows.length || rows.length >= maxOptions) return false;
+    const clone = rows[rows.length - 1].cloneNode(true);
+    clone.classList.add("is-extra");
+    clone.querySelectorAll("input, select, textarea").forEach((field) => {
+      if (field.type === "checkbox" || field.type === "radio") field.checked = false;
+      else field.value = "";
+      field.disabled = false;
+    });
+    clone.querySelectorAll("button").forEach((rowButton) => {
+      rowButton.disabled = false;
+    });
+    list.insertBefore(clone, button);
+    syncOptionRows(root);
+    clone.scrollIntoView?.({ block: "nearest" });
+    clone.querySelector("input, select, textarea")?.focus();
+    return true;
+  };
+
+  const removeOption = (button) => {
+    if (!button || button.disabled) return false;
+    const root = button.closest(rootSelector);
+    const row = button.closest(rowSelector);
+    const rows = optionRows(root);
+    if (!root || !row) return false;
+    if (rows.length <= 1) {
+      row.querySelectorAll("input, select, textarea").forEach((field) => {
+        if (field.type === "checkbox" || field.type === "radio") field.checked = false;
+        else field.value = "";
+      });
+    } else {
+      row.remove();
+    }
+    syncOptionRows(root);
+    return true;
+  };
+
+  document.addEventListener("click", (event) => {
+    const addButton = event.target.closest?.(addSelector);
+    if (addButton) {
+      if (addOption(addButton)) {
+        event.preventDefault();
+        event.stopImmediatePropagation();
+      }
+      return;
+    }
+    const removeButton = event.target.closest?.(removeSelector);
+    if (removeButton && removeOption(removeButton)) {
+      event.preventDefault();
+      event.stopImmediatePropagation();
+    }
+  }, true);
+
+  document.querySelectorAll(rootSelector).forEach(syncOptionRows);
+})();
+
+(() => {
   const referencePaymentNumber = "PAY-2026-0022";
   const syncFinancePaymentCardHeight = () => {
     const cards = Array.from(document.querySelectorAll(".finance-payment-request-grid .finance-request-card"));
@@ -11114,10 +11203,18 @@ const scheduleProceedInterviewButtonSync = (element) => {
   window.requestAnimationFrame(() => syncProceedInterviewButton(form));
 };
 
+const interviewOptionsListForRoot = (root) => root?.querySelector("[data-interview-options-list]");
+
+const interviewOptionRowsForRoot = (root) => {
+  const list = interviewOptionsListForRoot(root);
+  if (!list) return [];
+  return Array.from(list.children).filter((child) => child.matches?.("[data-interview-option-row]"));
+};
+
 const syncInterviewOptionControls = (root) => {
   if (!root) return;
   const maxOptions = Number(root.dataset.maxOptions || 5);
-  const rows = Array.from(root.querySelectorAll("[data-interview-option-row]"));
+  const rows = interviewOptionRowsForRoot(root);
   const addButton = root.querySelector("[data-add-interview-option]");
   if (addButton) addButton.disabled = rows.length >= maxOptions;
   rows.forEach((row, index) => {
@@ -11128,6 +11225,70 @@ const syncInterviewOptionControls = (root) => {
     }
   });
   syncProceedInterviewButton(root.closest("form"));
+};
+
+const addInterviewOptionRow = (addButton) => {
+  const root = addButton?.closest?.("[data-interview-options-root]");
+  const list = interviewOptionsListForRoot(root);
+  const rows = interviewOptionRowsForRoot(root);
+  const maxOptions = Number(root?.dataset.maxOptions || 5);
+  if (!root || !list || !rows.length || rows.length >= maxOptions) return false;
+  const clone = rows[rows.length - 1].cloneNode(true);
+  clone.classList.add("is-extra");
+  clone.querySelectorAll("input").forEach((input) => {
+    input.value = "";
+    input.disabled = false;
+  });
+  clone.querySelectorAll("select").forEach((select) => {
+    select.value = "";
+    select.disabled = false;
+    if (select.matches("[data-interview-option-platform]")) syncInterviewOptionPlatformPreview(select);
+  });
+  clone.querySelectorAll("button").forEach((button) => {
+    button.disabled = false;
+  });
+  list.insertBefore(clone, addButton);
+  syncInterviewOptionControls(root);
+  clone.scrollIntoView?.({ block: "nearest" });
+  clone.querySelector("input")?.focus();
+  return true;
+};
+
+const removeInterviewOptionRow = (removeButton) => {
+  const root = removeButton?.closest?.("[data-interview-options-root]");
+  const row = removeButton?.closest?.("[data-interview-option-row]");
+  const rows = interviewOptionRowsForRoot(root);
+  if (!root || !row) return false;
+  if (rows.length <= 1) {
+    row.querySelectorAll("input").forEach((input) => {
+      input.value = "";
+    });
+  } else {
+    row.remove();
+  }
+  syncInterviewOptionControls(root);
+  return true;
+};
+
+const initInterviewOptionsRoot = (root) => {
+  if (!root || root.dataset.interviewOptionsInitialized === "true") return;
+  root.dataset.interviewOptionsInitialized = "true";
+  syncInterviewOptionControls(root);
+  root.addEventListener("click", (event) => {
+    const addButton = event.target.closest?.("[data-add-interview-option]");
+    if (addButton) {
+      event.preventDefault();
+      event.stopPropagation();
+      addInterviewOptionRow(addButton);
+      return;
+    }
+    const removeButton = event.target.closest?.("[data-remove-interview-option]");
+    if (removeButton) {
+      event.preventDefault();
+      event.stopPropagation();
+      removeInterviewOptionRow(removeButton);
+    }
+  });
 };
 
 const platformPreviewHtml = (platform) => {
@@ -11145,7 +11306,7 @@ const syncInterviewOptionPlatformPreview = (select) => {
   }
 };
 
-document.querySelectorAll("[data-interview-options-root]").forEach(syncInterviewOptionControls);
+document.querySelectorAll("[data-interview-options-root]").forEach(initInterviewOptionsRoot);
 document.querySelectorAll("[data-interview-option-platform]").forEach(syncInterviewOptionPlatformPreview);
 document.querySelectorAll("[data-proceed-interview-button]").forEach((button) => {
   syncProceedInterviewButton(button.closest("form"));
@@ -11563,46 +11724,14 @@ document.addEventListener("click", (event) => {
   const addButton = event.target.closest("[data-add-interview-option]");
   if (addButton) {
     event.preventDefault();
-    const root = addButton.closest("[data-interview-options-root]");
-    const list = root?.querySelector("[data-interview-options-list]");
-    const rows = root ? Array.from(root.querySelectorAll("[data-interview-option-row]")) : [];
-    const maxOptions = Number(root?.dataset.maxOptions || 5);
-    if (!root || !list || rows.length >= maxOptions) return;
-    const clone = rows[rows.length - 1].cloneNode(true);
-    clone.classList.add("is-extra");
-    clone.querySelectorAll("input").forEach((input) => {
-      input.value = "";
-      input.disabled = false;
-    });
-    clone.querySelectorAll("select").forEach((select) => {
-      select.value = "";
-      select.disabled = false;
-      if (select.matches("[data-interview-option-platform]")) syncInterviewOptionPlatformPreview(select);
-    });
-    clone.querySelectorAll("button").forEach((button) => {
-      button.disabled = false;
-    });
-    list.insertBefore(clone, addButton);
-    syncInterviewOptionControls(root);
-    clone.querySelector("input")?.focus();
+    addInterviewOptionRow(addButton);
     return;
   }
 
   const removeButton = event.target.closest("[data-remove-interview-option]");
   if (removeButton) {
     event.preventDefault();
-    const root = removeButton.closest("[data-interview-options-root]");
-    const row = removeButton.closest("[data-interview-option-row]");
-    const rows = root ? Array.from(root.querySelectorAll("[data-interview-option-row]")) : [];
-    if (!root || !row) return;
-    if (rows.length <= 1) {
-      row.querySelectorAll("input").forEach((input) => {
-        input.value = "";
-      });
-    } else {
-      row.remove();
-    }
-    syncInterviewOptionControls(root);
+    removeInterviewOptionRow(removeButton);
   }
 });
 

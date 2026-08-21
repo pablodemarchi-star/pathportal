@@ -924,7 +924,7 @@
 {% if not entry.is_rejected and entry.status in ['CV to be reviewed', 'Review interview date and time'] %}
 {% set cv_review_drafts = session.get('potential_cv_review_drafts', {}) %}
 {% set cv_review_draft = cv_review_drafts.get(entry.id|string) if cv_review_drafts else none %}
-{% set cv_review_option_rows = cv_review_draft.options if cv_review_draft else entry.cv_review_interview_options|potential_cv_review_options %}
+{% set cv_review_option_rows = (cv_review_draft.options if cv_review_draft else entry.cv_review_interview_options|potential_cv_review_options) or [{'date': '', 'time': '', 'platform': '', 'interviewer': ''}] %}
 <div class="modal {% if request.args.get('open_staff_modal') == 'cv-review-potential-entry-' ~ entry.id %}is-open{% endif %}" id="cv-review-potential-entry-{{ entry.id }}" aria-hidden="{{ 'false' if request.args.get('open_staff_modal') == 'cv-review-potential-entry-' ~ entry.id else 'true' }}">
   <div class="modal-panel large potential-review-modal">
     <div class="modal-header potential-review-header">
@@ -1177,7 +1177,15 @@
                     <button class="mini-icon-button" type="button" data-remove-interview-option aria-label="Remove interview date and time option" title="Remove option" {% if loop.first %}hidden{% endif %} {% if not current_menu_can_edit %}disabled{% endif %}>X</button>
                   </div>
                 {% endfor %}
-                <button class="mini-button add-interview-option-button" type="button" data-add-interview-option aria-label="Add interview date and time option" {% if not current_menu_can_edit %}disabled{% endif %}>+ Add option</button>
+                <button
+                  class="mini-button add-interview-option-button"
+                  type="submit"
+                  formaction="{{ url_for('staff.add_potential_cv_review_option', entry_id=entry.id) }}"
+                  formnovalidate
+                  data-add-interview-option
+                  aria-label="Add interview date and time option"
+                  {% if not current_menu_can_edit %}disabled{% endif %}
+                >+ Add option</button>
                 <div class="interview-option-shared-fields">
                   <label>
                     Platform

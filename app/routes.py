@@ -18,6 +18,7 @@ from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from openpyxl.utils import get_column_letter
 from sqlalchemy import or_, union_all
 from sqlalchemy.orm import joinedload
+from werkzeug.datastructures import MultiDict
 
 from app import db, login_required, validate_csrf
 from app.models import (
@@ -27493,6 +27494,30 @@ def save_potential_cv_review(entry_id):
 
     entry = PotentialEntry.query.get_or_404(entry_id)
     return save_potential_cv_review_changes(entry, "CV review saved.")
+
+
+@staff_bp.route("/potential-entries/<int:entry_id>/cv-review/add-option", methods=["POST"])
+@login_required
+def add_potential_cv_review_option(entry_id):
+    if not validate_csrf():
+        flash("Security token expired. Please try again.", "error")
+        return redirect(url_for("staff.potential_entries"))
+
+    entry = PotentialEntry.query.get_or_404(entry_id)
+    if entry.is_rejected or entry.status not in {"CV to be reviewed", "Review interview date and time"}:
+        flash("This application can only be reviewed while its status is CV to be reviewed or Review interview date and time.", "error")
+        return redirect(url_for("staff.potential_entries"))
+
+    draft_form = MultiDict(request.form)
+    dates = draft_form.getlist("interview_option_date")[:5]
+    times = draft_form.getlist("interview_option_time")[:5]
+    if max(len(dates), len(times), 1) < 5:
+        dates.append("")
+        times.append("")
+    draft_form.setlist("interview_option_date", dates[:5])
+    draft_form.setlist("interview_option_time", times[:5])
+    save_potential_cv_review_draft(entry.id, draft_form)
+    return redirect(url_for("staff.potential_entries", open_staff_modal=f"cv-review-potential-entry-{entry.id}"))
 
 
 @staff_bp.route("/potential-entries/<int:entry_id>/interview/preassigned-sessions", methods=["POST"])

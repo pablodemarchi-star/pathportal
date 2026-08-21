@@ -1249,6 +1249,53 @@ class PotentialInvitationTest(unittest.TestCase):
         self.assertIn(f'/potential-entries/{entry.id}/cv-review/reject', html)
         self.assertIn(f'/potential-entries/{entry.id}/cv-review/proceed', html)
 
+    def test_cv_review_modal_with_empty_draft_keeps_addable_option_row(self):
+        entry = self.add_entry(status="CV to be reviewed")
+        client = self.client()
+        with client.session_transaction() as user_session:
+            user_session["potential_cv_review_drafts"] = {
+                str(entry.id): {
+                    "notes": "Draft without valid options",
+                    "to_user_id": "",
+                    "to_user_ids": [],
+                    "options": [],
+                    "preassigned_exam_session_ids": [],
+                }
+            }
+
+        html = client.get(f"/potential-entries?open_staff_modal=cv-review-potential-entry-{entry.id}").get_data(as_text=True)
+        modal_html = html[html.index(f'id="cv-review-potential-entry-{entry.id}"'):]
+        modal_html = modal_html[:modal_html.index(f'id="potential-note-{entry.id}"')]
+
+        self.assertIn('name="interview_option_date"', modal_html)
+        self.assertIn('name="interview_option_time"', modal_html)
+        self.assertIn('data-interview-option-row', modal_html)
+        self.assertIn('data-add-interview-option', modal_html)
+        self.assertLess(modal_html.index('data-interview-option-row'), modal_html.index('data-add-interview-option'))
+
+    def test_cv_review_add_option_fallback_reopens_modal_with_extra_row(self):
+        entry = self.add_entry(status="CV to be reviewed")
+
+        response = self.client().post(
+            f"/potential-entries/{entry.id}/cv-review/add-option",
+            data={
+                "csrf_token": "token",
+                "cv_review_notes": "Keep form state",
+                "interview_option_date": [""],
+                "interview_option_time": [""],
+            },
+            follow_redirects=True,
+        )
+        html = response.get_data(as_text=True)
+        modal_html = html[html.index(f'id="cv-review-potential-entry-{entry.id}"'):]
+        modal_html = modal_html[:modal_html.index(f'id="potential-note-{entry.id}"')]
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn(f'id="cv-review-potential-entry-{entry.id}" aria-hidden="false"', modal_html)
+        self.assertIn("Keep form state", modal_html)
+        self.assertEqual(modal_html.count('name="interview_option_date"'), 2)
+        self.assertEqual(modal_html.count('name="interview_option_time"'), 2)
+
     def test_interview_to_be_arranged_perform_action_opens_readonly_email_modal(self):
         entry = self.add_entry(
             status="Interview to be arranged",
