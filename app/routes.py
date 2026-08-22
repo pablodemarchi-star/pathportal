@@ -10513,10 +10513,42 @@ def monthly_registrations_closed_date(session_record, today=None):
     return today
 
 
-def schedule_preparation_deadline_for_session(session_record, today=None):
+SCHEDULE_PREPARATION_DEFAULT_BUSINESS_DAYS = 8
+SCHEDULE_PREPARATION_URGENT_BUSINESS_DAYS = 3
+SCHEDULE_PREPARATION_URGENT_WINDOW_BUSINESS_DAYS = 20
+
+
+def session_is_within_next_business_days(session_record, today=None, business_days=SCHEDULE_PREPARATION_URGENT_WINDOW_BUSINESS_DAYS):
+    session_date = getattr(session_record, "session_date", None)
+    if not session_date:
+        return False
+    today = today or datetime.now(LOCAL_TZ).date()
+    return today <= session_date <= argentina_add_business_days(today, business_days)
+
+
+def schedule_preparation_business_days_for_bundle_sessions(sessions, today=None):
+    if any(session_is_within_next_business_days(session_record, today=today) for session_record in sessions or []):
+        return SCHEDULE_PREPARATION_URGENT_BUSINESS_DAYS
+    return SCHEDULE_PREPARATION_DEFAULT_BUSINESS_DAYS
+
+
+def shipment_bundle_sessions_for_schedule_deadline(session_record):
+    links = list(getattr(session_record, "shipment_bundle_links", []) or [])
+    bundle = next((link.bundle for link in links if getattr(link, "bundle", None)), None)
+    return shipment_bundle_sessions(bundle) if bundle else []
+
+
+def schedule_preparation_deadline_for_session(session_record, today=None, bundle_sessions=None):
     if not session_record or not getattr(session_record, "monthly_registrations_closed", False):
         return None
-    return argentina_add_business_days(monthly_registrations_closed_date(session_record, today=today), 8)
+    if bundle_sessions is None:
+        bundle_sessions = shipment_bundle_sessions_for_schedule_deadline(session_record)
+    business_days = (
+        schedule_preparation_business_days_for_bundle_sessions(bundle_sessions, today=today)
+        if bundle_sessions
+        else SCHEDULE_PREPARATION_DEFAULT_BUSINESS_DAYS
+    )
+    return argentina_add_business_days(monthly_registrations_closed_date(session_record, today=today), business_days)
 
 
 def monthly_registration_reopen_affects_schedule(session_record):
@@ -10535,11 +10567,11 @@ def schedule_preparation_deadline_for_sessions(sessions):
     return min(deadlines)
 
 
-def sync_schedule_preparation_deadline_for_bundle(bundle):
+def sync_schedule_preparation_deadline_for_bundle(bundle, today=None):
     sessions = shipment_bundle_sessions(bundle)
     changed = False
     for session_record in sessions:
-        deadline = schedule_preparation_deadline_for_session(session_record)
+        deadline = schedule_preparation_deadline_for_session(session_record, today=today, bundle_sessions=sessions)
         if not deadline:
             continue
         workflow = get_or_create_schedule_workflow(session_record)
@@ -10556,7 +10588,7 @@ def schedule_preparation_deadline_for_session_bundle(session_record):
     return schedule_preparation_deadline_for_session(session_record)
 
 
-def create_auto_shipment_bundle(supervisor, sessions, bundle_year, split_from_bundle=None, event_note="Bundle automatically created."):
+def create_auto_shipment_bundle(supervisor, sessions, bundle_year, split_from_bundle=None, event_note="Bundle automatically created.", today=None):
     sessions = sorted(sessions, key=lambda item: (item.session_date or datetime.max.date(), item.exam_session_name.lower(), item.id or 0))
     bundle = ExamSessionShipmentBundle(
         supervisor_staff_id=supervisor.id,
@@ -10579,12 +10611,12 @@ def create_auto_shipment_bundle(supervisor, sessions, bundle_year, split_from_bu
     for session_record in sessions:
         db.session.add(ExamSessionShipmentBundleSession(bundle=bundle, exam_session_id=session_record.id))
     ensure_shipment_checklist_items(bundle)
-    sync_schedule_preparation_deadline_for_bundle(bundle)
+    sync_schedule_preparation_deadline_for_bundle(bundle, today=today)
     shipment_event(bundle, "AUTO_BUNDLE_CREATED", None, bundle.status, event_note)
     return bundle
 
 
-def update_auto_bundle_deadline(bundle):
+def update_auto_bundle_deadline(bundle, today=None):
     if is_shipment_bundle_completed(bundle) or bundle.status in SHIPMENT_PROTECTED_STATUSES:
         return False
     deadline = shipment_bundle_deadline_for_sessions(shipment_bundle_sessions(bundle))
@@ -10596,7 +10628,7 @@ def update_auto_bundle_deadline(bundle):
         changed = True
     else:
         changed = False
-    return sync_schedule_preparation_deadline_for_bundle(bundle) or changed
+    return sync_schedule_preparation_deadline_for_bundle(bundle, today=today) or changed
 
 
 def split_overdue_auto_bundle_if_needed(bundle, today=None):
@@ -10615,7 +10647,7 @@ def split_overdue_auto_bundle_if_needed(bundle, today=None):
     original_keep = confirmed_sessions if confirmed_sessions else pending_sessions[:1]
     sessions_to_move = pending_sessions if confirmed_sessions else pending_sessions[1:]
     if not sessions_to_move:
-        return update_auto_bundle_deadline(bundle)
+        return update_auto_bundle_deadline(bundle, today=today)
     existing_links = {link.exam_session_id: link for link in list(bundle.session_links)}
     for session_record in sessions_to_move:
         link = existing_links.get(session_record.id)
@@ -10623,7 +10655,7 @@ def split_overdue_auto_bundle_if_needed(bundle, today=None):
             db.session.delete(link)
     bundle.auto_split_at = bundle.auto_split_at or datetime.now(timezone.utc)
     bundle.updated_by = "system"
-    update_auto_bundle_deadline(bundle)
+    update_auto_bundle_deadline(bundle, today=today)
     split_note = "Bundle automatically split because the unified deadline had expired and not all packages were confirmed."
     shipment_event_once(bundle, "AUTO_BUNDLE_SPLIT", bundle.status, bundle.status, split_note)
     supervisor = bundle.supervisor
@@ -10635,6 +10667,7 @@ def split_overdue_auto_bundle_if_needed(bundle, today=None):
             bundle_year,
             split_from_bundle=bundle,
             event_note="Session moved to split bundle after the unified deadline expired.",
+            today=today,
         )
         new_bundle.auto_split_at = datetime.now(timezone.utc)
         shipment_event(new_bundle, "SESSION_MOVED_TO_SPLIT_BUNDLE", None, new_bundle.status, session_record.exam_session_name)
@@ -10722,7 +10755,7 @@ def reconcile_auto_shipment_bundles(year_or_sessions, today=None):
         if remaining_links:
             db.session.delete(current_link)
             shipment_event(bundle, "SESSION_REMOVED_FROM_AUTO_BUNDLE", bundle.status, bundle.status, session_record.exam_session_name)
-            update_auto_bundle_deadline(bundle)
+            update_auto_bundle_deadline(bundle, today=today)
         else:
             db.session.delete(bundle)
             auto_bundles.discard(bundle)
@@ -10737,10 +10770,10 @@ def reconcile_auto_shipment_bundles(year_or_sessions, today=None):
             if is_shipment_bundle_completed(bundle) or bundle.status in SHIPMENT_PROTECTED_STATUSES or not bundle.auto_managed:
                 continue
             if bundle.split_from_bundle_id:
-                changed = update_auto_bundle_deadline(bundle) or changed
+                changed = update_auto_bundle_deadline(bundle, today=today) or changed
                 continue
             if bundle.supervisor_staff_id == supervisor.id:
-                changed = update_auto_bundle_deadline(bundle) or changed
+                changed = update_auto_bundle_deadline(bundle, today=today) or changed
                 continue
             db.session.delete(current_link)
             shipment_event(bundle, "SESSION_REMOVED_FROM_AUTO_BUNDLE", bundle.status, bundle.status, session_record.exam_session_name)
@@ -10765,9 +10798,9 @@ def reconcile_auto_shipment_bundles(year_or_sessions, today=None):
                     db.session.add(ExamSessionShipmentBundleSession(bundle=existing_bundle, exam_session_id=session_record.id))
                     shipment_event(existing_bundle, "SESSION_ADDED_TO_AUTO_BUNDLE", existing_bundle.status, existing_bundle.status, session_record.exam_session_name)
                     changed = True
-            changed = update_auto_bundle_deadline(existing_bundle) or changed
+            changed = update_auto_bundle_deadline(existing_bundle, today=today) or changed
         else:
-            new_bundle = create_auto_shipment_bundle(supervisor, group_sessions, selected_year)
+            new_bundle = create_auto_shipment_bundle(supervisor, group_sessions, selected_year, today=today)
             db.session.flush()
             split_overdue_auto_bundle_if_needed(new_bundle, today=today)
             changed = True
@@ -22204,6 +22237,7 @@ PAYMENT_HOLD_ELIGIBLE_STATUSES = {
     "Payment delayed",
 }
 PAYMENT_ARCHIVE_ELIGIBLE_STATUSES = {"Payment completed", "Rejected", "Payment cancelled"}
+PAYMENT_ARCHIVED_DELETE_ELIGIBLE_STATUSES = {"Payment completed", "Payment cancelled"}
 PAYMENT_METHODS = ("Bank transfer", "Deposit", "Cash", "Card")
 BILLING_ARCHIVE_ELIGIBLE_STATUSES = {"Invoice issued", "Invoice cancelled"}
 BILLING_STATUSES = (
@@ -22492,6 +22526,17 @@ def can_archive_payment_request(user, payment):
         payment.status in PAYMENT_ARCHIVE_ELIGIBLE_STATUSES
         and not payment.is_archived
         and can_use_payment_request_card_actions(user, payment)
+    )
+
+
+def can_delete_payment_request(user, payment):
+    if payment.status == "Submitted":
+        return can_edit_payment_request(user, payment)
+    return (
+        current_user_is_superadmin()
+        and payment.is_archived
+        and payment.status in PAYMENT_ARCHIVED_DELETE_ELIGIBLE_STATUSES
+        and can_view_payment_request(user, payment)
     )
 
 
@@ -22986,6 +23031,8 @@ def apply_payment_form(payment, form, allow_status=False, save_payee_contact=Fal
     payment_date_mode = (form.get("payment_date_mode") or "asap").strip()
     if payment_date_mode not in {"asap", "specific"}:
         payment_date_mode = "asap"
+    card_payment_status = (form.get("card_payment_status") or "").strip()
+    card_payment_already_paid = payment_method == "Card" and card_payment_status == "Already paid"
     try:
         requested_date = parse_finance_date(form.get("requested_payment_date"))
         if payment_date_mode == "asap":
@@ -23001,19 +23048,18 @@ def apply_payment_form(payment, form, allow_status=False, save_payee_contact=Fal
     except ValueError as exc:
         errors.append(str(exc))
         requested_date = scheduled_date = None
-    if payment_date_mode == "specific" and not scheduled_date:
+    if card_payment_already_paid:
+        scheduled_date = None
+    if payment_date_mode == "specific" and not scheduled_date and not card_payment_already_paid:
         errors.append("Payment date is required when Specific date is selected.")
-    if payment_date_mode == "specific" and scheduled_date and scheduled_date < date.today():
+    if payment_date_mode == "specific" and scheduled_date and not card_payment_already_paid and scheduled_date < date.today():
         errors.append("Payment date cannot be in the past.")
-    if payment_date_mode == "specific" and scheduled_date and not is_argentina_business_day(scheduled_date):
+    if payment_date_mode == "specific" and scheduled_date and not card_payment_already_paid and not is_argentina_business_day(scheduled_date):
         errors.append(FINANCE_NON_BUSINESS_PAYMENT_DATE_MESSAGE)
     account_holder = (form.get("account_holder") or getattr(contact, "account_holder", "") or "").strip()
     account_number = (form.get("account_number") or getattr(contact, "account_number", "") or "").strip()
     alias = (form.get("alias") or getattr(contact, "alias", "") or "").strip()
     tax_id = (form.get("tax_id") or getattr(contact, "tax_id", "") or "").strip()
-    card_payment_status = (form.get("card_payment_status") or "").strip()
-    if payment_method == "Card" and card_payment_status == "Already paid":
-        scheduled_date = None
     if payment_method in {"Bank transfer", "Deposit"} and not account_holder:
         errors.append("Account holder is required for bank transfer/deposit.")
     if payment_method in {"Bank transfer", "Deposit"} and not (account_number or alias):
@@ -23403,6 +23449,7 @@ def finance_requests():
         can_hold_payment_request=can_hold_payment_request,
         can_release_payment_hold=can_release_payment_hold,
         can_archive_payment_request=can_archive_payment_request,
+        can_delete_payment_request=can_delete_payment_request,
         can_finance_process_payment=can_finance_process_payment,
         can_management_review_payment=can_management_review_payment,
         can_edit_billing_request=can_edit_billing_request,
@@ -23489,12 +23536,14 @@ def delete_payment_request(payment_id):
     require_menu_edit(FINANCE_REQUESTS_MENU_KEY)
     payment = PaymentRequest.query.get_or_404(payment_id)
     user = getattr(g, "current_user", None)
-    if payment.status != "Submitted" or not can_edit_payment_request(user, payment):
+    return_tab = request.form.get("tab") if request.form.get("tab") in {"payment_requests", "finance_payments"} else "payment_requests"
+    return_show_archived = request.form.get("show_archived") == "1"
+    if not can_delete_payment_request(user, payment):
         abort(403, description="This payment request cannot be deleted.")
     db.session.delete(payment)
     db.session.commit()
     flash("Payment request deleted.", "success")
-    return finance_request_redirect("payment_requests")
+    return finance_request_redirect(return_tab, show_archived="1" if return_show_archived else None)
 
 
 @staff_bp.route("/finance-requests/payment-requests/<int:payment_id>/resubmit", methods=["POST"])

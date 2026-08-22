@@ -2386,6 +2386,44 @@ class ScheduleWorkflowTest(unittest.TestCase):
         self.assertEqual(workflow.next_action_due_at, argentina_add_business_days(closed_at.date(), 8))
         self.assertEqual(workflow.next_action_due_at, schedule_preparation_deadline_for_session(self.session_record))
 
+    def test_start_schedule_preparation_uses_urgent_deadline_when_bundle_has_near_session(self):
+        today = datetime.now(LOCAL_TZ).date()
+        closed_at = datetime.combine(today, time(12, 0), tzinfo=timezone.utc)
+        self.session_record.session_date = argentina_add_business_days(today, 40)
+        self.session_record.monthly_registrations_closed = True
+        self.session_record.monthly_registrations_closed_at = closed_at
+        near_session = ExamSession(
+            exam_session_name="Near bundled session",
+            category="Path School",
+            status="Pending",
+            session_date=argentina_add_business_days(today, 10),
+            shifts="Morning",
+            modules="Speaking",
+            format="Online",
+            monthly_registrations_closed=True,
+            monthly_registrations_closed_at=closed_at,
+        )
+        db.session.add(near_session)
+        db.session.commit()
+        bundle = self.create_shipment_bundle_record(session_record=self.session_record)
+        db.session.add(ExamSessionShipmentBundleSession(bundle_id=bundle.id, exam_session_id=near_session.id))
+        db.session.commit()
+        client = self.login_client()
+
+        response = client.post(
+            f"/pre-session-control-tower/sessions/{self.session_record.id}/schedule",
+            data={
+                "csrf_token": "token",
+                "action_key": "start_preparation",
+            },
+            follow_redirects=False,
+        )
+
+        self.assertEqual(response.status_code, 302)
+        workflow = ExamSessionScheduleWorkflow.query.filter_by(exam_session_id=self.session_record.id).one()
+        self.assertEqual(workflow.status, "In progress")
+        self.assertEqual(workflow.next_action_due_at, argentina_add_business_days(closed_at.date(), 3))
+
     def test_schedule_actions_do_not_show_edit_deadline_button(self):
         db.session.add(ExamSessionScheduleWorkflow(
             exam_session_id=self.session_record.id,
@@ -8109,6 +8147,47 @@ class ScheduleWorkflowTest(unittest.TestCase):
             },
         )
         self.assertEqual(set(workflows), {session_record.id for session_record in sessions})
+
+    def test_auto_shipment_bundle_uses_urgent_schedule_deadline_when_any_session_is_near(self):
+        self.create_supervisor(staff_id=1, name="Laura Mendez")
+        today = date(2026, 8, 3)
+        closed_at = datetime(2026, 7, 20, 12, 0, tzinfo=timezone.utc)
+        sessions = []
+        for name, session_date in [
+            ("Near session", argentina_add_business_days(today, 10)),
+            ("Far session", argentina_add_business_days(today, 40)),
+        ]:
+            session_record = ExamSession(
+                exam_session_name=name,
+                category="Path School",
+                status="Pending",
+                session_date=session_date,
+                shifts="Morning",
+                modules="Speaking",
+                format="Online",
+                monthly_registrations_closed=True,
+                monthly_registrations_closed_at=closed_at,
+            )
+            db.session.add(session_record)
+            db.session.flush()
+            self.assign_confirmed_supervisor(session_record, supervisor_id=1)
+            sessions.append(session_record)
+        db.session.commit()
+
+        reconcile_auto_shipment_bundles(sessions, today=today)
+
+        bundle = ExamSessionShipmentBundle.query.one()
+        self.assertEqual({link.exam_session_id for link in bundle.session_links}, {session_record.id for session_record in sessions})
+        workflows = {
+            workflow.exam_session_id: workflow
+            for workflow in ExamSessionScheduleWorkflow.query.filter(
+                ExamSessionScheduleWorkflow.exam_session_id.in_([session_record.id for session_record in sessions])
+            ).all()
+        }
+        self.assertEqual(
+            {session_record.id: workflows[session_record.id].next_action_due_at for session_record in sessions},
+            {session_record.id: argentina_add_business_days(closed_at.date(), 3) for session_record in sessions},
+        )
 
     def test_auto_shipment_bundles_separate_supervisors_and_skip_missing_supervisor(self):
         self.create_supervisor(staff_id=1, name="Laura Mendez")

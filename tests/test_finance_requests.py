@@ -490,7 +490,7 @@ class FinanceRequestsTest(unittest.TestCase):
                 "amount": "2500",
                 "payment_method": "Cash",
                 "payment_date_mode": "specific",
-                "scheduled_payment_date": (date.today() + timedelta(days=1)).strftime("%d/%m/%Y"),
+                "scheduled_payment_date": finance_next_payment_run_date().strftime("%d/%m/%Y"),
             },
             follow_redirects=True,
         )
@@ -524,7 +524,7 @@ class FinanceRequestsTest(unittest.TestCase):
                 "amount": "",
                 "payment_method": "Cash",
                 "payment_date_mode": "specific",
-                "scheduled_payment_date": (date.today() + timedelta(days=1)).strftime("%d/%m/%Y"),
+                "scheduled_payment_date": finance_next_payment_run_date().strftime("%d/%m/%Y"),
             },
             follow_redirects=True,
         )
@@ -1268,6 +1268,46 @@ class FinanceRequestsTest(unittest.TestCase):
 
         self.assertEqual(response.status_code, 403)
         self.assertIsNotNone(PaymentRequest.query.get(payment.id))
+
+    def test_only_superadmin_can_delete_archived_completed_or_cancelled_payment(self):
+        requester = self.create_user("requester@example.com")
+        superadmin = self.create_user("superadmin@example.com", is_superadmin=True)
+        completed = self.payment(requester, status="Payment completed", is_archived=True)
+        cancelled = self.payment(requester, status="Payment cancelled", is_archived=True)
+        rejected = self.payment(requester, status="Rejected", is_archived=True)
+        active_completed = self.payment(requester, status="Payment completed")
+
+        requester_response = self.client_for(requester).post(
+            f"/finance-requests/payment-requests/{completed.id}/delete",
+            data={"tab": "payment_requests", "show_archived": "1"},
+        )
+
+        self.assertEqual(requester_response.status_code, 403)
+        self.assertIsNotNone(PaymentRequest.query.get(completed.id))
+
+        superadmin_response = self.client_for(superadmin).post(
+            f"/finance-requests/payment-requests/{cancelled.id}/delete",
+            data={"tab": "finance_payments", "show_archived": "1"},
+        )
+
+        self.assertEqual(superadmin_response.status_code, 302)
+        self.assertIn("tab=finance_payments", superadmin_response.headers["Location"])
+        self.assertIn("show_archived=1", superadmin_response.headers["Location"])
+        self.assertIsNone(PaymentRequest.query.get(cancelled.id))
+
+        rejected_response = self.client_for(superadmin).post(
+            f"/finance-requests/payment-requests/{rejected.id}/delete",
+            data={"tab": "payment_requests", "show_archived": "1"},
+        )
+        active_completed_response = self.client_for(superadmin).post(
+            f"/finance-requests/payment-requests/{active_completed.id}/delete",
+            data={"tab": "payment_requests", "show_archived": "1"},
+        )
+
+        self.assertEqual(rejected_response.status_code, 403)
+        self.assertEqual(active_completed_response.status_code, 403)
+        self.assertIsNotNone(PaymentRequest.query.get(rejected.id))
+        self.assertIsNotNone(PaymentRequest.query.get(active_completed.id))
 
     def test_payment_request_card_shows_created_datetime_as_requested(self):
         user = self.create_user("requester@example.com")
@@ -2833,6 +2873,40 @@ class FinanceRequestsTest(unittest.TestCase):
         self.assertNotIn(active.request_number, body)
         self.assertNotIn("Active payment", body)
         self.assertNotIn("Are you sure you want to archive this payment request?", body)
+
+    def test_archived_completed_and_cancelled_payment_delete_button_is_superadmin_only(self):
+        requester = self.create_user("requester@example.com")
+        superadmin = self.create_user("superadmin@example.com", is_superadmin=True)
+        completed = self.payment(requester, status="Payment completed", is_archived=True)
+        cancelled = self.payment(requester, status="Payment cancelled", is_archived=True)
+        rejected = self.payment(requester, status="Rejected", is_archived=True)
+
+        requester_body = self.client_for(requester).get(
+            "/finance-requests?tab=payment_requests&show_archived=1"
+        ).get_data(as_text=True)
+        payment_requests_body = self.client_for(superadmin).get(
+            "/finance-requests?tab=payment_requests&show_archived=1"
+        ).get_data(as_text=True)
+        finance_actions_body = self.client_for(superadmin).get(
+            "/finance-requests?tab=finance_payments&show_archived=1"
+        ).get_data(as_text=True)
+
+        completed_delete_action = f'action="/finance-requests/payment-requests/{completed.id}/delete"'
+        cancelled_delete_action = f'action="/finance-requests/payment-requests/{cancelled.id}/delete"'
+        rejected_delete_action = f'action="/finance-requests/payment-requests/{rejected.id}/delete"'
+
+        self.assertNotIn(completed_delete_action, requester_body)
+        self.assertNotIn(cancelled_delete_action, requester_body)
+        self.assertIn(completed_delete_action, payment_requests_body)
+        self.assertIn(cancelled_delete_action, payment_requests_body)
+        self.assertNotIn(rejected_delete_action, payment_requests_body)
+        self.assertIn('name="tab" value="payment_requests"', payment_requests_body)
+        self.assertIn("Are you sure you want to permanently delete this archived payment?", payment_requests_body)
+
+        self.assertIn(completed_delete_action, finance_actions_body)
+        self.assertIn(cancelled_delete_action, finance_actions_body)
+        self.assertNotIn(rejected_delete_action, finance_actions_body)
+        self.assertIn('name="tab" value="finance_payments"', finance_actions_body)
 
     def test_archived_payment_requests_can_be_sorted_by_payee(self):
         user = self.create_user("requester@example.com")

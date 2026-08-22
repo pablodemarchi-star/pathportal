@@ -175,7 +175,7 @@
   </article>
 {% endmacro %}
 
-{% macro archived_payment_table(payments, empty_message='No archived payment requests yet.') %}
+{% macro archived_payment_table(payments, empty_message='No archived payment requests yet.', tab_name='payment_requests') %}
   <div class="finance-table-wrap">
     <table class="finance-archive-table">
       <thead>
@@ -222,6 +222,13 @@
         </div>
         {{ payment_card(payment, 'archived_payment_requests', true) }}
         <div class="form-actions finance-archive-modal-actions">
+          {% if current_menu_can_edit and can_delete_payment_request(current_user, payment) %}
+            <form method="post" action="{{ url_for('staff.delete_payment_request', payment_id=payment.id) }}">
+              <input type="hidden" name="tab" value="{{ tab_name }}">
+              <input type="hidden" name="show_archived" value="1">
+              <button class="danger-button" type="submit" onclick="return window.confirm('Are you sure you want to permanently delete this archived payment?')">Delete payment</button>
+            </form>
+          {% endif %}
           <button class="secondary-button" type="button" data-close-modal>Close</button>
         </div>
       </div>
@@ -679,7 +686,7 @@
         <a class="secondary-button compact-action" href="{{ url_for('staff.finance_requests', tab='payment_requests', show_archived='0' if show_archived else '1') }}">{{ 'Hide archived payments' if show_archived else 'Show archived payments' }}</a>
       </div>
       {% if show_archived %}
-        {{ archived_payment_table(payment_requests) }}
+        {{ archived_payment_table(payment_requests, tab_name='payment_requests') }}
       {% else %}
         <div class="finance-card-list finance-payment-request-grid">
           {% for payment in payment_requests %}
@@ -752,7 +759,7 @@
     {% if show_archived_invoices %}
       {{ archived_billing_table(finance_archived_billings) }}
     {% elif show_archived %}
-      {{ archived_payment_table(finance_archived_payments) }}
+      {{ archived_payment_table(finance_archived_payments, tab_name='finance_payments') }}
     {% else %}
       <div class="finance-action-filter-bar" aria-label="Finance action filters">
         {% for option in finance_filter_options %}
