@@ -1765,7 +1765,7 @@ def monthly_registration_status(session_record, requirement=None):
     return "Achieved" if requirement["ready"] else "In progress"
 
 
-def return_package_requirements_for_session(session_record):
+def return_package_items_for_session(session_record):
     if not session_record:
         return []
     latest_month = (
@@ -1788,18 +1788,80 @@ def return_package_requirements_for_session(session_record):
         registrations_by_module.get("Listening and speaking", 0) > 0
         or registrations_by_module.get("Speaking", 0) > 0
     )
-    requirements = []
+    items = []
     if has_reading_and_writing:
-        requirements.extend([
-            "1 submitted Reading and writing modules.",
-            "1 absent Reading and writing modules.",
+        items.extend([
+            {
+                "requirement": "1 submitted Reading and writing modules.",
+                "label": "Submitted Reading and Writing modules",
+            },
+            {
+                "requirement": "1 absent Reading and writing modules.",
+                "label": "Absent Reading and Writing modules",
+            },
         ])
     if has_listening_or_speaking:
-        requirements.extend([
-            "1 submitted Listening and speaking modules.",
-            "1 absent Listening and speaking modules.",
+        items.extend([
+            {
+                "requirement": "1 submitted Listening and speaking modules.",
+                "label": "Submitted Listening and Speaking modules",
+            },
+            {
+                "requirement": "1 absent Listening and speaking modules.",
+                "label": "Absent Listening and Speaking modules",
+            },
         ])
-    return requirements
+    return items
+
+
+def return_package_requirements_for_session(session_record):
+    return [item["requirement"] for item in return_package_items_for_session(session_record)]
+
+
+def return_package_count_for_session(session_record):
+    return len(return_package_items_for_session(session_record))
+
+
+def return_package_identifiers_for_session(session_record):
+    if not session_record or not session_record.session_date:
+        return []
+    package_count = return_package_count_for_session(session_record)
+    if package_count <= 0:
+        return []
+    sequence_start = 1
+    sessions = ExamSession.query.order_by(ExamSession.session_date.asc(), ExamSession.id.asc()).all()
+    for candidate in sessions:
+        if candidate.id == session_record.id:
+            break
+        sequence_start += return_package_count_for_session(candidate)
+    year_suffix = f"{session_record.session_date.year % 100:02d}"
+    return [
+        f"RP{year_suffix}-{sequence:05d}"
+        for sequence in range(sequence_start, sequence_start + package_count)
+    ]
+
+
+def return_package_label_payload(session_record):
+    if not session_record:
+        return None, "Session information is incomplete. Please complete the session details before generating the return package label."
+    fields = {
+        "exam_session": session_record.exam_session_name,
+        "date": long_session_date_filter(session_record.session_date),
+    }
+    if any(not (value or "").strip() for value in (fields["exam_session"], fields["date"])):
+        return None, "Session information is incomplete. Please complete the session details before generating the return package label."
+    package_identifiers = return_package_identifiers_for_session(session_record)
+    if not package_identifiers:
+        return None, "Return package information is incomplete. Please complete the return package requirements before generating the label."
+    return_package_items = return_package_items_for_session(session_record)
+    fields["return_package_labels"] = [
+        {
+            "identifier": identifier,
+            "label": item["label"],
+        }
+        for identifier, item in zip(package_identifiers, return_package_items)
+    ]
+    return fields, ""
 
 
 def staff_members_pending_id_for_session(session_record, assignments=None):
@@ -2067,6 +2129,43 @@ def build_session_identification_label_pdf(fields):
     commands.append(f"12 16 m {width - 12:.2f} 16 l S")
     commands.append(pdf_command_text(18, 9, "PRINT IDENTIFICATION LABEL AND AFFIX IT TO TOP OF SEALED SESSION BOX", "/F2", 5.2))
     return build_pdf_document(width, height, commands)
+
+
+def build_return_package_label_pdf(fields):
+    width, height = SESSION_IDENTIFICATION_LABEL_SIZE
+    pages = []
+    for package_label in fields["return_package_labels"]:
+        title = f"{package_label['identifier']} {fields['exam_session']}"
+        commands = [
+            "0 0 0 RG 0 0 0 rg",
+            "0.8 w",
+            f"5 5 {width - 10:.2f} {height - 10:.2f} re S",
+            "1.2 w",
+            f"12 {height - 36:.2f} {width - 24:.2f} 24 re S",
+        ]
+        title_y = height - 22
+        for line in pdf_wrap(title, 9.4, width - 36, max_lines=2):
+            commands.append(pdf_command_text(18, title_y, line, "/F2", 9.4))
+            title_y -= 9.2
+        commands.extend([
+            pdf_command_text(18, height - 33, "RETURN PACKAGE LABEL", "/F1", 6.5),
+            f"12 {height - 44:.2f} m {width - 12:.2f} {height - 44:.2f} l S",
+        ])
+        detail_y = height - 56
+        for line in pdf_wrap(package_label["label"], 9.4, width - 36, max_lines=2):
+            commands.append(pdf_command_text(18, detail_y, line, "/F2", 9.4))
+            detail_y -= 10
+        commands.append(pdf_command_text(18, height - 72, "Head's signature and full name", "/F2", 6.4))
+        signature_top = height - 76
+        signature_height = 56
+        commands.extend([
+            f"18 {signature_top - signature_height:.2f} {width - 36:.2f} {signature_height:.2f} re S",
+            pdf_command_text(18, signature_top - signature_height - 10, fields["date"], "/F1", 7.4),
+            f"12 16 m {width - 12:.2f} 16 l S",
+            pdf_command_text(18, 9, "AFFIX TO USED SEALED RETURN PACKAGE BEFORE LEAVING THE EXAM CENTRE", "/F2", 5.2),
+        ])
+        pages.append(commands)
+    return build_pdf_document_pages(width, height, pages)
 
 
 def bundle_label_payload(bundle):
@@ -13225,6 +13324,7 @@ def schedule_workflow_view(session_record, workflow=None, today=None, staffing=N
             "schedule_ready": bool(gate.get("is_ready")),
             "staffing_ready": False,
             "return_package_requirements": return_package_requirements_for_session(session_record),
+            "return_package_count": return_package_count_for_session(session_record),
             "staff_member_id_requirements": staff_member_id_requirements_for_session(session_record),
             "status_events": package_status_track_events(session_record, staff_member_id_requirements_for_session(session_record)),
             "inclusion_final_items": inclusion_final_items_for_session(session_record),
@@ -16592,6 +16692,7 @@ def pre_session_control_tower():
                 "schedule_ready": bool(schedule_gate.get("is_ready")),
                 "staffing_ready": bool(staffing_contract.get("ready")),
                 "return_package_requirements": return_package_requirements_for_session(session_record),
+                "return_package_count": return_package_count_for_session(session_record),
                 "staff_member_id_requirements": staff_member_id_requirements,
                 "status_events": package_status_track_events(session_record, staff_member_id_requirements),
                 "inclusion_final_items": inclusion_final_items_for_session(session_record, supervisor_assignments),
@@ -19421,6 +19522,20 @@ def session_identification_label_pdf(session_id):
     pdf_bytes = build_session_identification_label_pdf(fields)
     response = Response(pdf_bytes, mimetype="application/pdf")
     response.headers["Content-Disposition"] = f"inline; filename=session-identification-label-{session_record.id}.pdf"
+    return response
+
+
+@staff_bp.route("/pre-session-control-tower/sessions/<int:session_id>/return-package-label.pdf")
+@login_required
+def return_package_label_pdf(session_id):
+    require_menu_view("pre_session_control_tower")
+    session_record = ExamSession.query.get_or_404(session_id)
+    fields, error = return_package_label_payload(session_record)
+    if error:
+        return Response(error, status=400, mimetype="text/plain")
+    pdf_bytes = build_return_package_label_pdf(fields)
+    response = Response(pdf_bytes, mimetype="application/pdf")
+    response.headers["Content-Disposition"] = f"inline; filename=return-package-label-{session_record.id}.pdf"
     return response
 
 

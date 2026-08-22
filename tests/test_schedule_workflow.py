@@ -4569,6 +4569,140 @@ class ScheduleWorkflowTest(unittest.TestCase):
             response.get_data(as_text=True),
         )
 
+    def test_return_package_label_link_renders_with_dynamic_copy_count(self):
+        db.session.add(ExamSessionMonthlyRegistration(exam_session_id=self.session_record.id, month=6, module="Reading and writing", registration_number=3))
+        db.session.add(ExamSessionMonthlyRegistration(exam_session_id=self.session_record.id, month=6, module="Speaking", registration_number=2))
+        db.session.commit()
+        self.create_shipment_bundle_record(session_record=self.session_record)
+        client = self.login_client()
+
+        response = client.get("/pre-session-control-tower?session_year=2026&view=bundles")
+        html = response.get_data(as_text=True)
+        packages_section_start = html.index(f'<section class="staffing-control-section packages-control-section" id="packages-{self.session_record.id}"')
+        packages_section = html[packages_section_start:packages_section_start + 36000]
+        return_guidance = packages_section[
+            packages_section.index("Return packages") : packages_section.index('aria-label="Return packages actions"')
+        ]
+
+        self.assertIn("1. Include the following return packages:", return_guidance)
+        self.assertIn("2. Include ", return_guidance)
+        self.assertIn(
+            f'<a href="/pre-session-control-tower/sessions/{self.session_record.id}/return-package-label.pdf" target="_blank" rel="noopener noreferrer" aria-label="Open return package label PDF">these return labels</a>',
+            return_guidance,
+        )
+        self.assertIn(" loose for the Supervisor - DO NOT AFFIX", return_guidance)
+        self.assertNotIn("Include 4 copies of", return_guidance)
+        self.assertNotIn(">this return label</a>", return_guidance)
+        self.assertNotIn("undefined", return_guidance)
+        self.assertNotIn("null", return_guidance)
+        self.assertNotIn("None", return_guidance)
+
+    def test_return_package_label_pdf_requires_login_and_permission(self):
+        url = f"/pre-session-control-tower/sessions/{self.session_record.id}/return-package-label.pdf"
+
+        response = self.app.test_client().get(url)
+        self.assertEqual(response.status_code, 302)
+
+        user = User(full_name="No Return Label Access", email="no-return-label-access@example.com", department="Finance", is_active=True)
+        user.set_password("secret123")
+        db.session.add(user)
+        db.session.commit()
+        response = self.login_client_for_user(user).get(url)
+
+        self.assertEqual(response.status_code, 403)
+        self.assertIn("Access denied", response.get_data(as_text=True))
+
+    def test_return_package_label_pdf_generates_reference_sized_labels_with_unique_numbers(self):
+        previous_session = self.create_planning_ready_session("Previous return session", date(2025, 12, 10))
+        db.session.add(ExamSessionMonthlyRegistration(exam_session_id=previous_session.id, month=12, module="Speaking", registration_number=1))
+        self.session_record.exam_session_name = "Return label onsite"
+        self.session_record.session_date = date(2026, 12, 10)
+        db.session.add(ExamSessionMonthlyRegistration(exam_session_id=self.session_record.id, month=12, module="Reading and writing", registration_number=3))
+        db.session.add(ExamSessionMonthlyRegistration(exam_session_id=self.session_record.id, month=12, module="Speaking", registration_number=2))
+        viewer = User(full_name="Return Label Viewer", email="return-label-viewer@example.com", department="Finance", is_active=True)
+        viewer.set_password("secret123")
+        db.session.add_all([
+            viewer,
+            UserMenuPermission(user=viewer, menu_key="pre_session_control_tower", can_view=True, can_edit=False),
+        ])
+        db.session.commit()
+        updated_on = self.session_record.updated_on
+        event_count = ExamSessionShipmentEvent.query.count()
+        url = f"/pre-session-control-tower/sessions/{self.session_record.id}/return-package-label.pdf"
+
+        response = self.login_client_for_user(viewer).get(url)
+        pdf = response.data
+        text = pdf.decode("latin-1", "ignore")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.headers["Content-Type"], "application/pdf")
+        self.assertIn("inline; filename=return-package-label-", response.headers["Content-Disposition"])
+        self.assertEqual(len(re.findall(rb"/Type /Page\b", pdf)), 4)
+        self.assertIn(b"/MediaBox [0 0 280.630 161.575]", pdf)
+        self.assertIn("RP26-00003 Return label onsite", text)
+        self.assertIn("RP26-00004 Return label onsite", text)
+        self.assertIn("RP26-00005 Return label onsite", text)
+        self.assertIn("RP26-00006 Return label onsite", text)
+        self.assertIn("Submitted Reading and Writing modules", text)
+        self.assertIn("Absent Reading and Writing modules", text)
+        self.assertIn("Submitted Listening and Speaking modules", text)
+        self.assertIn("Absent Listening and Speaking modules", text)
+        self.assertIn("RETURN PACKAGE LABEL", text)
+        self.assertIn("Thursday 10, December 2026", text)
+        self.assertIn("Head's signature and full name", text)
+        self.assertIn("AFFIX TO USED SEALED RETURN PACKAGE BEFORE LEAVING THE EXAM CENTRE", text)
+        self.assertNotIn("AFFIX TO USED SEALED RETURN PACKAGES BEFORE LEAVING THE EXAM CENTRE", text)
+        self.assertNotIn("AFFIX TO SEALED RETURN PACKAGE BEFORE COLLECTION", text)
+        self.assertNotIn("PATH INTERNATIONAL EXAMINATIONS", text)
+        self.assertNotIn("PATH EXAMINATIONS", text)
+        self.assertNotIn("Exam session:", text)
+        self.assertNotIn("Date:", text)
+        self.assertNotIn("Head's signature)", text)
+        self.assertNotIn("candidate", text.lower())
+        self.assertNotIn("undefined", text)
+        self.assertNotIn("null", text)
+        self.assertNotIn("None", text)
+        db.session.refresh(self.session_record)
+        self.assertEqual(self.session_record.updated_on, updated_on)
+        self.assertEqual(ExamSessionShipmentEvent.query.count(), event_count)
+
+    def test_return_package_numbering_does_not_reset_when_year_changes(self):
+        previous_session = self.create_planning_ready_session("Previous return session", date(2026, 12, 10))
+        future_session = self.create_planning_ready_session("Future return session", date(2027, 1, 15))
+        db.session.add(ExamSessionMonthlyRegistration(exam_session_id=previous_session.id, month=12, module="Reading and writing", registration_number=1))
+        db.session.add(ExamSessionMonthlyRegistration(exam_session_id=previous_session.id, month=12, module="Speaking", registration_number=1))
+        db.session.add(ExamSessionMonthlyRegistration(exam_session_id=future_session.id, month=1, module="Speaking", registration_number=1))
+        viewer = User(full_name="Future Return Label Viewer", email="future-return-label-viewer@example.com", department="Finance", is_active=True)
+        viewer.set_password("secret123")
+        db.session.add_all([
+            viewer,
+            UserMenuPermission(user=viewer, menu_key="pre_session_control_tower", can_view=True, can_edit=False),
+        ])
+        db.session.commit()
+        url = f"/pre-session-control-tower/sessions/{future_session.id}/return-package-label.pdf"
+
+        response = self.login_client_for_user(viewer).get(url)
+        text = response.data.decode("latin-1", "ignore")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("RP27-00005 Future return session", text)
+        self.assertIn("RP27-00006 Future return session", text)
+        self.assertNotIn("RP27-00001", text)
+
+    def test_return_package_label_pdf_validates_required_data(self):
+        self.session_record.exam_session_name = ""
+        db.session.commit()
+        client = self.login_client()
+        url = f"/pre-session-control-tower/sessions/{self.session_record.id}/return-package-label.pdf"
+
+        response = client.get(url)
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(response.mimetype, "text/plain")
+        self.assertIn(
+            "Session information is incomplete. Please complete the session details before generating the return package label.",
+            response.get_data(as_text=True),
+        )
+
     def test_bundle_label_pdf_requires_login_and_permission(self):
         supervisor = self.create_supervisor(staff_id=410, name="Bundle Supervisor")
         first_session = self.create_planning_ready_session("Bundle label A", date(2026, 8, 20), supervisor_id=supervisor.id)
@@ -5254,7 +5388,7 @@ class ScheduleWorkflowTest(unittest.TestCase):
         self.assertIn("Candidate label printing actions", packages_section)
         self.assertIn("Room package sealing actions", packages_section)
         self.assertIn("Return packages actions", return_guidance)
-        self.assertIn("Include the following return packages:", return_guidance)
+        self.assertIn("1. Include the following return packages:", return_guidance)
         self.assertIn("1 submitted Reading and writing modules.", return_guidance)
         self.assertIn("1 absent Reading and writing modules.", return_guidance)
         self.assertIn("1 submitted Listening and speaking modules.", return_guidance)

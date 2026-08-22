@@ -2609,13 +2609,15 @@ This stage has already been marked as complete. Reopening it may affect package 
                   {% endif %}
                 </span>
               </div>
-              <p>Include the following return packages:</p>
+              <p>1. Include the following return packages:</p>
               {% if view.packages.return_package_requirements %}
                 <ul>
                   {% for requirement in view.packages.return_package_requirements %}
                     <li>{{ requirement }}</li>
                   {% endfor %}
                 </ul>
+                {% set return_package_label_count = view.packages.return_package_count %}
+                <p>2. Include <a href="{{ url_for('staff.return_package_label_pdf', session_id=session.id) }}" target="_blank" rel="noopener noreferrer" aria-label="Open return package label PDF">{{ "this return label" if return_package_label_count == 1 else "these return labels" }}</a> loose for the Supervisor - DO NOT AFFIX</p>
               {% endif %}
             </div>
             <div class="package-preparation-actions" aria-label="Return packages actions">
