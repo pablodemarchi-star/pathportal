@@ -2218,6 +2218,25 @@ class FinanceContact(db.Model):
     default_concept = db.relationship("FinanceConcept")
 
 
+class FinanceLinkFolder(db.Model):
+    __tablename__ = "finance_link_folder"
+
+    id = db.Column(db.Integer, primary_key=True)
+    link_type = db.Column(db.String(80), nullable=False, index=True)
+    link_url = db.Column(db.String(500), nullable=False)
+    departments = db.Column(db.String(200), nullable=False, default="", index=True)
+    created_on = db.Column(db.DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc), index=True)
+    updated_on = db.Column(
+        db.DateTime(timezone=True),
+        nullable=False,
+        default=lambda: datetime.now(timezone.utc),
+        onupdate=lambda: datetime.now(timezone.utc),
+    )
+
+    def departments_list(self):
+        return [department.strip() for department in (self.departments or "").split(",") if department.strip()]
+
+
 class FinanceClientContact(db.Model):
     __tablename__ = "finance_client_contact"
 

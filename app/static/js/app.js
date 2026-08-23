@@ -118,6 +118,31 @@ const modalOpeners = new WeakMap();
 })();
 
 (() => {
+  const dropdownSelector = ".finance-fixed-detail-dropdown";
+  const summarySelector = ".finance-fixed-detail-link";
+  const closeDropdowns = (except = null) => {
+    document.querySelectorAll(dropdownSelector).forEach((dropdown) => {
+      if (dropdown !== except) dropdown.removeAttribute("open");
+    });
+  };
+
+  document.addEventListener("click", (event) => {
+    const dropdown = event.target.closest?.(dropdownSelector);
+    if (!dropdown) {
+      closeDropdowns();
+      return;
+    }
+    if (event.target.closest?.(summarySelector)) {
+      closeDropdowns(dropdown);
+    }
+  });
+
+  document.addEventListener("keydown", (event) => {
+    if (event.key === "Escape") closeDropdowns();
+  });
+})();
+
+(() => {
   const statuses = ["Pending", "Waiting for confirmation", "Confirmed"];
   const classPrefix = "date-confirmation-";
   const classForStatus = (status) => `${classPrefix}${status.toLowerCase().replace(/\s+/g, "-")}`;

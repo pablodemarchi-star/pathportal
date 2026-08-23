@@ -1,4 +1,4 @@
-{% macro payment_form_fields(payment=none, amount_required=true) %}
+{% macro payment_form_fields(payment=none, amount_required=true, show_supporting_folder_link=false) %}
   {% set bank_snapshot = finance_bank_snapshot(payment) %}
   {% set date_mode = payment.payment_date_mode if payment and payment.payment_date_mode else ('specific' if payment and payment.scheduled_payment_date else 'asap') %}
   {% set asap_payment_date = payment.scheduled_payment_date if payment and date_mode == 'asap' and payment.scheduled_payment_date else next_payment_run_date %}
@@ -85,7 +85,15 @@
       </div>
     </div>
   </fieldset>
-  <label>Supporting documentation link <input name="supporting_documentation_url" value="{{ payment.supporting_documentation_url if payment else '' }}"></label>
+  <div class="finance-supporting-document-row">
+    <span class="finance-supporting-document-label">Supporting documentation link</span>
+    <div class="finance-supporting-document-control-row">
+      <input name="supporting_documentation_url" value="{{ payment.supporting_documentation_url if payment else '' }}" aria-label="Supporting documentation link">
+      {% if show_supporting_folder_link and new_payment_request_folder_link %}
+        <a class="finance-access-folder-link" href="{{ new_payment_request_folder_link }}" target="_blank" rel="noopener noreferrer">Access folder</a>
+      {% endif %}
+    </div>
+  </div>
   <label>Requester comments <textarea name="requester_comments" rows="3">{{ payment.requester_comments if payment else '' }}</textarea></label>
   {% if can_manage_payment_visibility %}
     <label>Visibility

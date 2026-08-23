@@ -12,6 +12,7 @@ from app.models import (
     FinanceClientContact,
     FinanceConcept,
     FinanceContact,
+    FinanceLinkFolder,
     PaymentRequest,
     PaymentRequestEvent,
     User,
@@ -160,6 +161,16 @@ class FinanceRequestsTest(unittest.TestCase):
         self.assertIn("right: 0;", block)
         self.assertIn("min-width: 330px;", block)
 
+    def test_finance_fixed_detail_dropdowns_close_from_page_clicks(self):
+        with open("app/static/js/app.js", encoding="utf-8") as js_file:
+            js = js_file.read()
+
+        self.assertIn('const dropdownSelector = ".finance-fixed-detail-dropdown";', js)
+        self.assertIn('document.addEventListener("click", (event) => {', js)
+        self.assertIn('closeDropdowns(dropdown);', js)
+        self.assertIn('if (!dropdown) {', js)
+        self.assertIn('closeDropdowns();', js)
+
     def test_new_payment_request_button_only_shows_on_payment_requests_view(self):
         user = self.create_user("superadmin@example.com", is_superadmin=True)
         client = self.client_for(user)
@@ -193,7 +204,7 @@ class FinanceRequestsTest(unittest.TestCase):
 
         self.assertIn("Finance actions", body)
         self.assertIn("<h2>Finance actions</h2>", body)
-        self.assertNotIn("Payment requests</a>", body)
+        self.assertIn("Payment requests</a>", body)
         self.assertNotIn("Invoice requests</a>", body)
         self.assertNotIn("Management review</a>", body)
         self.assertNotIn("Concepts</a>", body)
@@ -205,7 +216,7 @@ class FinanceRequestsTest(unittest.TestCase):
         user = self.create_user("finance@example.com", department="Finance")
         client = self.client_for(user)
 
-        for tab in ["calendar", "payment_requests", "billing_requests", "management_review", "concepts"]:
+        for tab in ["calendar", "billing_requests", "management_review", "concepts"]:
             with self.subTest(tab=tab):
                 body = client.get(f"/finance-requests?tab={tab}").get_data(as_text=True)
 
@@ -215,6 +226,45 @@ class FinanceRequestsTest(unittest.TestCase):
                 self.assertNotIn("<h2>Management review</h2>", body)
                 self.assertNotIn(">Calendar<", body)
                 self.assertNotIn("<h2>Calendar</h2>", body)
+
+    def test_finance_users_can_open_payment_requests_tab(self):
+        user = self.create_user("finance@example.com", department="Finance")
+        body = self.client_for(user).get("/finance-requests?tab=payment_requests").get_data(as_text=True)
+
+        self.assertIn("Payment requests</a>", body)
+        self.assertIn("<h2>Payment requests</h2>", body)
+        self.assertNotIn("<h2>Finance actions</h2>", body)
+
+    def test_finance_created_payment_requests_are_hidden_from_non_finance_users(self):
+        finance_user = self.create_user("finance@example.com", department="Finance")
+        admissions_user = self.create_user("admissions@example.com", department="Admissions")
+        management_user = self.create_user("management@example.com", department="Management")
+        finance_payment = self.payment(finance_user, status="Submitted")
+        finance_payment.description = "Finance department private payment"
+        admissions_payment = self.payment(admissions_user, status="Submitted")
+        admissions_payment.description = "Admissions visible payment"
+        db.session.commit()
+
+        admissions_body = self.client_for(admissions_user).get("/finance-requests?tab=payment_requests").get_data(as_text=True)
+        management_body = self.client_for(management_user).get("/finance-requests?tab=payment_requests").get_data(as_text=True)
+
+        self.assertNotIn(finance_payment.description, admissions_body)
+        self.assertNotIn(finance_payment.description, management_body)
+        self.assertIn(admissions_payment.description, admissions_body)
+        self.assertIn(admissions_payment.description, management_body)
+
+    def test_finance_created_payment_requests_are_visible_to_finance_and_superadmin(self):
+        finance_user = self.create_user("finance@example.com", department="Finance")
+        superadmin = self.create_user("superadmin@example.com", department="Admin", is_superadmin=True)
+        finance_payment = self.payment(finance_user, status="Submitted")
+        finance_payment.description = "Finance department private payment"
+        db.session.commit()
+
+        finance_body = self.client_for(finance_user).get("/finance-requests?tab=payment_requests").get_data(as_text=True)
+        superadmin_body = self.client_for(superadmin).get("/finance-requests?tab=payment_requests").get_data(as_text=True)
+
+        self.assertIn(finance_payment.description, finance_body)
+        self.assertIn(finance_payment.description, superadmin_body)
 
     def test_concepts_view_renders_edit_controls_for_superadmin(self):
         user = self.create_user("admin@example.com", is_superadmin=True)
@@ -282,6 +332,104 @@ class FinanceRequestsTest(unittest.TestCase):
 
         self.assertEqual(response.status_code, 302)
         self.assertIsNotNone(FinanceConcept.query.get(self.concept.id))
+
+    def test_link_folders_tab_renders_for_superadmin_only(self):
+        superadmin = self.create_user("admin@example.com", is_superadmin=True)
+        finance_user = self.create_user("finance@example.com", department="Finance")
+        link_folder = FinanceLinkFolder(
+            link_type="Payment proof",
+            link_url="https://example.com/payment-proof",
+            departments="Finance,Management",
+        )
+        db.session.add(link_folder)
+        db.session.commit()
+
+        superadmin_body = self.client_for(superadmin).get("/finance-requests?tab=link_folders").get_data(as_text=True)
+        finance_body = self.client_for(finance_user).get("/finance-requests?tab=link_folders").get_data(as_text=True)
+
+        self.assertIn("Link folders</a>", superadmin_body)
+        self.assertIn("<h2>Link folders</h2>", superadmin_body)
+        self.assertIn("Type of link", superadmin_body)
+        self.assertIn("Payment proof", superadmin_body)
+        self.assertIn("https://example.com/payment-proof", superadmin_body)
+        self.assertIn('class="finance-link-folder-url"', superadmin_body)
+        self.assertIn("Finance, Management", superadmin_body)
+        self.assertIn('data-open-modal="new-link-folder-modal"', superadmin_body)
+        self.assertIn(">New link</button>", superadmin_body)
+        self.assertIn('class="finance-department-picker"', superadmin_body)
+        self.assertIn('type="checkbox" name="departments" value="Admin"', superadmin_body)
+        self.assertIn('type="checkbox" name="departments" value="Finance"', superadmin_body)
+        self.assertNotIn("Link folders</a>", finance_body)
+        self.assertNotIn("<h2>Link folders</h2>", finance_body)
+        self.assertNotIn("https://example.com/payment-proof", finance_body)
+
+    def test_superadmin_can_create_link_folder_with_multiple_departments(self):
+        superadmin = self.create_user("admin@example.com", is_superadmin=True)
+
+        response = self.client_for(superadmin).post(
+            "/finance-requests/link-folders",
+            data={
+                "link_type": "New payment request",
+                "link_url": "https://example.com/new-payment-request",
+                "departments": ["Admin", "Finance", "Management"],
+            },
+        )
+
+        self.assertEqual(response.status_code, 302)
+        self.assertIn("tab=link_folders", response.headers["Location"])
+        link_folder = FinanceLinkFolder.query.one()
+        self.assertEqual(link_folder.link_type, "New payment request")
+        self.assertEqual(link_folder.link_url, "https://example.com/new-payment-request")
+        self.assertEqual(link_folder.departments_list(), ["Admin", "Finance", "Management"])
+
+    def test_new_payment_request_form_shows_access_folder_link(self):
+        superadmin = self.create_user("admin@example.com", is_superadmin=True)
+        db.session.add(FinanceLinkFolder(
+            link_type="New payment request",
+            link_url="https://example.com/new-payment-folder",
+            departments="Admin",
+        ))
+        db.session.commit()
+
+        body = self.client_for(superadmin).get("/finance-requests?tab=payment_requests").get_data(as_text=True)
+
+        self.assertIn("finance-supporting-document-row", body)
+        self.assertIn(
+            '<a class="finance-access-folder-link" href="https://example.com/new-payment-folder" target="_blank" rel="noopener noreferrer">Access folder</a>',
+            body,
+        )
+
+    def test_new_invoice_request_form_shows_access_folder_link(self):
+        superadmin = self.create_user("admin@example.com", is_superadmin=True)
+        db.session.add(FinanceLinkFolder(
+            link_type="New invoice request",
+            link_url="https://example.com/new-invoice-folder",
+            departments="Admin",
+        ))
+        db.session.commit()
+
+        body = self.client_for(superadmin).get("/finance-requests?tab=billing_requests").get_data(as_text=True)
+
+        self.assertIn("finance-supporting-document-row", body)
+        self.assertIn(
+            '<a class="finance-access-folder-link" href="https://example.com/new-invoice-folder" target="_blank" rel="noopener noreferrer">Access folder</a>',
+            body,
+        )
+
+    def test_non_superadmin_cannot_create_link_folder(self):
+        finance_user = self.create_user("finance@example.com", department="Finance")
+
+        response = self.client_for(finance_user).post(
+            "/finance-requests/link-folders",
+            data={
+                "link_type": "Payment proof",
+                "link_url": "https://example.com/payment-proof",
+                "departments": ["Finance"],
+            },
+        )
+
+        self.assertEqual(response.status_code, 403)
+        self.assertEqual(FinanceLinkFolder.query.count(), 0)
 
     def test_payment_method_form_shows_conditional_field_hooks_and_no_echeque(self):
         user = self.create_user("requester@example.com")
@@ -448,6 +596,12 @@ class FinanceRequestsTest(unittest.TestCase):
 
     def test_finance_actions_shows_only_scheduled_cards_with_payment_request_grid(self):
         user = self.create_user("finance@example.com", department="Finance")
+        db.session.add(FinanceLinkFolder(
+            link_type="Payment proof",
+            link_url="https://example.com/payment-proof-folder",
+            departments="Finance",
+        ))
+        db.session.commit()
         scheduled = self.payment(user, status="Management approved", scheduled_payment_date=date.today())
         scheduled.description = "Scheduled payment"
         completed = self.payment(user, status="Payment completed")
@@ -468,6 +622,10 @@ class FinanceRequestsTest(unittest.TestCase):
         self.assertIn('<span class="finance-status-chip status-management-approved">Scheduled</span>', body)
         self.assertIn("Payment proof", body)
         self.assertIn("data-payment-proof-input", body)
+        self.assertIn(
+            '<a class="finance-access-folder-link" href="https://example.com/payment-proof-folder" target="_blank" rel="noopener noreferrer">Access folder</a>',
+            body,
+        )
         self.assertIn("data-requires-payment-proof", body)
         self.assertIn("data-requires-empty-payment-proof", body)
         self.assertIn("Cancel payment", body)

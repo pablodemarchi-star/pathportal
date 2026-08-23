@@ -82,6 +82,7 @@ def create_app():
         BillingRequestEvent,
         FinanceConcept,
         FinanceContact,
+        FinanceLinkFolder,
         InternStage2Selection,
         InternStage3Selection,
         InternStageAnnualMeetingSelection,

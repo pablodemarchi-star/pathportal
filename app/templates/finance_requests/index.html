@@ -411,7 +411,7 @@
   {% endif %}
 {% endmacro %}
 
-{% macro payment_form_fields(payment=none, amount_required=true) %}
+{% macro payment_form_fields(payment=none, amount_required=true, show_supporting_folder_link=false) %}
   {% set bank_snapshot = finance_bank_snapshot(payment) %}
   {% set date_mode = payment.payment_date_mode if payment and payment.payment_date_mode else ('specific' if payment and payment.scheduled_payment_date else 'asap') %}
   {% set asap_payment_date = payment.scheduled_payment_date if payment and date_mode == 'asap' and payment.scheduled_payment_date else next_payment_run_date %}
@@ -498,7 +498,15 @@
       </div>
     </div>
   </fieldset>
-  <label>Supporting documentation link <input name="supporting_documentation_url" value="{{ payment.supporting_documentation_url if payment else '' }}"></label>
+  <div class="finance-supporting-document-row">
+    <span class="finance-supporting-document-label">Supporting documentation link</span>
+    <div class="finance-supporting-document-control-row">
+      <input name="supporting_documentation_url" value="{{ payment.supporting_documentation_url if payment else '' }}" aria-label="Supporting documentation link">
+      {% if show_supporting_folder_link and new_payment_request_folder_link %}
+        <a class="finance-access-folder-link" href="{{ new_payment_request_folder_link }}" target="_blank" rel="noopener noreferrer">Access folder</a>
+      {% endif %}
+    </div>
+  </div>
   <label>Requester comments <textarea name="requester_comments" rows="3">{{ payment.requester_comments if payment else '' }}</textarea></label>
   {% if can_manage_payment_visibility %}
     <label>Visibility
@@ -513,7 +521,7 @@
   {% endif %}
 {% endmacro %}
 
-{% macro billing_form_fields(billing=none) %}
+{% macro billing_form_fields(billing=none, show_supporting_folder_link=false) %}
   {% set selected_vat_status = billing.vat_status_invoice_type if billing else '' %}
   {% set needs_full_address = selected_vat_status in vat_status_requires_full_address %}
   <div class="finance-payee-picker" data-finance-payee-picker data-finance-contact-kind="client">
@@ -560,7 +568,15 @@
     </select>
   </label>
   <label data-finance-full-address-field {% if not needs_full_address %}hidden{% endif %}>Full address <input name="client_full_address" value="{{ billing.client_full_address or '' if billing else '' }}" {% if not needs_full_address %}disabled{% else %}required{% endif %}></label>
-  <label>Supporting documentation link <input name="supporting_documentation_url" value="{{ billing.supporting_documentation_url or '' if billing else '' }}"></label>
+  <div class="finance-supporting-document-row">
+    <span class="finance-supporting-document-label">Supporting documentation link</span>
+    <div class="finance-supporting-document-control-row">
+      <input name="supporting_documentation_url" value="{{ billing.supporting_documentation_url or '' if billing else '' }}" aria-label="Supporting documentation link">
+      {% if show_supporting_folder_link and new_invoice_request_folder_link %}
+        <a class="finance-access-folder-link" href="{{ new_invoice_request_folder_link }}" target="_blank" rel="noopener noreferrer">Access folder</a>
+      {% endif %}
+    </div>
+  </div>
   <label>Requester comments <textarea name="requester_comments" rows="3">{{ billing.requester_comments or '' if billing else '' }}</textarea></label>
 {% endmacro %}
 
@@ -611,6 +627,7 @@
     {% if 'management_review' in valid_tabs %}<a class="{% if active_tab == 'management_review' %}is-active{% endif %}" href="{{ url_for('staff.finance_requests', tab='management_review') }}">Management review</a>{% endif %}
     {% if 'finance_payments' in valid_tabs %}<a class="{% if active_tab == 'finance_payments' %}is-active{% endif %}" href="{{ url_for('staff.finance_requests', tab='finance_payments') }}">Finance actions</a>{% endif %}
     {% if 'concepts' in valid_tabs %}<a class="{% if active_tab == 'concepts' %}is-active{% endif %}" href="{{ url_for('staff.finance_requests', tab='concepts') }}">Concepts</a>{% endif %}
+    {% if 'link_folders' in valid_tabs %}<a class="{% if active_tab == 'link_folders' %}is-active{% endif %}" href="{{ url_for('staff.finance_requests', tab='link_folders') }}">Link folders</a>{% endif %}
   </div>
   <div class="finance-fixed-links">
     <details class="finance-fixed-detail-dropdown">
@@ -796,9 +813,15 @@
               <form class="finance-payment-execution-actions" method="post" action="{{ url_for('staff.process_payment_request', payment_id=payment.id) }}" data-required-payment-proof-message="Payment proof is required to complete a payment." data-empty-payment-proof-message="Payment proof must be empty to cancel or process a payment.">
                 <input type="hidden" name="scheduled_payment_date" value="{{ payment.scheduled_payment_date.isoformat() if payment.scheduled_payment_date else '' }}">
                 <input type="hidden" name="finance_filter" value="{{ active_finance_filter }}">
-                <label>Payment proof
-                  <input name="payment_proof_url" value="{{ payment.payment_proof_url or '' }}" placeholder="https://" data-payment-proof-input>
-                </label>
+                <div class="finance-supporting-document-row">
+                  <span class="finance-supporting-document-label">Payment proof</span>
+                  <div class="finance-supporting-document-control-row">
+                    <input name="payment_proof_url" value="{{ payment.payment_proof_url or '' }}" placeholder="https://" data-payment-proof-input aria-label="Payment proof">
+                    {% if payment_proof_folder_link %}
+                      <a class="finance-access-folder-link" href="{{ payment_proof_folder_link }}" target="_blank" rel="noopener noreferrer">Access folder</a>
+                    {% endif %}
+                  </div>
+                </div>
                 <div class="finance-payment-execution-buttons">
                   <button class="finance-review-button reject" type="submit" name="status" value="Payment cancelled" data-requires-empty-payment-proof>Cancel payment</button>
                   <button class="finance-review-button discrepancy" type="submit" name="status" value="Payment scheduled" {% if payment.status == 'Payment scheduled' %}disabled aria-disabled="true"{% endif %} data-requires-empty-payment-proof>Processing payment</button>
@@ -819,7 +842,7 @@
     {% if current_menu_can_edit and not show_archived_invoices %}
     <form class="finance-panel finance-form-panel" method="post" action="{{ url_for('staff.create_billing_request') }}">
       <h2>New invoice request</h2>
-      {{ billing_form_fields() }}
+      {{ billing_form_fields(show_supporting_folder_link=true) }}
       <button class="primary-button" type="submit">Create invoice request</button>
     </form>
     {% endif %}
@@ -900,6 +923,41 @@
       </div>
     </div>
   </section>
+{% elif active_tab == 'link_folders' %}
+  <section>
+    <div class="finance-panel">
+      <div class="finance-panel-header">
+        <h2>Link folders</h2>
+        {% if current_menu_can_edit and current_user_is_superadmin %}
+          <button class="primary-button" type="button" data-open-modal="new-link-folder-modal">New link</button>
+        {% endif %}
+      </div>
+      <div class="finance-table-wrap">
+        <table class="finance-archive-table finance-link-folders-table">
+          <thead>
+            <tr>
+              <th>Type of link</th>
+              <th>Link</th>
+              <th>Department</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for link_folder in link_folders %}
+              <tr>
+                <td>{{ link_folder.link_type }}</td>
+                <td><a class="finance-link-folder-url" href="{{ link_folder.link_url }}" target="_blank" rel="noopener noreferrer">{{ link_folder.link_url }}</a></td>
+                <td>{{ link_folder.departments_list()|join(', ') }}</td>
+              </tr>
+            {% else %}
+              <tr>
+                <td colspan="3" class="empty-state">No links yet.</td>
+              </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </section>
 {% endif %}
 {% if current_menu_can_edit and active_tab in ['payment_requests', 'finance_payments'] %}
   <div class="modal" id="new-payment-request-modal" aria-hidden="true" role="dialog" aria-modal="true" aria-labelledby="new-payment-request-title">
@@ -913,10 +971,48 @@
       </div>
       <form class="finance-form-panel finance-modal-form" method="post" action="{{ url_for('staff.create_payment_request') }}">
         <input type="hidden" name="source_tab" value="{{ active_tab }}">
-        {{ payment_form_fields(amount_required=active_tab != 'finance_payments') }}
+        {{ payment_form_fields(amount_required=active_tab != 'finance_payments', show_supporting_folder_link=true) }}
         <div class="form-actions">
           <button class="secondary-button" type="button" data-close-modal>Cancel</button>
           <button class="primary-button" type="submit">Create payment request</button>
+        </div>
+      </form>
+    </div>
+  </div>
+{% endif %}
+{% if current_menu_can_edit and current_user_is_superadmin and active_tab == 'link_folders' %}
+  <div class="modal" id="new-link-folder-modal" aria-hidden="true" role="dialog" aria-modal="true" aria-labelledby="new-link-folder-title">
+    <div class="modal-panel finance-request-modal-panel">
+      <div class="modal-header">
+        <div>
+          <h2 id="new-link-folder-title" tabindex="-1">New link</h2>
+        </div>
+        <button class="icon-button" type="button" data-close-modal aria-label="Close modal">&times;</button>
+      </div>
+      <form class="finance-form-panel finance-modal-form" method="post" action="{{ url_for('staff.create_finance_link_folder') }}">
+        <label>Type of link
+          <select name="link_type" required>
+            <option value="">Select type</option>
+            {% for link_type in finance_link_types %}
+              <option value="{{ link_type }}">{{ link_type }}</option>
+            {% endfor %}
+          </select>
+        </label>
+        <label>Link <input name="link_url" type="url" required></label>
+        <fieldset class="finance-department-picker">
+          <legend>Department</legend>
+          <div class="finance-department-options">
+            {% for department in finance_link_departments %}
+              <label class="finance-department-option">
+                <input type="checkbox" name="departments" value="{{ department }}">
+                <span>{{ department }}</span>
+              </label>
+            {% endfor %}
+          </div>
+        </fieldset>
+        <div class="form-actions">
+          <button class="secondary-button" type="button" data-close-modal>Cancel</button>
+          <button class="primary-button" type="submit">Save link</button>
         </div>
       </form>
     </div>

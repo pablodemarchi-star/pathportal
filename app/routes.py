@@ -79,6 +79,7 @@ from app.models import (
     FinanceClientContact,
     FinanceConcept,
     FinanceContact,
+    FinanceLinkFolder,
     InternStage2Selection,
     InternStage3Selection,
     InternStageAnnualMeetingSelection,
@@ -22379,6 +22380,7 @@ VAT_STATUS_REQUIRES_FULL_ADDRESS = {
     "International clients (factura E)",
 }
 FINANCE_VISIBILITY_MODES = ("Standard", "Restricted", "Superadmin only")
+FINANCE_LINK_TYPES = ("New payment request", "New invoice request", "Payment proof")
 FINANCE_NON_BUSINESS_PAYMENT_DATE_MESSAGE = "Payments cannot be processed on Saturdays, Sundays or public holidays."
 PAYMENT_DESCRIPTION_MAX_LENGTH = 90
 FINANCE_CONCEPT_SEEDS = (
@@ -22573,6 +22575,13 @@ def can_view_payment_request(user, payment):
         return False
     if not user:
         return bool(session.get("user"))
+    payment_requester_department = (
+        payment.requester_department
+        or getattr(payment.requester, "department", None)
+        or ""
+    )
+    if payment_requester_department == "Finance":
+        return user.department == "Finance"
     if payment.requester_user_id == user.id:
         return True
     if payment.visibility_mode == "Superadmin only":
@@ -23325,13 +23334,13 @@ def finance_requests():
     reconcile_overdue_payment_requests()
     active_tab = request.args.get("tab")
     if is_finance_user() and not current_user_is_superadmin():
-        valid_tabs = {"finance_payments"}
+        valid_tabs = {"payment_requests", "finance_payments"}
         default_tab = "finance_payments"
     else:
         valid_tabs = {"payment_requests", "billing_requests"}
         default_tab = "payment_requests"
     if current_user_is_superadmin():
-        valid_tabs.update({"management_review", "finance_payments", "concepts"})
+        valid_tabs.update({"management_review", "finance_payments", "concepts", "link_folders"})
         default_tab = "payment_requests"
     active_tab = active_tab or default_tab
     if active_tab not in valid_tabs:
@@ -23516,6 +23525,26 @@ def finance_requests():
     contacts = FinanceContact.query.order_by(FinanceContact.is_active.desc(), FinanceContact.display_name.asc()).all()
     client_contacts = FinanceClientContact.query.order_by(FinanceClientContact.is_active.desc(), FinanceClientContact.display_name.asc()).all()
     concepts = FinanceConcept.query.order_by(FinanceConcept.name.asc()).all()
+    link_folders = FinanceLinkFolder.query.order_by(FinanceLinkFolder.created_on.desc(), FinanceLinkFolder.id.desc()).all() if current_user_is_superadmin() else []
+    current_department = getattr(getattr(g, "current_user", None), "department", "") or ""
+
+    def finance_folder_link_for(link_type):
+        folder_links = (
+            FinanceLinkFolder.query
+            .filter_by(link_type=link_type)
+            .order_by(FinanceLinkFolder.created_on.desc(), FinanceLinkFolder.id.desc())
+            .all()
+        )
+        for link_folder in folder_links:
+            if current_department in link_folder.departments_list():
+                return link_folder.link_url
+        if current_user_is_superadmin() and folder_links:
+            return folder_links[0].link_url
+        return ""
+
+    new_payment_request_folder_link = finance_folder_link_for("New payment request")
+    new_invoice_request_folder_link = finance_folder_link_for("New invoice request")
+    payment_proof_folder_link = finance_folder_link_for("Payment proof")
     calendar_groups = payment_calendar_groups(finance_action_candidates)
     return render_template(
         "finance_requests/index.html",
@@ -23531,8 +23560,14 @@ def finance_requests():
         contacts=contacts,
         client_contacts=client_contacts,
         concepts=concepts,
+        link_folders=link_folders,
+        new_payment_request_folder_link=new_payment_request_folder_link,
+        new_invoice_request_folder_link=new_invoice_request_folder_link,
+        payment_proof_folder_link=payment_proof_folder_link,
         payment_concepts=[concept for concept in concepts if concept.is_active and concept.applies_to in {"Payments", "Both"}],
         billing_concepts=[concept for concept in concepts if concept.is_active and concept.applies_to in {"Billing", "Both"}],
+        finance_link_types=FINANCE_LINK_TYPES,
+        finance_link_departments=USER_DEPARTMENTS,
         payment_methods=PAYMENT_METHODS,
         payment_statuses=PAYMENT_STATUSES,
         billing_statuses=BILLING_STATUSES,
@@ -24080,6 +24115,43 @@ def delete_finance_concept(concept_id):
     db.session.commit()
     flash("Finance concept deleted.", "success")
     return finance_request_redirect("concepts")
+
+
+@staff_bp.route("/finance-requests/link-folders", methods=["POST"])
+@login_required
+def create_finance_link_folder():
+    require_menu_edit(FINANCE_REQUESTS_MENU_KEY)
+    if not current_user_is_superadmin():
+        abort(403, description="Only the Superadmin can manage finance link folders.")
+    link_type = (request.form.get("link_type") or "").strip()
+    link_url = (request.form.get("link_url") or "").strip()
+    departments = [
+        department for department in request.form.getlist("departments")
+        if department in USER_DEPARTMENTS
+    ]
+    errors = []
+    if link_type not in FINANCE_LINK_TYPES:
+        errors.append("Select a valid type of link.")
+    try:
+        link_url = clean_optional_url(link_url, "Link")
+    except ValueError as exc:
+        errors.append(str(exc))
+    if not link_url:
+        errors.append("Link is required.")
+    if not departments:
+        errors.append("Select at least one department.")
+    if errors:
+        for error in errors:
+            flash(error, "error")
+        return finance_request_redirect("link_folders", open_staff_modal="new-link-folder-modal")
+    db.session.add(FinanceLinkFolder(
+        link_type=link_type,
+        link_url=link_url,
+        departments=",".join(departments),
+    ))
+    db.session.commit()
+    flash("Finance link saved.", "success")
+    return finance_request_redirect("link_folders")
 
 
 @staff_bp.route("/")
