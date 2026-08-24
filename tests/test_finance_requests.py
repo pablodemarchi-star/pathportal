@@ -1,4 +1,5 @@
 import os
+import json
 import unittest
 from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
@@ -2392,6 +2393,89 @@ class FinanceRequestsTest(unittest.TestCase):
         payment = PaymentRequest.query.one()
         self.assertIsNone(payment.scheduled_payment_date)
 
+    def test_card_already_paid_request_is_completed_and_superadmin_archives_from_management_review(self):
+        requester = self.create_user("requester@example.com")
+        superadmin = self.create_user("superadmin@example.com", is_superadmin=True)
+        finance_user = self.create_user("finance@example.com", department="Finance")
+
+        response = self.client_for(requester).post(
+            "/finance-requests/payment-requests",
+            data={
+                "description": "Already paid card payment",
+                "concept_id": str(self.concept.id),
+                "currency": "ARS",
+                "amount": "2500",
+                "payment_method": "Card",
+                "card_payment_status": "Already paid",
+                "payment_date_mode": "specific",
+                "scheduled_payment_date": "20/08/2026",
+            },
+            follow_redirects=True,
+        )
+
+        self.assertEqual(response.status_code, 200)
+        payment = PaymentRequest.query.one()
+        self.assertEqual(payment.status, "Payment completed")
+        self.assertIsNotNone(payment.payment_completed_at)
+        self.assertIsNone(payment.scheduled_payment_date)
+        self.assertEqual(json.loads(payment.bank_details_snapshot)["card_payment_status"], "Already paid")
+
+        payment_requests_body = self.client_for(requester).get("/finance-requests?tab=payment_requests").get_data(as_text=True)
+        management_body = self.client_for(superadmin).get("/finance-requests?tab=management_review").get_data(as_text=True)
+        finance_body = self.client_for(finance_user).get("/finance-requests?tab=finance_payments").get_data(as_text=True)
+        requester_payment_card = self.card_for(payment_requests_body, "Already paid card payment")
+        management_card = self.card_for(management_body, "Already paid card payment")
+
+        self.assertIn("Already paid card payment", payment_requests_body)
+        self.assertIn("Already paid card payment", management_body)
+        self.assertIn("Payment completed", management_body)
+        self.assertNotIn("Already paid card payment", finance_body)
+        self.assertNotIn(">Archive</button>", requester_payment_card)
+        self.assertIn(">Archive</button>", management_card)
+        self.assertIn('name="tab" value="management_review"', management_card)
+
+        requester_archive_response = self.client_for(requester).post(
+            f"/finance-requests/payment-requests/{payment.id}/archive",
+            data={"tab": "payment_requests"},
+        )
+        self.assertEqual(requester_archive_response.status_code, 403)
+
+        wrong_tab_response = self.client_for(superadmin).post(
+            f"/finance-requests/payment-requests/{payment.id}/archive",
+            data={"tab": "payment_requests"},
+        )
+        self.assertEqual(wrong_tab_response.status_code, 403)
+
+        archive_response = self.client_for(requester).post(
+            f"/finance-requests/payment-requests/{payment.id}/archive",
+            data={"tab": "management_review"},
+            follow_redirects=True,
+        )
+
+        self.assertEqual(archive_response.status_code, 403)
+        db.session.refresh(payment)
+        self.assertFalse(payment.is_archived)
+
+        archive_response = self.client_for(superadmin).post(
+            f"/finance-requests/payment-requests/{payment.id}/archive",
+            data={"tab": "management_review"},
+            follow_redirects=True,
+        )
+
+        self.assertEqual(archive_response.status_code, 200)
+        db.session.refresh(payment)
+        self.assertTrue(payment.is_archived)
+        archived_management_body = self.client_for(superadmin).get("/finance-requests?tab=management_review").get_data(as_text=True)
+        self.assertNotIn("Already paid card payment", archived_management_body)
+        archived_payment_requests_body = self.client_for(superadmin).get(
+            "/finance-requests?tab=payment_requests&show_archived=1"
+        ).get_data(as_text=True)
+        archived_finance_body = self.client_for(finance_user).get(
+            "/finance-requests?tab=finance_payments&show_archived=1"
+        ).get_data(as_text=True)
+        self.assertIn("Already paid card payment", archived_payment_requests_body)
+        self.assertIn("Already paid card payment", archived_finance_body)
+
     def test_billing_request_card_renders_only_summary_fields(self):
         user = self.create_user("requester@example.com")
         response = self.client_for(user).post(
@@ -3213,11 +3297,13 @@ class FinanceRequestsTest(unittest.TestCase):
         completed = self.payment(user, status="Payment completed", is_archived=True)
         completed.payee_name_snapshot = "Paid Vendor"
         completed.description = "Completed archived payment"
+        completed.payment_method = "Card"
         completed.payment_proof_url = "https://example.com/payment-proof"
         completed.payment_completed_at = datetime(2026, 8, 15, 15, 30, tzinfo=timezone.utc)
         cancelled = self.payment(user, status="Payment cancelled", is_archived=True)
         cancelled.payee_name_snapshot = "Cancelled Vendor"
         cancelled.description = "Cancelled archived payment"
+        cancelled.payment_method = "Bank transfer"
         db.session.add(
             PaymentRequestEvent(
                 payment_request_id=cancelled.id,
@@ -3232,10 +3318,11 @@ class FinanceRequestsTest(unittest.TestCase):
 
         body = self.client_for(user).get("/finance-requests?tab=payment_requests&show_archived=1").get_data(as_text=True)
 
-        for heading in ("Payment no.", "Final date", "Status", "Payee", "Concept", "Description", "Payment proof", "Full info", "Copy"):
+        for heading in ("Payment no.", "Final date", "Status", "Payee", "Concept", "Description", "Method", "Payment proof", "Full info", "Copy"):
             self.assertIn(heading, body)
         self.assertIn('class="table-sort ', body)
         self.assertIn("sort=payee", body)
+        self.assertIn("sort=payment_method", body)
         self.assertIn("finance-archive-copy-actions", body)
         self.assertIn("Payment WhatsApp message copied.", body)
         self.assertIn("Mensaje de WhatsApp del pago copiado.", body)
@@ -3244,6 +3331,7 @@ class FinanceRequestsTest(unittest.TestCase):
         self.assertIn(completed.request_number, body)
         self.assertIn("15/08/2026", body)
         self.assertIn("Paid Vendor", body)
+        self.assertIn("Card", body)
         self.assertIn("Completed archived payment", body)
         self.assertIn('href="https://example.com/payment-proof"', body)
         self.assertIn(">View proof</a>", body)
@@ -3252,9 +3340,44 @@ class FinanceRequestsTest(unittest.TestCase):
         self.assertIn(cancelled.request_number, body)
         self.assertIn("16/08/2026", body)
         self.assertIn("Cancelled Vendor", body)
+        self.assertIn("Bank transfer", body)
         self.assertNotIn(active.request_number, body)
         self.assertNotIn("Active payment", body)
         self.assertNotIn("Are you sure you want to archive this payment request?", body)
+
+    def test_archived_payments_can_be_sorted_by_payment_method(self):
+        user = self.create_user("requester@example.com")
+        card = self.payment(user, status="Payment completed", is_archived=True)
+        card.payment_method = "Card"
+        card.description = "Card archived payment"
+        bank = self.payment(user, status="Payment cancelled", is_archived=True)
+        bank.payment_method = "Bank transfer"
+        bank.description = "Bank archived payment"
+        db.session.commit()
+
+        payment_requests_body = self.client_for(user).get(
+            "/finance-requests?tab=payment_requests&show_archived=1&sort=payment_method&dir=asc"
+        ).get_data(as_text=True)
+        finance_actions_body = self.client_for(user).get(
+            "/finance-requests?tab=finance_payments&show_archived=1&sort=payment_method&dir=asc"
+        ).get_data(as_text=True)
+
+        self.assertLess(payment_requests_body.index(bank.request_number), payment_requests_body.index(card.request_number))
+        self.assertLess(finance_actions_body.index(bank.request_number), finance_actions_body.index(card.request_number))
+        self.assertIn("Method", payment_requests_body)
+        self.assertIn("Method", finance_actions_body)
+
+    def test_archived_payments_table_prevents_horizontal_overlap(self):
+        with open("app/static/css/styles.css", encoding="utf-8") as css_file:
+            css = css_file.read()
+
+        self.assertIn(".finance-archived-payments-table-wrap .archive-payment-payee-col", css)
+        self.assertIn(".finance-archived-payments-table-wrap .archive-payment-concept-col", css)
+        self.assertIn(".finance-archived-payments-table-wrap .archive-payment-status-col", css)
+        self.assertIn(".finance-archived-payments-table-wrap .archive-payment-copy-col", css)
+        self.assertIn(".finance-archived-payments-table-wrap .finance-status-chip", css)
+        self.assertIn("white-space: nowrap;", css[css.index(".finance-archived-payments-table-wrap .finance-archive-table th {") :])
+        self.assertIn("overflow-wrap: anywhere;", css[css.index(".finance-archived-payments-table-wrap .finance-archive-table th,") :])
 
     def test_archived_completed_and_cancelled_payment_delete_button_is_superadmin_only(self):
         requester = self.create_user("requester@example.com")

@@ -773,6 +773,65 @@
   width: 100%;
 }
 
+.finance-archived-payments-table-wrap {
+  overflow-x: visible;
+}
+
+.finance-archived-payments-table-wrap .finance-archive-table {
+  min-width: 0;
+  table-layout: fixed;
+}
+
+.finance-archived-payments-table-wrap .finance-archive-table th,
+.finance-archived-payments-table-wrap .finance-archive-table td {
+  box-sizing: border-box;
+  overflow-wrap: anywhere;
+  overflow: hidden;
+  word-break: normal;
+}
+
+.finance-archived-payments-table-wrap .finance-archive-table th {
+  font-size: 0.76rem;
+  padding-left: 5px;
+  padding-right: 5px;
+  white-space: nowrap;
+}
+
+.finance-archived-payments-table-wrap .table-sort {
+  align-items: flex-start;
+  gap: 3px;
+  max-width: 100%;
+  white-space: nowrap;
+}
+
+.finance-archived-payments-table-wrap .table-sort span {
+  flex: 0 0 14px;
+  height: 14px;
+  width: 14px;
+}
+
+.finance-archived-payments-table-wrap .archive-payment-no-col { width: 10%; }
+.finance-archived-payments-table-wrap .archive-payment-date-col { width: 7%; }
+.finance-archived-payments-table-wrap .archive-payment-status-col { width: 14%; }
+.finance-archived-payments-table-wrap .archive-payment-payee-col { width: 14%; }
+.finance-archived-payments-table-wrap .archive-payment-concept-col { width: 13%; }
+.finance-archived-payments-table-wrap .archive-payment-description-col { width: 12%; }
+.finance-archived-payments-table-wrap .archive-payment-method-col { width: 9%; }
+.finance-archived-payments-table-wrap .archive-payment-proof-col { width: 8%; }
+.finance-archived-payments-table-wrap .archive-payment-info-col { width: 6%; }
+.finance-archived-payments-table-wrap .archive-payment-copy-col { width: 7%; }
+
+.finance-archive-payment-payee,
+.finance-archive-payment-concept {
+  white-space: normal;
+}
+
+.finance-archived-payments-table-wrap .finance-status-chip {
+  border-radius: 8px;
+  max-width: 100%;
+  white-space: normal;
+}
+
 .finance-archive-table th,
 .finance-archive-table td {
   border-bottom: 1px solid rgba(28, 42, 75, 0.1);
@@ -962,8 +1021,18 @@
 
 .finance-archive-copy-actions {
   align-items: center;
-  display: flex;
-  gap: 4px;
+  display: grid;
+  gap: 3px;
+  grid-template-columns: repeat(2, minmax(0, 24px));
+  justify-content: start;
+  max-width: 100%;
+}
+
+.finance-archive-copy-actions .copy-icon-button {
+  min-height: 22px;
+  min-width: 0;
+  padding: 0 3px;
+  width: 24px;
 }
 
 .finance-archive-modal-actions {

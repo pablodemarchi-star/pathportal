@@ -22599,6 +22599,14 @@ def finance_bank_snapshot(payment):
     return snapshot if isinstance(snapshot, dict) else {}
 
 
+def payment_is_card_already_paid(payment):
+    return bool(
+        payment
+        and payment.payment_method == "Card"
+        and finance_bank_snapshot(payment).get("card_payment_status") == "Already paid"
+    )
+
+
 def ensure_default_finance_concepts():
     if FinanceConcept.query.count():
         return
@@ -22703,6 +22711,13 @@ def can_release_payment_hold(user, payment):
 
 
 def can_archive_payment_request(user, payment):
+    if payment_is_card_already_paid(payment):
+        return (
+            payment.status in PAYMENT_ARCHIVE_ELIGIBLE_STATUSES
+            and not payment.is_archived
+            and current_user_is_superadmin()
+            and can_view_payment_request(user, payment)
+        )
     return (
         payment.status in PAYMENT_ARCHIVE_ELIGIBLE_STATUSES
         and not payment.is_archived
@@ -23084,6 +23099,17 @@ FINANCE_DASHBOARD_INVOICE_ACTION_STATUSES = {"Invoice issued", "Invoice cancelle
 FINANCE_DASHBOARD_MANAGEMENT_REVIEW_STATUSES = {"Submitted", "Pending approval", "Resubmitted"}
 
 
+def payment_appears_in_management_review(payment):
+    return bool(
+        payment
+        and not payment.is_archived
+        and (
+            payment.status in FINANCE_DASHBOARD_MANAGEMENT_REVIEW_STATUSES
+            or (payment.status == "Payment completed" and payment_is_card_already_paid(payment))
+        )
+    )
+
+
 def finance_dashboard_action_link(label, count, url):
     return {
         "label": label,
@@ -23147,8 +23173,7 @@ def finance_dashboard_actions():
     if is_superadmin:
         management_action_count = len([
             payment for payment in visible_payments
-            if not payment.is_archived
-            and payment.status in FINANCE_DASHBOARD_MANAGEMENT_REVIEW_STATUSES
+            if payment_appears_in_management_review(payment)
         ])
         if management_action_count:
             action_links.append(finance_dashboard_action_link(
@@ -23410,7 +23435,7 @@ def finance_requests():
     show_archived_invoices = request.args.get("show_archived_invoices") == "1"
     finance_sort_by = request.args.get("sort", "").strip()
     finance_sort_dir = request.args.get("dir", "asc").strip()
-    if finance_sort_by not in {"payment_no", "invoice_no", "final_date", "status", "payee", "client", "concept"}:
+    if finance_sort_by not in {"payment_no", "invoice_no", "final_date", "status", "payee", "client", "concept", "payment_method"}:
         finance_sort_by = ""
     if finance_sort_dir not in {"asc", "desc"}:
         finance_sort_dir = "asc"
@@ -23438,6 +23463,8 @@ def finance_requests():
                 return sorted(payments, key=lambda payment: ((payment.payee_name_snapshot or "").casefold(), payment.request_number or ""), reverse=finance_sort_dir == "desc")
             if finance_sort_by == "concept":
                 return sorted(payments, key=lambda payment: ((payment.concept_name_snapshot or "").casefold(), payment.request_number or ""), reverse=finance_sort_dir == "desc")
+            if finance_sort_by == "payment_method":
+                return sorted(payments, key=lambda payment: ((payment.payment_method or "").casefold(), payment.request_number or ""), reverse=finance_sort_dir == "desc")
         terminal_statuses = {"Payment completed", "Payment cancelled"}
 
         def default_payment_request_sort_value(payment):
@@ -23581,7 +23608,7 @@ def finance_requests():
         })
     management_payments = [
         payment for payment in visible_payments
-        if payment.status in {"Submitted", "Pending approval", "Resubmitted"} and not payment.is_archived
+        if payment_appears_in_management_review(payment)
     ]
     contacts = FinanceContact.query.order_by(FinanceContact.is_active.desc(), FinanceContact.display_name.asc()).all()
     client_contacts = FinanceClientContact.query.order_by(FinanceClientContact.is_active.desc(), FinanceClientContact.display_name.asc()).all()
@@ -23657,6 +23684,7 @@ def finance_requests():
         billing_completed_at=billing_completed_at,
         billing_finalized_at=billing_finalized_at,
         payment_is_delayed=payment_is_delayed,
+        payment_is_card_already_paid=payment_is_card_already_paid,
         billing_whatsapp_copy_contract=billing_whatsapp_copy_contract,
         can_view_payment_request=can_view_payment_request,
         can_edit_payment_request=can_edit_payment_request,
@@ -23712,10 +23740,16 @@ def create_payment_request():
         if source_tab == "finance_payments":
             redirect_params["finance_filter"] = "pending_approval"
         return finance_request_redirect(source_tab, **redirect_params)
+    if payment_is_card_already_paid(payment):
+        payment.status = "Payment completed"
+        payment.payment_completed_at = datetime.now(timezone.utc)
     db.session.add(payment)
     db.session.flush()
-    add_payment_event(payment, "Pending approval" if is_finance_action_request else "Submitted", new_status=payment.status)
-    if initial_status == "Management approved":
+    if payment.status == "Payment completed":
+        add_payment_event(payment, "Payment completed", new_status=payment.status)
+    else:
+        add_payment_event(payment, "Pending approval" if is_finance_action_request else "Submitted", new_status=payment.status)
+    if payment.status != "Payment completed" and initial_status == "Management approved":
         add_payment_event(payment, "Approved by Management", previous_status="Submitted", new_status="Management approved")
     db.session.commit()
     flash("Payment request created.", "success")
@@ -23808,6 +23842,8 @@ def manage_payment_request(payment_id):
     user = getattr(g, "current_user", None)
     if not can_management_review_payment(user, payment):
         abort(403, description="Only the Superadmin can review payment requests.")
+    if payment.status not in FINANCE_DASHBOARD_MANAGEMENT_REVIEW_STATUSES:
+        abort(403, description="This payment request does not need Management review.")
     action = request.form.get("action")
     comment = (request.form.get("management_comments") or "").strip()
     previous = payment.status
@@ -23954,6 +23990,11 @@ def archive_payment_request(payment_id):
     user = getattr(g, "current_user", None)
     if not can_archive_payment_request(user, payment):
         abort(403, description="Only completed or rejected payment requests can be archived.")
+    return_tab = request.form.get("tab") or "payment_requests"
+    if payment_is_card_already_paid(payment):
+        if return_tab != "management_review":
+            abort(403, description="Already paid card payments must be archived from Management review.")
+        return_tab = "payment_requests"
     actor = current_actor()
     payment.is_archived = True
     payment.archived_at = datetime.now(timezone.utc)
@@ -23962,7 +24003,7 @@ def archive_payment_request(payment_id):
     add_payment_event(payment, "Payment request archived", previous_status=payment.status, new_status=payment.status)
     db.session.commit()
     flash("Payment request archived.", "success")
-    return finance_request_redirect(request.form.get("tab") or "payment_requests")
+    return finance_request_redirect(return_tab, show_archived="1" if payment_is_card_already_paid(payment) else None)
 
 
 @staff_bp.route("/finance-requests/billing-requests", methods=["POST"])
