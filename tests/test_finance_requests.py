@@ -452,6 +452,17 @@ class FinanceRequestsTest(unittest.TestCase):
             body,
         )
 
+    def test_payment_request_currency_field_is_dropdown_with_ars_default(self):
+        user = self.create_user("requester@example.com")
+
+        body = self.client_for(user).get("/finance-requests?tab=payment_requests").get_data(as_text=True)
+
+        self.assertIn('<select name="currency" required>', body)
+        self.assertIn('<option value="ARS" selected>ARS</option>', body)
+        for currency in ("EUR", "GBP", "USD", "UYU"):
+            self.assertIn(f'<option value="{currency}" >{currency}</option>', body)
+        self.assertNotIn('<input name="currency"', body)
+
     def test_new_invoice_request_form_shows_access_folder_link(self):
         superadmin = self.create_user("admin@example.com", is_superadmin=True)
         db.session.add(FinanceLinkFolder(
@@ -468,6 +479,17 @@ class FinanceRequestsTest(unittest.TestCase):
             '<a class="finance-access-folder-link" href="https://example.com/new-invoice-folder" target="_blank" rel="noopener noreferrer">Access folder</a>',
             body,
         )
+
+    def test_invoice_request_currency_field_is_dropdown_with_ars_default(self):
+        user = self.create_user("requester@example.com")
+
+        body = self.client_for(user).get("/finance-requests?tab=billing_requests").get_data(as_text=True)
+
+        self.assertIn('<select name="currency" required>', body)
+        self.assertIn('<option value="ARS" selected>ARS</option>', body)
+        for currency in ("EUR", "GBP", "USD", "UYU"):
+            self.assertIn(f'<option value="{currency}" >{currency}</option>', body)
+        self.assertNotIn('<input name="currency"', body)
 
     def test_non_superadmin_cannot_create_link_folder(self):
         finance_user = self.create_user("finance@example.com", department="Finance")
@@ -1949,6 +1971,24 @@ class FinanceRequestsTest(unittest.TestCase):
         self.assertTrue(payment.request_number.startswith("PAY-"))
         self.assertEqual(payment.concept_name_snapshot, "Accounting")
 
+    def test_payment_request_rejects_invalid_currency(self):
+        user = self.create_user("requester@example.com")
+        response = self.client_for(user).post(
+            "/finance-requests/payment-requests",
+            data={
+                "description": "Invalid currency payment",
+                "concept_id": str(self.concept.id),
+                "currency": "BRL",
+                "amount": "2500",
+                "payment_method": "Cash",
+            },
+            follow_redirects=True,
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(PaymentRequest.query.count(), 0)
+        self.assertIn("Select a valid currency.", response.get_data(as_text=True))
+
     def test_payment_amount_accepts_comma_decimal_separator(self):
         user = self.create_user("requester@example.com")
         response = self.client_for(user).post(
@@ -2377,6 +2417,27 @@ class FinanceRequestsTest(unittest.TestCase):
         self.assertNotIn('name="scheduled_invoice_issue_date"', page)
         self.assertNotIn('name="invoice_number"', page)
         self.assertNotIn('name="invoice_link"', page)
+
+    def test_billing_request_rejects_invalid_currency(self):
+        user = self.create_user("requester@example.com")
+        response = self.client_for(user).post(
+            "/finance-requests/billing-requests",
+            data={
+                "concept_id": str(self.concept.id),
+                "client_name": "Client SA",
+                "currency": "BRL",
+                "amount": "75",
+                "client_tax_id": "30-12345678-9",
+                "vat_status_invoice_type": "Responsable Inscripto (factura A)",
+                "client_full_address": "123 Client Street",
+                "visibility_mode": "Standard",
+            },
+            follow_redirects=True,
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(BillingRequest.query.count(), 0)
+        self.assertIn("Select a valid currency.", response.get_data(as_text=True))
 
     def test_invoice_request_cards_have_consistent_base_height(self):
         with open("app/static/css/styles.css", encoding="utf-8") as css_file:

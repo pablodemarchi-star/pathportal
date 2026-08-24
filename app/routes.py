@@ -23207,6 +23207,8 @@ def apply_payment_form(payment, form, allow_status=False, save_payee_contact=Fal
         errors.append("Concept is required.")
     if not currency:
         errors.append("Currency is required.")
+    elif currency not in FEE_CURRENCY_OPTIONS:
+        errors.append("Select a valid currency.")
     if payment_method not in PAYMENT_METHODS:
         errors.append("Payment method is required.")
     payment_date_mode = (form.get("payment_date_mode") or "asap").strip()
@@ -23326,6 +23328,8 @@ def apply_billing_form(billing, form, save_client_contact=False):
         errors.append("Concept is required.")
     if not currency:
         errors.append("Currency is required.")
+    elif currency not in FEE_CURRENCY_OPTIONS:
+        errors.append("Select a valid currency.")
     if not client_tax_id:
         errors.append("Tax ID / CUIL / CUIT is required.")
     if not vat_status_invoice_type:
@@ -23628,6 +23632,7 @@ def finance_requests():
         finance_link_types=FINANCE_LINK_TYPES,
         finance_link_departments=USER_DEPARTMENTS,
         payment_methods=PAYMENT_METHODS,
+        finance_currency_options=FEE_CURRENCY_OPTIONS,
         payment_statuses=PAYMENT_STATUSES,
         billing_statuses=BILLING_STATUSES,
         vat_status_invoice_types=VAT_STATUS_INVOICE_TYPES,

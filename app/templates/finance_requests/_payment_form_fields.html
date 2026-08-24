@@ -2,6 +2,8 @@
   {% set bank_snapshot = finance_bank_snapshot(payment) %}
   {% set date_mode = payment.payment_date_mode if payment and payment.payment_date_mode else ('specific' if payment and payment.scheduled_payment_date else 'asap') %}
   {% set asap_payment_date = payment.scheduled_payment_date if payment and date_mode == 'asap' and payment.scheduled_payment_date else next_payment_run_date %}
+  {% set selected_currency = payment.currency if payment and payment.currency else 'ARS' %}
+  {% set request_currency_options = finance_currency_options|default(['ARS', 'EUR', 'GBP', 'USD', 'UYU']) %}
   <div class="finance-payee-picker" data-finance-payee-picker>
     <label>Contact / Payee
       <input name="payee_name" value="{{ payment.payee_name_snapshot or '' if payment else '' }}" autocomplete="off" data-finance-payee-input>
@@ -39,7 +41,13 @@
   </label>
   <label>Description <textarea name="description" rows="3" maxlength="90" required>{{ payment.description if payment else '' }}</textarea></label>
   <div class="finance-form-row">
-    <label>Currency <input name="currency" maxlength="10" value="{{ payment.currency if payment else 'ARS' }}" required></label>
+    <label>Currency
+      <select name="currency" required>
+        {% for currency in request_currency_options %}
+          <option value="{{ currency }}" {% if selected_currency == currency %}selected{% endif %}>{{ currency }}</option>
+        {% endfor %}
+      </select>
+    </label>
     <label>Amount <input name="amount" inputmode="decimal" pattern="[0-9]+([.][0-9]+)?" value="{{ payment.amount if payment and payment.amount else '' }}" data-finance-amount{% if amount_required %} required{% endif %}></label>
   </div>
   <label>Payment method
