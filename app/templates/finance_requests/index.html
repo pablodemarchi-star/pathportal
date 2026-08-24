@@ -554,6 +554,15 @@
       {% endif %}
     </div>
   </div>
+  <div class="finance-supporting-document-row" data-finance-card-receipt-row hidden>
+    <span class="finance-supporting-document-label">Receipt</span>
+    <div class="finance-supporting-document-control-row">
+      <input name="payment_proof_url" value="{{ payment.payment_proof_url if payment else '' }}" aria-label="Receipt">
+      {% if show_supporting_folder_link and new_payment_request_folder_link %}
+        <a class="finance-access-folder-link" href="{{ new_payment_request_folder_link }}" target="_blank" rel="noopener noreferrer">Access folder</a>
+      {% endif %}
+    </div>
+  </div>
   <label>Requester comments <textarea name="requester_comments" rows="3">{{ payment.requester_comments if payment else '' }}</textarea></label>
   {% if can_manage_payment_visibility %}
     <label>Visibility

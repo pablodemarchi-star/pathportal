@@ -23279,6 +23279,13 @@ def apply_payment_form(payment, form, allow_status=False, save_payee_contact=Fal
     except ValueError as exc:
         errors.append(str(exc))
         supporting_url = ""
+    try:
+        receipt_url = clean_optional_url(form.get("payment_proof_url"), "Receipt")
+    except ValueError as exc:
+        errors.append(str(exc))
+        receipt_url = ""
+    if card_payment_already_paid and not receipt_url:
+        errors.append("Receipt is required for already paid card payments.")
     if errors:
         return errors
     if save_payee_contact:
@@ -23308,6 +23315,7 @@ def apply_payment_form(payment, form, allow_status=False, save_payee_contact=Fal
     payment.payment_date_mode = payment_date_mode
     payment.fixed_payment_date_required = form.get("fixed_payment_date_required") == "1"
     payment.supporting_documentation_url = supporting_url
+    payment.payment_proof_url = receipt_url if card_payment_already_paid else ""
     payment.requester_comments = (form.get("requester_comments") or "").strip()
     if can_manage_payment_visibility():
         payment.visibility_mode = form.get("visibility_mode") if form.get("visibility_mode") in FINANCE_VISIBILITY_MODES else "Standard"

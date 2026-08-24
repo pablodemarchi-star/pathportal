@@ -501,10 +501,14 @@ class FinanceRequestsTest(unittest.TestCase):
         body = self.client_for(superadmin).get("/finance-requests?tab=payment_requests").get_data(as_text=True)
 
         self.assertIn("finance-supporting-document-row", body)
+        self.assertIn("data-finance-card-receipt-row", body)
+        self.assertIn('name="payment_proof_url"', body)
+        self.assertIn("Receipt", body)
         self.assertIn(
             '<a class="finance-access-folder-link" href="https://example.com/new-payment-folder" target="_blank" rel="noopener noreferrer">Access folder</a>',
             body,
         )
+        self.assertGreaterEqual(body.count('href="https://example.com/new-payment-folder"'), 2)
 
     def test_payment_request_currency_field_is_dropdown_with_ars_default(self):
         user = self.create_user("requester@example.com")
@@ -594,6 +598,7 @@ class FinanceRequestsTest(unittest.TestCase):
         self.assertIn('data-finance-payment-method', body)
         self.assertIn('data-finance-bank-fields', body)
         self.assertIn('data-finance-card-fields', body)
+        self.assertIn('data-finance-card-receipt-row', body)
         self.assertIn("Already paid", body)
         self.assertIn("To be paid", body)
         self.assertNotIn("E-cheque", body)
@@ -2385,6 +2390,7 @@ class FinanceRequestsTest(unittest.TestCase):
                 "card_payment_status": "Already paid",
                 "payment_date_mode": "specific",
                 "scheduled_payment_date": "20/08/2026",
+                "payment_proof_url": "https://example.com/card-receipt",
             },
             follow_redirects=True,
         )
@@ -2392,6 +2398,7 @@ class FinanceRequestsTest(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         payment = PaymentRequest.query.one()
         self.assertIsNone(payment.scheduled_payment_date)
+        self.assertEqual(payment.payment_proof_url, "https://example.com/card-receipt")
 
     def test_card_already_paid_request_is_completed_and_superadmin_archives_from_management_review(self):
         requester = self.create_user("requester@example.com")
@@ -2409,6 +2416,7 @@ class FinanceRequestsTest(unittest.TestCase):
                 "card_payment_status": "Already paid",
                 "payment_date_mode": "specific",
                 "scheduled_payment_date": "20/08/2026",
+                "payment_proof_url": "https://example.com/card-receipt",
             },
             follow_redirects=True,
         )
@@ -2418,6 +2426,7 @@ class FinanceRequestsTest(unittest.TestCase):
         self.assertEqual(payment.status, "Payment completed")
         self.assertIsNotNone(payment.payment_completed_at)
         self.assertIsNone(payment.scheduled_payment_date)
+        self.assertEqual(payment.payment_proof_url, "https://example.com/card-receipt")
         self.assertEqual(json.loads(payment.bank_details_snapshot)["card_payment_status"], "Already paid")
 
         payment_requests_body = self.client_for(requester).get("/finance-requests?tab=payment_requests").get_data(as_text=True)
@@ -2475,6 +2484,26 @@ class FinanceRequestsTest(unittest.TestCase):
         ).get_data(as_text=True)
         self.assertIn("Already paid card payment", archived_payment_requests_body)
         self.assertIn("Already paid card payment", archived_finance_body)
+
+    def test_card_already_paid_requires_receipt(self):
+        user = self.create_user("requester@example.com")
+        response = self.client_for(user).post(
+            "/finance-requests/payment-requests",
+            data={
+                "description": "Already paid card payment",
+                "concept_id": str(self.concept.id),
+                "currency": "ARS",
+                "amount": "2500",
+                "payment_method": "Card",
+                "card_payment_status": "Already paid",
+                "payment_date_mode": "asap",
+            },
+            follow_redirects=True,
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(PaymentRequest.query.count(), 0)
+        self.assertIn("Receipt is required for already paid card payments.", response.get_data(as_text=True))
 
     def test_cancelled_card_payment_can_be_archived_by_superadmin_from_payment_requests(self):
         requester = self.create_user("requester@example.com")

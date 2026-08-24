@@ -8718,6 +8718,17 @@ const syncFinancePaymentDateFields = (root = document) => {
     const paymentMethod = form.querySelector("[data-finance-payment-method]")?.value || "";
     const cardStatus = form.querySelector("input[name='card_payment_status']:checked")?.value || "";
     const hidePaymentDate = paymentMethod === "Card" && cardStatus === "Already paid";
+    const receiptRow = form.querySelector("[data-finance-card-receipt-row]");
+    const receiptInput = receiptRow?.querySelector("input[name='payment_proof_url']");
+    if (receiptRow) {
+      receiptRow.hidden = !hidePaymentDate;
+      receiptRow.setAttribute("aria-hidden", hidePaymentDate ? "false" : "true");
+    }
+    if (receiptInput) {
+      receiptInput.disabled = !hidePaymentDate;
+      receiptInput.required = hidePaymentDate;
+      if (!hidePaymentDate && receiptInput.setCustomValidity) receiptInput.setCustomValidity("");
+    }
     group.hidden = hidePaymentDate;
     group.setAttribute("aria-hidden", hidePaymentDate ? "true" : "false");
     group.querySelectorAll("input, select, textarea").forEach((field) => {
