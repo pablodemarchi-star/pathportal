@@ -22711,7 +22711,7 @@ def can_release_payment_hold(user, payment):
 
 
 def can_archive_payment_request(user, payment):
-    if payment_is_card_already_paid(payment):
+    if payment.status == "Payment completed" and payment_is_card_already_paid(payment):
         return (
             payment.status in PAYMENT_ARCHIVE_ELIGIBLE_STATUSES
             and not payment.is_archived
@@ -23991,7 +23991,7 @@ def archive_payment_request(payment_id):
     if not can_archive_payment_request(user, payment):
         abort(403, description="Only completed or rejected payment requests can be archived.")
     return_tab = request.form.get("tab") or "payment_requests"
-    if payment_is_card_already_paid(payment):
+    if payment.status == "Payment completed" and payment_is_card_already_paid(payment):
         if return_tab != "management_review":
             abort(403, description="Already paid card payments must be archived from Management review.")
         return_tab = "payment_requests"
@@ -24003,7 +24003,10 @@ def archive_payment_request(payment_id):
     add_payment_event(payment, "Payment request archived", previous_status=payment.status, new_status=payment.status)
     db.session.commit()
     flash("Payment request archived.", "success")
-    return finance_request_redirect(return_tab, show_archived="1" if payment_is_card_already_paid(payment) else None)
+    return finance_request_redirect(
+        return_tab,
+        show_archived="1" if payment.status == "Payment completed" and payment_is_card_already_paid(payment) else None,
+    )
 
 
 @staff_bp.route("/finance-requests/billing-requests", methods=["POST"])

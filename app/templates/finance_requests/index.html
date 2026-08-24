@@ -409,7 +409,8 @@
           </div>
         {% endif %}
         {% set is_card_already_paid = payment_is_card_already_paid(payment) %}
-        {% set show_payment_archive = current_menu_can_edit and can_archive_payment_request(current_user, payment) and ((tab_name == 'payment_requests' and not is_card_already_paid) or (tab_name == 'management_review' and is_card_already_paid)) %}
+        {% set requires_management_archive = payment.status == 'Payment completed' and is_card_already_paid %}
+        {% set show_payment_archive = current_menu_can_edit and can_archive_payment_request(current_user, payment) and ((tab_name == 'payment_requests' and not requires_management_archive) or (tab_name == 'management_review' and requires_management_archive)) %}
         {% if show_payment_archive %}
           <form method="post" action="{{ url_for('staff.archive_payment_request', payment_id=payment.id) }}">
             <input type="hidden" name="tab" value="{{ tab_name }}">

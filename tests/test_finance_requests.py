@@ -2476,6 +2476,31 @@ class FinanceRequestsTest(unittest.TestCase):
         self.assertIn("Already paid card payment", archived_payment_requests_body)
         self.assertIn("Already paid card payment", archived_finance_body)
 
+    def test_cancelled_card_payment_can_be_archived_by_superadmin_from_payment_requests(self):
+        requester = self.create_user("requester@example.com")
+        superadmin = self.create_user("superadmin@example.com", is_superadmin=True)
+        payment = self.payment(requester, status="Payment cancelled")
+        payment.description = "Cancelled card payment"
+        payment.payment_method = "Card"
+        payment.bank_details_snapshot = json.dumps({"card_payment_status": "Already paid"})
+        db.session.commit()
+
+        body = self.client_for(superadmin).get("/finance-requests?tab=payment_requests").get_data(as_text=True)
+        payment_card = self.card_for(body, "Cancelled card payment")
+
+        self.assertIn(">Archive</button>", payment_card)
+        self.assertIn('name="tab" value="payment_requests"', payment_card)
+
+        response = self.client_for(superadmin).post(
+            f"/finance-requests/payment-requests/{payment.id}/archive",
+            data={"tab": "payment_requests"},
+            follow_redirects=True,
+        )
+
+        self.assertEqual(response.status_code, 200)
+        db.session.refresh(payment)
+        self.assertTrue(payment.is_archived)
+
     def test_billing_request_card_renders_only_summary_fields(self):
         user = self.create_user("requester@example.com")
         response = self.client_for(user).post(
