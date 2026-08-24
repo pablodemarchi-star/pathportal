@@ -23334,7 +23334,7 @@ def finance_requests():
     reconcile_overdue_payment_requests()
     active_tab = request.args.get("tab")
     if is_finance_user() and not current_user_is_superadmin():
-        valid_tabs = {"payment_requests", "finance_payments"}
+        valid_tabs = {"finance_payments"}
         default_tab = "finance_payments"
     else:
         valid_tabs = {"payment_requests", "billing_requests"}

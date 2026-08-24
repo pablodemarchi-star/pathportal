@@ -204,7 +204,7 @@ class FinanceRequestsTest(unittest.TestCase):
 
         self.assertIn("Finance actions", body)
         self.assertIn("<h2>Finance actions</h2>", body)
-        self.assertIn("Payment requests</a>", body)
+        self.assertNotIn("Payment requests</a>", body)
         self.assertNotIn("Invoice requests</a>", body)
         self.assertNotIn("Management review</a>", body)
         self.assertNotIn("Concepts</a>", body)
@@ -216,7 +216,7 @@ class FinanceRequestsTest(unittest.TestCase):
         user = self.create_user("finance@example.com", department="Finance")
         client = self.client_for(user)
 
-        for tab in ["calendar", "billing_requests", "management_review", "concepts"]:
+        for tab in ["payment_requests", "calendar", "billing_requests", "management_review", "concepts"]:
             with self.subTest(tab=tab):
                 body = client.get(f"/finance-requests?tab={tab}").get_data(as_text=True)
 
@@ -227,13 +227,13 @@ class FinanceRequestsTest(unittest.TestCase):
                 self.assertNotIn(">Calendar<", body)
                 self.assertNotIn("<h2>Calendar</h2>", body)
 
-    def test_finance_users_can_open_payment_requests_tab(self):
+    def test_finance_users_cannot_open_payment_requests_tab(self):
         user = self.create_user("finance@example.com", department="Finance")
         body = self.client_for(user).get("/finance-requests?tab=payment_requests").get_data(as_text=True)
 
-        self.assertIn("Payment requests</a>", body)
-        self.assertIn("<h2>Payment requests</h2>", body)
-        self.assertNotIn("<h2>Finance actions</h2>", body)
+        self.assertNotIn("Payment requests</a>", body)
+        self.assertNotIn("<h2>Payment requests</h2>", body)
+        self.assertIn("<h2>Finance actions</h2>", body)
 
     def test_finance_created_payment_requests_are_hidden_from_non_finance_users(self):
         finance_user = self.create_user("finance@example.com", department="Finance")
@@ -253,7 +253,7 @@ class FinanceRequestsTest(unittest.TestCase):
         self.assertIn(admissions_payment.description, admissions_body)
         self.assertIn(admissions_payment.description, management_body)
 
-    def test_finance_created_payment_requests_are_visible_to_finance_and_superadmin(self):
+    def test_finance_created_payment_requests_stay_available_to_superadmin_after_finance_tab_fallback(self):
         finance_user = self.create_user("finance@example.com", department="Finance")
         superadmin = self.create_user("superadmin@example.com", department="Admin", is_superadmin=True)
         finance_payment = self.payment(finance_user, status="Submitted")
@@ -263,7 +263,9 @@ class FinanceRequestsTest(unittest.TestCase):
         finance_body = self.client_for(finance_user).get("/finance-requests?tab=payment_requests").get_data(as_text=True)
         superadmin_body = self.client_for(superadmin).get("/finance-requests?tab=payment_requests").get_data(as_text=True)
 
-        self.assertIn(finance_payment.description, finance_body)
+        self.assertIn("<h2>Finance actions</h2>", finance_body)
+        self.assertNotIn("Payment requests</a>", finance_body)
+        self.assertNotIn(finance_payment.description, finance_body)
         self.assertIn(finance_payment.description, superadmin_body)
 
     def test_concepts_view_renders_edit_controls_for_superadmin(self):
@@ -1042,6 +1044,8 @@ class FinanceRequestsTest(unittest.TestCase):
         self.assertIn("Archived invoice actions", body)
         self.assertIn("Invoice no.", body)
         self.assertIn("Invoice proof", body)
+        self.assertIn("<th>Copy</th>", body)
+        self.assertIn("finance-archive-copy-actions", body)
         self.assertNotIn("<th>Description</th>", body)
         self.assertIn("INVOICE-2026-0001", body)
         self.assertIn('<span class="finance-status-chip status-invoice-issued">Invoice issued</span>', body)
@@ -1052,6 +1056,8 @@ class FinanceRequestsTest(unittest.TestCase):
         archived_invoice_body = self.client_for(user).get("/finance-requests?tab=finance_payments&show_archived_invoices=1").get_data(as_text=True)
         self.assertIn("INVOICE-2026-0001", archived_invoice_body)
         self.assertIn('href="https://example.com/invoice-proof"', archived_invoice_body)
+        self.assertIn("Invoice WhatsApp message copied.", archived_invoice_body)
+        self.assertIn("Mensaje de WhatsApp de la factura copiado.", archived_invoice_body)
 
     def test_finance_actions_cancel_invoice_requires_empty_invoice_proof(self):
         user = self.create_user("finance@example.com", department="Finance")
@@ -1348,6 +1354,7 @@ class FinanceRequestsTest(unittest.TestCase):
         user = self.create_user("finance@example.com", department="Finance")
         payment = self.payment(user, status="Management approved", scheduled_payment_date=date.today())
         payment.description = "Ready to complete"
+        payment.payee_name_snapshot = "Ready Vendor"
         db.session.commit()
 
         response = self.client_for(user).post(
@@ -1370,9 +1377,13 @@ class FinanceRequestsTest(unittest.TestCase):
         self.assertIn("Archived finance actions", body)
         self.assertIn("Payment no.", body)
         self.assertIn("Full info", body)
+        self.assertIn("<th>Copy</th>", body)
+        self.assertIn("finance-archive-copy-actions", body)
         self.assertIn(payment.request_number, body)
         self.assertIn("Ready to complete", body)
         self.assertIn('<span class="finance-status-chip status-payment-completed">Payment completed</span>', body)
+        self.assertIn("Payment WhatsApp message copied.", body)
+        self.assertIn("Mensaje de WhatsApp del pago copiado.", body)
 
         superadmin = self.create_user("superadmin@example.com", department="Admin", is_superadmin=True)
         payment_requests_body = self.client_for(superadmin).get("/finance-requests?tab=payment_requests").get_data(as_text=True)
@@ -2724,6 +2735,12 @@ class FinanceRequestsTest(unittest.TestCase):
         self.assertIn("Issued Client", body)
         self.assertIn("Invoice proof", body)
         self.assertIn("Full info", body)
+        self.assertIn("<th>Copy</th>", body)
+        self.assertIn("finance-archive-copy-actions", body)
+        self.assertIn("Invoice WhatsApp message copied.", body)
+        self.assertIn("Mensaje de WhatsApp de la factura copiado.", body)
+        self.assertIn('<span class="copy-icon copy-language-label">EN</span>', body)
+        self.assertIn('<span class="copy-icon copy-language-label">SP</span>', body)
 
         active_page = self.client_for(user).get("/finance-requests?tab=billing_requests").get_data(as_text=True)
         self.assertNotIn(issued.request_number, active_page)
@@ -3101,10 +3118,15 @@ class FinanceRequestsTest(unittest.TestCase):
 
         body = self.client_for(user).get("/finance-requests?tab=payment_requests&show_archived=1").get_data(as_text=True)
 
-        for heading in ("Payment no.", "Final date", "Status", "Payee", "Concept", "Description", "Payment proof", "Full info"):
+        for heading in ("Payment no.", "Final date", "Status", "Payee", "Concept", "Description", "Payment proof", "Full info", "Copy"):
             self.assertIn(heading, body)
         self.assertIn('class="table-sort ', body)
         self.assertIn("sort=payee", body)
+        self.assertIn("finance-archive-copy-actions", body)
+        self.assertIn("Payment WhatsApp message copied.", body)
+        self.assertIn("Mensaje de WhatsApp del pago copiado.", body)
+        self.assertIn('<span class="copy-icon copy-language-label">EN</span>', body)
+        self.assertIn('<span class="copy-icon copy-language-label">SP</span>', body)
         self.assertIn(completed.request_number, body)
         self.assertIn("15/08/2026", body)
         self.assertIn("Paid Vendor", body)

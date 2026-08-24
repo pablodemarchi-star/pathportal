@@ -175,7 +175,7 @@
   </article>
 {% endmacro %}
 
-{% macro archived_payment_table(payments, empty_message='No archived payment requests yet.', tab_name='payment_requests') %}
+{% macro archived_payment_table(payments, empty_message='No archived payment requests yet.', tab_name='payment_requests', show_copy_actions=false) %}
   <div class="finance-table-wrap">
     <table class="finance-archive-table">
       <thead>
@@ -188,10 +188,13 @@
           <th>Description</th>
           <th>Payment proof</th>
           <th>Full info</th>
+          {% if show_copy_actions %}<th>Copy</th>{% endif %}
         </tr>
       </thead>
       <tbody>
         {% for payment in payments %}
+          {% set whatsapp_copy = payment_whatsapp_copy_contract(payment) %}
+          {% set whatsapp_copy_sp = payment_whatsapp_copy_contract(payment, 'sp') %}
           <tr>
             <td><strong>{{ payment.request_number }}</strong></td>
             <td>{{ payment_finalized_at(payment)|display_date if payment_finalized_at(payment) else 'Not set' }}</td>
@@ -201,10 +204,18 @@
             <td class="finance-archive-payment-description"><span>{{ payment.description }}</span></td>
             <td>{% if payment.payment_proof_url %}<a href="{{ payment.payment_proof_url }}" target="_blank" rel="noopener">View proof</a>{% else %}not yet{% endif %}</td>
             <td><button class="finance-archive-view-button" type="button" data-open-modal="archived-payment-request-{{ payment.id }}">View</button></td>
+            {% if show_copy_actions %}
+              <td>
+                <div class="finance-archive-copy-actions">
+                  {{ copy_button(whatsapp_copy.message, 'Payment WhatsApp message copied.', whatsapp_copy.error, 'EN') }}
+                  {{ copy_button(whatsapp_copy_sp.message, 'Mensaje de WhatsApp del pago copiado.', whatsapp_copy_sp.error, 'SP') }}
+                </div>
+              </td>
+            {% endif %}
           </tr>
         {% else %}
           <tr>
-            <td colspan="8" class="empty-state">{{ empty_message }}</td>
+            <td colspan="{{ 9 if show_copy_actions else 8 }}" class="empty-state">{{ empty_message }}</td>
           </tr>
         {% endfor %}
       </tbody>
@@ -236,7 +247,7 @@
   {% endfor %}
 {% endmacro %}
 
-{% macro archived_billing_table(billings, empty_message='No archived invoice requests yet.') %}
+{% macro archived_billing_table(billings, empty_message='No archived invoice requests yet.', show_copy_actions=false) %}
   <div class="finance-table-wrap">
     <table class="finance-archive-table">
       <thead>
@@ -248,10 +259,13 @@
           <th>{{ archived_payment_sort_header('Concept', 'concept') }}</th>
           <th>Invoice proof</th>
           <th>Full info</th>
+          {% if show_copy_actions %}<th>Copy</th>{% endif %}
         </tr>
       </thead>
       <tbody>
         {% for billing in billings %}
+          {% set invoice_copy = billing_whatsapp_copy_contract(billing) %}
+          {% set invoice_copy_sp = billing_whatsapp_copy_contract(billing, 'sp') %}
           <tr>
             <td><strong>{{ billing.request_number }}</strong></td>
             <td>{{ billing_finalized_at(billing)|display_date if billing_finalized_at(billing) else 'Not set' }}</td>
@@ -260,10 +274,18 @@
             <td>{{ billing.concept_name_snapshot }}</td>
             <td>{% if billing.invoice_link %}<a href="{{ billing.invoice_link }}" target="_blank" rel="noopener">View proof</a>{% else %}not yet{% endif %}</td>
             <td><button class="finance-archive-view-button" type="button" data-open-modal="archived-billing-request-{{ billing.id }}">View</button></td>
+            {% if show_copy_actions %}
+              <td>
+                <div class="finance-archive-copy-actions">
+                  {{ copy_button(invoice_copy.message, 'Invoice WhatsApp message copied.', invoice_copy.error, 'EN') }}
+                  {{ copy_button(invoice_copy_sp.message, 'Mensaje de WhatsApp de la factura copiado.', invoice_copy_sp.error, 'SP') }}
+                </div>
+              </td>
+            {% endif %}
           </tr>
         {% else %}
           <tr>
-            <td colspan="7" class="empty-state">{{ empty_message }}</td>
+            <td colspan="{{ 8 if show_copy_actions else 7 }}" class="empty-state">{{ empty_message }}</td>
           </tr>
         {% endfor %}
       </tbody>
@@ -703,7 +725,7 @@
         <a class="secondary-button compact-action" href="{{ url_for('staff.finance_requests', tab='payment_requests', show_archived='0' if show_archived else '1') }}">{{ 'Hide archived payments' if show_archived else 'Show archived payments' }}</a>
       </div>
       {% if show_archived %}
-        {{ archived_payment_table(payment_requests, tab_name='payment_requests') }}
+        {{ archived_payment_table(payment_requests, tab_name='payment_requests', show_copy_actions=true) }}
       {% else %}
         <div class="finance-card-list finance-payment-request-grid">
           {% for payment in payment_requests %}
@@ -774,9 +796,9 @@
       </div>
     </div>
     {% if show_archived_invoices %}
-      {{ archived_billing_table(finance_archived_billings) }}
+      {{ archived_billing_table(finance_archived_billings, show_copy_actions=true) }}
     {% elif show_archived %}
-      {{ archived_payment_table(finance_archived_payments, tab_name='finance_payments') }}
+      {{ archived_payment_table(finance_archived_payments, tab_name='finance_payments', show_copy_actions=true) }}
     {% else %}
       <div class="finance-action-filter-bar" aria-label="Finance action filters">
         {% for option in finance_filter_options %}
@@ -858,7 +880,7 @@
         <a class="secondary-button compact-action" href="{{ url_for('staff.finance_requests', tab='billing_requests', show_archived_invoices='0' if show_archived_invoices else '1') }}">{{ 'Hide archived invoices' if show_archived_invoices else 'Show archived invoices' }}</a>
       </div>
       {% if show_archived_invoices %}
-        {{ archived_billing_table(billing_requests) }}
+        {{ archived_billing_table(billing_requests, show_copy_actions=true) }}
       {% else %}
         <div class="finance-card-list finance-invoice-request-list">
           {% for billing in billing_requests %}
