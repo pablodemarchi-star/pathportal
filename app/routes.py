@@ -24169,12 +24169,18 @@ def delete_finance_concept(concept_id):
     has_usage = (
         PaymentRequest.query.filter_by(concept_id=concept.id).first()
         or BillingRequest.query.filter_by(concept_id=concept.id).first()
-        or FinanceContact.query.filter_by(default_concept_id=concept.id).first()
-        or FinanceClientContact.query.filter_by(default_concept_id=concept.id).first()
     )
     if has_usage:
         flash("This concept cannot be deleted because it is already used by finance records.", "error")
         return finance_request_redirect("concepts")
+    FinanceContact.query.filter_by(default_concept_id=concept.id).update(
+        {"default_concept_id": None},
+        synchronize_session=False,
+    )
+    FinanceClientContact.query.filter_by(default_concept_id=concept.id).update(
+        {"default_concept_id": None},
+        synchronize_session=False,
+    )
     db.session.delete(concept)
     db.session.commit()
     flash("Finance concept deleted.", "success")

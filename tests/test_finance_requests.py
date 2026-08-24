@@ -335,6 +335,59 @@ class FinanceRequestsTest(unittest.TestCase):
         self.assertEqual(response.status_code, 302)
         self.assertIsNotNone(FinanceConcept.query.get(self.concept.id))
 
+    def test_delete_finance_concept_clears_saved_contact_defaults_when_no_requests_remain(self):
+        user = self.create_user("admin@example.com", is_superadmin=True)
+        payee = FinanceContact(display_name="Provider SA", default_concept_id=self.concept.id)
+        client_contact = FinanceClientContact(display_name="Client SA", default_concept_id=self.concept.id)
+        db.session.add_all([payee, client_contact])
+        db.session.commit()
+
+        response = self.client_for(user).post(f"/finance-requests/concepts/{self.concept.id}/delete")
+
+        self.assertEqual(response.status_code, 302)
+        self.assertIsNone(FinanceConcept.query.get(self.concept.id))
+        db.session.refresh(payee)
+        db.session.refresh(client_contact)
+        self.assertIsNone(payee.default_concept_id)
+        self.assertIsNone(client_contact.default_concept_id)
+
+    def test_delete_finance_concept_after_related_payment_is_deleted(self):
+        user = self.create_user("admin@example.com", is_superadmin=True)
+        payment = self.payment(user, status="Submitted")
+        db.session.delete(payment)
+        db.session.commit()
+
+        response = self.client_for(user).post(f"/finance-requests/concepts/{self.concept.id}/delete")
+
+        self.assertEqual(response.status_code, 302)
+        self.assertIsNone(FinanceConcept.query.get(self.concept.id))
+
+    def test_delete_finance_concept_after_related_invoice_is_deleted(self):
+        user = self.create_user("admin@example.com", is_superadmin=True)
+        billing = BillingRequest(
+            request_number="BILL-2026-0001",
+            requester_user_id=user.id,
+            requester_department=user.department,
+            client_name_snapshot="Client SA",
+            concept_id=self.concept.id,
+            concept_name_snapshot=self.concept.name,
+            description=self.concept.name,
+            currency="ARS",
+            amount=Decimal("7609990.00"),
+            client_tax_id="30-12345678-9",
+            vat_status_invoice_type="Consumidor Final (factura B)",
+            status="Requested",
+        )
+        db.session.add(billing)
+        db.session.commit()
+        db.session.delete(billing)
+        db.session.commit()
+
+        response = self.client_for(user).post(f"/finance-requests/concepts/{self.concept.id}/delete")
+
+        self.assertEqual(response.status_code, 302)
+        self.assertIsNone(FinanceConcept.query.get(self.concept.id))
+
     def test_link_folders_tab_renders_for_superadmin_only(self):
         superadmin = self.create_user("admin@example.com", is_superadmin=True)
         finance_user = self.create_user("finance@example.com", department="Finance")
