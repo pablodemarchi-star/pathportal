@@ -954,7 +954,13 @@
               <tr>
                 <td>{{ link_folder.link_type }}</td>
                 <td><a class="finance-link-folder-url" href="{{ link_folder.link_url }}" target="_blank" rel="noopener noreferrer">{{ link_folder.link_url }}</a></td>
-                <td>{{ selected_departments|join(', ') }}</td>
+                <td>
+                  <div class="finance-link-folder-departments">
+                    {% for department in selected_departments %}
+                      <span class="finance-link-folder-department">{{ department }}</span>
+                    {% endfor %}
+                  </div>
+                </td>
                 <td>
                   <div class="finance-link-folder-actions">
                     <button class="secondary-button compact-action" type="button" data-open-modal="edit-link-folder-{{ link_folder.id }}">Edit</button>
