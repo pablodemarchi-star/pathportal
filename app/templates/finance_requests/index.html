@@ -793,9 +793,15 @@
               {% if can_manage_finance %}
                 <form class="finance-payment-execution-actions" method="post" action="{{ url_for('staff.process_billing_request', billing_id=billing.id) }}" data-required-payment-proof-message="Invoice proof is required to issue an invoice." data-empty-payment-proof-message="Invoice proof must be empty to cancel or process an invoice.">
                   <input type="hidden" name="finance_filter" value="{{ active_finance_filter }}">
-                  <label>Invoice proof
-                    <input name="invoice_link" value="{{ billing.invoice_link or '' }}" placeholder="https://" data-payment-proof-input>
-                  </label>
+                  <div class="finance-supporting-document-row">
+                    <span class="finance-supporting-document-label">Invoice proof</span>
+                    <div class="finance-supporting-document-control-row">
+                      <input name="invoice_link" value="{{ billing.invoice_link or '' }}" placeholder="https://" data-payment-proof-input aria-label="Invoice proof">
+                      {% if invoice_proof_folder_link %}
+                        <a class="finance-access-folder-link" href="{{ invoice_proof_folder_link }}" target="_blank" rel="noopener noreferrer">Access folder</a>
+                      {% endif %}
+                    </div>
+                  </div>
                   <div class="finance-payment-execution-buttons">
                     <button class="finance-review-button reject" type="submit" name="status" value="Invoice cancelled" data-requires-empty-payment-proof>Cancel invoice</button>
                     <button class="finance-review-button discrepancy" type="submit" name="status" value="Processing invoice" {% if billing.status == 'Processing invoice' %}disabled aria-disabled="true"{% endif %} data-requires-empty-payment-proof>Processing invoice</button>
@@ -939,18 +945,28 @@
               <th>Type of link</th>
               <th>Link</th>
               <th>Department</th>
+              <th>Actions</th>
             </tr>
           </thead>
           <tbody>
             {% for link_folder in link_folders %}
+              {% set selected_departments = link_folder.departments_list() %}
               <tr>
                 <td>{{ link_folder.link_type }}</td>
                 <td><a class="finance-link-folder-url" href="{{ link_folder.link_url }}" target="_blank" rel="noopener noreferrer">{{ link_folder.link_url }}</a></td>
-                <td>{{ link_folder.departments_list()|join(', ') }}</td>
+                <td>{{ selected_departments|join(', ') }}</td>
+                <td>
+                  <div class="finance-link-folder-actions">
+                    <button class="secondary-button compact-action" type="button" data-open-modal="edit-link-folder-{{ link_folder.id }}">Edit</button>
+                    <form method="post" action="{{ url_for('staff.delete_finance_link_folder', link_folder_id=link_folder.id) }}">
+                      <button class="danger-button compact-action" type="submit" onclick="return window.confirm('Are you sure you want to delete this link?')">Delete</button>
+                    </form>
+                  </div>
+                </td>
               </tr>
             {% else %}
               <tr>
-                <td colspan="3" class="empty-state">No links yet.</td>
+                <td colspan="4" class="empty-state">No links yet.</td>
               </tr>
             {% endfor %}
           </tbody>
@@ -1017,5 +1033,43 @@
       </form>
     </div>
   </div>
+  {% for link_folder in link_folders %}
+    {% set selected_departments = link_folder.departments_list() %}
+    <div class="modal" id="edit-link-folder-{{ link_folder.id }}" aria-hidden="true" role="dialog" aria-modal="true" aria-labelledby="edit-link-folder-title-{{ link_folder.id }}">
+      <div class="modal-panel finance-request-modal-panel">
+        <div class="modal-header">
+          <div>
+            <h2 id="edit-link-folder-title-{{ link_folder.id }}" tabindex="-1">Edit link</h2>
+          </div>
+          <button class="icon-button" type="button" data-close-modal aria-label="Close modal">&times;</button>
+        </div>
+        <form class="finance-form-panel finance-modal-form" method="post" action="{{ url_for('staff.update_finance_link_folder', link_folder_id=link_folder.id) }}">
+          <label>Type of link
+            <select name="link_type" required>
+              {% for link_type in finance_link_types %}
+                <option value="{{ link_type }}" {% if link_folder.link_type == link_type %}selected{% endif %}>{{ link_type }}</option>
+              {% endfor %}
+            </select>
+          </label>
+          <label>Link <input name="link_url" type="url" value="{{ link_folder.link_url }}" required></label>
+          <fieldset class="finance-department-picker">
+            <legend>Department</legend>
+            <div class="finance-department-options">
+              {% for department in finance_link_departments %}
+                <label class="finance-department-option">
+                  <input type="checkbox" name="departments" value="{{ department }}" {% if department in selected_departments %}checked{% endif %}>
+                  <span>{{ department }}</span>
+                </label>
+              {% endfor %}
+            </div>
+          </fieldset>
+          <div class="form-actions">
+            <button class="secondary-button" type="button" data-close-modal>Cancel</button>
+            <button class="primary-button" type="submit">Save changes</button>
+          </div>
+        </form>
+      </div>
+    </div>
+  {% endfor %}
 {% endif %}
 {% endblock %}

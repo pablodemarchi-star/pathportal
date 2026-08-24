@@ -351,9 +351,16 @@ class FinanceRequestsTest(unittest.TestCase):
         self.assertIn("<h2>Link folders</h2>", superadmin_body)
         self.assertIn("Type of link", superadmin_body)
         self.assertIn("Payment proof", superadmin_body)
+        self.assertIn('<option value="Invoice proof">Invoice proof</option>', superadmin_body)
         self.assertIn("https://example.com/payment-proof", superadmin_body)
         self.assertIn('class="finance-link-folder-url"', superadmin_body)
         self.assertIn("Finance, Management", superadmin_body)
+        self.assertIn("<th>Actions</th>", superadmin_body)
+        self.assertIn(f'data-open-modal="edit-link-folder-{link_folder.id}"', superadmin_body)
+        self.assertIn(f'action="/finance-requests/link-folders/{link_folder.id}/edit"', superadmin_body)
+        self.assertIn(f'action="/finance-requests/link-folders/{link_folder.id}/delete"', superadmin_body)
+        self.assertIn(">Edit</button>", superadmin_body)
+        self.assertIn(">Delete</button>", superadmin_body)
         self.assertIn('data-open-modal="new-link-folder-modal"', superadmin_body)
         self.assertIn(">New link</button>", superadmin_body)
         self.assertIn('class="finance-department-picker"', superadmin_body)
@@ -381,6 +388,48 @@ class FinanceRequestsTest(unittest.TestCase):
         self.assertEqual(link_folder.link_type, "New payment request")
         self.assertEqual(link_folder.link_url, "https://example.com/new-payment-request")
         self.assertEqual(link_folder.departments_list(), ["Admin", "Finance", "Management"])
+
+    def test_superadmin_can_update_link_folder(self):
+        superadmin = self.create_user("admin@example.com", is_superadmin=True)
+        link_folder = FinanceLinkFolder(
+            link_type="Payment proof",
+            link_url="https://example.com/payment-proof",
+            departments="Finance,Management",
+        )
+        db.session.add(link_folder)
+        db.session.commit()
+
+        response = self.client_for(superadmin).post(
+            f"/finance-requests/link-folders/{link_folder.id}/edit",
+            data={
+                "link_type": "Invoice proof",
+                "link_url": "https://example.com/invoice-proof",
+                "departments": ["Admin", "Finance"],
+            },
+        )
+
+        self.assertEqual(response.status_code, 302)
+        self.assertIn("tab=link_folders", response.headers["Location"])
+        db.session.refresh(link_folder)
+        self.assertEqual(link_folder.link_type, "Invoice proof")
+        self.assertEqual(link_folder.link_url, "https://example.com/invoice-proof")
+        self.assertEqual(link_folder.departments_list(), ["Admin", "Finance"])
+
+    def test_superadmin_can_delete_link_folder(self):
+        superadmin = self.create_user("admin@example.com", is_superadmin=True)
+        link_folder = FinanceLinkFolder(
+            link_type="Payment proof",
+            link_url="https://example.com/payment-proof",
+            departments="Finance",
+        )
+        db.session.add(link_folder)
+        db.session.commit()
+
+        response = self.client_for(superadmin).post(f"/finance-requests/link-folders/{link_folder.id}/delete")
+
+        self.assertEqual(response.status_code, 302)
+        self.assertIn("tab=link_folders", response.headers["Location"])
+        self.assertEqual(FinanceLinkFolder.query.count(), 0)
 
     def test_new_payment_request_form_shows_access_folder_link(self):
         superadmin = self.create_user("admin@example.com", is_superadmin=True)
@@ -430,6 +479,33 @@ class FinanceRequestsTest(unittest.TestCase):
 
         self.assertEqual(response.status_code, 403)
         self.assertEqual(FinanceLinkFolder.query.count(), 0)
+
+    def test_non_superadmin_cannot_update_or_delete_link_folder(self):
+        finance_user = self.create_user("finance@example.com", department="Finance")
+        link_folder = FinanceLinkFolder(
+            link_type="Payment proof",
+            link_url="https://example.com/payment-proof",
+            departments="Finance",
+        )
+        db.session.add(link_folder)
+        db.session.commit()
+        client = self.client_for(finance_user)
+
+        update_response = client.post(
+            f"/finance-requests/link-folders/{link_folder.id}/edit",
+            data={
+                "link_type": "Invoice proof",
+                "link_url": "https://example.com/invoice-proof",
+                "departments": ["Finance"],
+            },
+        )
+        delete_response = client.post(f"/finance-requests/link-folders/{link_folder.id}/delete")
+
+        self.assertEqual(update_response.status_code, 403)
+        self.assertEqual(delete_response.status_code, 403)
+        db.session.refresh(link_folder)
+        self.assertEqual(link_folder.link_type, "Payment proof")
+        self.assertEqual(FinanceLinkFolder.query.count(), 1)
 
     def test_payment_method_form_shows_conditional_field_hooks_and_no_echeque(self):
         user = self.create_user("requester@example.com")
@@ -840,6 +916,12 @@ class FinanceRequestsTest(unittest.TestCase):
 
     def test_finance_actions_today_shows_invoice_request_cards(self):
         user = self.create_user("finance@example.com", department="Finance")
+        db.session.add(FinanceLinkFolder(
+            link_type="Invoice proof",
+            link_url="https://example.com/invoice-proof-folder",
+            departments="Finance",
+        ))
+        db.session.commit()
         billing = BillingRequest(
             request_number="INVOICE-2026-0001",
             requester_user_id=user.id,
@@ -876,6 +958,10 @@ class FinanceRequestsTest(unittest.TestCase):
         self.assertIn(f'action="/finance-requests/billing-requests/{billing.id}/finance"', today_body)
         self.assertIn("Invoice proof", today_body)
         self.assertIn('name="invoice_link"', today_body)
+        self.assertIn(
+            '<a class="finance-access-folder-link" href="https://example.com/invoice-proof-folder" target="_blank" rel="noopener noreferrer">Access folder</a>',
+            today_body,
+        )
         self.assertIn('name="status" value="Invoice cancelled"', today_body)
         self.assertIn(">Cancel invoice</button>", today_body)
         self.assertIn("data-requires-empty-payment-proof", today_body)

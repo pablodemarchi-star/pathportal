@@ -22380,7 +22380,7 @@ VAT_STATUS_REQUIRES_FULL_ADDRESS = {
     "International clients (factura E)",
 }
 FINANCE_VISIBILITY_MODES = ("Standard", "Restricted", "Superadmin only")
-FINANCE_LINK_TYPES = ("New payment request", "New invoice request", "Payment proof")
+FINANCE_LINK_TYPES = ("New payment request", "New invoice request", "Payment proof", "Invoice proof")
 FINANCE_NON_BUSINESS_PAYMENT_DATE_MESSAGE = "Payments cannot be processed on Saturdays, Sundays or public holidays."
 PAYMENT_DESCRIPTION_MAX_LENGTH = 90
 FINANCE_CONCEPT_SEEDS = (
@@ -23545,6 +23545,7 @@ def finance_requests():
     new_payment_request_folder_link = finance_folder_link_for("New payment request")
     new_invoice_request_folder_link = finance_folder_link_for("New invoice request")
     payment_proof_folder_link = finance_folder_link_for("Payment proof")
+    invoice_proof_folder_link = finance_folder_link_for("Invoice proof")
     calendar_groups = payment_calendar_groups(finance_action_candidates)
     return render_template(
         "finance_requests/index.html",
@@ -23564,6 +23565,7 @@ def finance_requests():
         new_payment_request_folder_link=new_payment_request_folder_link,
         new_invoice_request_folder_link=new_invoice_request_folder_link,
         payment_proof_folder_link=payment_proof_folder_link,
+        invoice_proof_folder_link=invoice_proof_folder_link,
         payment_concepts=[concept for concept in concepts if concept.is_active and concept.applies_to in {"Payments", "Both"}],
         billing_concepts=[concept for concept in concepts if concept.is_active and concept.applies_to in {"Billing", "Both"}],
         finance_link_types=FINANCE_LINK_TYPES,
@@ -24123,10 +24125,23 @@ def create_finance_link_folder():
     require_menu_edit(FINANCE_REQUESTS_MENU_KEY)
     if not current_user_is_superadmin():
         abort(403, description="Only the Superadmin can manage finance link folders.")
-    link_type = (request.form.get("link_type") or "").strip()
-    link_url = (request.form.get("link_url") or "").strip()
+    link_folder = FinanceLinkFolder()
+    errors = apply_finance_link_folder_form(link_folder, request.form)
+    if errors:
+        for error in errors:
+            flash(error, "error")
+        return finance_request_redirect("link_folders", open_staff_modal="new-link-folder-modal")
+    db.session.add(link_folder)
+    db.session.commit()
+    flash("Finance link saved.", "success")
+    return finance_request_redirect("link_folders")
+
+
+def apply_finance_link_folder_form(link_folder, form):
+    link_type = (form.get("link_type") or "").strip()
+    link_url = (form.get("link_url") or "").strip()
     departments = [
-        department for department in request.form.getlist("departments")
+        department for department in form.getlist("departments")
         if department in USER_DEPARTMENTS
     ]
     errors = []
@@ -24141,16 +24156,40 @@ def create_finance_link_folder():
     if not departments:
         errors.append("Select at least one department.")
     if errors:
+        return errors
+    link_folder.link_type = link_type
+    link_folder.link_url = link_url
+    link_folder.departments = ",".join(departments)
+    return []
+
+
+@staff_bp.route("/finance-requests/link-folders/<int:link_folder_id>/edit", methods=["POST"])
+@login_required
+def update_finance_link_folder(link_folder_id):
+    require_menu_edit(FINANCE_REQUESTS_MENU_KEY)
+    if not current_user_is_superadmin():
+        abort(403, description="Only the Superadmin can manage finance link folders.")
+    link_folder = FinanceLinkFolder.query.get_or_404(link_folder_id)
+    errors = apply_finance_link_folder_form(link_folder, request.form)
+    if errors:
         for error in errors:
             flash(error, "error")
-        return finance_request_redirect("link_folders", open_staff_modal="new-link-folder-modal")
-    db.session.add(FinanceLinkFolder(
-        link_type=link_type,
-        link_url=link_url,
-        departments=",".join(departments),
-    ))
+        return finance_request_redirect("link_folders", open_staff_modal=f"edit-link-folder-{link_folder.id}")
     db.session.commit()
-    flash("Finance link saved.", "success")
+    flash("Finance link updated.", "success")
+    return finance_request_redirect("link_folders")
+
+
+@staff_bp.route("/finance-requests/link-folders/<int:link_folder_id>/delete", methods=["POST"])
+@login_required
+def delete_finance_link_folder(link_folder_id):
+    require_menu_edit(FINANCE_REQUESTS_MENU_KEY)
+    if not current_user_is_superadmin():
+        abort(403, description="Only the Superadmin can manage finance link folders.")
+    link_folder = FinanceLinkFolder.query.get_or_404(link_folder_id)
+    db.session.delete(link_folder)
+    db.session.commit()
+    flash("Finance link deleted.", "success")
     return finance_request_redirect("link_folders")
 
 
