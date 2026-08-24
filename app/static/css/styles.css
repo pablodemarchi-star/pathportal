@@ -3649,6 +3649,20 @@ td .centered-dash {
   opacity: 0.7;
 }
 
+.candidate-minimum-status {
+  font-size: 11px;
+  font-weight: 950;
+  line-height: 1.15;
+}
+
+.candidate-minimum-status.is-reached {
+  color: #518536;
+}
+
+.candidate-minimum-status.is-missing {
+  color: #C00000;
+}
+
 .date-confirmation-pending {
   background: var(--badge-red-bg);
   color: var(--badge-red-text);
@@ -5173,6 +5187,35 @@ span.session-marker-chip {
   min-width: 0;
 }
 
+.staff-card-danger-actions {
+  display: grid;
+  justify-items: center;
+  gap: 5px;
+  width: max-content;
+}
+
+.staff-declined-button {
+  border: 0;
+  background: transparent;
+  color: var(--color-primary);
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 800;
+  line-height: 1.1;
+  padding: 0;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.staff-declined-button:hover {
+  color: var(--color-primary-dark);
+}
+
+.staff-declined-button:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
 .staff-assignment-card .staff-member-select-row {
   width: 100%;
   max-width: 100%;
@@ -5493,10 +5536,20 @@ span.session-marker-chip {
 }
 
 .staff-email-actions {
-  display: inline-flex;
+  display: flex;
   align-items: center;
+  justify-content: space-between;
   gap: 8px;
+  width: 100%;
   max-width: 100%;
+  min-width: 0;
+}
+
+.staff-email-actions a,
+.staff-email-actions .muted {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .staff-contact-email-chip-row {

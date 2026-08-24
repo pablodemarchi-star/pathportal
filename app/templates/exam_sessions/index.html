@@ -22,6 +22,16 @@
   </button>
 {%- endmacro %}
 
+{% macro candidate_minimum_status(contract) -%}
+  {% set current = contract.current|default(0, true) %}
+  {% set required = contract.required|default(0, true) %}
+  {% if contract.ready %}
+    <span class="candidate-minimum-status is-reached">Minimum reached ✓</span>
+  {% else %}
+    <span class="candidate-minimum-status is-missing">{{ required - current }} candidates to be confirmed</span>
+  {% endif %}
+{%- endmacro %}
+
 {% macro module_badge(module, registration_count=none) -%}
   <span class="badge exam-module-{{ module|lower|replace(' ', '-') }}">{{ module }}{% if registration_count is not none %} ({{ registration_count }}){% endif %}</span>
 {%- endmacro %}
@@ -268,6 +278,7 @@
   {% set shipment_recipient_value = section_key ~ ':' ~ row_key %}
   {% set raw_participation_status = assignment.participation_status if assignment else 'Pending' %}
   {% set participation_status = 'Pre-confirmation sent' if raw_participation_status == 'Sent' else raw_participation_status %}
+  {% set participation_has_live_calculation = participation_status in exam_session_planner_participation_options %}
   {% set participation_class = participation_status|lower|replace(' ', '-') %}
   {% set raw_logistics_type = assignment.logistics_type if assignment and assignment.logistics_type else '' %}
   {% set logistics_type = raw_logistics_type if raw_logistics_type in logistics_type_options else ('Uber' if assignment and assignment.logistics_enabled else 'Does not apply') %}
@@ -294,7 +305,10 @@
             <span aria-hidden="true">🚚</span>
           </label>
         {% endif %}
-        <button class="danger-button compact-action" type="button" data-remove-supervisor-row aria-label="Remove {{ 'supervisor' if section_key == 'supervisor' else 'examiner' if section_key == 'examiner' else 'intern' }}">Remove</button>
+        <div class="staff-card-danger-actions">
+          <button class="danger-button compact-action" type="button" data-remove-supervisor-row aria-label="Remove {{ 'supervisor' if section_key == 'supervisor' else 'examiner' if section_key == 'examiner' else 'intern' }}">Remove</button>
+          <button class="staff-declined-button" type="button" data-staff-declined-button {% if not selected_value %}disabled{% endif %}>Declined</button>
+        </div>
       </div>
     </div>
 
@@ -310,7 +324,7 @@
         <span class="staff-card-field-label">Staff member</span>
       <input type="hidden" name="{{ section_key }}_row_keys" value="{{ row_key }}">
       <input type="hidden" name="{{ section_key }}_assignment_id_{{ row_key }}" value="{{ assignment.id if assignment else '' }}">
-      <input type="hidden" name="{{ section_key }}_manual_fee_override_{{ row_key }}" value="{{ '1' if assignment and assignment.manual_fee_override and assignment.participation_status == 'Pending' else '' }}" data-manual-fee-override>
+      <input type="hidden" name="{{ section_key }}_manual_fee_override_{{ row_key }}" value="{{ '1' if assignment and assignment.manual_fee_override and participation_has_live_calculation else '' }}" data-manual-fee-override>
       <span data-row-non-available-fields data-non-available-section-key="{{ section_key }}" data-non-available-row-key="{{ row_key }}" hidden></span>
       <div class="staff-member-select-row">
         <input type="hidden" name="{{ section_key }}_team_member_id_{{ row_key }}" value="{{ selected_value }}" data-original-value="{{ selected_value }}" data-team-member-select>
@@ -360,7 +374,7 @@
         </details>
         {% if section_key == 'supervisor' %}
           <label class="supervisor-remote-checkbox">
-            <input type="checkbox" name="{{ section_key }}_remote_{{ row_key }}" value="1" {% if assignment and assignment.is_remote %}checked{% endif %}>
+            <input type="checkbox" name="{{ section_key }}_remote_{{ row_key }}" value="1" {% if assignment and assignment.is_remote %}checked{% endif %} data-supervisor-remote-checkbox>
             <span>Remote</span>
           </label>
         {% endif %}
@@ -380,12 +394,15 @@
       <span class="staff-card-field-label">Participation</span>
       <div class="participation-cell-stack">
         <select name="{{ section_key }}_participation_status_{{ row_key }}" class="participation-select participation-{{ participation_class }}" data-participation-select>
-          {% for option in participation_options %}
-            <option value="{{ option }}" {% if participation_status == option %}selected{% endif %} {% if (not selected_value and option != 'Pending') or (selected_is_potential and option not in potential_entry_participation_options) %}disabled hidden{% endif %}>{{ option }}</option>
+          {% if participation_status not in exam_session_planner_participation_options %}
+            <option value="{{ participation_status }}" selected disabled data-external-participation-status="true">{{ participation_status }}</option>
+          {% endif %}
+          {% for option in exam_session_planner_participation_options %}
+            <option value="{{ option }}" {% if participation_status == option %}selected{% endif %} {% if not selected_value and option != 'Pending' %}disabled hidden{% endif %}>{{ option }}</option>
           {% endfor %}
         </select>
-        <span class="fee-state-chip {{ 'is-live' if participation_status == 'Pending' else 'is-locked' }}" data-fee-state-chip>
-          {{ 'Live calculation' if participation_status == 'Pending' else 'Locked' }}
+        <span class="fee-state-chip {{ 'is-live' if participation_has_live_calculation else 'is-locked' }}" data-fee-state-chip>
+          {{ 'Live calculation' if participation_has_live_calculation else 'Locked' }}
         </span>
       </div>
       </div>
@@ -533,13 +550,12 @@
         <span data-total-fee-value>-</span>
       </div>
       <div class="staff-card-actions-row">
-        <button class="secondary-button compact-action row-edit-fees-button" type="button" data-edit-assignment-fees {% if participation_status != 'Pending' %}hidden{% endif %}>Edit</button>
+        <button class="secondary-button compact-action row-edit-fees-button" type="button" data-edit-assignment-fees {% if not participation_has_live_calculation %}hidden{% endif %}>Edit</button>
       </div>
       </div>
     </section>
 
     <section class="staff-card-block staff-card-contact-block" aria-label="Contact">
-      <h4>Contact</h4>
       <div class="staff-card-field staff-card-field-wide staff-email-cell" data-staff-email-cell>
       <span class="staff-card-field-label">Email</span>
       {% if selected_member %}
@@ -549,23 +565,7 @@
           {% else %}
             <span class="muted">-</span>
           {% endif %}
-          <button class="copy-icon-button email-invitation-copy-button" type="button" data-copy-invitation-email aria-label="Copy invitation email" title="Copy invitation email">
-            <svg class="copy-icon" viewBox="0 0 24 24" aria-hidden="true">
-              <rect x="9" y="9" width="10" height="10" rx="2"></rect>
-              <path d="M5 15V7a2 2 0 0 1 2-2h8"></path>
-            </svg>
-            <svg class="check-icon" viewBox="0 0 24 24" aria-hidden="true">
-              <path d="m5 12 4 4 10-10"></path>
-            </svg>
-            <span class="copy-button-feedback">Copied!</span>
-          </button>
-        </div>
-        <div class="staff-contact-email-chip-row" aria-label="Staff email actions">
           <button class="staff-contact-email-chip" type="button" data-staff-preconfirmation-email {% if not current_menu_can_edit %}disabled{% endif %}>Pre-confirmation email</button>
-          {% if not selected_is_potential %}
-            <button class="staff-contact-email-chip" type="button" data-staff-confirmation-email {% if not current_menu_can_edit or session.format != 'Onsite' %}disabled{% endif %} {% if session.format != 'Onsite' %}title="Official confirmation email is only available for onsite sessions."{% endif %}>Official confirmation email</button>
-            <button class="staff-contact-email-chip" type="button" data-staff-final-information-email {% if not current_menu_can_edit %}disabled{% endif %}>Final information email</button>
-          {% endif %}
         </div>
       {% else %}
         <span class="muted">-</span>
@@ -819,6 +819,7 @@
             <div class="session-date-cell">
               <span>{{ session.session_date|long_session_date }}</span>
               {{ date_confirmation_status_chip(session, csrf_token) }}
+              {{ candidate_minimum_status(candidate_requirement_contracts.get(session.id, {})) }}
             </div>
           </td>
           <td class="badge-list">
@@ -1064,25 +1065,32 @@
               {% for emergency_contact_row in session.emergency_contact_rows() %}
                 {% set emergency_contact_status = 'Pre-confirmation sent' if emergency_contact_row.status == 'Sent' else emergency_contact_row.status|default('Pending', true) %}
                 {% set emergency_contact_status_class = emergency_contact_status|lower|replace(' ', '-') %}
-                <div class="modal-emergency-contact-select-row" data-emergency-contact-row data-emergency-contact-saved-member-id="{{ emergency_contact_row.member_id or '' }}" data-emergency-contact-saved-status="{{ emergency_contact_status }}">
-                  <label class="modal-emergency-contact-select">
+                {% set emergency_contact_excluded_member_ids = session_emergency_contact_excluded_member_ids.get(session.id, []) %}
+	                <div class="modal-emergency-contact-select-row" data-emergency-contact-row data-emergency-contact-saved-member-id="{{ emergency_contact_row.member_id or '' }}" data-emergency-contact-saved-status="{{ emergency_contact_status }}">
+	                  <input type="hidden" name="emergency_contact_preserve_time_without_member" value="" form="exam-session-members-form-{{ session.id }}" data-emergency-contact-preserve-time-input>
+	                  <label class="modal-emergency-contact-select">
                     <span class="modal-emergency-contact-row-title" {% if not loop.first %}hidden{% endif %}>Emergency contact</span>
                     <select name="emergency_contact_member_id" form="exam-session-members-form-{{ session.id }}" data-emergency-contact-select {% if not session.emergency_contact_required or session.emergency_contact_not_required %}disabled{% endif %}>
                       <option value="">Select active staff member</option>
                       {% for member in emergency_contact_members %}
-                        <option value="{{ member.id }}" {% if emergency_contact_row.member_id == member.id %}selected{% endif %}>{{ member_option_label(member) }}</option>
+                        {% set emergency_contact_member_excluded = member.id in emergency_contact_excluded_member_ids and emergency_contact_row.member_id != member.id %}
+                        <option value="{{ member.id }}" {% if emergency_contact_row.member_id == member.id %}selected{% endif %} {% if emergency_contact_member_excluded %}disabled hidden{% endif %}>{{ member_option_label(member) }}</option>
                       {% endfor %}
                     </select>
                   </label>
                   <div class="modal-emergency-contact-status-field">
-                    <span class="modal-emergency-contact-status-label modal-emergency-contact-row-title" {% if not loop.first %}hidden{% endif %}>Status</span>
-                    <span class="modal-emergency-contact-role-to-cover" data-emergency-contact-role-to-cover {% if emergency_contact_row.member_id %}hidden{% endif %}>Role to cover</span>
-                    <select name="emergency_contact_participation_status" form="exam-session-members-form-{{ session.id }}" class="participation-select modal-emergency-contact-status participation-{{ emergency_contact_status_class }}" data-emergency-contact-status-select {% if not emergency_contact_row.member_id %}hidden{% endif %} {% if not session.emergency_contact_required or session.emergency_contact_not_required %}disabled{% endif %}>
-                      {% for option in participation_options %}
-                        <option value="{{ option }}" {% if emergency_contact_status == option %}selected{% endif %}>{{ option }}</option>
-                      {% endfor %}
-                    </select>
-                  </div>
+	                    <span class="modal-emergency-contact-status-label modal-emergency-contact-row-title" {% if not loop.first %}hidden{% endif %}>Status</span>
+	                    <span class="modal-emergency-contact-role-to-cover" data-emergency-contact-role-to-cover {% if emergency_contact_row.member_id %}hidden{% endif %}>Role to cover</span>
+	                    <select name="emergency_contact_participation_status" form="exam-session-members-form-{{ session.id }}" class="participation-select modal-emergency-contact-status participation-{{ emergency_contact_status_class }}" data-emergency-contact-status-select {% if not emergency_contact_row.member_id %}hidden{% endif %} {% if not session.emergency_contact_required or session.emergency_contact_not_required %}disabled{% endif %}>
+	                      {% if emergency_contact_status not in exam_session_planner_participation_options %}
+	                        <option value="{{ emergency_contact_status }}" selected disabled data-external-participation-status="true">{{ emergency_contact_status }}</option>
+	                      {% endif %}
+	                      {% for option in exam_session_planner_participation_options %}
+	                        <option value="{{ option }}" {% if emergency_contact_status == option %}selected{% endif %}>{{ option }}</option>
+	                      {% endfor %}
+	                    </select>
+	                    <button class="staff-declined-button modal-emergency-contact-declined-button" type="button" data-emergency-contact-declined-button {% if not emergency_contact_row.member_id %}hidden disabled{% endif %}>Declined</button>
+	                  </div>
                   <div class="modal-emergency-contact-time-field" data-emergency-contact-time-field {% if not emergency_contact_row.member_id %}hidden{% endif %}>
                     <span class="modal-emergency-contact-status-label modal-emergency-contact-row-title" {% if not loop.first %}hidden{% endif %}>Time range</span>
                     <div class="time-range-stack modal-emergency-contact-time-stack" data-time-range-stack>

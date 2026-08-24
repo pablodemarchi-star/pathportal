@@ -3,6 +3,7 @@ import os
 import re
 import subprocess
 import unittest
+from urllib.parse import parse_qs, urlparse
 from datetime import date, datetime, time, timedelta, timezone
 
 os.environ["DATABASE_URL"] = "sqlite:///:memory:"
@@ -282,6 +283,27 @@ class ScheduleWorkflowTest(unittest.TestCase):
         result = subprocess.run(["node", "-e", script], check=True, capture_output=True, text=True)
         return json.loads(result.stdout)
 
+    def build_staff_gmail_url(self, dataset):
+        with open("app/static/js/app.js", encoding="utf-8") as handle:
+            js = handle.read()
+        start = js.index("const cleanEmailValue")
+        end = js.index("const initStaffGmailLinks")
+        script = (
+            js[start:end]
+            + "\nconst panel = { dataset: "
+            + json.dumps(dataset["panel"])
+            + " };\n"
+            + "console.log(buildStaffGmailUrl({ email: "
+            + json.dumps(dataset["email"])
+            + ", role: "
+            + json.dumps(dataset["role"])
+            + ", panel, body: "
+            + json.dumps(dataset["body"])
+            + " }));\n"
+        )
+        result = subprocess.run(["node", "-e", script], check=True, capture_output=True, text=True)
+        return result.stdout.strip()
+
     def build_staff_official_confirmation_email(self, dataset):
         with open("app/static/js/app.js", encoding="utf-8") as handle:
             js = handle.read()
@@ -397,6 +419,34 @@ class ScheduleWorkflowTest(unittest.TestCase):
         self.assertIn('data-date-confirmation-chip', html)
         self.assertIn('data-status="Pending"', html)
         self.assertIn('date-confirmation-pending', html)
+
+    def test_exam_session_planner_date_column_shows_minimum_candidates_reached(self):
+        self.session_record.minimum_candidates_required = 30
+        db.session.add(ExamSessionMonthlyCandidateTotal(
+            exam_session_id=self.session_record.id,
+            month=6,
+            total_candidates=30,
+        ))
+        db.session.commit()
+
+        html = self.login_client().get("/exam-session-planner?session_year=2026").get_data(as_text=True)
+
+        self.assertIn("Minimum reached ✓", html)
+        self.assertIn("candidate-minimum-status is-reached", html)
+
+    def test_exam_session_planner_date_column_shows_missing_candidates(self):
+        self.session_record.minimum_candidates_required = 30
+        db.session.add(ExamSessionMonthlyCandidateTotal(
+            exam_session_id=self.session_record.id,
+            month=6,
+            total_candidates=27,
+        ))
+        db.session.commit()
+
+        html = self.login_client().get("/exam-session-planner?session_year=2026").get_data(as_text=True)
+
+        self.assertIn("3 candidates to be confirmed", html)
+        self.assertIn("candidate-minimum-status is-missing", html)
 
     def test_exam_session_date_confirmation_status_updates(self):
         client = self.login_client()
@@ -515,6 +565,7 @@ class ScheduleWorkflowTest(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertIn("Remote", html)
         self.assertIn('name="supervisor_remote_', html)
+        self.assertIn("data-supervisor-remote-checkbox", html)
         self.assertNotIn('name="examiner_remote_', html)
         self.assertNotIn('name="intern_remote_', html)
 
@@ -538,6 +589,32 @@ class ScheduleWorkflowTest(unittest.TestCase):
 
         self.assertEqual(response.status_code, 200)
         self.assertTrue(assignment.is_remote)
+
+    def test_exam_session_supervisor_assignment_rejects_remote_with_km(self):
+        supervisor = self.create_supervisor()
+        client = self.login_client()
+
+        response = client.post(
+            f"/exam-session-planner/sessions/{self.session_record.id}/members",
+            data={
+                "csrf_token": "token",
+                "session_year": "2026",
+                "supervisor_row_keys": "new-1",
+                "supervisor_assignment_id_new-1": "",
+                "supervisor_team_member_id_new-1": str(supervisor.id),
+                "supervisor_remote_new-1": "1",
+                "supervisor_participation_status_new-1": "Pending",
+                "supervisor_km_new-1": "20",
+            },
+            follow_redirects=True,
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("Remote and Km cannot be selected at the same time.", response.get_data(as_text=True))
+        self.assertIsNone(ExamSessionSupervisorAssignment.query.filter_by(
+            exam_session_id=self.session_record.id,
+            team_member_id=supervisor.id,
+        ).first())
 
     def test_exam_session_supervisor_summary_identifies_remote_roles(self):
         supervisor = self.create_supervisor()
@@ -5898,14 +5975,17 @@ class ScheduleWorkflowTest(unittest.TestCase):
         self.assertIn("data-seniority-display", html)
         self.assertIn("data-total-fee-cell", html)
         self.assertIn("data-staff-email-cell", html)
-        self.assertIn("data-copy-invitation-email", html)
+        self.assertNotIn("<h4>Contact</h4>", html)
+        self.assertNotIn("data-copy-invitation-email", html)
         self.assertIn("Pre-confirmation email", html)
-        self.assertIn("Official confirmation email", html)
-        self.assertIn("Final information email", html)
+        self.assertNotIn("Official confirmation email", html)
+        self.assertNotIn("Final information email", html)
         self.assertIn("data-staff-preconfirmation-email", html)
-        self.assertIn("data-staff-confirmation-email", html)
-        self.assertIn("data-staff-final-information-email", html)
+        self.assertNotIn("data-staff-confirmation-email", html)
+        self.assertNotIn("data-staff-final-information-email", html)
         self.assertIn("data-remove-supervisor-row", html)
+        self.assertIn("data-staff-declined-button", html)
+        self.assertIn(">Declined</button>", html)
         self.assertNotIn("<th>Non-available</th>", html)
         self.assertIn("Non-available staff members", html)
         self.assertIn("data-session-non-available-picker", html)
@@ -6134,6 +6214,26 @@ class ScheduleWorkflowTest(unittest.TestCase):
         self.assertNotIn("null", payload["html"])
         self.assertNotIn("None", payload["html"])
 
+    def test_staff_gmail_url_does_not_degrade_preconfirmation_body_to_plain_text(self):
+        body = "Pre-confirmation\n\nDear Laura Mendez,\n\nParticipation awaiting your pre-confirmation"
+
+        url = self.build_staff_gmail_url({
+            "email": "laura@example.com",
+            "role": "Supervisor",
+            "body": body,
+            "panel": {
+                "sessionFormat": "Onsite",
+                "sessionDate": "2026-12-10",
+                "sessionName": "London Bridge",
+            },
+        })
+        query = parse_qs(urlparse(url).query)
+
+        self.assertEqual(query["to"], ["laura@example.com"])
+        self.assertIn("SUPERVISOR", query["su"][0])
+        self.assertIn("London Bridge", query["su"][0])
+        self.assertNotIn("body", query)
+
     def test_staff_preconfirmation_email_for_examiner_validates_certification_dates(self):
         payload = self.build_staff_preconfirmation_email({
             "full_name": "Noah Rivers",
@@ -6188,7 +6288,7 @@ class ScheduleWorkflowTest(unittest.TestCase):
 
         self.assertEqual(payload["error"], "Exam session address is required for onsite sessions.")
 
-    def test_exam_session_planner_renders_existing_official_confirmation_button_without_duplicates(self):
+    def test_exam_session_planner_hides_existing_official_confirmation_button_from_contact_section(self):
         supervisor = self.create_supervisor(staff_id=1, name="Laura Mendez")
         self.session_record.format = "Onsite"
         self.session_record.full_address_google_maps = "Pilar, Buenos Aires"
@@ -6202,12 +6302,12 @@ class ScheduleWorkflowTest(unittest.TestCase):
 
         html = self.login_client().get("/exam-session-planner?session_year=2026").get_data(as_text=True)
 
-        self.assertEqual(html.count("data-staff-confirmation-email"), 1)
-        self.assertIn("Official confirmation email", html)
+        self.assertEqual(html.count("data-staff-confirmation-email"), 0)
+        self.assertNotIn("Official confirmation email", html)
         self.assertIn('data-staff-payment-next-payment-date="27/12/2026"', html)
         self.assertNotIn(">Confirmation email</button>", html)
 
-    def test_exam_session_planner_disables_official_confirmation_button_for_online_session(self):
+    def test_exam_session_planner_hides_official_confirmation_button_for_online_session(self):
         supervisor = self.create_supervisor(staff_id=1, name="Laura Mendez")
         db.session.add(ExamSessionSupervisorAssignment(
             exam_session_id=self.session_record.id,
@@ -6218,8 +6318,101 @@ class ScheduleWorkflowTest(unittest.TestCase):
 
         html = self.login_client().get("/exam-session-planner?session_year=2026").get_data(as_text=True)
 
-        self.assertIn("Official confirmation email is only available for onsite sessions.", html)
-        self.assertRegex(html, r"data-staff-confirmation-email[^>]*disabled")
+        self.assertNotIn("Official confirmation email is only available for onsite sessions.", html)
+        self.assertNotIn("data-staff-confirmation-email", html)
+
+    def test_exam_session_planner_participation_dropdown_only_offers_preconfirmation_statuses(self):
+        supervisor = self.create_supervisor(staff_id=1, name="Laura Mendez")
+        assignment = ExamSessionSupervisorAssignment(
+            exam_session_id=self.session_record.id,
+            team_member_id=supervisor.id,
+            participation_status="Confirmed",
+        )
+        db.session.add(assignment)
+        db.session.commit()
+
+        html = self.login_client().get("/exam-session-planner?session_year=2026").get_data(as_text=True)
+        assignment_id_index = html.index(f'name="supervisor_assignment_id_existing-{assignment.id}"')
+        card_html = html[html.rfind("<article", 0, assignment_id_index):html.index("</article>", assignment_id_index)]
+        select_start = card_html.index('data-participation-select')
+        select_html = card_html[card_html.rfind("<select", 0, select_start):card_html.index("</select>", select_start)]
+
+        self.assertIn('<option value="Confirmed" selected disabled data-external-participation-status="true">Confirmed</option>', select_html)
+        self.assertIn('<option value="Pending"', select_html)
+        self.assertIn('<option value="Pre-confirmation sent"', select_html)
+        self.assertIn('<option value="Pre-confirmed"', select_html)
+        self.assertNotIn('<option value="Official confirmation sent"', select_html)
+        self.assertNotIn('<option value="Declined"', select_html)
+        self.assertNotIn('<option value="Cancelled"', select_html)
+
+    def test_exam_session_planner_preconfirmation_statuses_keep_live_calculation(self):
+        supervisor = self.create_supervisor(staff_id=1, name="Laura Mendez")
+        examiner = AcademicStaff(id=2, status="Active", full_name="Noah Rivers", roles="Examiner", email="noah@example.com")
+        intern = AcademicStaff(id=3, status="Active", full_name="Iris Lane", roles="Intern", email="iris@example.com")
+        db.session.add_all([examiner, intern])
+        db.session.flush()
+        supervisor_assignment = ExamSessionSupervisorAssignment(
+            exam_session_id=self.session_record.id,
+            team_member_id=supervisor.id,
+            participation_status="Pre-confirmation sent",
+        )
+        examiner_assignment = ExamSessionExaminerAssignment(
+            exam_session_id=self.session_record.id,
+            team_member_id=examiner.id,
+            participation_status="Pre-confirmed",
+        )
+        intern_assignment = ExamSessionInternAssignment(
+            exam_session_id=self.session_record.id,
+            team_member_id=intern.id,
+            participation_status="Confirmed",
+        )
+        db.session.add_all([supervisor_assignment, examiner_assignment, intern_assignment])
+        db.session.commit()
+
+        html = self.login_client().get("/exam-session-planner?session_year=2026").get_data(as_text=True)
+        supervisor_index = html.index(f'name="supervisor_assignment_id_existing-{supervisor_assignment.id}"')
+        examiner_index = html.index(f'name="examiner_assignment_id_existing-{examiner_assignment.id}"')
+        intern_index = html.index(f'name="intern_assignment_id_existing-{intern_assignment.id}"')
+        preconfirmation_sent_card = html[html.rfind("<article", 0, supervisor_index):html.index("</article>", supervisor_index)]
+        preconfirmed_card = html[html.rfind("<article", 0, examiner_index):html.index("</article>", examiner_index)]
+        confirmed_card = html[html.rfind("<article", 0, intern_index):html.index("</article>", intern_index)]
+
+        self.assertIn("Live calculation", preconfirmation_sent_card)
+        self.assertIn("is-live", preconfirmation_sent_card)
+        self.assertNotIn("Locked", preconfirmation_sent_card)
+        self.assertIn("Live calculation", preconfirmed_card)
+        self.assertIn("is-live", preconfirmed_card)
+        self.assertNotIn("Locked", preconfirmed_card)
+        self.assertIn("Locked", confirmed_card)
+        self.assertIn("is-locked", confirmed_card)
+
+    def test_exam_session_planner_rejects_setting_external_participation_status(self):
+        supervisor = self.create_supervisor(staff_id=1, name="Laura Mendez")
+        assignment = ExamSessionSupervisorAssignment(
+            exam_session_id=self.session_record.id,
+            team_member_id=supervisor.id,
+            participation_status="Pending",
+        )
+        db.session.add(assignment)
+        db.session.commit()
+
+        response = self.login_client().post(
+            f"/exam-session-planner/sessions/{self.session_record.id}/members",
+            data={
+                "csrf_token": "token",
+                "session_year": "2026",
+                "supervisor_row_keys": f"existing-{assignment.id}",
+                f"supervisor_assignment_id_existing-{assignment.id}": str(assignment.id),
+                f"supervisor_team_member_id_existing-{assignment.id}": str(supervisor.id),
+                f"supervisor_participation_status_existing-{assignment.id}": "Confirmed",
+            },
+            follow_redirects=True,
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("Exam session planner can only set Pending, Pre-confirmation sent or Pre-confirmed participation status.", response.get_data(as_text=True))
+        db.session.refresh(assignment)
+        self.assertEqual(assignment.participation_status, "Pending")
 
     def official_confirmation_base_payload(self, **overrides):
         payload = {
@@ -7894,6 +8087,61 @@ class ScheduleWorkflowTest(unittest.TestCase):
         self.assertIn(f'value="{unavailable_supervisor.id}"', html)
         self.assertIn("checked", html)
 
+    def test_declined_staff_action_moves_member_to_non_available_and_resets_card(self):
+        supervisor = self.create_supervisor(staff_id=4, name="Mateo Silva")
+        assignment = ExamSessionSupervisorAssignment(
+            exam_session_id=self.session_record.id,
+            team_member_id=supervisor.id,
+            participation_status="Pre-confirmed",
+            logistics_enabled=True,
+            logistics_type="Uber",
+            is_remote=True,
+            km=42,
+            time_ranges=json.dumps([{"start": "09:00", "end": "11:00"}]),
+            start_time="09:00",
+            end_time="11:00",
+            commuting="ARS 1.000",
+            commuting_currency="ARS",
+        )
+        db.session.add(assignment)
+        db.session.commit()
+        client = self.login_client()
+
+        response = client.post(
+            f"/exam-session-planner/sessions/{self.session_record.id}/members",
+            data={
+                "csrf_token": "token",
+                "session_year": "2026",
+                "modal_action": "save",
+                "session_non_available_member_ids": ["", str(supervisor.id)],
+                "supervisor_row_keys": f"existing-{assignment.id}",
+                f"supervisor_assignment_id_existing-{assignment.id}": str(assignment.id),
+                f"supervisor_team_member_id_existing-{assignment.id}": "",
+                f"supervisor_participation_status_existing-{assignment.id}": "Pending",
+                f"supervisor_logistics_type_existing-{assignment.id}": "Does not apply",
+                f"supervisor_remote_existing-{assignment.id}": "1",
+                f"supervisor_start_time_existing-{assignment.id}": "09:00",
+                f"supervisor_end_time_existing-{assignment.id}": "11:00",
+            },
+            follow_redirects=False,
+        )
+
+        self.assertEqual(response.status_code, 302)
+        db.session.refresh(self.session_record)
+        db.session.refresh(assignment)
+        self.assertEqual(self.session_record.non_available_ids(), [supervisor.id])
+        self.assertIsNone(assignment.team_member_id)
+        self.assertIsNone(assignment.potential_entry_id)
+        self.assertEqual(assignment.participation_status, "Pending")
+        self.assertEqual(assignment.logistics_type, "Does not apply")
+        self.assertFalse(assignment.logistics_enabled)
+        self.assertTrue(assignment.is_remote)
+        self.assertIsNone(assignment.km)
+        self.assertEqual(assignment.time_ranges_list(), [{"start": "09:00", "end": "11:00"}])
+        self.assertEqual(assignment.start_time, "09:00")
+        self.assertEqual(assignment.end_time, "11:00")
+        self.assertEqual(assignment.commuting, "")
+
     def test_session_header_non_available_staff_can_be_cleared(self):
         unavailable_supervisor = self.create_supervisor(staff_id=4, name="Mateo Silva")
         self.session_record.non_available_member_ids = f"[{unavailable_supervisor.id}]"
@@ -7999,9 +8247,115 @@ class ScheduleWorkflowTest(unittest.TestCase):
         client = self.login_client()
 
         html = client.get(f"/exam-session-planner?session_year=2026&open_session_modal={self.session_record.id}").get_data(as_text=True)
-        self.assertIn('name="emergency_contact_participation_status"', html)
-        self.assertIn('<option value="Official confirmation sent"', html)
-        self.assertIn('<option value="Confirmed"', html)
+        modal_start = html.index(f'id="exam-session-members-{self.session_record.id}"')
+        modal_html = html[modal_start:modal_start + 25000]
+        status_index = modal_html.index('data-emergency-contact-status-select')
+        select_html = modal_html[modal_html.rfind("<select", 0, status_index):modal_html.index("</select>", status_index)]
+        self.assertIn('name="emergency_contact_participation_status"', select_html)
+        self.assertIn('<option value="Pending"', select_html)
+        self.assertIn('<option value="Pre-confirmation sent"', select_html)
+        self.assertIn('<option value="Pre-confirmed"', select_html)
+        self.assertNotIn('<option value="Official confirmation sent"', select_html)
+        self.assertNotIn('<option value="Confirmed"', select_html)
+        self.assertIn("data-emergency-contact-declined-button", modal_html)
+
+        response = client.post(
+            f"/exam-session-planner/sessions/{self.session_record.id}/members",
+            data={
+                "csrf_token": "token",
+                "session_year": "2026",
+                "modal_action": "save",
+                "session_non_available_member_ids": "",
+                "emergency_contact_required": "1",
+                "emergency_contact_member_id": str(active_contact.id),
+                "emergency_contact_participation_status": "Pre-confirmed",
+            },
+            follow_redirects=False,
+        )
+
+        self.assertEqual(response.status_code, 302)
+        db.session.refresh(self.session_record)
+        self.assertEqual(self.session_record.emergency_contact_member_id, active_contact.id)
+        self.assertEqual(self.session_record.emergency_contact_participation_status, "Pre-confirmed")
+
+    def test_session_emergency_contact_select_excludes_staff_assigned_to_other_role(self):
+        assigned_supervisor = self.create_supervisor(staff_id=1, name="Laura Mendez")
+        available_contact = AcademicStaff(id=8, status="Active", full_name="Mara Ruiz", roles="")
+        db.session.add_all([
+            available_contact,
+            ExamSessionSupervisorAssignment(
+                exam_session_id=self.session_record.id,
+                team_member_id=assigned_supervisor.id,
+                participation_status="Pending",
+            ),
+        ])
+        db.session.commit()
+        client = self.login_client()
+
+        html = client.get(f"/exam-session-planner?session_year=2026&open_session_modal={self.session_record.id}").get_data(as_text=True)
+        modal_start = html.index(f'id="exam-session-members-{self.session_record.id}"')
+        modal_html = html[modal_start:modal_start + 25000]
+        select_index = modal_html.index('name="emergency_contact_member_id"')
+        select_html = modal_html[modal_html.rfind("<select", 0, select_index):modal_html.index("</select>", select_index)]
+
+        self.assertRegex(select_html, rf'<option value="{assigned_supervisor.id}"[^>]*disabled hidden')
+        self.assertIn(f'<option value="{available_contact.id}"', select_html)
+
+    def test_session_emergency_contact_rejects_staff_assigned_to_other_role(self):
+        assigned_supervisor = self.create_supervisor(staff_id=1, name="Laura Mendez")
+        db.session.add(ExamSessionSupervisorAssignment(
+            exam_session_id=self.session_record.id,
+            team_member_id=assigned_supervisor.id,
+            participation_status="Pending",
+        ))
+        db.session.commit()
+        client = self.login_client()
+
+        response = client.post(
+            f"/exam-session-planner/sessions/{self.session_record.id}/members",
+            data={
+                "csrf_token": "token",
+                "session_year": "2026",
+                "modal_action": "save",
+                "session_non_available_member_ids": "",
+                "emergency_contact_required": "1",
+                "emergency_contact_member_id": str(assigned_supervisor.id),
+                "emergency_contact_participation_status": "Pending",
+            },
+            follow_redirects=True,
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("Each staff member can only be selected once within this exam session.", response.get_data(as_text=True))
+        db.session.refresh(self.session_record)
+        self.assertIsNone(self.session_record.emergency_contact_member_id)
+
+    def test_session_emergency_contact_external_status_is_displayed_but_not_selectable(self):
+        active_contact = AcademicStaff(id=8, status="Active", full_name="Mara Ruiz", roles="")
+        db.session.add(active_contact)
+        self.session_record.emergency_contact_required = True
+        self.session_record.emergency_contact_member_id = active_contact.id
+        self.session_record.emergency_contact_participation_status = "Confirmed"
+        db.session.commit()
+        client = self.login_client()
+
+        html = client.get(f"/exam-session-planner?session_year=2026&open_session_modal={self.session_record.id}").get_data(as_text=True)
+        modal_start = html.index(f'id="exam-session-members-{self.session_record.id}"')
+        modal_html = html[modal_start:modal_start + 25000]
+        status_index = modal_html.index('data-emergency-contact-status-select')
+        select_html = modal_html[modal_html.rfind("<select", 0, status_index):modal_html.index("</select>", status_index)]
+
+        self.assertIn('<option value="Confirmed" selected disabled data-external-participation-status="true">Confirmed</option>', select_html)
+        self.assertIn('<option value="Pending"', select_html)
+        self.assertIn('<option value="Pre-confirmation sent"', select_html)
+        self.assertIn('<option value="Pre-confirmed"', select_html)
+        self.assertNotIn('<option value="Official confirmation sent"', select_html)
+
+    def test_session_emergency_contact_rejects_external_status_from_modal(self):
+        active_contact = AcademicStaff(id=8, status="Active", full_name="Mara Ruiz", roles="")
+        db.session.add(active_contact)
+        db.session.commit()
+        client = self.login_client()
 
         response = client.post(
             f"/exam-session-planner/sessions/{self.session_record.id}/members",
@@ -8014,13 +8368,14 @@ class ScheduleWorkflowTest(unittest.TestCase):
                 "emergency_contact_member_id": str(active_contact.id),
                 "emergency_contact_participation_status": "Confirmed",
             },
-            follow_redirects=False,
+            follow_redirects=True,
         )
 
-        self.assertEqual(response.status_code, 302)
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("Exam session planner can only set Pending, Pre-confirmation sent or Pre-confirmed Emergency contact participation status.", response.get_data(as_text=True))
         db.session.refresh(self.session_record)
-        self.assertEqual(self.session_record.emergency_contact_member_id, active_contact.id)
-        self.assertEqual(self.session_record.emergency_contact_participation_status, "Confirmed")
+        self.assertIsNone(self.session_record.emergency_contact_member_id)
+        self.assertEqual(self.session_record.emergency_contact_participation_status, "Pending")
 
     def test_session_emergency_contact_time_range_can_be_saved_from_modal(self):
         active_contact = AcademicStaff(id=8, status="Active", full_name="Mara Ruiz", roles="")
@@ -8042,7 +8397,7 @@ class ScheduleWorkflowTest(unittest.TestCase):
                 "session_non_available_member_ids": "",
                 "emergency_contact_required": "1",
                 "emergency_contact_member_id": str(active_contact.id),
-                "emergency_contact_participation_status": "Confirmed",
+                "emergency_contact_participation_status": "Pre-confirmed",
                 "emergency_contact_start_time": "08:30",
                 "emergency_contact_end_time": "12:45",
             },
@@ -8073,7 +8428,7 @@ class ScheduleWorkflowTest(unittest.TestCase):
                 "session_non_available_member_ids": "",
                 "emergency_contact_required": "1",
                 "emergency_contact_member_id": [str(first_contact.id), str(second_contact.id)],
-                "emergency_contact_participation_status": ["Confirmed", "Official confirmation sent"],
+                "emergency_contact_participation_status": ["Pre-confirmed", "Pre-confirmation sent"],
                 "emergency_contact_start_time": ["08:30", "12:00"],
                 "emergency_contact_end_time": ["11:30", "15:00"],
             },
@@ -8083,13 +8438,13 @@ class ScheduleWorkflowTest(unittest.TestCase):
         self.assertEqual(response.status_code, 302)
         db.session.refresh(self.session_record)
         self.assertEqual(self.session_record.emergency_contact_member_id, first_contact.id)
-        self.assertEqual(self.session_record.emergency_contact_participation_status, "Confirmed")
+        self.assertEqual(self.session_record.emergency_contact_participation_status, "Pre-confirmed")
         self.assertEqual(self.session_record.emergency_contact_start_time, "08:30")
         self.assertEqual(self.session_record.emergency_contact_end_time, "11:30")
         additional_contacts = json.loads(self.session_record.emergency_contact_additional_contacts)
         self.assertEqual(additional_contacts, [{
             "member_id": second_contact.id,
-            "status": "Official confirmation sent",
+            "status": "Pre-confirmation sent",
             "start_time": "12:00",
             "end_time": "15:00",
         }])
@@ -8127,6 +8482,42 @@ class ScheduleWorkflowTest(unittest.TestCase):
         self.assertEqual(self.session_record.emergency_contact_start_time, "")
         self.assertEqual(self.session_record.emergency_contact_end_time, "")
         self.assertEqual(self.session_record.emergency_contact_additional_contacts, "[]")
+
+    def test_session_emergency_contact_declined_modal_preserves_time_without_staff_member(self):
+        active_contact = AcademicStaff(id=8, status="Active", full_name="Mara Ruiz", roles="")
+        db.session.add(active_contact)
+        self.session_record.emergency_contact_required = True
+        self.session_record.emergency_contact_member_id = active_contact.id
+        self.session_record.emergency_contact_participation_status = "Pre-confirmed"
+        self.session_record.emergency_contact_start_time = "08:30"
+        self.session_record.emergency_contact_end_time = "12:45"
+        db.session.commit()
+        client = self.login_client()
+
+        response = client.post(
+            f"/exam-session-planner/sessions/{self.session_record.id}/members",
+            data={
+                "csrf_token": "token",
+                "session_year": "2026",
+                "modal_action": "save",
+                "session_non_available_member_ids": ["", str(active_contact.id)],
+                "emergency_contact_required": "1",
+                "emergency_contact_member_id": "",
+                "emergency_contact_participation_status": "Pending",
+                "emergency_contact_start_time": "08:30",
+                "emergency_contact_end_time": "12:45",
+                "emergency_contact_preserve_time_without_member": "1",
+            },
+            follow_redirects=False,
+        )
+
+        self.assertEqual(response.status_code, 302)
+        db.session.refresh(self.session_record)
+        self.assertEqual(self.session_record.non_available_ids(), [active_contact.id])
+        self.assertIsNone(self.session_record.emergency_contact_member_id)
+        self.assertEqual(self.session_record.emergency_contact_participation_status, "Pending")
+        self.assertEqual(self.session_record.emergency_contact_start_time, "08:30")
+        self.assertEqual(self.session_record.emergency_contact_end_time, "12:45")
 
     def test_exam_session_members_save_preserves_current_pagination(self):
         for index in range(1, 6):

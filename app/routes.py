@@ -267,6 +267,12 @@ EXAM_SESSION_PARTICIPATION_OPTIONS = [
     "Declined",
     "Cancelled",
 ]
+EXAM_SESSION_PLANNER_PARTICIPATION_OPTIONS = [
+    "Pending",
+    "Pre-confirmation sent",
+    "Pre-confirmed",
+]
+EXAM_SESSION_LIVE_CALCULATION_PARTICIPATION_OPTIONS = set(EXAM_SESSION_PLANNER_PARTICIPATION_OPTIONS)
 POTENTIAL_ENTRY_EXAM_SESSION_PARTICIPATION_OPTIONS = [
     "Pending",
     "Pre-confirmation sent",
@@ -20039,6 +20045,7 @@ def exam_session_planner():
     session_intern_members = {}
     session_non_available_staff_members = {}
     session_non_available_member_ids = {}
+    session_emergency_contact_excluded_member_ids = {}
     emergency_contact_members = active_staff_member_options()
     for session_record in sessions:
         supervisor_states[session_record.id] = {
@@ -20059,6 +20066,15 @@ def exam_session_planner():
         session_supervisor_members[session_record.id] = session_staff_member_order(session_record, supervisor_assignment_options)
         session_examiner_members[session_record.id] = session_staff_member_order(session_record, examiner_assignment_options)
         session_intern_members[session_record.id] = session_staff_member_order(session_record, intern_assignment_options)
+        session_emergency_contact_excluded_member_ids[session_record.id] = {
+            assignment.team_member_id
+            for assignment in (
+                supervisor_assignments.get(session_record.id, [])
+                + examiner_assignments.get(session_record.id, [])
+                + intern_assignments.get(session_record.id, [])
+            )
+            if assignment.team_member_id is not None
+        }
         staff_options_by_id = {}
         for member in (
             session_supervisor_members[session_record.id]
@@ -20098,6 +20114,7 @@ def exam_session_planner():
         session_intern_members=session_intern_members,
         session_non_available_staff_members=session_non_available_staff_members,
         session_non_available_member_ids=session_non_available_member_ids,
+        session_emergency_contact_excluded_member_ids=session_emergency_contact_excluded_member_ids,
         emergency_contact_members=emergency_contact_members,
         supervisor_member_map=supervisor_member_map,
         examiner_member_map=examiner_member_map,
@@ -20114,6 +20131,7 @@ def exam_session_planner():
         examiner_member_session_counts=examiner_member_session_counts,
         intern_member_session_counts=intern_member_session_counts,
         participation_options=EXAM_SESSION_PARTICIPATION_OPTIONS,
+        exam_session_planner_participation_options=EXAM_SESSION_PLANNER_PARTICIPATION_OPTIONS,
         potential_entry_participation_options=POTENTIAL_ENTRY_EXAM_SESSION_PARTICIPATION_OPTIONS,
         logistics_type_options=EXAM_SESSION_LOGISTICS_TYPE_OPTIONS,
         logistics_status_options=LOGISTICS_STATUS_OPTIONS,
@@ -20128,6 +20146,7 @@ def exam_session_planner():
         staffing_readiness_by_session=staffing_readiness_by_session,
         logistics_readiness_by_session=logistics_readiness_by_session,
         pending_status_tooltips_by_session=pending_status_tooltips_by_session,
+        candidate_requirement_contracts=candidate_requirement_contracts,
         persisted_staff_confirmed_by_session=persisted_staff_confirmed_by_session,
         logistics_notes=logistics_notes,
         session_cost_summaries=session_cost_summaries,
@@ -20585,6 +20604,13 @@ def save_exam_session_assignment_section(
         if participation_status not in EXAM_SESSION_PARTICIPATION_OPTIONS:
             flash("Please select a valid Participation status.", "error")
             return None
+        previous_participation_status = normalize_participation_status(assignment.participation_status if assignment else "")
+        if (
+            participation_status not in EXAM_SESSION_PLANNER_PARTICIPATION_OPTIONS
+            and participation_status != previous_participation_status
+        ):
+            flash("Exam session planner can only set Pending, Pre-confirmation sent or Pre-confirmed participation status.", "error")
+            return None
         if potential_entry_id is not None and participation_status not in POTENTIAL_ENTRY_EXAM_SESSION_PARTICIPATION_OPTIONS:
             flash("Potential entries can only use Pending, Pre-confirmation sent or Pre-confirmed participation status.", "error")
             return None
@@ -20603,13 +20629,17 @@ def save_exam_session_assignment_section(
             logistics_enabled = False
             logistics_type = "Does not apply"
         is_remote = section_key == "supervisor" and request.form.get(f"{section_key}_remote_{row_key}") == "1"
+        has_live_calculation = participation_status in EXAM_SESSION_LIVE_CALCULATION_PARTICIPATION_OPTIONS
         manual_fee_override = (
-            participation_status == "Pending"
+            has_live_calculation
             and request.form.get(f"{section_key}_manual_fee_override_{row_key}", "").strip() == "1"
         )
 
         km_value = request.form.get(f"{section_key}_km_{row_key}", "").strip()
         km = int(km_value) if km_value.isdigit() else None
+        if is_remote and km is not None:
+            flash("Remote and Km cannot be selected at the same time.", "error")
+            return None
         role_fee = request.form.get(f"{section_key}_role_fee_{row_key}", "").strip()
         role_fee_currency = request.form.get(f"{section_key}_role_fee_currency_{row_key}", "").strip()
         role_fee_base_value = request.form.get(f"{section_key}_role_fee_base_value_{row_key}", "").strip()
@@ -20633,7 +20663,7 @@ def save_exam_session_assignment_section(
         vehicle_dep_unit = request.form.get(f"{section_key}_vehicle_dep_unit_{row_key}", "").strip() if fuel_enabled else ""
         team_member = member_map.get(team_member_id) if team_member_id is not None else None
         fuel_vehicle_allowed = km is not None and km >= 60 and team_member is not None and team_member.has_car == "Yes"
-        if participation_status == "Pending" and not manual_fee_override and not fuel_vehicle_allowed:
+        if has_live_calculation and not manual_fee_override and not fuel_vehicle_allowed:
             fuel_enabled = False
             fuel = ""
             fuel_currency = ""
@@ -20657,7 +20687,7 @@ def save_exam_session_assignment_section(
             flash("Wrong time", "error")
             return None
 
-        if participation_status == "Pending" and section_key == "intern" and not manual_fee_override:
+        if has_live_calculation and section_key == "intern" and not manual_fee_override:
             if intern_fee:
                 role_fee_result = calculate_role_fee_from_ranges(time_ranges, intern_fee)
                 if role_fee_result:
@@ -20676,7 +20706,7 @@ def save_exam_session_assignment_section(
                 role_fee_base_value = ""
                 role_fee_unit = ""
 
-        if participation_status == "Pending" and not manual_fee_override:
+        if has_live_calculation and not manual_fee_override:
             role_fee_source = supervisor_fee if section_key == "supervisor" else examiner_fee if section_key == "examiner" else None
             if role_fee_source:
                 role_fee_result = calculate_role_fee_from_ranges(time_ranges, role_fee_source)
@@ -20737,7 +20767,7 @@ def save_exam_session_assignment_section(
                     vehicle_dep_base_value = ""
                     vehicle_dep_unit = ""
 
-        if participation_status == "Pending" and not manual_fee_override:
+        if has_live_calculation and not manual_fee_override:
             seniority_result = seniority_calculation_from_role_fee(team_member, role_fee)
             seniority_fee = seniority_result["value"] if seniority_result else ""
             seniority_applied = bool(seniority_result)
@@ -20830,7 +20860,7 @@ def save_exam_session_assignment_section(
             assignment.is_remote = row_data["is_remote"]
         assignment.is_shipment_recipient = row_data["is_shipment_recipient"]
         assignment.manual_fee_override = row_data["manual_fee_override"]
-        if row_data["participation_status"] == "Pending":
+        if row_data["participation_status"] in EXAM_SESSION_LIVE_CALCULATION_PARTICIPATION_OPTIONS:
             assignment.fee_frozen_on = None
             assignment.fee_frozen_status = ""
         elif assignment.fee_frozen_on is None or assignment.fee_frozen_status != row_data["participation_status"]:
@@ -21223,6 +21253,12 @@ def update_exam_session_members(session_id):
                 + intern_session_member_options()
             )
         }
+        if session_record.emergency_contact_member_id:
+            valid_non_available_ids.add(session_record.emergency_contact_member_id)
+        for contact in session_record.additional_emergency_contacts_list():
+            member_id = contact.get("member_id")
+            if member_id:
+                valid_non_available_ids.add(member_id)
         valid_potential_entry_ids = {
             entry.id
             for entry in PotentialEntry.query.with_entities(PotentialEntry.id).filter(
@@ -21256,6 +21292,14 @@ def update_exam_session_members(session_id):
         emergency_contact_status_values = [value.strip() for value in request.form.getlist("emergency_contact_participation_status")]
         emergency_contact_start_values = [value.strip() for value in request.form.getlist("emergency_contact_start_time")]
         emergency_contact_end_values = [value.strip() for value in request.form.getlist("emergency_contact_end_time")]
+        emergency_contact_preserve_time_values = [value.strip() for value in request.form.getlist("emergency_contact_preserve_time_without_member")]
+        previous_emergency_contact_status_by_member = {}
+        if session_record.emergency_contact_member_id:
+            previous_emergency_contact_status_by_member[str(session_record.emergency_contact_member_id)] = normalize_participation_status(session_record.emergency_contact_participation_status)
+        for contact in session_record.additional_emergency_contacts_list():
+            member_id = contact.get("member_id")
+            if member_id:
+                previous_emergency_contact_status_by_member[str(member_id)] = normalize_participation_status(contact.get("status", "Pending"))
         row_count = max(
             len(emergency_contact_member_values),
             len(emergency_contact_status_values),
@@ -21271,13 +21315,26 @@ def update_exam_session_members(session_id):
             )
             start_time = emergency_contact_start_values[index] if index < len(emergency_contact_start_values) else ""
             end_time = emergency_contact_end_values[index] if index < len(emergency_contact_end_values) else ""
+            preserve_time_without_member = (
+                emergency_contact_preserve_time_values[index] if index < len(emergency_contact_preserve_time_values) else ""
+            ) == "1"
             if status_value not in EXAM_SESSION_PARTICIPATION_OPTIONS:
                 flash("Please select a valid Emergency contact participation status.", "error")
+                return session_members_redirect(keep_open=True)
+            previous_status_for_member = previous_emergency_contact_status_by_member.get(member_value, "")
+            if (
+                status_value not in EXAM_SESSION_PLANNER_PARTICIPATION_OPTIONS
+                and status_value != previous_status_for_member
+            ):
+                flash("Exam session planner can only set Pending, Pre-confirmation sent or Pre-confirmed Emergency contact participation status.", "error")
                 return session_members_redirect(keep_open=True)
             if not valid_time_range_value(start_time) or not valid_time_range_value(end_time):
                 flash("Wrong time", "error")
                 return session_members_redirect(keep_open=True)
             if not member_value:
+                if preserve_time_without_member and emergency_contact_start_time == "" and emergency_contact_end_time == "":
+                    emergency_contact_start_time = start_time
+                    emergency_contact_end_time = end_time
                 continue
             if not member_value.isdigit():
                 flash("Please select an active emergency contact.", "error")

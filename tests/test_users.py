@@ -1010,6 +1010,23 @@ class UsersTest(unittest.TestCase):
         self.assertNotIn("Pre onsite session control tower", body)
         self.assertNotIn(">Users<", body)
 
+    def test_sidebar_places_monthly_registrations_below_exam_session_planner(self):
+        client, _user = self.permission_client({
+            "exam_session_planner": {"view": True},
+            "monthly_exam_session_registrations": {"view": True},
+            "pre_session_control_tower": {"view": True},
+        })
+        body = client.get("/").get_data(as_text=True)
+
+        self.assertLess(
+            body.index("Exam session planner"),
+            body.index("Monthly exam session registrations"),
+        )
+        self.assertLess(
+            body.index("Monthly exam session registrations"),
+            body.index("Pre onsite session control tower"),
+        )
+
     def test_view_only_banner_repeats_on_key_menus_and_not_for_edit(self):
         view_only_client, _user = self.permission_client({
             "staff_members": {"view": True},

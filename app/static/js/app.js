@@ -3366,6 +3366,21 @@ const replaceStaffCardFieldValue = (cell, ...nodes) => {
   }
 };
 
+const rowHasKmEnabled = (row) => Boolean(row?.querySelector("[data-km-input]"));
+
+const syncRemoteKmMutualExclusion = (row) => {
+  if (!row) return;
+  const remoteCheckbox = row.querySelector("[data-supervisor-remote-checkbox]");
+  const kmCheckbox = row.querySelector("[data-enable-km]");
+  const kmEnabled = rowHasKmEnabled(row);
+  if (remoteCheckbox) {
+    remoteCheckbox.disabled = kmEnabled;
+  }
+  if (kmCheckbox) {
+    kmCheckbox.disabled = Boolean(remoteCheckbox?.checked);
+  }
+};
+
 document.addEventListener("change", (event) => {
   const checkbox = event.target.closest("[data-enable-km]");
   if (!checkbox || !checkbox.checked) return;
@@ -3376,6 +3391,8 @@ document.addEventListener("change", (event) => {
   const field = checkbox.closest("[data-km-field]");
   if (!field) return;
   const row = staffAssignmentRow(field);
+  const remoteCheckbox = row?.querySelector("[data-supervisor-remote-checkbox]");
+  if (remoteCheckbox) remoteCheckbox.checked = false;
   const input = document.createElement("input");
   input.className = "km-input";
   input.name = checkbox.dataset.kmName || "";
@@ -3409,13 +3426,51 @@ document.addEventListener("change", (event) => {
   initIntegerInputs(field);
   syncCommuting(row, { forceEmpty: true });
   syncFuelVehicleCells(row);
+  syncRemoteKmMutualExclusion(row);
   input.focus();
+});
+
+document.addEventListener("change", (event) => {
+  const remoteCheckbox = event.target.closest("[data-supervisor-remote-checkbox]");
+  if (!remoteCheckbox) return;
+  const row = staffAssignmentRow(remoteCheckbox);
+  if (remoteCheckbox.checked) {
+    resetKmFieldToCheckbox(row);
+  }
+  syncRemoteKmMutualExclusion(row);
 });
 
 const syncKmDisableButton = (input) => {
   const button = input.closest("[data-km-field]")?.querySelector("[data-disable-km]");
   if (!button) return;
   button.hidden = input.value.trim() !== "";
+};
+
+const resetKmFieldToCheckbox = (row) => {
+  const field = row?.querySelector("[data-km-field]");
+  const input = field?.querySelector("[data-km-input]");
+  if (!field || !input) return;
+  const label = document.createElement("label");
+  label.className = "km-checkbox-label";
+  const checkbox = document.createElement("input");
+  checkbox.type = "checkbox";
+  checkbox.setAttribute("data-enable-km", "");
+  checkbox.dataset.kmName = input.dataset.kmName || input.name || "";
+  label.appendChild(checkbox);
+  field.replaceChildren(label);
+  const commutingCell = row?.querySelector("[data-commuting-cell]");
+  const commutingInput = commutingCell?.querySelector("[data-commuting-input]");
+  if (commutingCell && commutingInput) {
+    const dash = document.createElement("span");
+    dash.className = "assignment-disabled-dash";
+    dash.setAttribute("data-commuting-dash", "");
+    dash.dataset.commutingName = commutingInput.name || "";
+    dash.textContent = "-";
+    replaceStaffCardFieldValue(commutingCell, dash);
+  }
+  syncCommuting(row, { forceEmpty: true });
+  syncFuelVehicleCells(row);
+  syncRemoteKmMutualExclusion(row);
 };
 
 document.addEventListener("input", (event) => {
@@ -3441,27 +3496,7 @@ document.addEventListener("click", (event) => {
   const field = button.closest("[data-km-field]");
   const input = field?.querySelector("[data-km-input]");
   if (!field || !input || input.value.trim() !== "") return;
-  const row = staffAssignmentRow(field);
-  const label = document.createElement("label");
-  label.className = "km-checkbox-label";
-  const checkbox = document.createElement("input");
-  checkbox.type = "checkbox";
-  checkbox.setAttribute("data-enable-km", "");
-  checkbox.dataset.kmName = input.dataset.kmName || input.name || "";
-  label.appendChild(checkbox);
-  field.replaceChildren(label);
-  const commutingCell = row?.querySelector("[data-commuting-cell]");
-  const commutingInput = commutingCell?.querySelector("[data-commuting-input]");
-  if (commutingCell && commutingInput) {
-    const dash = document.createElement("span");
-    dash.className = "assignment-disabled-dash";
-    dash.setAttribute("data-commuting-dash", "");
-    dash.dataset.commutingName = commutingInput.name || "";
-    dash.textContent = "-";
-    replaceStaffCardFieldValue(commutingCell, dash);
-  }
-  syncCommuting(row, { forceEmpty: true });
-  syncFuelVehicleCells(row);
+  resetKmFieldToCheckbox(staffAssignmentRow(field));
 });
 
 const selectedRowTeamMemberHasCar = (row) => {
@@ -4457,6 +4492,9 @@ const selectedSupervisorMemberValues = (form, excludedControl) => {
   scope.querySelectorAll("[data-team-member-select]").forEach((select) => {
     if (select !== excludedControl && select.value) selected.push(select.value);
   });
+  scope.querySelectorAll("[data-emergency-contact-select]").forEach((select) => {
+    if (select !== excludedControl && select.value) selected.push(select.value);
+  });
   return selected;
 };
 
@@ -4467,6 +4505,7 @@ const selectedTeamMemberOption = (input) => {
 };
 
 const staffAssignmentRow = (element) => element?.closest?.("[data-supervisor-row]") || null;
+const EXAM_SESSION_PLANNER_PARTICIPATION_STATUSES = new Set(["Pending", "Pre-confirmation sent", "Pre-confirmed"]);
 const selectedAssignmentIsPotentialEntry = (row) => {
   const input = row?.querySelector("[data-team-member-select]");
   const option = input ? selectedTeamMemberOption(input) : null;
@@ -4476,14 +4515,18 @@ const selectedAssignmentIsPotentialEntry = (row) => {
 const syncPotentialEntryParticipationOptions = (row) => {
   const select = row?.querySelector("[data-participation-select]");
   if (!select) return;
-  const allowedForPotential = new Set(["Pending", "Pre-confirmation sent", "Pre-confirmed"]);
   const isPotentialEntry = selectedAssignmentIsPotentialEntry(row);
   Array.from(select.options).forEach((option) => {
-    const blocked = isPotentialEntry && !allowedForPotential.has(option.value);
+    if (option.dataset.externalParticipationStatus === "true") {
+      option.disabled = true;
+      option.hidden = select.value !== option.value;
+      return;
+    }
+    const blocked = isPotentialEntry && !EXAM_SESSION_PLANNER_PARTICIPATION_STATUSES.has(option.value);
     option.disabled = blocked;
     option.hidden = blocked;
   });
-  if (isPotentialEntry && !allowedForPotential.has(select.value)) {
+  if (isPotentialEntry && !EXAM_SESSION_PLANNER_PARTICIPATION_STATUSES.has(select.value)) {
     select.value = "Pending";
   }
 };
@@ -4494,9 +4537,9 @@ const resetParticipationWithoutTeamMember = (row) => {
   if (!teamMemberSelect || !participationSelect) return false;
   const hasTeamMember = Boolean(teamMemberSelect.value);
   Array.from(participationSelect.options).forEach((option) => {
-    if (selectedAssignmentIsPotentialEntry(row) && !["Pending", "Pre-confirmation sent", "Pre-confirmed"].includes(option.value)) {
+    if (option.dataset.externalParticipationStatus === "true") {
       option.disabled = true;
-      option.hidden = true;
+      option.hidden = participationSelect.value !== option.value;
       return;
     }
     option.disabled = !hasTeamMember && option.value !== "Pending";
@@ -4614,6 +4657,16 @@ const syncSupervisorMemberAvailability = (form) => {
     });
     syncTeamMemberSelect(input);
   });
+
+  scope?.querySelectorAll("[data-emergency-contact-select]").forEach((select) => {
+    const usedValues = selectedSupervisorMemberValues(form, select);
+    Array.from(select.options).forEach((option) => {
+      if (!option.value) return;
+      const usedElsewhere = usedValues.includes(option.value);
+      option.disabled = option.value !== select.value && usedElsewhere;
+      option.hidden = option.disabled;
+    });
+  });
 };
 
 const initMemberMultiselects = (root = document) => {
@@ -4676,12 +4729,15 @@ const syncEmergencyContactControl = (control) => {
     const select = row.querySelector("[data-emergency-contact-select]");
     const roleToCover = row.querySelector("[data-emergency-contact-role-to-cover]");
     const statusSelect = row.querySelector("[data-emergency-contact-status-select]");
+    const declinedButton = row.querySelector("[data-emergency-contact-declined-button]");
     const timeField = row.querySelector("[data-emergency-contact-time-field]");
     const timeInputs = Array.from(row.querySelectorAll("[data-emergency-contact-time-input]") || []);
     if (!select) return;
     select.disabled = !required;
     if (!required) select.value = "";
     const hasMember = Boolean(select.value);
+    const preserveTimeWithoutMember = row.dataset.emergencyContactPreserveTime === "true";
+    if (hasMember) delete row.dataset.emergencyContactPreserveTime;
     if (roleToCover) roleToCover.hidden = !required || hasMember;
     if (statusSelect) {
       const savedMemberId = row.dataset.emergencyContactSavedMemberId || "";
@@ -4692,14 +4748,24 @@ const syncEmergencyContactControl = (control) => {
         statusSelect.value = select.value === savedMemberId ? savedStatus : "Pending";
         statusSelect.dataset.currentMemberId = select.value;
       }
+      Array.from(statusSelect.options).forEach((option) => {
+        if (option.dataset.externalParticipationStatus === "true") {
+          option.disabled = true;
+          option.hidden = statusSelect.value !== option.value;
+        }
+      });
       statusSelect.classList.remove(...participationClasses);
       statusSelect.classList.add(`participation-${(statusSelect.value || "Pending").toLowerCase().replace(/\s+/g, "-")}`);
       statusSelect.hidden = !required || !hasMember;
     }
-    if (timeField) timeField.hidden = !required || !hasMember;
+    if (declinedButton) {
+      declinedButton.hidden = !required || !hasMember;
+      declinedButton.disabled = !required || !hasMember;
+    }
+    if (timeField) timeField.hidden = !required || (!hasMember && !preserveTimeWithoutMember);
     timeInputs.forEach((input) => {
       input.disabled = !required;
-      if (!required || !hasMember) input.value = "";
+      if (!required || (!hasMember && !preserveTimeWithoutMember)) input.value = "";
       syncTimeRangeError(input);
     });
   });
@@ -4724,6 +4790,7 @@ const initEmergencyContactControls = (root = document) => {
     control.addEventListener("change", (event) => {
       if (!event.target.closest("[data-emergency-contact-select], [data-emergency-contact-status-select]")) return;
       syncEmergencyContactControl(control);
+      syncSupervisorMemberAvailability(sessionMembersFormForElement(control));
       markStaffChangesUnsaved(sessionMembersFormForElement(control));
     });
     control.addEventListener("input", (event) => {
@@ -4734,6 +4801,31 @@ const initEmergencyContactControls = (root = document) => {
     control.addEventListener("click", (event) => {
       const addButton = event.target.closest("[data-add-emergency-contact-row]");
       const removeButton = event.target.closest("[data-remove-emergency-contact-row]");
+      const declinedButton = event.target.closest("[data-emergency-contact-declined-button]");
+      if (declinedButton) {
+        event.preventDefault();
+        event.stopPropagation();
+        const row = declinedButton.closest("[data-emergency-contact-row]");
+        const select = row?.querySelector("[data-emergency-contact-select]");
+        const selectedValue = select?.value || "";
+        if (!row || !selectedValue) return;
+        if (!window.confirm("Please confirm this staff member declined their participation.")) return;
+        const form = sessionMembersFormForElement(control);
+        markStaffMemberNonAvailable(form, selectedValue);
+        row.dataset.emergencyContactPreserveTime = "true";
+        const preserveInput = row.querySelector("[data-emergency-contact-preserve-time-input]");
+        if (preserveInput) preserveInput.value = "1";
+        select.value = "";
+        const statusSelect = row.querySelector("[data-emergency-contact-status-select]");
+        if (statusSelect) {
+          statusSelect.value = "Pending";
+          statusSelect.dataset.currentMemberId = "";
+        }
+        syncEmergencyContactControl(control);
+        syncSupervisorMemberAvailability(form);
+        markStaffChangesUnsaved(form);
+        return;
+      }
       if (addButton) {
         const row = addButton.closest("[data-emergency-contact-row]");
         const clone = row?.cloneNode(true);
@@ -4749,7 +4841,11 @@ const initEmergencyContactControls = (root = document) => {
           input.value = "";
           input.dataset.timeInitialized = "";
         });
+        const preserveInput = clone.querySelector("[data-emergency-contact-preserve-time-input]");
+        if (preserveInput) preserveInput.value = "";
         clone.querySelector("[data-emergency-contact-role-to-cover]")?.removeAttribute("hidden");
+        clone.querySelector("[data-emergency-contact-declined-button]")?.setAttribute("hidden", "");
+        clone.querySelector("[data-emergency-contact-declined-button]")?.setAttribute("disabled", "");
         clone.querySelectorAll(".modal-emergency-contact-row-title").forEach((title) => {
           title.hidden = true;
         });
@@ -4758,6 +4854,7 @@ const initEmergencyContactControls = (root = document) => {
         row.after(clone);
         initTimeInputs(clone);
         syncEmergencyContactControl(control);
+        syncSupervisorMemberAvailability(sessionMembersFormForElement(control));
         clone.querySelector("[data-emergency-contact-select]")?.focus();
         markStaffChangesUnsaved(sessionMembersFormForElement(control));
       }
@@ -4766,11 +4863,13 @@ const initEmergencyContactControls = (root = document) => {
         if (row && control.querySelectorAll("[data-emergency-contact-row]").length > 1) {
           row.remove();
           syncEmergencyContactControl(control);
+          syncSupervisorMemberAvailability(sessionMembersFormForElement(control));
           markStaffChangesUnsaved(sessionMembersFormForElement(control));
         }
       }
     });
     syncEmergencyContactControl(control);
+    syncSupervisorMemberAvailability(sessionMembersFormForElement(control));
   });
 };
 
@@ -4862,6 +4961,9 @@ window.addEventListener("scroll", () => {
 
 const syncTeamMemberSelect = (select) => {
   select.classList.remove("is-empty", "is-warning", "is-complete");
+  const row = staffAssignmentRow(select);
+  const declinedButton = row?.querySelector("[data-staff-declined-button]");
+  if (declinedButton) declinedButton.disabled = !select.value;
   const picker = select.closest(".staff-member-select-row")?.querySelector("[data-team-member-picker]");
   const summary = picker?.querySelector("[data-team-member-selected]");
   const option = selectedTeamMemberOption(select);
@@ -4870,24 +4972,23 @@ const syncTeamMemberSelect = (select) => {
     select.classList.add("is-empty");
     picker?.classList.add("is-empty");
     if (summary) summary.innerHTML = '<span class="team-member-placeholder" title="Select a staff member to cover this role.">Role to cover</span>';
-    const cardTitle = staffAssignmentRow(select)?.querySelector("[data-staff-card-title]");
+    const cardTitle = row?.querySelector("[data-staff-card-title]");
     if (cardTitle) cardTitle.textContent = "Role to cover";
     syncStaffMemberAddressButton(select);
     syncStaffMemberEmailCell(select);
-    syncFuelVehicleCells(staffAssignmentRow(select));
-    syncFuel(staffAssignmentRow(select), { forceEmpty: true });
-    syncVehicleDep(staffAssignmentRow(select), { forceEmpty: true });
-    syncSeniority(staffAssignmentRow(select));
-    resetParticipationWithoutTeamMember(staffAssignmentRow(select));
+    syncFuelVehicleCells(row);
+    syncFuel(row, { forceEmpty: true });
+    syncVehicleDep(row, { forceEmpty: true });
+    syncSeniority(row);
+    resetParticipationWithoutTeamMember(row);
     syncLogisticsStaffMemberLists(select.closest("[data-session-members-form]"));
     return;
   }
   const state = option.dataset.state || "warning";
-  syncPotentialEntryParticipationOptions(staffAssignmentRow(select));
+  syncPotentialEntryParticipationOptions(row);
   select.classList.add(state === "completed" ? "is-complete" : "is-warning");
   picker?.classList.add(state === "completed" ? "is-complete" : "is-warning");
   if (summary) {
-    const row = staffAssignmentRow(select);
     const location = option.querySelector(".staff-option-location")?.textContent.trim() || "";
     const seniorBadge = option.dataset.seniority === "true" ? '<span class="staff-option-senior">Senior</span>' : "";
     const carBadge = option.dataset.hasCar === "true" ? '<span class="staff-option-car">Has a car</span>' : "";
@@ -4895,15 +4996,15 @@ const syncTeamMemberSelect = (select) => {
     const countBadge = `<span class="staff-option-count">(${sessionCount})</span>`;
     summary.innerHTML = `${state === "completed" ? '<span class="team-member-check">✓</span>' : ""}<span>${option.dataset.name || ""}</span>${location ? `<span class="staff-option-location">${location}</span>` : ""}${seniorBadge}${carBadge}${countBadge}`;
   }
-  const cardTitle = staffAssignmentRow(select)?.querySelector("[data-staff-card-title]");
+  const cardTitle = row?.querySelector("[data-staff-card-title]");
   if (cardTitle) cardTitle.textContent = option.dataset.name || "Role to cover";
   syncStaffMemberAddressButton(select);
   syncStaffMemberEmailCell(select);
-  syncFuelVehicleCells(staffAssignmentRow(select));
-  syncFuel(staffAssignmentRow(select), { forceEmpty: true });
-  syncVehicleDep(staffAssignmentRow(select), { forceEmpty: true });
-  syncSeniority(staffAssignmentRow(select));
-  resetParticipationWithoutTeamMember(staffAssignmentRow(select));
+  syncFuelVehicleCells(row);
+  syncFuel(row, { forceEmpty: true });
+  syncVehicleDep(row, { forceEmpty: true });
+  syncSeniority(row);
+  resetParticipationWithoutTeamMember(row);
   syncLogisticsStaffMemberLists(select.closest("[data-session-members-form]"));
 };
 
@@ -4932,52 +5033,16 @@ const syncStaffMemberEmailCell = (select) => {
     dash.textContent = "-";
     wrapper.appendChild(dash);
   }
-  const button = document.createElement("button");
-  button.className = "copy-icon-button email-invitation-copy-button";
-  button.type = "button";
-  button.dataset.copyInvitationEmail = "";
-  button.setAttribute("aria-label", "Copy invitation email");
-  button.title = "Copy invitation email";
-  button.innerHTML = `
-    <svg class="copy-icon" viewBox="0 0 24 24" aria-hidden="true">
-      <rect x="9" y="9" width="10" height="10" rx="2"></rect>
-      <path d="M5 15V7a2 2 0 0 1 2-2h8"></path>
-    </svg>
-    <svg class="check-icon" viewBox="0 0 24 24" aria-hidden="true">
-      <path d="m5 12 4 4 10-10"></path>
-    </svg>
-    <span class="copy-button-feedback">Copied!</span>
-  `;
-  wrapper.appendChild(button);
-  const emailChipRow = document.createElement("div");
-  emailChipRow.className = "staff-contact-email-chip-row";
-  emailChipRow.setAttribute("aria-label", "Staff email actions");
-  const emailActions = [
-    ["Pre-confirmation email", "staffPreconfirmationEmail"],
-    ["Official confirmation email", "staffConfirmationEmail"],
-    ["Final information email", "staffFinalInformationEmail"],
-  ];
-  emailActions.forEach(([label, dataKey]) => {
-    if (option?.dataset.entryType === "potential" && ["staffConfirmationEmail", "staffFinalInformationEmail"].includes(dataKey)) {
-      return;
-    }
-    const chip = document.createElement("button");
-    chip.className = "staff-contact-email-chip";
-    chip.type = "button";
-    chip.dataset[dataKey] = "";
-    chip.textContent = label;
-    chip.disabled = document.querySelector("main[data-current-menu-can-edit='false']") !== null
-      || (dataKey === "staffConfirmationEmail" && row.closest("[data-session-modal-panel]")?.dataset.sessionFormat !== "Onsite");
-    if (dataKey === "staffConfirmationEmail" && chip.disabled) {
-      chip.title = "Official confirmation email is only available for onsite sessions.";
-    }
-    emailChipRow.appendChild(chip);
-  });
-  cell.replaceChildren(wrapper, emailChipRow);
+  const chip = document.createElement("button");
+  chip.className = "staff-contact-email-chip";
+  chip.type = "button";
+  chip.dataset.staffPreconfirmationEmail = "";
+  chip.textContent = "Pre-confirmation email";
+  chip.disabled = document.querySelector("main[data-current-menu-can-edit='false']") !== null;
+  wrapper.appendChild(chip);
+  cell.replaceChildren(wrapper);
   initStaffGmailLinks(cell);
-  initInvitationEmailCopyButtons(cell);
   initStaffPreconfirmationEmailButtons(cell);
-  initStaffOfficialConfirmationEmailButtons(cell);
   syncInvitationEmailCopyButtons(row.closest("[data-session-members-form]"));
 };
 
@@ -5063,7 +5128,7 @@ const rowTimeRangeMinutes = (row) => {
 
 const rowFeesAreLocked = (row) => {
   const status = row?.querySelector("[data-participation-select]")?.value || "Pending";
-  return status !== "Pending";
+  return !EXAM_SESSION_PLANNER_PARTICIPATION_STATUSES.has(status);
 };
 
 const rowHasManualFeeOverride = (row) => row?.querySelector("[data-manual-fee-override]")?.value === "1";
@@ -5073,7 +5138,7 @@ const syncEditFeesButton = (row) => {
   const button = row.querySelector("[data-edit-assignment-fees]");
   const status = row.querySelector("[data-participation-select]")?.value || "Pending";
   if (!button) return;
-  button.hidden = status !== "Pending";
+  button.hidden = !EXAM_SESSION_PLANNER_PARTICIPATION_STATUSES.has(status);
   button.textContent = row.classList.contains("is-manual-fee-editing")
     ? "Save"
     : rowHasManualFeeOverride(row)
@@ -8883,8 +8948,8 @@ const syncParticipationSelect = (select) => {
   syncStaffHeaderParticipationTag(row, select.value);
   const chip = select.closest(".staff-card-field")?.querySelector("[data-fee-state-chip]");
   if (chip) {
-    const isLive = select.value === "Pending";
-    const isLocked = select.value !== "Pending";
+    const isLive = EXAM_SESSION_PLANNER_PARTICIPATION_STATUSES.has(select.value);
+    const isLocked = !isLive;
     chip.textContent = isLocked ? "Locked" : "Live calculation";
     chip.classList.toggle("is-live", isLive);
     chip.classList.toggle("is-locked", isLocked);
@@ -8892,7 +8957,7 @@ const syncParticipationSelect = (select) => {
   }
   syncCalculatedFieldLocks(row);
   syncInvitationEmailCopyButtons(select.closest("[data-session-members-form]"));
-  if (select.value === "Pending") {
+  if (EXAM_SESSION_PLANNER_PARTICIPATION_STATUSES.has(select.value)) {
     syncLiveFeeCalculations(row, { forceEmpty: true });
   } else {
     syncAssignmentTotalFee(row);
@@ -9815,6 +9880,7 @@ const initSessionMemberRows = (root = document) => {
     syncSeniorityPlaceholder(root);
     syncSeniority(root);
     syncFuelVehicleCells(root);
+    syncRemoteKmMutualExclusion(root);
     if (rowHasManualFeeOverride(root)) {
       enableManualFeeOverride(root);
       saveManualFeeOverride(root);
@@ -9831,6 +9897,7 @@ const initSessionMemberRows = (root = document) => {
     syncSeniorityPlaceholder(row);
     syncSeniority(row);
     syncFuelVehicleCells(row);
+    syncRemoteKmMutualExclusion(row);
     if (rowHasManualFeeOverride(row)) {
       enableManualFeeOverride(row);
       saveManualFeeOverride(row);
@@ -10049,6 +10116,82 @@ document.addEventListener("click", (event) => {
     deletedWrap?.appendChild(deletedInput);
   }
   row.remove();
+  markStaffChangesUnsaved(form);
+  syncLogisticsSection(form);
+  refreshTeamMemberSessionCounts();
+  syncSupervisorMemberAvailability(form);
+  syncShipmentRecipientControls(form);
+  syncSameDateAssignmentConflictAlerts();
+});
+
+const markStaffMemberNonAvailable = (form, value) => {
+  if (!form || !value) return false;
+  const scope = sessionMembersScopeForForm(form);
+  const checkbox = scope?.querySelector(`[data-session-non-available-picker] input[type='checkbox'][value="${CSS.escape(value)}"]`);
+  if (!checkbox) return false;
+  checkbox.checked = true;
+  syncMemberMultiselect(checkbox.closest("[data-session-non-available-picker]"));
+  syncSessionNonAvailableFields(form);
+  return true;
+};
+
+const resetDeclinedStaffAssignmentRow = (row) => {
+  const participation = row?.querySelector("[data-participation-select]");
+  if (participation) {
+    Array.from(participation.options).forEach((option) => {
+      if (option.value === "Pending") {
+        option.disabled = false;
+        option.hidden = false;
+      } else if (option.dataset.externalParticipationStatus === "true") {
+        option.disabled = true;
+        option.hidden = true;
+      }
+    });
+    participation.value = "Pending";
+  }
+  const logistics = row?.querySelector("[data-logistics-control]");
+  if (logistics) {
+    Array.from(logistics.options).forEach((option) => {
+      option.selected = option.value === "Does not apply";
+    });
+    logistics.value = "Does not apply";
+  }
+  const teamMemberInput = row?.querySelector("[data-team-member-select]");
+  if (teamMemberInput) {
+    teamMemberInput.value = "";
+    syncTeamMemberSelect(teamMemberInput);
+  }
+  if (participation) {
+    participation.value = "Pending";
+    syncParticipationSelect(participation);
+  }
+  if (logistics) {
+    logistics.value = "Does not apply";
+    syncStaffLogisticsControl(logistics);
+    logistics.dataset.previousLogisticsValue = logistics.value;
+  }
+  resetKmFieldToCheckbox(row);
+  resetManualFeeOverride(row);
+  syncLiveFeeCalculations(row, { forceEmpty: true });
+};
+
+document.addEventListener("click", (event) => {
+  const declinedButton = event.target.closest("[data-staff-declined-button]");
+  if (!declinedButton) return;
+  event.preventDefault();
+  event.stopPropagation();
+  const row = declinedButton.closest("[data-supervisor-row]");
+  const form = declinedButton.closest("[data-session-members-form]");
+  const teamMemberInput = row?.querySelector("[data-team-member-select]");
+  const selectedValue = teamMemberInput?.value || "";
+  if (!row || !form || !selectedValue) return;
+  if (rowHasActiveLogisticsControl(row) && activeLogisticsControls(form).length === 1 && formHasLogisticsConcepts(form)) {
+    window.alert("Remove all Logistics concepts before deactivating Logistics from the session.");
+    return;
+  }
+  if (!window.confirm("Please confirm this staff member declined their participation.")) return;
+  markStaffMemberNonAvailable(form, selectedValue);
+  resetDeclinedStaffAssignmentRow(row);
   markStaffChangesUnsaved(form);
   syncLogisticsSection(form);
   refreshTeamMemberSessionCounts();
@@ -11871,7 +12014,7 @@ const applyViewOnlyMode = () => {
       element.className || "",
     ].filter(Boolean).join(" ");
     if (
-      element.matches(".copy-icon-button, [data-copy-text], [data-copy-invitation-email], [data-staff-address-copy], [data-copy-journey-link], [data-bulk-email-link], [data-acceptance-draft-save], [data-delete-logistics-concept], [data-remove-supervisor-row], [data-add-time-range], [data-remove-time-range], [data-disable-km], [data-edit-assignment-fees], [data-clear-selection], [data-provider-type-create-form] button") ||
+      element.matches(".copy-icon-button, [data-copy-text], [data-copy-invitation-email], [data-staff-address-copy], [data-copy-journey-link], [data-bulk-email-link], [data-acceptance-draft-save], [data-delete-logistics-concept], [data-remove-supervisor-row], [data-staff-declined-button], [data-emergency-contact-declined-button], [data-add-time-range], [data-remove-time-range], [data-disable-km], [data-edit-assignment-fees], [data-clear-selection], [data-provider-type-create-form] button") ||
       mutatingButtonPattern.test(text) ||
       mutatingTargetPattern.test(target)
     ) {
