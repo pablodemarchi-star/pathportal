@@ -184,6 +184,35 @@
   </span>
 {%- endmacro %}
 
+{% macro final_checks_gate_chip(view) -%}
+  {% if view.final_checks_gate.status == 'unblocked' %}
+    <span class="logistics-gate-chip logistics-gate-unblocked" aria-label="Final checks gate unblocked">
+      <svg viewBox="0 0 24 24" aria-hidden="true">
+        <rect x="5" y="10" width="14" height="10" rx="2"></rect>
+        <path d="M8 10V7a4 4 0 0 1 7.4-2.1"></path>
+      </svg>
+      UNBLOCKED
+    </span>
+  {% elif view.final_checks_gate.status == 'semi_unblocked' %}
+    <span class="logistics-gate-chip logistics-gate-semi-unblocked" aria-label="Final checks gate semi-unblocked">
+      <svg viewBox="0 0 24 24" aria-hidden="true">
+        <rect x="5" y="10" width="14" height="10" rx="2"></rect>
+        <path d="M8 10V7a4 4 0 0 1 7.4-2.1"></path>
+        <path d="M16 7v3"></path>
+      </svg>
+      SEMI-UNBLOCKED
+    </span>
+  {% else %}
+    <span class="logistics-gate-chip logistics-gate-blocked" aria-label="Final checks gate blocked">
+      <svg viewBox="0 0 24 24" aria-hidden="true">
+        <rect x="5" y="10" width="14" height="10" rx="2"></rect>
+        <path d="M8 10V7a4 4 0 0 1 8 0v3"></path>
+      </svg>
+      BLOCKED
+    </span>
+  {% endif %}
+{%- endmacro %}
+
 {% macro packages_status_badge(packages, focusable=true) -%}
   <span class="badge packages-status-{{ packages.status|replace('_', '-') }}" title="{{ packages.tooltip or packages.summary }}" aria-label="Packages {{ packages.label }}: {{ packages.tooltip or packages.summary }}"{% if focusable %} tabindex="0"{% endif %}>{{ packages.label }}</span>
 {%- endmacro %}
@@ -316,12 +345,22 @@
 {%- endmacro %}
 
 {% macro sinapsis_status_badge(sinapsis, focusable=true) -%}
-  <span class="badge sinapsis-readiness-status-{{ sinapsis.status|replace('_', '-') }}" title="{{ sinapsis.message }}" aria-label="Sinapsis readiness {{ sinapsis.label }}: {{ sinapsis.message }}"{% if focusable %} tabindex="0"{% endif %}>{{ sinapsis.label }}</span>
+  <span class="badge sinapsis-readiness-status-{{ sinapsis.status|replace('_', '-') }}" title="{{ sinapsis.message }}" aria-label="Final checks {{ sinapsis.label }}: {{ sinapsis.message }}"{% if focusable %} tabindex="0"{% endif %}>{{ sinapsis.label }}</span>
+{%- endmacro %}
+
+{% macro final_checks_progress_chip(sinapsis) -%}
+  {% if sinapsis.status == 'ready' %}
+    <span class="badge final-checks-progress-completed">Completed</span>
+  {% elif sinapsis.status == 'in_progress' or sinapsis.status == 'needs_correction' %}
+    <span class="badge final-checks-progress-in-progress">In progress</span>
+  {% else %}
+    <span class="badge final-checks-progress-not-started">Not started</span>
+  {% endif %}
 {%- endmacro %}
 
 {% macro sinapsis_table_cell(sinapsis, focusable=true) -%}
   <span class="sinapsis-readiness-summary-cell">
-    {{ sinapsis_status_badge(sinapsis, focusable) }}
+    {{ final_checks_progress_chip(sinapsis) }}
     <span>{{ sinapsis.checklist_checked }} / {{ sinapsis.checklist_total }} checks complete</span>
     {% if sinapsis.requires_action %}
       {% if sinapsis.deadline_status in ['overdue', 'due_today', 'not_set'] %}
@@ -332,6 +371,24 @@
     {% else %}
       <small>{{ sinapsis.responsible }}</small>
     {% endif %}
+  </span>
+{%- endmacro %}
+
+{% macro final_checks_table_cell(view, focusable=true) -%}
+  <span class="logistics-summary-cell">
+    {{ final_checks_gate_chip(view) }}
+    {{ final_checks_progress_chip(view.sinapsis) }}
+    <span>{{ view.sinapsis.checklist_checked }} / {{ view.sinapsis.checklist_total }} checks complete</span>
+    {% if view.sinapsis.requires_action %}
+      {% if view.sinapsis.deadline_status in ['overdue', 'due_today', 'not_set'] %}
+        <small>{{ view.sinapsis.responsible }} · {{ view.sinapsis.deadline_label }}</small>
+      {% elif view.sinapsis.deadline %}
+        <small>{{ view.sinapsis.responsible }} · {{ view.sinapsis.deadline|session_date }}</small>
+      {% endif %}
+    {% else %}
+      <small>{{ view.sinapsis.responsible }}</small>
+    {% endif %}
+    {{ shipment_deadline_chip(view.final_checks_deadline_badge, 'final-checks-column-deadline-chip') }}
   </span>
 {%- endmacro %}
 
@@ -841,6 +898,34 @@
         </div>
       {% else %}
         <p class="status-track-empty">No logistics status changes recorded yet.</p>
+      {% endif %}
+    </div>
+  </section>
+{%- endmacro %}
+
+{% macro final_checks_status_track_panel(session, events) -%}
+  <section class="status-track-panel sinapsis-status-track-panel" aria-label="Final checks status track">
+    <button
+      class="status-track-toggle"
+      type="button"
+      aria-expanded="false"
+      aria-controls="final-checks-status-track-{{ session.id }}"
+      data-status-track-toggle
+    >Status track</button>
+    <div id="final-checks-status-track-{{ session.id }}" class="status-track-content" hidden>
+      {% if events %}
+        <div class="status-track-list">
+          {% for event in events %}
+            <article class="status-track-item">
+              <strong>{{ event.previous_status or '—' }} → {{ event.new_status }}</strong>
+              <span>{{ event.created_at|status_track_dt }} · {{ event.created_by or 'Unknown user' }}</span>
+              {% if event.note %}<p>{{ event.note }}</p>{% endif %}
+              {% if event.evidence_url %}<a class="sinapsis-chip-link" href="{{ event.evidence_url }}" target="_blank" rel="noopener noreferrer">Evidence</a>{% endif %}
+            </article>
+          {% endfor %}
+        </div>
+      {% else %}
+        <p class="status-track-empty">No final checks status changes recorded yet.</p>
       {% endif %}
     </div>
   </section>
@@ -1432,7 +1517,7 @@
           <th>Action description</th>
           <th>Logistics</th>
           <th>Finance</th>
-          <th>Final actions</th>
+          <th>Final checks</th>
           <th>Session readiness</th>
         {% endif %}
       </tr>
@@ -1493,12 +1578,9 @@
             </td>
             <td>
               <div class="sinapsis-table-cell-with-link">
-                {% call contextual_cell_trigger(session, 'sinapsis', 'Check Sinapsis', sinapsis_only=true) %}
-                  {{ sinapsis_table_cell(view.sinapsis, false) }}
+                {% call contextual_cell_trigger(session, 'sinapsis', 'Review Final checks', sinapsis_only=true) %}
+                  {{ final_checks_table_cell(view, false) }}
                 {% endcall %}
-                {% if view.sinapsis_available %}
-                  <a class="sinapsis-chip-link" href="{{ view.sinapsis_url }}" target="_blank" rel="noopener noreferrer">Open link</a>
-                {% endif %}
               </div>
             </td>
             <td>{{ session_readiness_sessions_cell(session, view.session_readiness) }}</td>
@@ -1539,7 +1621,7 @@
             <span class="modal-title-shipments">BUNDLE SHIPMENT</span>
             <span class="modal-title-logistics">LOGISTICS</span>
             <span class="modal-title-finance">FINANCE</span>
-            <span class="modal-title-sinapsis">SINAPSIS</span>
+            <span class="modal-title-sinapsis">FINAL CHECKS</span>
             <span class="modal-title-communications">COMMUNICATIONS</span>
           </p>
           <h2 id="schedule-workflow-title-{{ session.id }}" tabindex="-1">{{ session.exam_session_name }}</h2>
@@ -1598,7 +1680,7 @@
         <a href="#logistics-{{ session.id }}">Logistics</a>
         <a href="#shipments-{{ session.id }}">Shipments</a>
         <a href="#finance-{{ session.id }}">Finance</a>
-        <a href="#sinapsis-{{ session.id }}">Sinapsis</a>
+        <a href="#sinapsis-{{ session.id }}">Final checks</a>
         <a href="#communications-{{ session.id }}">Communications</a>
         <a href="#incidents-{{ session.id }}">Incidents</a>
         <a href="#readiness-{{ session.id }}">Readiness</a>
@@ -3633,62 +3715,45 @@ This stage has already been marked as complete. Reopening it may affect package 
       <section class="staffing-control-section sinapsis-control-section" id="sinapsis-{{ session.id }}" data-control-section data-default-collapsed="true" aria-labelledby="sinapsis-title-{{ session.id }}">
         <div class="staffing-control-header">
           <div>
-            <h3 id="sinapsis-title-{{ session.id }}" tabindex="-1">Sinapsis readiness</h3>
-            {{ sinapsis_status_badge(view.sinapsis) }}
+            <h3 id="sinapsis-title-{{ session.id }}" tabindex="-1">Final checks</h3>
+            {{ final_checks_progress_chip(view.sinapsis) }}
             <p>{{ view.sinapsis.message }}</p>
           </div>
-          <strong class="responsible-chip">ADMIN</strong>
+          {{ final_checks_gate_chip(view) }}
         </div>
         {{ review_flags_block(view.review_flags.by_area.get('sinapsis', []), session, selected_schedule_status, selected_view, csrf_token) }}
-        <section class="staffing-control-metadata" aria-label="Sinapsis readiness details">
+        <section class="staffing-control-metadata" aria-label="Final checks details">
+          {% set final_checks_metadata = namespace(next_action='-', responsible=view.sinapsis.responsible, deadline='-') %}
+          {% if view.final_checks_deadline_badge %}
+            {% set final_checks_metadata.deadline = view.final_checks_deadline_badge.date|session_date %}
+          {% endif %}
+          {% if view.sinapsis.requires_action %}
+            {% if view.sinapsis.label == 'Not reviewed' %}
+              {% set final_checks_metadata.next_action = 'Review Final checks' %}
+            {% elif view.sinapsis.label == 'In progress' %}
+              {% set final_checks_metadata.next_action = 'Complete Final checks' %}
+            {% elif view.sinapsis.label == 'Needs correction' %}
+              {% set final_checks_metadata.next_action = 'Correct Final checks' %}
+            {% endif %}
+          {% endif %}
           <div>
-            <span>Status</span>
-            <strong>{{ view.sinapsis.label }}</strong>
+            <span>Current status</span>
+            <strong>{{ final_checks_progress_chip(view.sinapsis) }}</strong>
+          </div>
+          <div>
+            <span>Recommended next action</span>
+            <strong>{{ final_checks_metadata.next_action }}</strong>
           </div>
           <div>
             <span>Responsible</span>
-            <strong>{{ view.sinapsis.responsible }}</strong>
+            <strong>{{ final_checks_metadata.responsible }}</strong>
           </div>
           <div>
-            <span>Sinapsis deadline</span>
-            <strong>
-              {% if view.sinapsis.requires_action and view.sinapsis.deadline_status in ['overdue', 'due_today', 'not_set'] %}
-                {{ view.sinapsis.deadline_label }}
-              {% elif view.sinapsis.deadline %}
-                {{ view.sinapsis.deadline|session_date }}
-              {% else %}
-                {{ view.sinapsis.deadline_label }}
-              {% endif %}
-            </strong>
-            {% if not view.sinapsis.requires_action and view.sinapsis.deadline %}
-              <small>Saved deadline: {{ view.sinapsis.deadline|session_date }}</small>
-            {% endif %}
-          </div>
-          <div>
-            <span>Session details link</span>
-            {% if view.sinapsis.details_url_available %}
-              <a class="sinapsis-chip-link" href="{{ view.sinapsis.details_url }}" target="_blank" rel="noopener noreferrer">Open in Sinapsis</a>
-            {% else %}
-              <strong class="muted">Not available</strong>
-            {% endif %}
-          </div>
-          <div>
-            <span>Evidence</span>
-            {% if view.sinapsis.evidence_url %}
-              <a class="sinapsis-chip-link" href="{{ view.sinapsis.evidence_url }}" target="_blank" rel="noopener noreferrer">Open evidence</a>
-            {% else %}
-              <strong class="muted">Not added</strong>
-            {% endif %}
-          </div>
-          <div>
-            <span>Checklist</span>
-            <strong>{{ view.sinapsis.checklist_checked }} of {{ view.sinapsis.checklist_total }} checks complete</strong>
-          </div>
-          <div>
-            <span>Note</span>
-            <strong>{{ view.sinapsis.note if view.sinapsis.note else '—' }}</strong>
+            <span>Current deadline</span>
+            <strong>{{ final_checks_metadata.deadline }}</strong>
           </div>
         </section>
+        {{ final_checks_status_track_panel(session, view.sinapsis_events) }}
         {% if view.sinapsis.blockers %}
           <div class="staffing-blockers">
             <h4>Blockers</h4>
@@ -3699,44 +3764,9 @@ This stage has already been marked as complete. Reopening it may affect package 
             </ul>
           </div>
         {% endif %}
-        <button class="secondary-button compact-action staffing-control-edit-button" type="button" data-sinapsis-control-toggle aria-controls="sinapsis-control-form-{{ session.id }}" aria-expanded="false">Edit Sinapsis status</button>
-        <form method="post" action="{{ url_for('staff.update_sinapsis_control', session_id=session.id) }}" id="sinapsis-control-form-{{ session.id }}" class="staffing-control-form sinapsis-control-form" data-sinapsis-control-form data-disable-on-submit hidden>
-          <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-          <input type="hidden" name="schedule_status" value="{{ selected_schedule_status }}">
-          <div class="schedule-form-error" data-sinapsis-control-error hidden></div>
-          <label>
-            Responsible department
-            <input value="ADMIN" readonly>
-          </label>
-          <label>
-            Sinapsis status
-            <select name="sinapsis_status" required data-sinapsis-status-select>
-              {% for status_option in sinapsis_status_options %}
-                <option value="{{ status_option }}" {% if view.sinapsis.raw_status == status_option %}selected{% endif %}>{{ status_option }}</option>
-              {% endfor %}
-            </select>
-          </label>
-          <label>
-            Sinapsis deadline
-            <input type="date" name="sinapsis_due_at" value="{{ view.sinapsis.deadline.isoformat() if view.sinapsis.deadline else '' }}">
-          </label>
-          <label>
-            Evidence URL
-            <input type="url" name="evidence_url" value="{{ view.sinapsis.evidence_url }}" placeholder="https://...">
-          </label>
-          <label>
-            Note
-            <textarea name="note" rows="3" maxlength="2000" placeholder="Add a Sinapsis note" data-sinapsis-note>{{ view.sinapsis.note }}</textarea>
-            <small data-sinapsis-note-hint hidden>A note is required when Sinapsis needs correction.</small>
-          </label>
-          <div class="form-actions">
-            <button class="secondary-button compact-action" type="button" data-sinapsis-control-cancel>Cancel</button>
-            <button class="primary-button compact-action" type="submit">Save Sinapsis status</button>
-          </div>
-        </form>
 
-        <section class="sinapsis-checklist" aria-label="Sinapsis checklist">
-          <h4>Checklist</h4>
+        <section class="sinapsis-checklist" aria-label="Final session checklist">
+          <h4>Final session checklist</h4>
           {% if view.sinapsis_checklist_items %}
             <div class="sinapsis-checklist-list">
               {% for item in view.sinapsis_checklist_items %}
@@ -3762,26 +3792,7 @@ This stage has already been marked as complete. Reopening it may affect package 
               {% endfor %}
             </div>
           {% else %}
-            <p class="empty-history">Save Sinapsis status once to create the checklist.</p>
-          {% endif %}
-        </section>
-
-        <section class="logistics-readonly-list finance-history-list" aria-label="Sinapsis history">
-          <h4>History</h4>
-          {% if view.sinapsis_events %}
-            <ul>
-              {% for event in view.sinapsis_events %}
-                <li>
-                  <strong>{{ event.event_type|replace('_', ' ')|title }}: {{ event.previous_status or '—' }} → {{ event.new_status }}</strong>
-                  <span>{{ event.created_at|localdt }}</span>
-                  {% if event.created_by %}<small>{{ event.created_by }}</small>{% endif %}
-                  {% if event.note %}<p>{{ event.note }}</p>{% endif %}
-                  {% if event.evidence_url %}<a class="sinapsis-chip-link" href="{{ event.evidence_url }}" target="_blank" rel="noopener noreferrer">Evidence</a>{% endif %}
-                </li>
-              {% endfor %}
-            </ul>
-          {% else %}
-            <p class="empty-history">No Sinapsis history yet.</p>
+            <p class="empty-history">No final session checklist has been created yet.</p>
           {% endif %}
         </section>
       </section>

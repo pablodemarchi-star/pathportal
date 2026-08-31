@@ -99,6 +99,26 @@ class FinanceRequestsTest(unittest.TestCase):
         db.session.commit()
         return payment
 
+    def billing(self, requester, status="Requested", is_archived=False):
+        billing = BillingRequest(
+            request_number=f"INVOICE-2026-{BillingRequest.query.count() + 1:04d}",
+            requester_user_id=requester.id,
+            requester_department=requester.department,
+            client_name_snapshot="Client SA",
+            concept_id=self.concept.id,
+            concept_name_snapshot=self.concept.name,
+            description=self.concept.name,
+            currency="ARS",
+            amount=Decimal("7609990.00"),
+            client_tax_id="30-12345678-9",
+            vat_status_invoice_type="Consumidor Final (factura B)",
+            status=status,
+            is_archived=is_archived,
+        )
+        db.session.add(billing)
+        db.session.commit()
+        return billing
+
     def card_for(self, body, needle):
         needle_index = body.index(needle)
         start = body.rfind("<article", 0, needle_index)
@@ -549,6 +569,36 @@ class FinanceRequestsTest(unittest.TestCase):
             self.assertIn(f'<option value="{currency}" >{currency}</option>', body)
         self.assertNotIn('<input name="currency"', body)
 
+    def test_superadmin_sees_invoice_request_edit_buttons_for_all_statuses(self):
+        requester = self.create_user("requester@example.com")
+        superadmin = self.create_user("superadmin@example.com", department="Admin", is_superadmin=True)
+        requested = self.billing(requester, status="Requested")
+        requested.client_name_snapshot = "Requested Client"
+        processing = self.billing(requester, status="Processing invoice")
+        processing.client_name_snapshot = "Processing Client"
+        issued = self.billing(requester, status="Invoice issued")
+        issued.client_name_snapshot = "Issued Client"
+        cancelled = self.billing(requester, status="Invoice cancelled")
+        cancelled.client_name_snapshot = "Cancelled Client"
+        db.session.commit()
+
+        body = self.client_for(superadmin).get("/finance-requests?tab=billing_requests").get_data(as_text=True)
+
+        for billing in [requested, processing, issued, cancelled]:
+            with self.subTest(status=billing.status):
+                card = self.card_for(body, f"Client: {billing.client_name_snapshot}")
+                self.assertIn(f'data-open-modal="edit-billing-request-{billing.id}"', card)
+                self.assertIn(f'id="edit-billing-request-{billing.id}"', body)
+
+    def test_non_superadmin_invoice_request_cards_do_not_render_edit_button(self):
+        requester = self.create_user("requester@example.com")
+        billing = self.billing(requester, status="Requested")
+
+        body = self.client_for(requester).get("/finance-requests?tab=billing_requests").get_data(as_text=True)
+
+        self.assertNotIn(f'data-open-modal="edit-billing-request-{billing.id}"', body)
+        self.assertNotIn(f'id="edit-billing-request-{billing.id}"', body)
+
     def test_non_superadmin_cannot_create_link_folder(self):
         finance_user = self.create_user("finance@example.com", department="Finance")
 
@@ -657,8 +707,8 @@ class FinanceRequestsTest(unittest.TestCase):
         self.assertIn('name="action" value="needs_correction" data-requires-management-comment>Mark discrepancy</button>', body)
         self.assertIn('name="action" value="reject" data-requires-management-comment>Reject</button>', body)
 
-    def test_submitted_payment_card_renders_edit_chip_and_modal(self):
-        user = self.create_user("requester@example.com")
+    def test_submitted_payment_card_renders_superadmin_edit_chip_and_modal(self):
+        user = self.create_user("requester@example.com", is_superadmin=True)
         payment = self.payment(user, status="Submitted")
 
         body = self.client_for(user).get("/finance-requests").get_data(as_text=True)
@@ -671,14 +721,15 @@ class FinanceRequestsTest(unittest.TestCase):
         self.assertIn(f'action="/finance-requests/payment-requests/{payment.id}/edit"', body)
         self.assertIn(f'action="/finance-requests/payment-requests/{payment.id}/delete"', body)
 
-    def test_needs_correction_payment_card_renders_edit_chip_and_modal(self):
-        user = self.create_user("requester@example.com")
+    def test_needs_correction_payment_card_renders_superadmin_edit_chip_and_modal(self):
+        user = self.create_user("requester@example.com", is_superadmin=True)
         payment = self.payment(user, status="Needs correction")
 
         body = self.client_for(user).get("/finance-requests").get_data(as_text=True)
 
         self.assertIn(f'data-open-modal="edit-payment-request-{payment.id}"', body)
-        self.assertIn(">Update</button>", body)
+        self.assertIn(">Edit</button>", body)
+        self.assertNotIn(">Update</button>", body)
         self.assertIn("Edit payment request", body)
         self.assertIn(">Resubmit</button>", body)
         self.assertIn(f'action="/finance-requests/payment-requests/{payment.id}/resubmit"', body)
@@ -708,13 +759,21 @@ class FinanceRequestsTest(unittest.TestCase):
         self.assertIn("tab=management_review", response.headers["Location"])
         self.assertEqual(payment.status, "Resubmitted")
 
-    def test_non_submitted_payment_card_does_not_render_edit_chip(self):
+    def test_non_superadmin_payment_card_does_not_render_edit_chip(self):
         user = self.create_user("requester@example.com")
-        payment = self.payment(user, status="Management approved")
+        submitted = self.payment(user, status="Submitted")
+        submitted.description = "Submitted without superadmin edit"
+        needs_correction = self.payment(user, status="Needs correction")
+        needs_correction.description = "Needs correction without superadmin edit"
+        approved = self.payment(user, status="Management approved")
+        approved.description = "Approved without superadmin edit"
+        db.session.commit()
 
         body = self.client_for(user).get("/finance-requests").get_data(as_text=True)
 
-        self.assertNotIn(f'data-open-modal="edit-payment-request-{payment.id}"', body)
+        self.assertNotIn(f'data-open-modal="edit-payment-request-{submitted.id}"', body)
+        self.assertNotIn(f'data-open-modal="edit-payment-request-{needs_correction.id}"', body)
+        self.assertNotIn(f'data-open-modal="edit-payment-request-{approved.id}"', body)
         self.assertNotIn("Edit payment request", body)
         self.assertNotIn("Delete request", body)
 
@@ -1057,6 +1116,34 @@ class FinanceRequestsTest(unittest.TestCase):
         self.assertNotIn("No finance actions to process.", today_body)
         self.assertNotIn("INVOICE-2026-0001", tomorrow_body)
 
+    def test_superadmin_sees_invoice_edit_button_in_finance_actions(self):
+        requester = self.create_user("requester@example.com")
+        superadmin = self.create_user("superadmin@example.com", department="Admin", is_superadmin=True)
+        requested = self.billing(requester, status="Requested")
+        requested.client_name_snapshot = "Finance Action Client"
+        db.session.commit()
+
+        body = self.client_for(superadmin).get("/finance-requests?tab=finance_payments").get_data(as_text=True)
+
+        card = self.card_for(body, "Client: Finance Action Client")
+        self.assertIn(f'data-open-modal="edit-billing-request-{requested.id}"', card)
+        self.assertIn(f'id="edit-billing-request-{requested.id}"', body)
+        self.assertIn('name="tab" value="finance_payments"', body)
+
+    def test_superadmin_sees_payment_edit_button_in_finance_actions(self):
+        requester = self.create_user("requester@example.com")
+        superadmin = self.create_user("superadmin@example.com", department="Admin", is_superadmin=True)
+        payment = self.payment(requester, status="Management approved", scheduled_payment_date=date.today())
+        payment.description = "Finance action payment for superadmin"
+        db.session.commit()
+
+        body = self.client_for(superadmin).get("/finance-requests?tab=finance_payments").get_data(as_text=True)
+
+        card = self.card_for(body, payment.description)
+        self.assertIn(f'data-open-modal="edit-payment-request-{payment.id}"', card)
+        self.assertIn(f'id="edit-payment-request-{payment.id}"', body)
+        self.assertIn('name="tab" value="finance_payments"', body)
+
     def test_finance_actions_issue_invoice_requires_invoice_proof(self):
         user = self.create_user("finance@example.com", department="Finance")
         billing = BillingRequest(
@@ -1370,16 +1457,23 @@ class FinanceRequestsTest(unittest.TestCase):
         on_hold.description = "On hold by someone else"
         completed = self.payment(requester, status="Payment completed")
         completed.description = "Completed by someone else"
+        cancelled = self.payment(requester, status="Payment cancelled")
+        cancelled.description = "Cancelled by someone else"
         db.session.commit()
 
         body = self.client_for(superadmin).get("/finance-requests?tab=payment_requests").get_data(as_text=True)
 
         self.assertIn(f'data-open-modal="edit-payment-request-{submitted.id}"', self.card_for(body, submitted.description))
+        self.assertIn(f'data-open-modal="edit-payment-request-{scheduled.id}"', self.card_for(body, scheduled.description))
         self.assertIn("Put on hold", self.card_for(body, scheduled.description))
         on_hold_card = self.card_for(body, on_hold.description)
+        self.assertIn(f'data-open-modal="edit-payment-request-{on_hold.id}"', on_hold_card)
         self.assertIn(">Release</button>", on_hold_card)
         self.assertIn(">Cancel</button>", on_hold_card)
-        self.assertIn(">Archive</button>", self.card_for(body, completed.description))
+        completed_card = self.card_for(body, completed.description)
+        self.assertIn(f'data-open-modal="edit-payment-request-{completed.id}"', completed_card)
+        self.assertIn(">Archive</button>", completed_card)
+        self.assertIn(f'data-open-modal="edit-payment-request-{cancelled.id}"', self.card_for(body, cancelled.description))
 
     def test_management_sees_payment_request_buttons_except_superadmin_only(self):
         requester = self.create_user("requester@example.com", department="Admissions")
@@ -1396,8 +1490,8 @@ class FinanceRequestsTest(unittest.TestCase):
 
         body = self.client_for(management).get("/finance-requests?tab=payment_requests").get_data(as_text=True)
 
-        self.assertIn(f'data-open-modal="edit-payment-request-{standard.id}"', self.card_for(body, standard.description))
-        self.assertIn(f'data-open-modal="edit-payment-request-{restricted.id}"', self.card_for(body, restricted.description))
+        self.assertNotIn(f'data-open-modal="edit-payment-request-{standard.id}"', self.card_for(body, standard.description))
+        self.assertNotIn(f'data-open-modal="edit-payment-request-{restricted.id}"', self.card_for(body, restricted.description))
         self.assertNotIn(superadmin_only.description, body)
 
     def test_operational_users_only_see_payment_request_buttons_on_their_cards(self):
@@ -2685,7 +2779,7 @@ class FinanceRequestsTest(unittest.TestCase):
         self.assertEqual(billing.request_number, f"INVOICE-{year}-0004")
 
     def test_requested_invoice_request_card_shows_edit_modal(self):
-        user = self.create_user("requester@example.com")
+        user = self.create_user("requester@example.com", is_superadmin=True)
         billing = BillingRequest(
             request_number="BILL-2026-0001",
             requester_user_id=user.id,

@@ -111,6 +111,7 @@
 
 {% macro billing_card(billing, show_edit=true, show_copy=true, show_archive=true) %}
   {% set billing_completed_on = billing_completed_at(billing) %}
+  {% set can_show_billing_edit = current_menu_can_edit and current_user_is_superadmin and not billing.is_archived and can_edit_billing_request(current_user, billing) %}
   <article class="finance-request-card">
     <div class="finance-card-main finance-invoice-card-main">
       <div>
@@ -151,7 +152,7 @@
       <summary>Status track</summary>
       {{ billing_status_track_panel_content(billing) }}
     </details>
-    {% if show_edit or show_copy or show_archive %}
+    {% if can_show_billing_edit or show_copy or show_archive %}
       <div class="finance-card-actions finance-invoice-card-actions">
         {% if show_copy %}
           {% set invoice_copy = billing_whatsapp_copy_contract(billing) %}
@@ -161,7 +162,7 @@
             {{ copy_button(invoice_copy_sp.message, 'Mensaje de WhatsApp de la factura copiado.', invoice_copy_sp.error, 'SP') }}
           </div>
         {% endif %}
-        {% if show_edit and billing.status == 'Requested' and current_menu_can_edit and can_edit_billing_request(current_user, billing) %}
+        {% if can_show_billing_edit %}
           <button class="secondary-button compact-action" type="button" data-open-modal="edit-billing-request-{{ billing.id }}">Edit</button>
         {% endif %}
         {% if show_archive and current_menu_can_edit and can_archive_billing_request(current_user, billing) %}
@@ -173,6 +174,37 @@
       </div>
     {% endif %}
   </article>
+{% endmacro %}
+
+{% macro billing_edit_modal(billing, tab_name='billing_requests') %}
+  {% set can_show_billing_edit = current_menu_can_edit and current_user_is_superadmin and not billing.is_archived and can_edit_billing_request(current_user, billing) %}
+  {% if can_show_billing_edit %}
+    <div class="modal" id="edit-billing-request-{{ billing.id }}" aria-hidden="true" role="dialog" aria-modal="true" aria-labelledby="edit-billing-request-title-{{ billing.id }}">
+      <div class="modal-panel large finance-request-modal-panel">
+        <div class="modal-header">
+          <div>
+            <h2 id="edit-billing-request-title-{{ billing.id }}" tabindex="-1">Edit invoice request</h2>
+            <p class="modal-subtitle">{{ billing.request_number }}</p>
+          </div>
+          <button class="icon-button" type="button" data-close-modal aria-label="Close modal">&times;</button>
+        </div>
+        <form id="edit-billing-request-form-{{ billing.id }}" class="finance-form-panel finance-modal-form" method="post" action="{{ url_for('staff.update_billing_request', billing_id=billing.id) }}">
+          <input type="hidden" name="tab" value="{{ tab_name }}">
+          {{ billing_form_fields(billing) }}
+        </form>
+        {% if billing.status == 'Requested' %}
+          <form id="delete-billing-request-form-{{ billing.id }}" method="post" action="{{ url_for('staff.delete_billing_request', billing_id=billing.id) }}"></form>
+        {% endif %}
+        <div class="form-actions">
+          <button class="secondary-button" type="button" data-close-modal>Close</button>
+          <button class="primary-button" type="submit" form="edit-billing-request-form-{{ billing.id }}">Save and close</button>
+          {% if billing.status == 'Requested' %}
+            <button class="danger-button" type="submit" form="delete-billing-request-form-{{ billing.id }}" onclick="return window.confirm('Are you sure you want to delete this invoice request?')">Delete</button>
+          {% endif %}
+        </div>
+      </div>
+    </div>
+  {% endif %}
 {% endmacro %}
 
 {% macro archived_payment_table(payments, empty_message='No archived payment requests yet.', tab_name='payment_requests', show_copy_actions=false) %}
@@ -325,6 +357,7 @@
 {% endmacro %}
 
 {% macro payment_card(payment, tab_name, readonly=false) %}
+  {% set can_show_payment_edit = not readonly and current_menu_can_edit and current_user_is_superadmin and not payment.is_archived and can_edit_payment_request(current_user, payment) %}
   <article class="finance-request-card {% if tab_name == 'payment_requests' %}finance-payment-requests-card{% endif %} {% if payment.is_archived %}is-archived{% endif %}" data-payment-number="{{ payment.request_number }}">
     <div class="finance-card-main">
       <div>
@@ -384,8 +417,8 @@
           {{ copy_button(whatsapp_copy.message, 'Payment WhatsApp message copied.', whatsapp_copy.error, 'EN') }}
           {{ copy_button(whatsapp_copy_sp.message, 'Mensaje de WhatsApp del pago copiado.', whatsapp_copy_sp.error, 'SP') }}
         </div>
-        {% if payment.status in ['Submitted', 'Needs correction'] and current_menu_can_edit and can_edit_payment_request(current_user, payment) %}
-          <button class="secondary-button compact-action" type="button" data-open-modal="edit-payment-request-{{ payment.id }}">{{ 'Update' if payment.status == 'Needs correction' else 'Edit' }}</button>
+        {% if can_show_payment_edit %}
+          <button class="secondary-button compact-action" type="button" data-open-modal="edit-payment-request-{{ payment.id }}">Edit</button>
         {% endif %}
         {% if tab_name == 'management_review' and current_menu_can_edit and payment_amount_is_pending(payment) %}
           <button class="secondary-button compact-action" type="button" data-open-modal="set-payment-amount-{{ payment.id }}">Set amount</button>
@@ -421,7 +454,7 @@
     {% endif %}
   </article>
 
-  {% if not readonly and payment.status in ['Submitted', 'Needs correction'] and current_menu_can_edit and can_edit_payment_request(current_user, payment) %}
+  {% if can_show_payment_edit %}
     <div class="modal" id="edit-payment-request-{{ payment.id }}" aria-hidden="true" role="dialog" aria-modal="true" aria-labelledby="edit-payment-request-title-{{ payment.id }}">
       <div class="modal-panel large finance-request-modal-panel">
         <div class="modal-header">
@@ -856,6 +889,7 @@
           {% for billing in finance_billings %}
             <div class="finance-action-payment-item finance-action-invoice-item">
               {{ billing_card(billing, false, true, false) }}
+              {{ billing_edit_modal(billing, 'finance_payments') }}
               {% if can_manage_finance %}
                 <form class="finance-payment-execution-actions" method="post" action="{{ url_for('staff.process_billing_request', billing_id=billing.id) }}" data-required-payment-proof-message="Invoice proof is required to issue an invoice." data-empty-payment-proof-message="Invoice proof must be empty to cancel or process an invoice.">
                   <input type="hidden" name="finance_filter" value="{{ active_finance_filter }}">
@@ -929,28 +963,7 @@
         <div class="finance-card-list finance-invoice-request-list">
           {% for billing in billing_requests %}
             {{ billing_card(billing) }}
-            {% if billing.status == 'Requested' and current_menu_can_edit and can_edit_billing_request(current_user, billing) %}
-              <div class="modal" id="edit-billing-request-{{ billing.id }}" aria-hidden="true" role="dialog" aria-modal="true" aria-labelledby="edit-billing-request-title-{{ billing.id }}">
-                <div class="modal-panel large finance-request-modal-panel">
-                  <div class="modal-header">
-                    <div>
-                      <h2 id="edit-billing-request-title-{{ billing.id }}" tabindex="-1">Edit invoice request</h2>
-                      <p class="modal-subtitle">{{ billing.request_number }}</p>
-                    </div>
-                    <button class="icon-button" type="button" data-close-modal aria-label="Close modal">&times;</button>
-                  </div>
-                  <form id="edit-billing-request-form-{{ billing.id }}" class="finance-form-panel finance-modal-form" method="post" action="{{ url_for('staff.update_billing_request', billing_id=billing.id) }}">
-                    {{ billing_form_fields(billing) }}
-                  </form>
-                  <form id="delete-billing-request-form-{{ billing.id }}" method="post" action="{{ url_for('staff.delete_billing_request', billing_id=billing.id) }}"></form>
-                  <div class="form-actions">
-                    <button class="secondary-button" type="button" data-close-modal>Close</button>
-                    <button class="primary-button" type="submit" form="edit-billing-request-form-{{ billing.id }}">Save and close</button>
-                    <button class="danger-button" type="submit" form="delete-billing-request-form-{{ billing.id }}" onclick="return window.confirm('Are you sure you want to delete this invoice request?')">Delete</button>
-                  </div>
-                </div>
-              </div>
-            {% endif %}
+            {{ billing_edit_modal(billing) }}
           {% else %}
             <p class="empty-state">No invoice requests yet.</p>
           {% endfor %}

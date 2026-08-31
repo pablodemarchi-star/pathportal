@@ -5992,6 +5992,28 @@ def logistics_deadline_badge_contract(session_record, logistics=None, concepts=N
     )
 
 
+def final_checks_deadline(session_record):
+    if not session_record or not session_record.session_date:
+        return None
+    return argentina_subtract_business_days(session_record.session_date, 1)
+
+
+def final_checks_completed_date(sinapsis=None):
+    ready_at = (sinapsis or {}).get("ready_at")
+    return local_date(ready_at) if ready_at else None
+
+
+def final_checks_deadline_badge_contract(session_record, sinapsis=None, today=None):
+    deadline = final_checks_deadline(session_record)
+    completed = (sinapsis or {}).get("status") == "ready"
+    return deadline_badge_contract(
+        deadline,
+        completed=completed,
+        completed_date=final_checks_completed_date(sinapsis) if completed else None,
+        today=today,
+    )
+
+
 def schedule_deadline_badge_contract(workflow, status=None, today=None):
     status = status or schedule_workflow_status(workflow)
     deadline = schedule_workflow_latest_recorded_deadline(workflow) if status == "Approved" else schedule_workflow_current_deadline(workflow)
@@ -10632,6 +10654,21 @@ def session_is_within_next_business_days(session_record, today=None, business_da
     return today <= session_date <= argentina_add_business_days(today, business_days)
 
 
+def argentina_business_days_until(value, today=None):
+    if not value:
+        return None
+    today = today or datetime.now(LOCAL_TZ).date()
+    if value < today:
+        return None
+    current = today
+    days = 0
+    while current < value:
+        current += timedelta(days=1)
+        if is_argentina_business_day(current):
+            days += 1
+    return days
+
+
 def schedule_preparation_business_days_for_bundle_sessions(sessions, today=None):
     if any(session_is_within_next_business_days(session_record, today=today) for session_record in sessions or []):
         return SCHEDULE_PREPARATION_URGENT_BUSINESS_DAYS
@@ -13265,6 +13302,53 @@ def render_journey_unavailable(status_code=404):
     ), status_code
 
 
+def final_checks_gate_contract(session_record, schedule_status, schedule_gate, staffing, packages, shipments, logistics, finance, today=None):
+    schedule_completed = schedule_status in {"Approved", "Completed"} or bool((schedule_gate or {}).get("is_ready"))
+    staffing_confirmed = bool((staffing or {}).get("ready")) or (staffing or {}).get("status") == "confirmed"
+    package_completed = ((packages or {}).get("preparation_status") or {}).get("status") == "completed"
+    operational_status = (shipments or {}).get("operational_status") or {}
+    shipment_contract = (shipments or {}).get("contract") or {}
+    shipment_delivered = (
+        operational_status.get("status") == "delivered_successfully"
+        or shipment_contract.get("status") == "Delivered successfully"
+    )
+    logistics_completed = (logistics or {}).get("status") in {"completed", "not_applicable"}
+    finance_cleared = (finance or {}).get("status") == "cleared" or (finance or {}).get("label") == "Cleared"
+    business_days_until_session = argentina_business_days_until(getattr(session_record, "session_date", None), today=today)
+    within_window = business_days_until_session is not None and business_days_until_session <= 4
+    unblocked = (
+        within_window
+        and schedule_completed
+        and staffing_confirmed
+        and package_completed
+        and shipment_delivered
+        and logistics_completed
+        and finance_cleared
+    )
+    semi_unblocked = within_window and schedule_completed and staffing_confirmed
+    if unblocked:
+        status = "unblocked"
+        label = "UNBLOCKED"
+    elif semi_unblocked:
+        status = "semi_unblocked"
+        label = "SEMI-UNBLOCKED"
+    else:
+        status = "blocked"
+        label = "BLOCKED"
+    return {
+        "status": status,
+        "label": label,
+        "within_window": within_window,
+        "business_days_until_session": business_days_until_session,
+        "schedule_completed": schedule_completed,
+        "staffing_confirmed": staffing_confirmed,
+        "package_completed": package_completed,
+        "shipment_delivered": shipment_delivered,
+        "logistics_completed": logistics_completed,
+        "finance_cleared": finance_cleared,
+    }
+
+
 def schedule_workflow_view(session_record, workflow=None, today=None, staffing=None, logistics=None, logistics_gate=None, logistics_deadline_badge=None, core_readiness=None, operational_readiness=None, session_readiness=None, incidents=None, review_flags=None, priority_action=None, staffing_control=None, staffing_deadline_badge=None, logistics_control=None, finance=None, finance_events=None, sinapsis=None, sinapsis_checklist_items=None, sinapsis_events=None, communications=None, communications_checklist_items=None, communications_events=None, schedule_gate=None, packages=None, shipments=None, activity_timeline=None, journey_shares=None, staffing_rows=None, staffing_events=None, bundle_detail_actions=None, schedule_locked_by_staffing=False):
     status = schedule_workflow_status(workflow)
     deadline = schedule_workflow_current_deadline(workflow)
@@ -13278,6 +13362,7 @@ def schedule_workflow_view(session_record, workflow=None, today=None, staffing=N
     logistics_gate_view = logistics_gate or logistics_gate_contract(fallback_staffing_contract)
     finance_view = finance or finance_readiness_contract(None, today=today)
     sinapsis_view = sinapsis or sinapsis_readiness_contract(session_record, None, today=today)
+    final_checks_deadline_badge = final_checks_deadline_badge_contract(session_record, sinapsis_view, today=today)
     communications_view = communications or communications_readiness_contract(None, today=today)
     incidents_view = incidents or incidents_readiness_contract(session_record, [], today=today)
     review_flags_view = review_flags or incident_review_flags_contract(session_record, [])
@@ -13287,6 +13372,45 @@ def schedule_workflow_view(session_record, workflow=None, today=None, staffing=N
         logistics_readiness_contract([], [], None),
         packages_readiness_contract(session_record, [], [], gate, staffing_readiness_contract([], [], [])),
         session_shipment_contract(session_record),
+    )
+    packages_view = packages or {
+        "contract": packages_readiness_contract(session_record, [], [], schedule_gate=gate, staffing_contract=fallback_staffing_contract),
+        "preparation_status": package_preparation_status_contract(session_record, staff_member_id_requirements_for_session(session_record)),
+        "action": None,
+        "unit_views": [],
+        "session_pre_packing_items": [],
+        "session_final_assembly_items": [],
+        "schedule_ready": bool(gate.get("is_ready")),
+        "staffing_ready": False,
+        "return_package_requirements": return_package_requirements_for_session(session_record),
+        "return_package_count": return_package_count_for_session(session_record),
+        "staff_member_id_requirements": staff_member_id_requirements_for_session(session_record),
+        "status_events": package_status_track_events(session_record, staff_member_id_requirements_for_session(session_record)),
+        "inclusion_final_items": inclusion_final_items_for_session(session_record),
+        "deadline_badge": None,
+    }
+    fallback_shipment_contract = session_shipment_contract(session_record)
+    shipments_view = shipments or {
+        "contract": fallback_shipment_contract,
+        "planning": None,
+        "planning_action": None,
+        "assisted_action": None,
+        "action": None,
+        "bundle_view": None,
+        "operational_status": fallback_shipment_contract,
+        "available_supervisors": [],
+        "available_sessions": [],
+    }
+    final_checks_gate = final_checks_gate_contract(
+        session_record,
+        status,
+        gate,
+        staffing or staffing_presentation_from_contract(fallback_staffing_contract),
+        packages_view,
+        shipments_view,
+        logistics or logistics_presentation_from_contract(fallback_logistics_contract),
+        finance_view,
+        today=today,
     )
     return {
         "session": session_record,
@@ -13316,37 +13440,15 @@ def schedule_workflow_view(session_record, workflow=None, today=None, staffing=N
         "finance": finance_view,
         "finance_events": finance_events or [],
         "sinapsis": sinapsis_view,
+        "final_checks_deadline_badge": final_checks_deadline_badge,
         "sinapsis_checklist_items": sinapsis_checklist_items or [],
         "sinapsis_events": sinapsis_events or [],
         "communications": communications_view,
         "communications_checklist_items": communications_checklist_items or [],
         "communications_events": communications_events or [],
-        "packages": packages or {
-            "contract": packages_readiness_contract(session_record, [], [], schedule_gate=gate, staffing_contract=fallback_staffing_contract),
-            "preparation_status": package_preparation_status_contract(session_record, staff_member_id_requirements_for_session(session_record)),
-            "action": None,
-            "unit_views": [],
-            "session_pre_packing_items": [],
-            "session_final_assembly_items": [],
-            "schedule_ready": bool(gate.get("is_ready")),
-            "staffing_ready": False,
-            "return_package_requirements": return_package_requirements_for_session(session_record),
-            "return_package_count": return_package_count_for_session(session_record),
-            "staff_member_id_requirements": staff_member_id_requirements_for_session(session_record),
-            "status_events": package_status_track_events(session_record, staff_member_id_requirements_for_session(session_record)),
-            "inclusion_final_items": inclusion_final_items_for_session(session_record),
-            "deadline_badge": None,
-        },
-        "shipments": shipments or {
-            "contract": session_shipment_contract(session_record),
-            "planning": None,
-            "planning_action": None,
-            "assisted_action": None,
-            "action": None,
-            "bundle_view": None,
-            "available_supervisors": [],
-            "available_sessions": [],
-        },
+        "packages": packages_view,
+        "shipments": shipments_view,
+        "final_checks_gate": final_checks_gate,
         "core_readiness": core_readiness or core_readiness_contract(
             gate,
             staffing_readiness_contract([], [], []),
@@ -22683,6 +22785,8 @@ def can_use_payment_request_card_actions(user, payment):
 
 
 def can_edit_payment_request(user, payment):
+    if current_user_is_superadmin():
+        return can_use_payment_request_card_actions(user, payment)
     if payment.status not in {"Submitted", "Needs correction"}:
         return False
     return can_use_payment_request_card_actions(user, payment)
@@ -24048,16 +24152,16 @@ def update_billing_request(billing_id):
     require_menu_edit(FINANCE_REQUESTS_MENU_KEY)
     billing = BillingRequest.query.get_or_404(billing_id)
     user = getattr(g, "current_user", None)
-    if billing.status != "Requested" or not can_edit_billing_request(user, billing):
+    if not can_edit_billing_request(user, billing) or (billing.status != "Requested" and not current_user_is_superadmin()):
         abort(403, description="This invoice request cannot be edited.")
     errors = apply_billing_form(billing, request.form, save_client_contact=True)
     if errors:
         for error in errors:
             flash(error, "error")
-        return finance_request_redirect("billing_requests", open_staff_modal=f"edit-billing-request-{billing.id}")
+        return finance_request_redirect(request.form.get("tab") or "billing_requests", open_staff_modal=f"edit-billing-request-{billing.id}")
     db.session.commit()
     flash("Invoice request updated.", "success")
-    return finance_request_redirect("billing_requests")
+    return finance_request_redirect(request.form.get("tab") or "billing_requests")
 
 
 @staff_bp.route("/finance-requests/billing-requests/<int:billing_id>/delete", methods=["POST"])

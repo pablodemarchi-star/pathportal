@@ -1422,19 +1422,6 @@ const openRequestedScheduleModal = () => {
       }
     }
   }
-  if (params.get("open_sinapsis_control") === "1") {
-    const form = document.querySelector(`#schedule-workflow-${sessionId} [data-sinapsis-control-form]`);
-    const trigger = document.querySelector(`#schedule-workflow-${sessionId} [data-sinapsis-control-toggle]`);
-    if (form) {
-      openSinapsisControlForm(form, trigger, { focus: false });
-      const flash = document.querySelector(".flash.error");
-      const errorBox = form.querySelector("[data-sinapsis-control-error]");
-      if (flash && errorBox) {
-        errorBox.textContent = flashNotificationMessage(flash);
-        errorBox.hidden = false;
-      }
-    }
-  }
   if (params.get("open_communications_control") === "1") {
     const form = document.querySelector(`#schedule-workflow-${sessionId} [data-communications-control-form]`);
     const trigger = document.querySelector(`#schedule-workflow-${sessionId} [data-communications-control-toggle]`);
@@ -1565,9 +1552,6 @@ const openScheduleActionPanel = (form, trigger, { focus = true } = {}) => {
   modal?.querySelectorAll("[data-finance-control-form]").forEach((panel) => {
     closeFinanceControlForm(panel, { restoreFocus: false });
   });
-  modal?.querySelectorAll("[data-sinapsis-control-form]").forEach((panel) => {
-    closeSinapsisControlForm(panel, { restoreFocus: false });
-  });
   modal?.querySelectorAll("[data-communications-control-form]").forEach((panel) => {
     closeCommunicationsControlForm(panel, { restoreFocus: false });
   });
@@ -1606,9 +1590,6 @@ const openStaffingControlForm = (form, trigger, { focus = true } = {}) => {
   });
   modal?.querySelectorAll("[data-finance-control-form]").forEach((panel) => {
     closeFinanceControlForm(panel, { restoreFocus: false });
-  });
-  modal?.querySelectorAll("[data-sinapsis-control-form]").forEach((panel) => {
-    closeSinapsisControlForm(panel, { restoreFocus: false });
   });
   modal?.querySelectorAll("[data-communications-control-form]").forEach((panel) => {
     closeCommunicationsControlForm(panel, { restoreFocus: false });
@@ -1650,9 +1631,6 @@ const openLogisticsControlForm = (form, trigger, { focus = true } = {}) => {
   });
   modal?.querySelectorAll("[data-finance-control-form]").forEach((panel) => {
     closeFinanceControlForm(panel, { restoreFocus: false });
-  });
-  modal?.querySelectorAll("[data-sinapsis-control-form]").forEach((panel) => {
-    closeSinapsisControlForm(panel, { restoreFocus: false });
   });
   modal?.querySelectorAll("[data-communications-control-form]").forEach((panel) => {
     closeCommunicationsControlForm(panel, { restoreFocus: false });
@@ -1706,9 +1684,6 @@ const openFinanceControlForm = (form, trigger, { focus = true } = {}) => {
   modal?.querySelectorAll("[data-logistics-control-form]").forEach((panel) => {
     closeLogisticsControlForm(panel, { restoreFocus: false });
   });
-  modal?.querySelectorAll("[data-sinapsis-control-form]").forEach((panel) => {
-    closeSinapsisControlForm(panel, { restoreFocus: false });
-  });
   modal?.querySelectorAll("[data-communications-control-form]").forEach((panel) => {
     closeCommunicationsControlForm(panel, { restoreFocus: false });
   });
@@ -1716,61 +1691,6 @@ const openFinanceControlForm = (form, trigger, { focus = true } = {}) => {
     closeScheduleActionPanel(panel, { restoreFocus: false });
   });
   syncFinanceNoteRequirement(form);
-  form.hidden = false;
-  trigger?.setAttribute("aria-expanded", "true");
-  if (focus) {
-    window.requestAnimationFrame(() => {
-      form.querySelector("input:not([type='hidden']):not([readonly]), textarea, select, button")?.focus();
-    });
-  }
-};
-
-const syncSinapsisNoteRequirement = (form) => {
-  const statusSelect = form?.querySelector("[data-sinapsis-status-select]");
-  const note = form?.querySelector("[data-sinapsis-note]");
-  const hint = form?.querySelector("[data-sinapsis-note-hint]");
-  if (!statusSelect || !note || !hint) return;
-  const isRequired = statusSelect.value === "Needs correction";
-  note.toggleAttribute("required", isRequired);
-  hint.hidden = !isRequired;
-};
-
-const closeSinapsisControlForm = (form, { restoreFocus = true } = {}) => {
-  if (!form) return;
-  form.hidden = true;
-  const modal = form.closest(".modal");
-  const trigger = modal?.querySelector(`[data-sinapsis-control-toggle][aria-controls="${CSS.escape(form.id)}"]`);
-  trigger?.setAttribute("aria-expanded", "false");
-  const errorBox = form.querySelector("[data-sinapsis-control-error]");
-  if (errorBox) {
-    errorBox.hidden = true;
-    errorBox.textContent = "";
-  }
-  if (restoreFocus) trigger?.focus();
-};
-
-const openSinapsisControlForm = (form, trigger, { focus = true } = {}) => {
-  if (!form) return;
-  const modal = form.closest(".modal");
-  document.querySelectorAll("[data-sinapsis-control-form]").forEach((panel) => {
-    if (panel !== form) closeSinapsisControlForm(panel, { restoreFocus: false });
-  });
-  modal?.querySelectorAll("[data-staffing-control-form]").forEach((panel) => {
-    closeStaffingControlForm(panel, { restoreFocus: false });
-  });
-  modal?.querySelectorAll("[data-logistics-control-form]").forEach((panel) => {
-    closeLogisticsControlForm(panel, { restoreFocus: false });
-  });
-  modal?.querySelectorAll("[data-finance-control-form]").forEach((panel) => {
-    closeFinanceControlForm(panel, { restoreFocus: false });
-  });
-  modal?.querySelectorAll("[data-communications-control-form]").forEach((panel) => {
-    closeCommunicationsControlForm(panel, { restoreFocus: false });
-  });
-  modal?.querySelectorAll("[data-schedule-action-panel]").forEach((panel) => {
-    closeScheduleActionPanel(panel, { restoreFocus: false });
-  });
-  syncSinapsisNoteRequirement(form);
   form.hidden = false;
   trigger?.setAttribute("aria-expanded", "true");
   if (focus) {
@@ -1818,9 +1738,6 @@ const openCommunicationsControlForm = (form, trigger, { focus = true } = {}) => 
   });
   modal?.querySelectorAll("[data-finance-control-form]").forEach((panel) => {
     closeFinanceControlForm(panel, { restoreFocus: false });
-  });
-  modal?.querySelectorAll("[data-sinapsis-control-form]").forEach((panel) => {
-    closeSinapsisControlForm(panel, { restoreFocus: false });
   });
   modal?.querySelectorAll("[data-schedule-action-panel]").forEach((panel) => {
     closeScheduleActionPanel(panel, { restoreFocus: false });
@@ -2092,26 +2009,6 @@ document.addEventListener("click", (event) => {
     return;
   }
 
-  const sinapsisControlToggle = event.target.closest("[data-sinapsis-control-toggle]");
-  if (sinapsisControlToggle) {
-    event.preventDefault();
-    const form = document.getElementById(sinapsisControlToggle.getAttribute("aria-controls"));
-    if (!form) return;
-    if (!form.hidden) {
-      closeSinapsisControlForm(form);
-    } else {
-      openSinapsisControlForm(form, sinapsisControlToggle);
-    }
-    return;
-  }
-
-  const sinapsisControlCancel = event.target.closest("[data-sinapsis-control-cancel]");
-  if (sinapsisControlCancel) {
-    event.preventDefault();
-    closeSinapsisControlForm(sinapsisControlCancel.closest("[data-sinapsis-control-form]"));
-    return;
-  }
-
   const communicationsControlToggle = event.target.closest("[data-communications-control-toggle]");
   if (communicationsControlToggle) {
     event.preventDefault();
@@ -2192,12 +2089,6 @@ document.addEventListener("keydown", (event) => {
       closeFinanceControlForm(openFinanceControl);
       return;
     }
-    const openSinapsisControl = topModal.querySelector("[data-sinapsis-control-form]:not([hidden])");
-    if (openSinapsisControl) {
-      event.preventDefault();
-      closeSinapsisControlForm(openSinapsisControl);
-      return;
-    }
     const openCommunicationsControl = topModal.querySelector("[data-communications-control-form]:not([hidden])");
     if (openCommunicationsControl) {
       event.preventDefault();
@@ -2213,13 +2104,6 @@ document.querySelectorAll("[data-finance-control-form]").forEach((form) => {
   syncFinanceNoteRequirement(form);
   form.querySelector("[data-finance-status-select]")?.addEventListener("change", () => {
     syncFinanceNoteRequirement(form);
-  });
-});
-
-document.querySelectorAll("[data-sinapsis-control-form]").forEach((form) => {
-  syncSinapsisNoteRequirement(form);
-  form.querySelector("[data-sinapsis-status-select]")?.addEventListener("change", () => {
-    syncSinapsisNoteRequirement(form);
   });
 });
 

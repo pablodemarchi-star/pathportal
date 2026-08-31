@@ -6688,6 +6688,21 @@ span.session-marker-chip {
   color: var(--badge-green-text);
 }
 
+.final-checks-progress-not-started {
+  background: var(--badge-grey-bg);
+  color: var(--badge-grey-text);
+}
+
+.final-checks-progress-in-progress {
+  background: var(--badge-yellow-bg);
+  color: var(--badge-yellow-text);
+}
+
+.final-checks-progress-completed {
+  background: var(--badge-green-bg);
+  color: var(--badge-green-text);
+}
+
 .communications-status-not-started,
 .communications-status-in-progress {
   background: var(--badge-yellow-bg);
@@ -7181,6 +7196,11 @@ span.session-marker-chip {
 .logistics-gate-blocked {
   background: #f7d4d8;
   color: #9f2635;
+}
+
+.logistics-gate-semi-unblocked {
+  background: #fff0c2;
+  color: #8a5a00;
 }
 
 .packages-gate-unblocked {
@@ -8877,6 +8897,12 @@ span.session-marker-chip {
 
 .staffing-control-metadata .badge {
   font-weight: 700;
+}
+
+.sinapsis-control-section .staffing-control-header .logistics-gate-chip {
+  color: var(--color-muted);
+  font-size: 12px;
+  font-weight: 900;
 }
 
 .staffing-control-metadata .shipment-deadline-risk-chip {
