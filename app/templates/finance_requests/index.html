@@ -279,6 +279,9 @@
         </div>
         {{ payment_card(payment, 'archived_payment_requests', true) }}
         <div class="form-actions finance-archive-modal-actions">
+          {% if tab_name == 'finance_payments' and current_menu_can_edit and can_edit_archived_payment_receipt(current_user, payment) %}
+            <button class="secondary-button" type="button" data-open-modal="edit-archived-payment-receipt-{{ payment.id }}">Edit</button>
+          {% endif %}
           {% if current_menu_can_edit and can_delete_payment_request(current_user, payment) %}
             <form method="post" action="{{ url_for('staff.delete_payment_request', payment_id=payment.id) }}">
               <input type="hidden" name="tab" value="{{ tab_name }}">
@@ -290,6 +293,27 @@
         </div>
       </div>
     </div>
+    {% if tab_name == 'finance_payments' and current_menu_can_edit and can_edit_archived_payment_receipt(current_user, payment) %}
+      <div class="modal" id="edit-archived-payment-receipt-{{ payment.id }}" aria-hidden="true" role="dialog" aria-modal="true" aria-labelledby="edit-archived-payment-receipt-title-{{ payment.id }}">
+        <div class="modal-panel finance-request-modal-panel">
+          <div class="modal-header">
+            <div>
+              <h2 id="edit-archived-payment-receipt-title-{{ payment.id }}" tabindex="-1">Edit payment receipt</h2>
+              <p class="modal-subtitle">{{ payment.request_number }}</p>
+            </div>
+            <button class="icon-button" type="button" data-close-modal aria-label="Close modal">&times;</button>
+          </div>
+          <form id="edit-archived-payment-receipt-form-{{ payment.id }}" class="finance-form-panel finance-modal-form" method="post" action="{{ url_for('staff.update_archived_payment_receipt', payment_id=payment.id) }}">
+            <input type="hidden" name="tab" value="finance_payments">
+            <label>Payment receipt <input name="payment_proof_url" value="{{ payment.payment_proof_url or '' }}" placeholder="https://"></label>
+          </form>
+          <div class="form-actions">
+            <button class="secondary-button" type="button" data-close-modal>Close</button>
+            <button class="primary-button" type="submit" form="edit-archived-payment-receipt-form-{{ payment.id }}">Save and close</button>
+          </div>
+        </div>
+      </div>
+    {% endif %}
   {% endfor %}
 {% endmacro %}
 

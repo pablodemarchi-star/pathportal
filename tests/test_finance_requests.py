@@ -1569,6 +1569,66 @@ class FinanceRequestsTest(unittest.TestCase):
         archived_payment_requests_body = self.client_for(superadmin).get("/finance-requests?tab=payment_requests&show_archived=1").get_data(as_text=True)
         self.assertNotIn(payment.request_number, archived_payment_requests_body)
 
+    def test_superadmin_can_edit_archived_finance_action_payment_receipt_from_full_info(self):
+        requester = self.create_user("requester@example.com")
+        superadmin = self.create_user("superadmin@example.com", department="Admin", is_superadmin=True)
+        payment = self.payment(requester, status="Payment completed")
+        payment.description = "Archived finance action receipt edit"
+        payment.payee_name_snapshot = "Receipt Vendor"
+        payment.payment_proof_url = "https://example.com/old-receipt"
+        payment.payment_completed_at = datetime(2026, 8, 15, 15, 30, tzinfo=timezone.utc)
+        db.session.commit()
+
+        body = self.client_for(superadmin).get("/finance-requests?tab=finance_payments&show_archived=1").get_data(as_text=True)
+
+        self.assertIn(f'data-open-modal="archived-payment-request-{payment.id}"', body)
+        self.assertIn(f'id="archived-payment-request-{payment.id}"', body)
+        self.assertIn(f'data-open-modal="edit-archived-payment-receipt-{payment.id}"', body)
+        self.assertIn(f'id="edit-archived-payment-receipt-{payment.id}"', body)
+        self.assertIn(f'action="/finance-requests/payment-requests/{payment.id}/receipt"', body)
+        self.assertIn("Payment receipt", body)
+        self.assertIn('value="https://example.com/old-receipt"', body)
+
+        response = self.client_for(superadmin).post(
+            f"/finance-requests/payment-requests/{payment.id}/receipt",
+            data={
+                "tab": "finance_payments",
+                "payment_proof_url": "https://example.com/new-receipt",
+            },
+        )
+
+        db.session.refresh(payment)
+        self.assertEqual(response.status_code, 302)
+        self.assertIn("tab=finance_payments", response.headers["Location"])
+        self.assertIn("show_archived=1", response.headers["Location"])
+        self.assertIn(f"open_staff_modal=archived-payment-request-{payment.id}", response.headers["Location"])
+        self.assertEqual(payment.payment_proof_url, "https://example.com/new-receipt")
+
+    def test_non_superadmin_cannot_edit_archived_finance_action_payment_receipt(self):
+        user = self.create_user("finance@example.com", department="Finance")
+        payment = self.payment(user, status="Payment completed")
+        payment.description = "Archived finance action receipt hidden"
+        payment.payment_proof_url = "https://example.com/receipt"
+        db.session.commit()
+
+        body = self.client_for(user).get("/finance-requests?tab=finance_payments&show_archived=1").get_data(as_text=True)
+
+        self.assertIn(f'data-open-modal="archived-payment-request-{payment.id}"', body)
+        self.assertNotIn(f'data-open-modal="edit-archived-payment-receipt-{payment.id}"', body)
+        self.assertNotIn(f'id="edit-archived-payment-receipt-{payment.id}"', body)
+
+        response = self.client_for(user).post(
+            f"/finance-requests/payment-requests/{payment.id}/receipt",
+            data={
+                "tab": "finance_payments",
+                "payment_proof_url": "https://example.com/new-receipt",
+            },
+        )
+
+        db.session.refresh(payment)
+        self.assertEqual(response.status_code, 403)
+        self.assertEqual(payment.payment_proof_url, "https://example.com/receipt")
+
     def test_finance_actions_complete_payment_requires_payment_proof(self):
         user = self.create_user("finance@example.com", department="Finance")
         payment = self.payment(user, status="Management approved", scheduled_payment_date=date.today())

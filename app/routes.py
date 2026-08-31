@@ -22840,6 +22840,16 @@ def can_delete_payment_request(user, payment):
     )
 
 
+def can_edit_archived_payment_receipt(user, payment):
+    return (
+        current_user_is_superadmin()
+        and user_can_edit(FINANCE_REQUESTS_MENU_KEY)
+        and payment
+        and payment.status in PAYMENT_ARCHIVE_ELIGIBLE_STATUSES
+        and can_view_payment_request(user, payment)
+    )
+
+
 def payment_is_delayed(payment, today=None):
     today = today or date.today()
     return bool(
@@ -23804,6 +23814,7 @@ def finance_requests():
         can_release_payment_hold=can_release_payment_hold,
         can_archive_payment_request=can_archive_payment_request,
         can_delete_payment_request=can_delete_payment_request,
+        can_edit_archived_payment_receipt=can_edit_archived_payment_receipt,
         can_finance_process_payment=can_finance_process_payment,
         can_management_review_payment=can_management_review_payment,
         can_edit_billing_request=can_edit_billing_request,
@@ -24092,6 +24103,33 @@ def cancel_payment_hold(payment_id):
     db.session.commit()
     flash("Payment request cancelled.", "success")
     return finance_request_redirect(request.form.get("tab") or "payment_requests")
+
+
+@staff_bp.route("/finance-requests/payment-requests/<int:payment_id>/receipt", methods=["POST"])
+@login_required
+def update_archived_payment_receipt(payment_id):
+    require_menu_edit(FINANCE_REQUESTS_MENU_KEY)
+    payment = PaymentRequest.query.get_or_404(payment_id)
+    user = getattr(g, "current_user", None)
+    if not can_edit_archived_payment_receipt(user, payment):
+        abort(403, description="Only the Superadmin can edit archived payment receipts.")
+    try:
+        payment.payment_proof_url = clean_optional_url(request.form.get("payment_proof_url"), "Payment receipt")
+    except ValueError as exc:
+        flash(str(exc), "error")
+        return finance_request_redirect(
+            request.form.get("tab") or "finance_payments",
+            show_archived="1",
+            open_staff_modal=f"edit-archived-payment-receipt-{payment.id}",
+        )
+    add_payment_event(payment, "Payment receipt updated", previous_status=payment.status, new_status=payment.status)
+    db.session.commit()
+    flash("Payment receipt updated.", "success")
+    return finance_request_redirect(
+        request.form.get("tab") or "finance_payments",
+        show_archived="1",
+        open_staff_modal=f"archived-payment-request-{payment.id}",
+    )
 
 
 @staff_bp.route("/finance-requests/payment-requests/<int:payment_id>/archive", methods=["POST"])
