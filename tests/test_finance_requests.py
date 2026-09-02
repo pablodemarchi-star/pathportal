@@ -759,23 +759,45 @@ class FinanceRequestsTest(unittest.TestCase):
         self.assertIn("tab=management_review", response.headers["Location"])
         self.assertEqual(payment.status, "Resubmitted")
 
-    def test_non_superadmin_payment_card_does_not_render_edit_chip(self):
+    def test_requester_payment_card_renders_edit_and_hold_buttons_for_editable_statuses(self):
         user = self.create_user("requester@example.com")
         submitted = self.payment(user, status="Submitted")
-        submitted.description = "Submitted without superadmin edit"
+        submitted.description = "Own submitted payment"
         needs_correction = self.payment(user, status="Needs correction")
-        needs_correction.description = "Needs correction without superadmin edit"
+        needs_correction.description = "Own needs correction payment"
         approved = self.payment(user, status="Management approved")
-        approved.description = "Approved without superadmin edit"
+        approved.description = "Own approved payment"
         db.session.commit()
 
         body = self.client_for(user).get("/finance-requests").get_data(as_text=True)
 
-        self.assertNotIn(f'data-open-modal="edit-payment-request-{submitted.id}"', body)
-        self.assertNotIn(f'data-open-modal="edit-payment-request-{needs_correction.id}"', body)
-        self.assertNotIn(f'data-open-modal="edit-payment-request-{approved.id}"', body)
-        self.assertNotIn("Edit payment request", body)
-        self.assertNotIn("Delete request", body)
+        submitted_card = self.card_for(body, submitted.description)
+        self.assertIn(f'data-open-modal="edit-payment-request-{submitted.id}"', submitted_card)
+        self.assertIn("Put on hold", submitted_card)
+        needs_correction_card = self.card_for(body, needs_correction.description)
+        self.assertIn(f'data-open-modal="edit-payment-request-{needs_correction.id}"', needs_correction_card)
+        self.assertIn("Put on hold", needs_correction_card)
+        approved_card = self.card_for(body, approved.description)
+        self.assertNotIn(f'data-open-modal="edit-payment-request-{approved.id}"', approved_card)
+        self.assertIn("Put on hold", approved_card)
+
+    def test_non_requester_payment_card_does_not_render_requester_buttons(self):
+        owner = self.create_user("owner@example.com")
+        other_user = self.create_user("viewer@example.com")
+        submitted = self.payment(other_user, status="Submitted")
+        submitted.description = "Other submitted payment"
+        needs_correction = self.payment(other_user, status="Needs correction")
+        needs_correction.description = "Other needs correction payment"
+        db.session.commit()
+
+        body = self.client_for(owner).get("/finance-requests").get_data(as_text=True)
+
+        submitted_card = self.card_for(body, submitted.description)
+        self.assertNotIn(f'data-open-modal="edit-payment-request-{submitted.id}"', submitted_card)
+        self.assertNotIn("Put on hold", submitted_card)
+        needs_correction_card = self.card_for(body, needs_correction.description)
+        self.assertNotIn(f'data-open-modal="edit-payment-request-{needs_correction.id}"', needs_correction_card)
+        self.assertNotIn("Put on hold", needs_correction_card)
 
     def test_management_approved_status_chip_displays_as_scheduled(self):
         user = self.create_user("requester@example.com")
@@ -1451,6 +1473,8 @@ class FinanceRequestsTest(unittest.TestCase):
         superadmin = self.create_user("superadmin@example.com", department="Admin", is_superadmin=True)
         submitted = self.payment(requester, status="Submitted")
         submitted.description = "Submitted by someone else"
+        needs_correction = self.payment(requester, status="Needs correction")
+        needs_correction.description = "Needs correction by someone else"
         scheduled = self.payment(requester, status="Management approved", scheduled_payment_date=date.today())
         scheduled.description = "Scheduled by someone else"
         on_hold = self.payment(requester, status="On hold", scheduled_payment_date=date.today())
@@ -1463,7 +1487,12 @@ class FinanceRequestsTest(unittest.TestCase):
 
         body = self.client_for(superadmin).get("/finance-requests?tab=payment_requests").get_data(as_text=True)
 
-        self.assertIn(f'data-open-modal="edit-payment-request-{submitted.id}"', self.card_for(body, submitted.description))
+        submitted_card = self.card_for(body, submitted.description)
+        self.assertIn(f'data-open-modal="edit-payment-request-{submitted.id}"', submitted_card)
+        self.assertIn("Put on hold", submitted_card)
+        needs_correction_card = self.card_for(body, needs_correction.description)
+        self.assertIn(f'data-open-modal="edit-payment-request-{needs_correction.id}"', needs_correction_card)
+        self.assertIn("Put on hold", needs_correction_card)
         self.assertIn(f'data-open-modal="edit-payment-request-{scheduled.id}"', self.card_for(body, scheduled.description))
         self.assertIn("Put on hold", self.card_for(body, scheduled.description))
         on_hold_card = self.card_for(body, on_hold.description)

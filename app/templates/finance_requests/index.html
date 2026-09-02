@@ -381,7 +381,8 @@
 {% endmacro %}
 
 {% macro payment_card(payment, tab_name, readonly=false) %}
-  {% set can_show_payment_edit = not readonly and current_menu_can_edit and current_user_is_superadmin and not payment.is_archived and can_edit_payment_request(current_user, payment) %}
+  {% set can_use_requester_payment_actions = current_user_is_superadmin or (current_user and payment.requester_user_id == current_user.id) %}
+  {% set can_show_payment_edit = not readonly and current_menu_can_edit and can_use_requester_payment_actions and not payment.is_archived and can_edit_payment_request(current_user, payment) %}
   <article class="finance-request-card {% if tab_name == 'payment_requests' %}finance-payment-requests-card{% endif %} {% if payment.is_archived %}is-archived{% endif %}" data-payment-number="{{ payment.request_number }}">
     <div class="finance-card-main">
       <div>
@@ -447,7 +448,7 @@
         {% if tab_name == 'management_review' and current_menu_can_edit and payment_amount_is_pending(payment) %}
           <button class="secondary-button compact-action" type="button" data-open-modal="set-payment-amount-{{ payment.id }}">Set amount</button>
         {% endif %}
-        {% if tab_name == 'payment_requests' and payment.status == 'Management approved' and current_menu_can_edit and can_hold_payment_request(current_user, payment) %}
+        {% if tab_name == 'payment_requests' and current_menu_can_edit and can_use_requester_payment_actions and can_hold_payment_request(current_user, payment) %}
           <form method="post" action="{{ url_for('staff.hold_payment_request', payment_id=payment.id) }}">
             <input type="hidden" name="tab" value="payment_requests">
             <button class="secondary-button compact-action" type="submit" onclick="return window.confirm('Are you sure you want to put this payment on hold?')">Put on hold</button>
