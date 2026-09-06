@@ -22759,7 +22759,7 @@ PAYMENT_HOLD_ELIGIBLE_STATUSES = {
 }
 PAYMENT_ARCHIVE_ELIGIBLE_STATUSES = {"Payment completed", "Rejected", "Payment cancelled"}
 PAYMENT_ARCHIVED_DELETE_ELIGIBLE_STATUSES = {"Payment completed", "Payment cancelled"}
-PAYMENT_METHODS = ("Bank transfer", "Deposit", "Cash", "Card")
+PAYMENT_METHODS = ("Bank transfer", "Deposit", "Cash", "Card", "Electronic Payment Slip (EPS)")
 BILLING_ARCHIVE_ELIGIBLE_STATUSES = {"Invoice issued", "Invoice cancelled"}
 BILLING_STATUSES = (
     "Requested",

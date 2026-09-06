@@ -231,6 +231,16 @@ class FinanceRequestsTest(unittest.TestCase):
         self.assertNotIn('data-open-modal="new-payment-request-modal"', management_body)
         self.assertNotIn('data-open-modal="new-payment-request-modal"', concepts_body)
 
+    def test_new_payment_request_payment_method_includes_eps(self):
+        user = self.create_user("superadmin@example.com", is_superadmin=True)
+        client = self.client_for(user)
+
+        payment_body = client.get("/finance-requests?tab=payment_requests").get_data(as_text=True)
+        finance_actions_body = client.get("/finance-requests?tab=finance_payments").get_data(as_text=True)
+
+        self.assertIn('<option value="Electronic Payment Slip (EPS)"', payment_body)
+        self.assertIn('<option value="Electronic Payment Slip (EPS)"', finance_actions_body)
+
     def test_contacts_tab_redirects_to_default_payment_requests(self):
         user = self.create_user("requester@example.com")
         body = self.client_for(user).get("/finance-requests?tab=contacts").get_data(as_text=True)
