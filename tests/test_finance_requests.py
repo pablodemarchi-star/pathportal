@@ -240,6 +240,8 @@ class FinanceRequestsTest(unittest.TestCase):
 
         self.assertIn('<option value="Electronic Payment Slip (EPS)"', payment_body)
         self.assertIn('<option value="Electronic Payment Slip (EPS)"', finance_actions_body)
+        self.assertIn('<option value="UK bank transfer"', payment_body)
+        self.assertIn('<option value="UK bank transfer"', finance_actions_body)
 
     def test_contacts_tab_redirects_to_default_payment_requests(self):
         user = self.create_user("requester@example.com")
