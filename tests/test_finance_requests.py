@@ -139,7 +139,7 @@ class FinanceRequestsTest(unittest.TestCase):
         self.assertNotIn(">Show archived</a>", body)
         self.assertIn("finance-fixed-links", body)
         self.assertIn("finance-fixed-detail-link", body)
-        self.assertLess(body.index("Payment requests</a>"), body.index("Path bank details</summary>"))
+        self.assertLess(body.index("Payment requests ("), body.index("Path bank details</summary>"))
         self.assertLess(body.index("Path bank details</summary>"), body.index("Path invoicing details</summary>"))
         self.assertIn("finance-bank-details-menu", body)
         self.assertIn("PATH EXAMINATIONS BANK ACCOUNT DETAILS:", body)
@@ -160,6 +160,26 @@ class FinanceRequestsTest(unittest.TestCase):
         self.assertIn("- *Condición frente al IVA:* Responsable Inscripto", body)
         self.assertNotIn(">Contacts<", body)
         self.assertNotIn(">Overview<", body)
+
+    def test_finance_tabs_show_visible_card_counts(self):
+        user = self.create_user("superadmin@example.com", is_superadmin=True)
+        today = date.today()
+        self.payment(user, status="Submitted")
+        self.payment(user, status="Payment completed", is_archived=True)
+        self.payment(user, status="Submitted")
+        self.payment(user, status="Pending approval")
+        self.payment(user, status="Management approved", scheduled_payment_date=today)
+        self.payment(user, status="Management approved", scheduled_payment_date=today + timedelta(days=1))
+        self.billing(user, status="Requested")
+        self.billing(user, status="Invoice issued", is_archived=True)
+        self.billing(user, status="Processing invoice")
+
+        body = self.client_for(user).get("/finance-requests?tab=payment_requests").get_data(as_text=True)
+
+        self.assertIn("Payment requests (5)", body)
+        self.assertIn("Invoice requests (2)", body)
+        self.assertIn("Management review (3)", body)
+        self.assertIn("Finance actions (3)", body)
 
     def test_finance_fixed_detail_links_use_plain_link_style(self):
         with open("app/static/css/styles.css", encoding="utf-8") as css_file:

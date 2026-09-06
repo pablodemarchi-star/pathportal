@@ -23978,6 +23978,15 @@ def finance_requests():
         payment for payment in visible_payments
         if payment_appears_in_management_review(payment)
     ]
+    finance_tab_counts = {
+        "payment_requests": len([payment for payment in all_visible_payments if not payment.is_archived]),
+        "billing_requests": len([billing for billing in all_visible_billings if not billing.is_archived]),
+        "management_review": len([
+            payment for payment in all_visible_payments
+            if payment_appears_in_management_review(payment)
+        ]),
+        "finance_payments": len(finance_action_groups["today"]) + len(finance_billings),
+    }
     contacts = FinanceContact.query.order_by(FinanceContact.is_active.desc(), FinanceContact.display_name.asc()).all()
     client_contacts = FinanceClientContact.query.order_by(FinanceClientContact.is_active.desc(), FinanceClientContact.display_name.asc()).all()
     concepts = FinanceConcept.query.order_by(FinanceConcept.name.asc()).all()
@@ -24035,6 +24044,7 @@ def finance_requests():
         visibility_modes=FINANCE_VISIBILITY_MODES,
         calendar_groups=calendar_groups,
         finance_filter_options=finance_filter_options,
+        finance_tab_counts=finance_tab_counts,
         active_finance_filter=finance_action_filter,
         today_date=date.today(),
         next_payment_run_date=finance_next_payment_run_date(),
