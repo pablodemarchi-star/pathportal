@@ -4500,11 +4500,30 @@ This stage has already been marked as complete. Reopening it may affect package 
               </div>
               <div class="schedule-recommended-action-buttons">
                 {% if action_ns.primary.key == 'send_for_review' %}
-                  {% set schedule_share_text = 'Schedules for ' ~ session.exam_session_name ~ ': ' ~ (session.details_url or '') %}
-                  {% set schedule_email_subject = 'Schedules for ' ~ session.exam_session_name %}
-                  {% set schedule_email_body = 'Please review the schedules for ' ~ session.exam_session_name ~ ': ' ~ (session.details_url or '') %}
-                  <a class="schedule-share-button compact-action{% if not session.details_url or not view.monthly_registrations_closed %} is-disabled{% endif %}" href="https://wa.me/?text={{ schedule_share_text|urlencode }}" target="_blank" rel="noopener"{% if not session.details_url or not view.monthly_registrations_closed %} aria-disabled="true" tabindex="-1"{% endif %}>WhatsApp schedule</a>
-                  <a class="schedule-share-button compact-action{% if not session.details_url or not view.monthly_registrations_closed %} is-disabled{% endif %}" href="mailto:?subject={{ schedule_email_subject|urlencode }}&body={{ schedule_email_body|urlencode }}"{% if not session.details_url or not view.monthly_registrations_closed %} aria-disabled="true" tabindex="-1"{% endif %}>Email schedule</a>
+                  {% set institution_journey_share = view.journey_shares.institution %}
+                  {% set schedule_whatsapp_contacts = session.contact_points_list() %}
+                  {% if schedule_whatsapp_contacts %}
+                    {% for contact_point in schedule_whatsapp_contacts %}
+                      {% set contact_point_name = contact_point.full_name or 'contact point' %}
+                      {% set contact_point_email = contact_point.email or '' %}
+                      {% set schedule_whatsapp = schedule_journey_whatsapp_link(session, contact_point, institution_journey_share) %}
+                      {% set schedule_whatsapp_disabled = not schedule_whatsapp.enabled or not view.monthly_registrations_closed %}
+                      {% set schedule_email_missing_journey = not schedule_whatsapp.journey_link or not institution_journey_share.enabled %}
+                      {% set schedule_email_disabled = not contact_point_email or not schedule_whatsapp.session_name or not schedule_whatsapp.session_date or not schedule_whatsapp.contact_name or schedule_email_missing_journey or not view.monthly_registrations_closed %}
+                      <button class="schedule-share-button compact-action{% if schedule_whatsapp_disabled %} is-disabled{% endif %}" type="button" data-session-journey-whatsapp data-view-only-allowed="true" data-session-name="{{ schedule_whatsapp.session_name }}" data-session-date="{{ schedule_whatsapp.session_date }}" data-contact-name="{{ schedule_whatsapp.contact_name }}" data-contact-phone="{{ schedule_whatsapp.phone }}" data-journey-link="{{ schedule_whatsapp.journey_link }}"{% if schedule_whatsapp_disabled %} disabled aria-disabled="true" title="{% if schedule_whatsapp.error %}{{ schedule_whatsapp.error }}{% else %}Monthly registrations must be closed before sharing this message.{% endif %}"{% endif %}>Share journey with {{ contact_point_name }} via WhatsApp</button>
+                      <button class="schedule-share-button compact-action{% if schedule_email_disabled %} is-disabled{% endif %}" type="button" data-session-journey-email data-view-only-allowed="true" data-session-name="{{ schedule_whatsapp.session_name }}" data-session-date="{{ schedule_whatsapp.session_date }}" data-contact-name="{{ schedule_whatsapp.contact_name }}" data-contact-email="{{ contact_point_email }}" data-journey-link="{{ schedule_whatsapp.journey_link }}"{% if schedule_email_disabled %} disabled aria-disabled="true" title="{% if not contact_point_email %}Point of contact email is required.{% elif schedule_email_missing_journey %}Institution Journey link is required.{% elif not schedule_whatsapp.contact_name %}Point of contact is required.{% else %}Monthly registrations must be closed before sharing this message.{% endif %}"{% endif %}>Share Journey with {{ contact_point_name }} via email</button>
+                      <button class="copy-icon-button schedule-email-copy-button{% if schedule_email_disabled %} is-disabled{% endif %}" type="button" data-copy-session-journey-email data-view-only-allowed="true" data-session-name="{{ schedule_whatsapp.session_name }}" data-session-date="{{ schedule_whatsapp.session_date }}" data-contact-name="{{ schedule_whatsapp.contact_name }}" data-contact-email="{{ contact_point_email }}" data-journey-link="{{ schedule_whatsapp.journey_link }}" aria-label="Copy Session Journey email for {{ contact_point_name }}" title="{% if schedule_email_disabled %}{% if not contact_point_email %}Point of contact email is required.{% elif schedule_email_missing_journey %}Institution Journey link is required.{% elif not schedule_whatsapp.contact_name %}Point of contact is required.{% else %}Monthly registrations must be closed before sharing this message.{% endif %}{% else %}Copy Session Journey email{% endif %}"{% if schedule_email_disabled %} disabled aria-disabled="true"{% endif %}>
+                        <svg class="copy-icon" viewBox="0 0 24 24" aria-hidden="true">
+                          <rect x="9" y="9" width="10" height="10" rx="2"></rect>
+                          <path d="M5 15V7a2 2 0 0 1 2-2h8"></path>
+                        </svg>
+                      </button>
+                    {% endfor %}
+                    <span class="bulk-status" data-session-journey-email-status></span>
+                  {% else %}
+                    <span class="schedule-share-button compact-action is-disabled" aria-disabled="true" title="Add at least one contact point for this session.">Share journey via WhatsApp</span>
+                    <span class="schedule-share-button compact-action is-disabled" aria-disabled="true" title="Add at least one contact point for this session.">Share Journey via email</span>
+                  {% endif %}
                 {% endif %}
                 <button class="primary-button compact-action" type="button" data-schedule-action-toggle="schedule-action-form-{{ session.id }}-{{ action_ns.primary.key }}" aria-controls="schedule-action-form-{{ session.id }}-{{ action_ns.primary.key }}" aria-expanded="false"{% if not view.monthly_registrations_closed %} disabled{% endif %}>{{ action_ns.primary.label }}</button>
               </div>
@@ -4517,22 +4536,19 @@ This stage has already been marked as complete. Reopening it may affect package 
             {% endfor %}
           </div>
 
-          {% set has_other_actions = view.available_transitions|selectattr('key', 'ne', primary_key)|selectattr('key', 'ne', 'update_deadline')|list|length > 0 %}
-          {% if has_other_actions %}
-            <section class="schedule-other-actions" aria-label="Other schedule workflow actions">
-              <h4>Other actions</h4>
-              <div class="schedule-other-action-list">
-                {% if action_ns.primary and action_ns.primary.key == 'send_for_review' %}
-                  <a class="schedule-share-button compact-action{% if not session.details_url or not view.monthly_registrations_closed %} is-disabled{% endif %}" href="{{ session.details_url or '#' }}" target="_blank" rel="noopener"{% if not session.details_url or not view.monthly_registrations_closed %} aria-disabled="true" tabindex="-1"{% endif %}>View schedule</a>
+          {% set institution_journey_share = view.journey_shares.institution %}
+          <section class="schedule-other-actions" aria-label="Other schedule workflow actions">
+            <h4>Other actions</h4>
+            <div class="schedule-other-action-list">
+              <a class="schedule-share-button compact-action{% if not session.details_url or not view.monthly_registrations_closed %} is-disabled{% endif %}" href="{{ session.details_url or '#' }}" target="_blank" rel="noopener"{% if not session.details_url or not view.monthly_registrations_closed %} aria-disabled="true" tabindex="-1" title="{% if not session.details_url %}Session schedule link is required.{% else %}Monthly registrations must be closed before opening this schedule.{% endif %}"{% endif %}>View schedule</a>
+              <a class="schedule-share-button compact-action{% if not institution_journey_share.enabled or not institution_journey_share.url or not view.monthly_registrations_closed %} is-disabled{% endif %}" href="{% if institution_journey_share.enabled and institution_journey_share.url and view.monthly_registrations_closed %}{{ institution_journey_share.url }}{% else %}#{% endif %}" target="_blank" rel="noopener"{% if not institution_journey_share.enabled or not institution_journey_share.url or not view.monthly_registrations_closed %} aria-disabled="true" tabindex="-1" title="{% if not institution_journey_share.enabled or not institution_journey_share.url %}Institution Journey link is required.{% else %}Monthly registrations must be closed before opening this journey.{% endif %}"{% endif %}>View journey</a>
+              {% for action in view.available_transitions %}
+                {% if action.key != primary_key and action.key != 'update_deadline' %}
+                  <button class="secondary-button compact-action" type="button" data-schedule-action-toggle="schedule-action-form-{{ session.id }}-{{ action.key }}" aria-controls="schedule-action-form-{{ session.id }}-{{ action.key }}" aria-expanded="false"{% if not view.monthly_registrations_closed %} disabled{% endif %}>{{ action.label }}</button>
                 {% endif %}
-                {% for action in view.available_transitions %}
-                  {% if action.key != primary_key and action.key != 'update_deadline' %}
-                    <button class="secondary-button compact-action" type="button" data-schedule-action-toggle="schedule-action-form-{{ session.id }}-{{ action.key }}" aria-controls="schedule-action-form-{{ session.id }}-{{ action.key }}" aria-expanded="false"{% if not view.monthly_registrations_closed %} disabled{% endif %}>{{ action.label }}</button>
-                  {% endif %}
-                {% endfor %}
-              </div>
-            </section>
-          {% endif %}
+              {% endfor %}
+            </div>
+          </section>
         {% else %}
           <p class="empty-history">No actions available.</p>
         {% endif %}

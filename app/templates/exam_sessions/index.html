@@ -580,6 +580,7 @@
   {% set selected_shifts = session.shifts_list() if session else [] %}
   {% set selected_format = session.format if session else '' %}
   {% set selected_exam_session_organised_by = session.exam_session_organised_by if session else 'the exam centre' %}
+  {% set session_contact_points = session.contact_points_list() if session and session.contact_points_list() else [{'full_name': '', 'phone': '', 'email': ''}] %}
   {% set selected_has_exam_centre_fields = selected_format in ['Onsite', 'Online at exam centre'] %}
   <form method="post" action="{{ action }}" class="form-grid exam-session-form" data-exam-session-form {% if session %}data-original-session-year="{{ session.session_date.year }}"{% endif %}>
     <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
@@ -624,6 +625,29 @@
         </label>
       {% endfor %}
     </fieldset>
+    <fieldset class="full-span exam-session-contact-points" data-session-contact-points data-max-contact-points="10">
+      <legend>CONTACT POINTS</legend>
+      <div class="exam-session-contact-point-list" data-session-contact-point-list>
+        {% for contact_point in session_contact_points %}
+          <div class="exam-session-contact-point-row" data-session-contact-point-row>
+            <label>
+              Full name:
+              <input name="contact_point_full_name" value="{{ contact_point.full_name }}" maxlength="160">
+            </label>
+            <label>
+              Phone:
+              <input name="contact_point_phone" value="{{ contact_point.phone }}" maxlength="80">
+            </label>
+            <label>
+              Email:
+              <input type="email" name="contact_point_email" value="{{ contact_point.email }}" maxlength="160">
+            </label>
+            <button class="time-range-remove-button session-contact-point-remove" type="button" data-remove-session-contact-point aria-label="Remove contact point" {% if loop.first %}hidden{% endif %}>&times;</button>
+          </div>
+        {% endfor %}
+      </div>
+      <button class="time-range-add-button session-contact-point-add" type="button" data-add-session-contact-point aria-label="Add contact point">+</button>
+    </fieldset>
     <fieldset class="full-span role-filter form-role-picker exam-shift-picker" data-exam-shift-picker>
       <legend>Shifts</legend>
       {% for shift in shift_options %}
@@ -642,8 +666,8 @@
         </label>
       {% endfor %}
     </fieldset>
-    <fieldset class="full-span exam-format-picker">
-      <legend>Format</legend>
+    <fieldset class="full-span exam-format-picker exam-session-format-picker">
+      <legend>FORMAT</legend>
       {% for format in format_options %}
         <label>
           <input type="radio" name="format" value="{{ format }}" {% if selected_format == format %}checked{% endif %} required>

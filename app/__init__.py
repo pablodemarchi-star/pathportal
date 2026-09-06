@@ -233,6 +233,7 @@ def create_app():
         if user_menu_permission_sql and (
             "'finance_requests'" not in user_menu_permission_sql
             or "'potential_entries'" not in user_menu_permission_sql
+            or "'path_session_journey'" not in user_menu_permission_sql
         ):
             db.session.execute(text("ALTER TABLE user_menu_permission RENAME TO user_menu_permission_legacy"))
             db.session.execute(text(f"""
@@ -733,6 +734,9 @@ def create_app():
             db.session.commit()
         if exam_session_columns and "exam_session_organised_by" not in exam_session_columns:
             db.session.execute(text("ALTER TABLE exam_session ADD COLUMN exam_session_organised_by VARCHAR(40) NOT NULL DEFAULT 'the exam centre'"))
+            db.session.commit()
+        if exam_session_columns and "contact_points" not in exam_session_columns:
+            db.session.execute(text("ALTER TABLE exam_session ADD COLUMN contact_points TEXT NOT NULL DEFAULT '[]'"))
             db.session.commit()
         if exam_session_columns and "rsg_enabled" in exam_session_columns:
             db.session.execute(text("UPDATE exam_session SET rsg_enabled = 0 WHERE format = 'Online' AND rsg_enabled = 1"))

@@ -1015,6 +1015,7 @@ class UsersTest(unittest.TestCase):
             "exam_session_planner": {"view": True},
             "monthly_exam_session_registrations": {"view": True},
             "pre_session_control_tower": {"view": True},
+            "path_session_journey": {"view": True},
         })
         body = client.get("/").get_data(as_text=True)
 
@@ -1026,6 +1027,8 @@ class UsersTest(unittest.TestCase):
             body.index("Monthly exam session registrations"),
             body.index("Pre onsite session control tower"),
         )
+        self.assertNotIn("path-session-journey-nav", body)
+        self.assertNotIn("Path Session Journey</div>", body)
 
     def test_view_only_banner_repeats_on_key_menus_and_not_for_edit(self):
         view_only_client, _user = self.permission_client({

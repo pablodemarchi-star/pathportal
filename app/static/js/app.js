@@ -2119,10 +2119,10 @@ const syncStaffingRoleCheckRow = (checkbox) => {
   if (!row) return;
   const verified = checkbox.checked && !checkbox.disabled;
   row.querySelectorAll("[data-role-check-dependent]").forEach((control) => {
-    const isCopyButton = control.matches("[data-copy-text]");
+    const isCopyButton = control.matches("[data-copy-text], [data-copy-text-target]");
     const targetHref = control.dataset.roleCheckHref || "";
     const hasTarget = isCopyButton
-      ? Boolean((control.dataset.copyText || "").trim())
+      ? Boolean((control.dataset.copyText || control.dataset.copyTextTarget || "").trim())
       : control.matches("a")
         ? Boolean(targetHref.trim() && targetHref.trim() !== "mailto:")
         : true;
@@ -3034,6 +3034,55 @@ document.querySelectorAll("[data-exam-session-form]").forEach((form) => {
   const allDayShift = shiftInputs.find((input) => input.value === "All day");
   const partialShiftValues = ["Morning", "Afternoon", "Evening"];
   const partialShifts = shiftInputs.filter((input) => partialShiftValues.includes(input.value));
+  const contactPointsRoot = form.querySelector("[data-session-contact-points]");
+  const contactPointsList = contactPointsRoot?.querySelector("[data-session-contact-point-list]");
+  const contactPointRows = () => Array.from(contactPointsList?.querySelectorAll("[data-session-contact-point-row]") || []);
+
+  const syncContactPointRows = () => {
+    const rows = contactPointRows();
+    const maxContactPoints = Number.parseInt(contactPointsRoot?.dataset.maxContactPoints || "10", 10);
+    const addButton = contactPointsRoot?.querySelector("[data-add-session-contact-point]");
+    if (addButton) addButton.disabled = rows.length >= maxContactPoints;
+    rows.forEach((row, index) => {
+      const removeButton = row.querySelector("[data-remove-session-contact-point]");
+      if (!removeButton) return;
+      removeButton.hidden = index === 0;
+      removeButton.disabled = index === 0;
+    });
+  };
+
+  const notifyExamSessionFormChanged = () => {
+    form.dispatchEvent(new Event("input", { bubbles: true }));
+  };
+
+  contactPointsRoot?.addEventListener("click", (event) => {
+    const addButton = event.target.closest("[data-add-session-contact-point]");
+    const removeButton = event.target.closest("[data-remove-session-contact-point]");
+    if (addButton) {
+      const rows = contactPointRows();
+      const maxContactPoints = Number.parseInt(contactPointsRoot.dataset.maxContactPoints || "10", 10);
+      if (!contactPointsList || !rows.length || rows.length >= maxContactPoints) return;
+      const clone = rows[rows.length - 1].cloneNode(true);
+      clone.querySelectorAll("input").forEach((input) => {
+        input.value = "";
+        input.disabled = false;
+      });
+      clone.querySelector("[data-remove-session-contact-point]")?.removeAttribute("hidden");
+      contactPointsList.appendChild(clone);
+      syncContactPointRows();
+      notifyExamSessionFormChanged();
+      clone.querySelector("input")?.focus();
+      return;
+    }
+    if (removeButton) {
+      const row = removeButton.closest("[data-session-contact-point-row]");
+      if (row && contactPointRows().length > 1) {
+        row.remove();
+        syncContactPointRows();
+        notifyExamSessionFormChanged();
+      }
+    }
+  });
 
   const syncExamShiftOptions = (changedInput = null) => {
     if (!allDayShift) return;
@@ -3108,6 +3157,8 @@ document.querySelectorAll("[data-exam-session-form]").forEach((form) => {
 
     if (submitButton) submitButton.disabled = !valid;
   };
+
+  syncContactPointRows();
 
   form.addEventListener("input", syncExamSessionForm);
   form.addEventListener("change", syncExamSessionForm);
@@ -8213,7 +8264,7 @@ document.addEventListener("keydown", (event) => {
 });
 
 const initCopyTextButtons = (root = document) => {
-  root.querySelectorAll("[data-copy-text]").forEach((button) => {
+  root.querySelectorAll("[data-copy-text], [data-copy-text-target]").forEach((button) => {
     if (button.dataset.initialized === "true") return;
     button.dataset.initialized = "true";
     button.addEventListener("click", async () => {
@@ -8235,7 +8286,11 @@ const initCopyTextButtons = (root = document) => {
         return;
       }
       try {
-        await copyTextToClipboard(button.dataset.copyText || "");
+        const target = button.dataset.copyTextTarget
+          ? document.getElementById(button.dataset.copyTextTarget)
+          : null;
+        const copyText = target ? (target.value || target.textContent || "") : (button.dataset.copyText || "");
+        await copyTextToClipboard(copyText);
         showFeedback(successMessage);
       } catch (error) {
         showFeedback(errorMessage, true);
@@ -11860,6 +11915,405 @@ document.addEventListener("change", (event) => {
   }
 });
 
+(() => {
+  const roots = document.querySelectorAll("[data-journey-schedule-review]");
+  if (!roots.length) return;
+
+  const storageAvailable = (() => {
+    try {
+      const key = "__journey_schedule_review_test__";
+      window.sessionStorage.setItem(key, "1");
+      window.sessionStorage.removeItem(key);
+      return true;
+    } catch (_error) {
+      return false;
+    }
+  })();
+
+  const stateKey = (root) => `path-session-journey:${root.dataset.journeyReviewKey || "schedule-review"}`;
+  const loadState = (root) => {
+    if (!storageAvailable) return {};
+    try {
+      return JSON.parse(window.sessionStorage.getItem(stateKey(root)) || "{}") || {};
+    } catch (_error) {
+      return {};
+    }
+  };
+  const saveState = (root, state) => {
+    if (!storageAvailable) return;
+    window.sessionStorage.setItem(stateKey(root), JSON.stringify(state));
+  };
+
+  const controls = (root) => ({
+    checkboxes: Array.from(root.querySelectorAll("[data-journey-schedule-checkbox]")),
+    confirmButton: root.querySelector("[data-journey-confirm-schedule]"),
+    requestButton: root.querySelector("[data-journey-request-changes]"),
+    requestPanel: root.querySelector("[data-journey-request-panel]"),
+    requestText: root.querySelector("[data-journey-request-text]"),
+    submitButton: root.querySelector("[data-journey-submit-request]"),
+    cancelButton: root.querySelector("[data-journey-cancel-request]"),
+    seeRequestButton: root.querySelector("[data-journey-see-request]"),
+    statusChip: document.querySelector("[data-journey-schedule-status-chip]"),
+  });
+
+  const applyState = (root) => {
+    const state = loadState(root);
+    const initialConfirmed = root.dataset.initialScheduleConfirmed === "true";
+    const confirmed = initialConfirmed || state.confirmed === true;
+    const {
+      checkboxes,
+      confirmButton,
+      requestButton,
+      requestPanel,
+      requestText,
+      seeRequestButton,
+      statusChip,
+    } = controls(root);
+    const checked = Array.isArray(state.checked) ? state.checked : [];
+    checkboxes.forEach((checkbox, index) => {
+      checkbox.checked = confirmed || checked.includes(index);
+      checkbox.disabled = confirmed;
+    });
+    const allChecked = checkboxes.length > 0 && checkboxes.every((checkbox) => checkbox.checked);
+    if (confirmButton) {
+      confirmButton.disabled = confirmed || !allChecked;
+      confirmButton.classList.toggle("is-disabled", confirmButton.disabled);
+      confirmButton.textContent = "Confirm";
+    }
+    if (requestButton) {
+      requestButton.disabled = confirmed;
+      requestButton.classList.toggle("is-disabled", confirmed);
+    }
+    if (statusChip && state.confirmed === true) {
+      statusChip.textContent = "Confirmed";
+      statusChip.classList.remove("is-in-progress");
+      statusChip.classList.add("is-confirmed");
+    }
+    if (requestText && typeof state.requestText === "string") {
+      requestText.value = state.requestText;
+    }
+    if (seeRequestButton) {
+      seeRequestButton.hidden = !state.requestText;
+    }
+    if (requestPanel && state.showRequest === true) {
+      requestPanel.hidden = false;
+    }
+  };
+
+  roots.forEach((root) => {
+    applyState(root);
+    const {
+      checkboxes,
+      confirmButton,
+      requestButton,
+      requestPanel,
+      requestText,
+      submitButton,
+      cancelButton,
+      seeRequestButton,
+    } = controls(root);
+
+    checkboxes.forEach((checkbox, index) => {
+      checkbox.addEventListener("change", () => {
+        const state = loadState(root);
+        const checked = new Set(Array.isArray(state.checked) ? state.checked : []);
+        if (checkbox.checked) checked.add(index);
+        else checked.delete(index);
+        state.checked = Array.from(checked);
+        saveState(root, state);
+        applyState(root);
+      });
+    });
+
+    confirmButton?.addEventListener("click", () => {
+      if (confirmButton.disabled) return;
+      const state = loadState(root);
+      state.confirmed = true;
+      state.showRequest = false;
+      saveState(root, state);
+      if (requestPanel) requestPanel.hidden = true;
+      applyState(root);
+    });
+
+    requestButton?.addEventListener("click", () => {
+      if (requestButton.disabled || !requestPanel) return;
+      const state = loadState(root);
+      state.showRequest = true;
+      saveState(root, state);
+      requestPanel.hidden = false;
+      requestText?.focus();
+    });
+
+    cancelButton?.addEventListener("click", () => {
+      const state = loadState(root);
+      state.showRequest = false;
+      saveState(root, state);
+      if (requestPanel) requestPanel.hidden = true;
+    });
+
+    submitButton?.addEventListener("click", () => {
+      const value = (requestText?.value || "").trim();
+      if (!value) {
+        requestText?.focus();
+        return;
+      }
+      const state = loadState(root);
+      state.requestText = value;
+      state.showRequest = false;
+      saveState(root, state);
+      if (requestPanel) requestPanel.hidden = true;
+      applyState(root);
+    });
+
+    seeRequestButton?.addEventListener("click", () => {
+      const state = loadState(root);
+      state.showRequest = true;
+      saveState(root, state);
+      if (requestPanel) requestPanel.hidden = false;
+      if (requestText) {
+        requestText.value = state.requestText || requestText.value;
+        requestText.focus();
+      }
+    });
+  });
+})();
+
+(() => {
+  const countdowns = document.querySelectorAll("[data-journey-schedule-countdown]");
+  if (!countdowns.length) return;
+
+  countdowns.forEach((countdown) => {
+    const startMinutes = Number.parseInt(countdown.dataset.startMinutes || "2380", 10);
+    const totalSeconds = Number.isFinite(startMinutes) ? startMinutes * 60 : 2380 * 60;
+    const openedAt = Date.now();
+    const render = () => {
+      const elapsedSeconds = Math.floor((Date.now() - openedAt) / 1000);
+      const remainingSeconds = Math.max(totalSeconds - elapsedSeconds, 0);
+      const hours = Math.floor(remainingSeconds / 3600);
+      const minutes = Math.floor((remainingSeconds % 3600) / 60);
+      const seconds = remainingSeconds % 60;
+      countdown.textContent = `${hours}:${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")} h`;
+    };
+    render();
+    window.setInterval(render, 1000);
+  });
+})();
+
+const buildSessionJourneyWhatsappMessage = ({ sessionName, sessionDate, contactName, journeyLink }) => {
+  const EMOJI_SPARKLES = "\u{1F4AB}";
+  const EMOJI_ROCKET = "\u{1F680}";
+  const EMOJI_POINT = "\u{1F449}";
+  const EMOJI_HOURGLASS = "\u{23F3}";
+  const EMOJI_EXCLAMATION = "\u{2757}";
+
+  return [
+    `*SESSION JOURNEY: ${sessionName} (${sessionDate})*`,
+    "",
+    `¡Hola, ${contactName}!`,
+    "",
+    `Esperamos que se encuentren muy bien. ${EMOJI_SPARKLES}`,
+    "",
+    `Les informamos que ya se encuentra habilitado su *_Exam session journey_* ${EMOJI_ROCKET} de Path Examinations. Pueden acceder a través del siguiente enlace:`,
+    "",
+    `${EMOJI_POINT} ${journeyLink}`,
+    "",
+    "Para continuar con los próximos pasos logísticos y administrativos, necesitamos que revisen y confirmen los horarios de la sesión. Los encontrarán dentro del *_Journey_*, en la etapa *_Exam session schedule_*.",
+    "",
+    `Recuerden que cuentan con *48 horas hábiles* ${EMOJI_HOURGLASS} para confirmar los horarios. Pasado ese plazo, se confirmarán automáticamente por sistema. ${EMOJI_EXCLAMATION} En esa misma etapa, podrán ver cuánto tiempo les queda disponible para realizar la confirmación.`,
+    "",
+    "¡Quedamos atentos para lo que necesiten!",
+    "",
+    "Muchas gracias,",
+    "Brenda",
+  ].join("\n");
+};
+
+const SESSION_JOURNEY_EMAIL_EMOJIS = {
+  sparkles: "\u{1F4AB}",
+  rocket: "\u{1F680}",
+  hourglass: "\u{23F3}",
+  exclamation: "\u{2757}",
+};
+
+const buildSessionJourneyEmail = ({ sessionName, sessionDate, contactName, contactEmail, journeyLink }) => {
+  const cleanSessionName = cleanEmailValue(sessionName);
+  const cleanSessionDate = cleanEmailValue(sessionDate);
+  const cleanContactName = cleanEmailValue(contactName);
+  const cleanContactEmail = cleanEmailValue(contactEmail);
+  const cleanJourneyLink = cleanEmailValue(journeyLink);
+  if (!cleanSessionName || !cleanSessionDate || !cleanContactName) {
+    return { error: "Point of contact is required." };
+  }
+  if (!cleanContactEmail) {
+    return { error: "Point of contact email is required." };
+  }
+  if (!emailLinkIsUsable(cleanJourneyLink)) {
+    return { error: "Institution Journey link is required." };
+  }
+
+  const { sparkles, rocket, hourglass, exclamation } = SESSION_JOURNEY_EMAIL_EMOJIS;
+  const subject = `Path Session Journey \u2013 ${cleanSessionName} (${cleanSessionDate})`;
+  const safeSessionName = escapeEmailHtml(cleanSessionName);
+  const safeSessionDate = escapeEmailHtml(cleanSessionDate);
+  const safeContactName = escapeEmailHtml(cleanContactName);
+  const safeJourneyLink = escapeEmailAttribute(cleanJourneyLink);
+  const html = `
+    <div style="margin:0;padding:24px;background:#00506b;font-family:Arial, Helvetica, sans-serif;color:#111115;">
+      <div style="max-width:640px;margin:0 auto;background:#ffffff;border:1px solid #d9dfdc;border-radius:16px;padding:28px;">
+        <p style="display:inline-block;margin:0 0 14px;padding:6px 11px;border-radius:999px;background:#e7f5f8;color:#00506b;font:700 11px Arial, Helvetica, sans-serif;letter-spacing:.5px;text-transform:uppercase;">SESSION JOURNEY</p>
+        <h1 style="margin:0;color:#00506b;font:700 25px/1.25 Arial, Helvetica, sans-serif;"><em>Path session journey</em> ya está disponible</h1>
+        <p style="margin:8px 0 22px;color:#647179;font:400 14px/1.5 Arial, Helvetica, sans-serif;">${safeSessionName} · ${safeSessionDate}</p>
+        <p style="margin:0 0 14px;color:#111115;font:400 15px/1.6 Arial, Helvetica, sans-serif;">¡Hola, ${safeContactName}!</p>
+        <p style="margin:0 0 14px;color:#111115;font:400 15px/1.6 Arial, Helvetica, sans-serif;">Esperamos que se encuentren muy bien. ${sparkles}</p>
+        <p style="margin:0 0 18px;color:#111115;font:400 15px/1.6 Arial, Helvetica, sans-serif;">Les informamos que ya se encuentra habilitado su <strong><em>Exam session journey</em></strong> ${rocket} de Path Examinations. Pueden acceder a través del siguiente enlace:</p>
+        <p style="margin:0 0 22px;">
+          <a href="${safeJourneyLink}" target="_blank" rel="noopener noreferrer" style="display:inline-block;padding:11px 18px;border-radius:999px;background:#00506b;color:#ffffff;font:700 14px Arial, Helvetica, sans-serif;text-decoration:none;">Acceder al <em>Session journey</em></a>
+        </p>
+        <div style="margin:0 0 18px;padding:16px 18px;background:#f1f7f9;border-left:4px solid #00506b;border-radius:12px;">
+          <p style="margin:0;color:#111115;font:400 15px/1.6 Arial, Helvetica, sans-serif;">Para continuar con los próximos pasos logísticos y administrativos, necesitamos que revisen y confirmen los horarios de la sesión. Los encontrarán dentro del <strong><em>Journey</em></strong>, en la etapa <strong><em>Exam session schedule</em></strong>.</p>
+        </div>
+        <p style="margin:0 0 14px;color:#111115;font:400 15px/1.6 Arial, Helvetica, sans-serif;">Recuerden que cuentan con <strong>48 horas hábiles</strong> ${hourglass} para confirmar los horarios. Pasado ese plazo, se confirmarán automáticamente por sistema. ${exclamation} En esa misma etapa, podrán ver cuánto tiempo les queda disponible para realizar la confirmación.</p>
+        <p style="margin:0 0 22px;color:#111115;font:400 15px/1.6 Arial, Helvetica, sans-serif;">¡Quedamos atentos para lo que necesiten!</p>
+        <p style="margin:0;color:#111115;font:400 15px/1.6 Arial, Helvetica, sans-serif;">Muchas gracias,</p>
+        <p style="margin:4px 0 0;color:#00506b;font:700 15px/1.6 Arial, Helvetica, sans-serif;">Path International Examinations</p>
+      </div>
+    </div>
+  `;
+  const text = [
+    `SESSION JOURNEY: ${cleanSessionName} (${cleanSessionDate})`,
+    "",
+    `¡Hola, ${cleanContactName}!`,
+    "",
+    `Esperamos que se encuentren muy bien. ${sparkles}`,
+    "",
+    `Les informamos que ya se encuentra habilitado su Exam session journey ${rocket} de Path Examinations. Pueden acceder a través del siguiente enlace:`,
+    "",
+    cleanJourneyLink,
+    "",
+    "Para continuar con los próximos pasos logísticos y administrativos, necesitamos que revisen y confirmen los horarios de la sesión. Los encontrarán dentro del Journey, en la etapa Exam session schedule.",
+    "",
+    `Recuerden que cuentan con 48 horas hábiles ${hourglass} para confirmar los horarios. Pasado ese plazo, se confirmarán automáticamente por sistema. ${exclamation} En esa misma etapa, podrán ver cuánto tiempo les queda disponible para realizar la confirmación.`,
+    "",
+    "¡Quedamos atentos para lo que necesiten!",
+    "",
+    "Muchas gracias,",
+    "Path International Examinations",
+  ].join("\n");
+  if (/undefined|null|None|\uFFFD|%EF%BF%BD/.test(`${html}\n${text}\n${subject}`)) {
+    return { error: "Session Journey email details are incomplete." };
+  }
+  return { html, text, email: cleanContactEmail, subject };
+};
+
+const buildSessionJourneyGmailUrl = ({ email, subject }) => (
+  `https://mail.google.com/mail/?view=cm&fs=1&to=${encodeURIComponent(email)}&su=${encodeURIComponent(subject)}`
+);
+
+const showSessionJourneyEmailStatus = (button, message, isError = false) => {
+  const status = button.closest(".schedule-recommended-action-buttons")?.querySelector("[data-session-journey-email-status]");
+  if (!status) {
+    window.alert(message);
+    return;
+  }
+  status.textContent = message;
+  status.classList.toggle("is-error", isError);
+  window.setTimeout(() => {
+    status.textContent = "";
+    status.classList.remove("is-error");
+  }, isError ? 3200 : 2200);
+};
+
+const sessionJourneyEmailPayloadFromButton = (button) => buildSessionJourneyEmail({
+  sessionName: button.dataset.sessionName,
+  sessionDate: button.dataset.sessionDate,
+  contactName: button.dataset.contactName,
+  contactEmail: button.dataset.contactEmail,
+  journeyLink: button.dataset.journeyLink,
+});
+
+(() => {
+  document.addEventListener("click", (event) => {
+    const button = event.target.closest?.("[data-session-journey-whatsapp]");
+    if (!button) return;
+    event.preventDefault();
+    event.stopPropagation();
+    if (button.disabled || button.getAttribute("aria-disabled") === "true") return;
+
+    const sessionName = (button.dataset.sessionName || "").trim();
+    const sessionDate = (button.dataset.sessionDate || "").trim();
+    const contactName = (button.dataset.contactName || "").trim();
+    const normalizedPhone = (button.dataset.contactPhone || "").replace(/\D+/g, "");
+    const journeyLink = (button.dataset.journeyLink || "").trim();
+    const values = [sessionName, sessionDate, contactName, normalizedPhone, journeyLink];
+    if (values.some((value) => !value || /undefined|null|None|\uFFFD/.test(value))) {
+      window.alert(button.getAttribute("title") || "Session Journey WhatsApp message cannot be opened because required information is missing.");
+      return;
+    }
+
+    const message = buildSessionJourneyWhatsappMessage({ sessionName, sessionDate, contactName, journeyLink });
+    const encodedMessage = encodeURIComponent(message);
+    const decodedMessage = decodeURIComponent(encodedMessage);
+    if (
+      /undefined|null|None|%EF%BF%BD|\uFFFD|\\uD83D|&amp;/.test(decodedMessage) ||
+      /undefined|null|None|%EF%BF%BD|\uFFFD/.test(encodedMessage)
+    ) {
+      return;
+    }
+    const whatsappUrl = `https://api.whatsapp.com/send?phone=${normalizedPhone}&text=${encodedMessage}`;
+    window.open(whatsappUrl, "_blank", "noopener,noreferrer");
+  });
+})();
+
+(() => {
+  document.addEventListener("click", async (event) => {
+    const button = event.target.closest?.("[data-session-journey-email]");
+    if (!button) return;
+    event.preventDefault();
+    event.stopPropagation();
+    if (button.disabled || button.getAttribute("aria-disabled") === "true") return;
+
+    const payload = sessionJourneyEmailPayloadFromButton(button);
+    if (payload.error) {
+      showSessionJourneyEmailStatus(button, payload.error, true);
+      return;
+    }
+
+    let copied = false;
+    try {
+      await copyRichTextToClipboard(payload);
+      copied = true;
+    } catch (error) {
+      copied = false;
+    }
+    window.open(buildSessionJourneyGmailUrl(payload), "_blank", "noopener,noreferrer");
+    showSessionJourneyEmailStatus(
+      button,
+      copied ? "Session Journey email copied." : "Could not copy the Session Journey email. Please try again.",
+      !copied,
+    );
+  });
+
+  document.addEventListener("click", async (event) => {
+    const button = event.target.closest?.("[data-copy-session-journey-email]");
+    if (!button) return;
+    event.preventDefault();
+    event.stopPropagation();
+    if (button.disabled || button.getAttribute("aria-disabled") === "true") return;
+
+    const payload = sessionJourneyEmailPayloadFromButton(button);
+    if (payload.error) {
+      showSessionJourneyEmailStatus(button, payload.error, true);
+      return;
+    }
+    try {
+      await copyRichTextToClipboard(payload);
+      showSessionJourneyEmailStatus(button, "Session Journey email copied.");
+    } catch (error) {
+      showSessionJourneyEmailStatus(button, "Could not copy the Session Journey email. Please try again.", true);
+    }
+  });
+})();
+
 const applyViewOnlyMode = () => {
   const main = document.querySelector("main[data-current-menu-can-edit='false']");
   if (!main) return;
@@ -11909,7 +12363,7 @@ const applyViewOnlyMode = () => {
       element.className || "",
     ].filter(Boolean).join(" ");
     if (
-      element.matches(".copy-icon-button, [data-copy-text], [data-copy-invitation-email], [data-staff-address-copy], [data-copy-journey-link], [data-bulk-email-link], [data-acceptance-draft-save], [data-delete-logistics-concept], [data-remove-supervisor-row], [data-staff-declined-button], [data-emergency-contact-declined-button], [data-add-time-range], [data-remove-time-range], [data-disable-km], [data-edit-assignment-fees], [data-clear-selection], [data-provider-type-create-form] button") ||
+      element.matches(".copy-icon-button, [data-copy-text], [data-copy-invitation-email], [data-staff-address-copy], [data-copy-journey-link], [data-bulk-email-link], [data-acceptance-draft-save], [data-delete-logistics-concept], [data-remove-supervisor-row], [data-staff-declined-button], [data-emergency-contact-declined-button], [data-add-time-range], [data-remove-time-range], [data-add-session-contact-point], [data-remove-session-contact-point], [data-disable-km], [data-edit-assignment-fees], [data-clear-selection], [data-provider-type-create-form] button") ||
       mutatingButtonPattern.test(text) ||
       mutatingTargetPattern.test(target)
     ) {

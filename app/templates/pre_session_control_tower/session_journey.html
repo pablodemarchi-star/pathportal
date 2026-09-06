@@ -12,9 +12,23 @@
     </article>
   {% else %}
     <header class="journey-hero">
-      <div class="journey-brand-mark">Path</div>
-      <p class="eyebrow">{% if is_preview %}Preview{% else %}Shared journey{% endif %}</p>
-      <h1>{{ journey.title }}</h1>
+      {% if journey.audience == 'institution' %}
+        <div class="journey-institution-title-row">
+          <img class="journey-path-logo" src="{{ url_for('static', filename='img/path-logo-white-transparent.png') }}" alt="Path International Examinations">
+          <div class="journey-institution-title-copy">
+            <h1>{{ journey.title }}</h1>
+            <p>{{ journey.session_name }}</p>
+          </div>
+        </div>
+      {% else %}
+        <div class="journey-brand-mark">Path International Examinations</div>
+      {% endif %}
+      {% if journey.audience != 'institution' %}
+        <p class="eyebrow">{% if is_preview %}Preview{% else %}Shared journey{% endif %}</p>
+      {% endif %}
+      {% if journey.audience != 'institution' %}
+        <h1>{{ journey.title }}</h1>
+      {% endif %}
       <p class="journey-hero-message">{{ journey.hero_message }}</p>
       <div class="journey-countdown" aria-label="Countdown">
         <strong>{{ journey.countdown.label }}</strong>
@@ -68,16 +82,121 @@
       </section>
     {% endif %}
 
-    <section class="journey-timeline" aria-label="Journey milestones">
-      <h2>Milestones</h2>
+    <section class="journey-timeline" aria-label="{% if journey.audience == 'institution' %}Journey stages{% else %}Journey milestones{% endif %}">
+      <h2>{% if journey.audience == 'institution' %}Exam session stages{% else %}Milestones{% endif %}</h2>
       <ol>
         {% for milestone in journey.milestones %}
           <li class="journey-milestone is-{{ milestone.status }}">
             <span class="journey-milestone-marker" aria-hidden="true">{% if milestone.status == 'completed' %}✓{% else %}•{% endif %}</span>
             <div>
-              <strong>{{ milestone.label }}</strong>
-              <small>{{ milestone.status_label }}</small>
-              <p>{{ milestone.message }}</p>
+              <span class="journey-stage-heading">
+                <strong>{{ milestone.label }}</strong>
+                {% if journey.audience == 'institution' and milestone.key == 'confirmed' %}
+                  <span class="journey-status-chip {% if journey.date_confirmation_confirmed %}is-confirmed{% else %}is-in-progress{% endif %}">{{ journey.date_confirmation_label }}</span>
+                {% elif journey.audience == 'institution' and milestone.key == 'schedule' %}
+                  <span class="journey-status-chip {% if journey.schedule_confirmed %}is-confirmed{% else %}is-in-progress{% endif %}" data-journey-schedule-status-chip>{{ journey.schedule_confirmation_label }}</span>
+                  <span class="journey-countdown-chip" data-journey-schedule-countdown data-start-minutes="2380">39:40:00 h</span>
+                {% elif journey.audience == 'institution' and milestone.key == 'entry_slips' %}
+                  <span class="journey-status-chip is-confirmed">Confirmed</span>
+                {% elif journey.audience == 'institution' and milestone.key == 'material_shipment' %}
+                  <span class="journey-status-chip is-{{ journey.material_shipment.status_key }}">{{ journey.material_shipment.status }}</span>
+                {% elif journey.audience == 'institution' and milestone.key == 'staffing' %}
+                  <span class="journey-status-chip is-{{ journey.staff_status.status_key }}">{{ journey.staff_status.status }}</span>
+                {% endif %}
+              </span>
+              {% if journey.audience != 'institution' %}
+                <small>{{ milestone.status_label }}</small>
+              {% endif %}
+              {% if journey.audience == 'institution' and milestone.key == 'entry_slips' %}
+                <p class="journey-inline-action-row">
+                  <span>{{ milestone.message }}</span>
+                  <button class="journey-access-chip" type="button" data-open-modal="journey-entry-slip-modal" data-view-only-allowed="true">Access</button>
+                </p>
+              {% elif journey.audience == 'institution' and milestone.key == 'material_shipment' %}
+                <p>{{ milestone.message }}</p>
+                <section class="journey-shipment-timeline" style="--journey-plane-progress: {{ journey.material_shipment.progress_percent }}%;" aria-label="Exam material shipment progress">
+                  <div class="journey-shipment-endpoint">
+                    <svg viewBox="0 0 24 24" aria-hidden="true">
+                      <path d="M4 21V7l8-4 8 4v14" />
+                      <path d="M8 21v-7h8v7" />
+                      <path d="M9 9h1" />
+                      <path d="M14 9h1" />
+                    </svg>
+                    <span>Path UK</span>
+                  </div>
+                  <div class="journey-shipment-track" aria-hidden="true">
+                    <span class="journey-shipment-plane">
+                      <img src="{{ url_for('static', filename='img/path-journey-commercial-plane.png') }}" alt="">
+                    </span>
+                  </div>
+                  <div class="journey-shipment-endpoint">
+                    <svg viewBox="0 0 24 24" aria-hidden="true">
+                      <path d="M12 12a4 4 0 1 0 0-8 4 4 0 0 0 0 8z" />
+                      <path d="M4 21a8 8 0 0 1 16 0" />
+                    </svg>
+                    <span>Exam session supervisor</span>
+                  </div>
+                </section>
+              {% elif journey.audience == 'institution' and milestone.key == 'staffing' %}
+                <p>{{ milestone.message }}</p>
+                {% if journey.staff_summary.dietary_count %}
+                  <section class="journey-dietary-summary" aria-label="Staff dietary requirements">
+                    <p>Please note that {{ journey.staff_summary.dietary_count }} staff {% if journey.staff_summary.dietary_count == 1 %}member has{% else %}members have{% endif %} special dietary requirements:</p>
+                    <div class="journey-dietary-chip-list">
+                      {% for requirement in journey.staff_summary.dietary_requirements %}
+                        <span class="journey-dietary-chip">{{ requirement }}</span>
+                      {% endfor %}
+                    </div>
+                  </section>
+                {% endif %}
+              {% else %}
+                <p>{{ milestone.message }}</p>
+              {% endif %}
+              {% if journey.audience == 'institution' and milestone.key == 'schedule' %}
+                <section class="journey-schedule-review" data-journey-schedule-review data-journey-review-key="journey-schedule-{{ journey.session_id }}" data-initial-schedule-confirmed="{{ 'true' if journey.schedule_confirmed else 'false' }}" aria-label="Session schedule review">
+                  {% if journey.schedule_url %}
+                    <a class="journey-schedule-link" href="{{ journey.schedule_url }}" target="_blank" rel="noopener noreferrer">View session schedule</a>
+                  {% else %}
+                    <span class="journey-schedule-link is-disabled">View session schedule</span>
+                  {% endif %}
+                  <fieldset class="journey-schedule-checklist">
+                    <legend>Verify the following information before approving the session schedule:</legend>
+                    <label>
+                      <input type="checkbox" data-journey-schedule-checkbox data-view-only-allowed="true">
+                      <span>the <strong>exam venue address</strong></span>
+                    </label>
+                    <label>
+                      <input type="checkbox" data-journey-schedule-checkbox data-view-only-allowed="true">
+                      <span>the <strong>number and names of the exam rooms</strong></span>
+                    </label>
+                    <label>
+                      <input type="checkbox" data-journey-schedule-checkbox data-view-only-allowed="true">
+                      <span>the <strong>maximum capacity of each room</strong>, ensuring it matches the number of candidates assigned to that room</span>
+                    </label>
+                    <label>
+                      <input type="checkbox" data-journey-schedule-checkbox data-view-only-allowed="true">
+                      <span>the <strong>start and end time</strong> for each exam room within the session</span>
+                    </label>
+                    <label>
+                      <input type="checkbox" data-journey-schedule-checkbox data-view-only-allowed="true">
+                      <span>the <strong>candidates included in the session</strong></span>
+                    </label>
+                  </fieldset>
+                  <div class="journey-schedule-actions">
+                    <button class="journey-action-chip confirm" type="button" disabled data-journey-confirm-schedule data-view-only-allowed="true">Confirm</button>
+                    <button class="journey-action-chip request" type="button" data-journey-request-changes data-view-only-allowed="true">Request schedule changes</button>
+                    <button class="journey-see-request-link" type="button" hidden data-journey-see-request data-view-only-allowed="true">See request</button>
+                  </div>
+                  <section class="journey-change-request-panel" hidden data-journey-request-panel aria-label="Schedule change request">
+                    <p>Change requests must comply with the terms and conditions established by Path Examinations. Submission of a request does not guarantee that the change will be processed or applied.</p>
+                    <textarea rows="4" placeholder="Describe the requested schedule changes" data-journey-request-text data-view-only-allowed="true"></textarea>
+                    <div class="journey-request-actions">
+                      <button class="journey-action-chip request" type="button" data-journey-cancel-request data-view-only-allowed="true">Cancel</button>
+                      <button class="journey-action-chip submit" type="button" data-journey-submit-request data-view-only-allowed="true">Submit request</button>
+                    </div>
+                  </section>
+                </section>
+              {% endif %}
             </div>
           </li>
         {% endfor %}
@@ -86,19 +205,113 @@
 
     {% if journey.next_steps %}
       <section class="journey-next-steps" aria-label="Next steps">
-        <h2>Next steps</h2>
-        {% for step in journey.next_steps %}
-          <p>{{ step }}</p>
-        {% endfor %}
+        <h2>Exam centre readiness checklist</h2>
+        <ol>
+          <li class="journey-milestone is-upcoming">
+            <span class="journey-milestone-marker" aria-hidden="true">&gt;</span>
+            <div>
+              <span class="journey-stage-heading">
+                <strong>Session journey for candidates and families</strong>
+              </span>
+              <p class="journey-inline-copy-row">
+                <span>Share this link with your candidates and their families</span>
+                <button class="copy-icon-button journey-copy-link-button" type="button" data-copy-text="{{ journey.public_journey_url }}" aria-label="Copy session journey link" title="Copy session journey link"{% if not journey.public_journey_url %} disabled{% endif %}>
+                  <svg class="copy-icon" viewBox="0 0 24 24" aria-hidden="true">
+                    <rect x="9" y="9" width="11" height="11" rx="2"></rect>
+                    <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
+                  </svg>
+                  <svg class="check-icon" viewBox="0 0 24 24" aria-hidden="true">
+                    <path d="M20 6 9 17l-5-5"></path>
+                  </svg>
+                  <span class="copy-button-feedback">Copied</span>
+                </button>
+              </p>
+            </div>
+          </li>
+          <li class="journey-milestone is-upcoming">
+            <span class="journey-milestone-marker" aria-hidden="true">&gt;</span>
+            <div>
+              <span class="journey-stage-heading">
+                <strong>Instructions for candidates</strong>
+              </span>
+              <p><a class="journey-inline-link" href="#">Click here</a> to download the instructions for candidates</p>
+            </div>
+          </li>
+          <li class="journey-milestone is-upcoming">
+            <span class="journey-milestone-marker" aria-hidden="true">&gt;</span>
+            <div>
+              <span class="journey-stage-heading">
+                <strong>Session venue setup</strong>
+              </span>
+              <p><a class="journey-inline-link" href="#">Click here</a> to download the checklist for exam centres</p>
+            </div>
+          </li>
+          <li class="journey-milestone is-upcoming">
+            <span class="journey-milestone-marker" aria-hidden="true">&gt;</span>
+            <div>
+              <span class="journey-stage-heading">
+                <strong>Statement of session attendance for candidates</strong>
+              </span>
+              <p><button class="journey-inline-link journey-link-button" type="button" data-open-modal="journey-attendance-request-modal" data-view-only-allowed="true">Click here</button> to request a statement of session attendance for candidates</p>
+            </div>
+          </li>
+          <li class="journey-milestone is-upcoming">
+            <span class="journey-milestone-marker" aria-hidden="true">&gt;</span>
+            <div>
+              <span class="journey-stage-heading">
+                <strong>Exam session feedback</strong>
+                <span class="journey-status-chip is-pending">Available on exam date</span>
+              </span>
+              <p><span class="journey-disabled-link">Click here</span> to complete the exam session feedback</p>
+            </div>
+          </li>
+        </ol>
       </section>
     {% endif %}
 
     <footer class="journey-footer">
       <p>{{ journey.final_message }}</p>
       {% if journey.visibility_note %}
-        <small>{{ journey.visibility_note }}</small>
+        <small class="journey-visibility-note">{{ journey.visibility_note }}</small>
       {% endif %}
     </footer>
+
+    <div class="modal journey-entry-slip-modal" id="journey-entry-slip-modal" aria-hidden="true" role="dialog" aria-modal="true" aria-labelledby="journey-entry-slip-title">
+      <div class="modal-panel journey-image-modal-panel">
+        <div class="modal-header">
+          <div>
+            <h2 id="journey-entry-slip-title">Entry slips for candidates</h2>
+          </div>
+          <button class="icon-button" type="button" data-close-modal data-view-only-allowed="true">&times;</button>
+        </div>
+        <img class="journey-entry-slip-preview" src="{{ url_for('static', filename='img/path-entry-slip-preview.png') }}" alt="International exam entry slip preview">
+      </div>
+    </div>
+
+    <div class="modal journey-attendance-request-modal" id="journey-attendance-request-modal" aria-hidden="true" role="dialog" aria-modal="true" aria-labelledby="journey-attendance-request-title">
+      <div class="modal-panel confirm-panel">
+        <div class="modal-header">
+          <div>
+            <h2 id="journey-attendance-request-title">Statement of session attendance for candidates</h2>
+          </div>
+          <button class="icon-button" type="button" data-close-modal data-view-only-allowed="true">&times;</button>
+        </div>
+        <form class="journey-attendance-request-form">
+          <label>
+            <span>Candidate number</span>
+            <input type="text" name="candidate_number" data-view-only-allowed="true">
+          </label>
+          <label>
+            <span>Candidate full name</span>
+            <input type="text" name="candidate_full_name" data-view-only-allowed="true">
+          </label>
+          <div class="journey-request-actions">
+            <button class="journey-action-chip request" type="button" data-close-modal data-view-only-allowed="true">Cancel</button>
+            <button class="journey-action-chip submit" type="button" data-close-modal data-view-only-allowed="true">Submit</button>
+          </div>
+        </form>
+      </div>
+    </div>
   {% endif %}
 </section>
 {% endblock %}

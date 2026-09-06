@@ -123,6 +123,7 @@ from app.routes import (
     priority_action_contract,
     schedule_gate_status,
     schedule_preparation_deadline_for_session,
+    schedule_journey_whatsapp_link,
     schedule_workflow_health,
     schedule_workflow_view,
     staffing_readiness_contract,
@@ -2628,6 +2629,272 @@ class ScheduleWorkflowTest(unittest.TestCase):
         )
         self.assertIn('name="schedule_reopen_password"', form)
 
+    def test_schedule_journey_whatsapp_contract_returns_simple_dynamic_values(self):
+        self.session_record.exam_session_name = "Colegio Nuestra Senora de La Salette"
+        self.session_record.session_date = date(2026, 12, 17)
+        db.session.commit()
+        contact_point = {
+            "full_name": "Juana Maria",
+            "phone": "+54 (9) 11-2850-8482",
+            "email": "juana@example.com",
+        }
+        institution_share = {
+            "enabled": True,
+            "url": "http://127.0.0.1:5001/path-session-journey/token/institution",
+        }
+
+        result = schedule_journey_whatsapp_link(self.session_record, contact_point, institution_share)
+
+        self.assertTrue(result["enabled"])
+        self.assertEqual(result["url"], "")
+        self.assertEqual(result["session_name"], "Colegio Nuestra Senora de La Salette")
+        self.assertEqual(result["session_date"], "17/12/2026")
+        self.assertEqual(result["contact_name"], "Juana Maria")
+        self.assertEqual(result["phone"], "5491128508482")
+        self.assertEqual(result["journey_link"], institution_share["url"])
+        for placeholder in ["undefined", "null", "None", "{SESSION_NAME}", "{SESSION_DATE}", "{POINT_OF_CONTACT_NAME}", "{INSTITUTION_JOURNEY_LINK}"]:
+            self.assertNotIn(placeholder, str(result))
+
+    def test_schedule_journey_whatsapp_link_requires_contact_phone(self):
+        result = schedule_journey_whatsapp_link(
+            self.session_record,
+            {"full_name": "Juana Maria", "phone": "", "email": "juana@example.com"},
+            {"enabled": True, "url": "http://127.0.0.1:5001/path-session-journey/token/institution"},
+        )
+
+        self.assertFalse(result["enabled"])
+        self.assertEqual(result["url"], "")
+        self.assertIn("Point of contact phone number is required.", result["error"])
+
+    def test_schedule_journey_whatsapp_link_requires_institution_journey_link(self):
+        result = schedule_journey_whatsapp_link(
+            self.session_record,
+            {"full_name": "Juana Maria", "phone": "+54 9 11 2850 8482", "email": "juana@example.com"},
+            {"enabled": False, "url": ""},
+        )
+
+        self.assertFalse(result["enabled"])
+        self.assertEqual(result["url"], "")
+        self.assertIn("Institution Journey link is required.", result["error"])
+
+    def test_schedule_journey_whatsapp_link_does_not_modify_schedule_state_or_push(self):
+        workflow = ExamSessionScheduleWorkflow(
+            exam_session_id=self.session_record.id,
+            status="Ready to send",
+            next_action_due_at=date(2026, 6, 30),
+        )
+        db.session.add(workflow)
+        db.session.commit()
+        before_status = workflow.status
+        before_event_count = ExamSessionScheduleEvent.query.count()
+
+        result = schedule_journey_whatsapp_link(
+            self.session_record,
+            {"full_name": "Juana Maria", "phone": "+54 9 11 2850 8482", "email": "juana@example.com"},
+            {"enabled": True, "url": "http://127.0.0.1:5001/path-session-journey/token/institution"},
+        )
+
+        self.assertTrue(result["enabled"])
+        self.assertEqual(workflow.status, before_status)
+        self.assertEqual(ExamSessionScheduleEvent.query.count(), before_event_count)
+        self.assertNotIn("git push", str(result))
+
+    def test_schedule_modal_disables_whatsapp_button_without_contact_phone(self):
+        self.close_monthly_registration_gate()
+        self.session_record.contact_points = json.dumps([
+            {"full_name": "Juana Maria", "phone": "", "email": "juana@example.com"}
+        ])
+        db.session.add(ExamSessionScheduleWorkflow(
+            exam_session_id=self.session_record.id,
+            status="Ready to send",
+        ))
+        db.session.commit()
+        client = self.login_client()
+
+        response = client.get("/pre-session-control-tower?session_year=2026&view=sessions")
+        html = response.data.decode()
+
+        self.assertIn("Share journey with Juana Maria via WhatsApp", html)
+        self.assertIn("Point of contact phone number is required.", html)
+        self.assertNotIn('href="https://wa.me/', html)
+
+    def test_schedule_modal_uses_institution_journey_link_for_whatsapp(self):
+        self.close_monthly_registration_gate()
+        self.session_record.contact_points = json.dumps([
+            {"full_name": "Juana Maria", "phone": "+54 9 11 2850 8482", "email": "juana@example.com"}
+        ])
+        db.session.add(ExamSessionScheduleWorkflow(
+            exam_session_id=self.session_record.id,
+            status="Ready to send",
+        ))
+        db.session.commit()
+        client = self.login_client()
+
+        response = client.get("/pre-session-control-tower?session_year=2026&view=sessions")
+        html = response.data.decode()
+        button_start = html.index('Share journey with Juana Maria via WhatsApp')
+        button_open = html.rfind("<button ", 0, button_start)
+        button_close = html.index("</button>", button_start)
+        whatsapp_button = html[button_open:button_close]
+
+        self.assertIn('data-view-only-allowed="true"', html)
+        self.assertIn("data-session-journey-whatsapp", whatsapp_button)
+        self.assertIn('data-contact-phone="5491128508482"', whatsapp_button)
+        self.assertIn('data-session-name="June exam session"', whatsapp_button)
+        self.assertIn('data-session-date="25/06/2026"', whatsapp_button)
+        self.assertIn('data-contact-name="Juana Maria"', whatsapp_button)
+        self.assertIn("path-session-journey", whatsapp_button)
+        self.assertIn("/institution", whatsapp_button)
+        self.assertNotIn("/public", whatsapp_button)
+        self.assertNotIn("https://wa.me", whatsapp_button)
+        self.assertNotIn("%F0%9F", whatsapp_button)
+        self.assertNotIn("%E2%8F", whatsapp_button)
+        self.assertNotIn("�", whatsapp_button)
+        self.assertNotIn("undefined", html)
+        self.assertNotIn("null", html)
+        self.assertNotIn("None", html)
+
+    def test_session_journey_whatsapp_js_builds_message_with_unicode_escapes(self):
+        with open("app/static/js/app.js", encoding="utf-8") as js_file:
+            js_source = js_file.read()
+
+        handler_start = js_source.index("const buildSessionJourneyWhatsappMessage")
+        handler_end = js_source.index("const SESSION_JOURNEY_EMAIL_EMOJIS", handler_start)
+        handler_source = js_source[handler_start:handler_end]
+        click_start = js_source.index('const button = event.target.closest?.("[data-session-journey-whatsapp]")')
+        click_end = js_source.index('const button = event.target.closest?.("[data-session-journey-email]")', click_start)
+        click_source = js_source[click_start:click_end]
+
+        self.assertIn('const EMOJI_SPARKLES = "\\u{1F4AB}"', handler_source)
+        self.assertIn('const EMOJI_ROCKET = "\\u{1F680}"', handler_source)
+        self.assertIn('const EMOJI_POINT = "\\u{1F449}"', handler_source)
+        self.assertIn('const EMOJI_HOURGLASS = "\\u{23F3}"', handler_source)
+        self.assertIn('const EMOJI_EXCLAMATION = "\\u{2757}"', handler_source)
+        self.assertIn("[data-session-journey-whatsapp]", click_source)
+        self.assertIn("event.preventDefault()", click_source)
+        self.assertIn("event.stopPropagation()", click_source)
+        self.assertIn("const encodedMessage = encodeURIComponent(message)", click_source)
+        self.assertIn("const decodedMessage = decodeURIComponent(encodedMessage)", click_source)
+        self.assertIn("https://api.whatsapp.com/send?phone=${normalizedPhone}&text=${encodedMessage}", click_source)
+        self.assertIn("window.open(whatsappUrl, \"_blank\", \"noopener,noreferrer\")", click_source)
+        self.assertEqual(click_source.count("encodeURIComponent("), 1)
+        for emoji in ["💫", "🚀", "👉", "⏳", "❗"]:
+            self.assertNotIn(emoji, handler_source)
+        self.assertNotIn("String.fromCodePoint", handler_source)
+        self.assertNotIn("%F0%9F%92%AB", handler_source)
+        self.assertNotIn("%F0%9F%9A%80", handler_source)
+        self.assertNotIn("%F0%9F%91%89", handler_source)
+        self.assertNotIn("%E2%8F%B3", handler_source)
+        self.assertNotIn("%E2%9D%97", handler_source)
+        self.assertNotIn("encodeURI(", handler_source)
+        self.assertNotIn("escape(", handler_source)
+        self.assertNotIn("unescape(", handler_source)
+        self.assertNotIn("btoa(", handler_source)
+        self.assertNotIn("atob(", handler_source)
+
+    def test_schedule_modal_uses_institution_journey_link_for_email(self):
+        self.close_monthly_registration_gate()
+        self.session_record.contact_points = json.dumps([
+            {"full_name": "Juana Maria", "phone": "", "email": "juana@example.com"}
+        ])
+        db.session.add(ExamSessionScheduleWorkflow(
+            exam_session_id=self.session_record.id,
+            status="Ready to send",
+        ))
+        db.session.commit()
+        client = self.login_client()
+
+        response = client.get("/pre-session-control-tower?session_year=2026&view=sessions")
+        html = response.data.decode()
+        button_start = html.index("Share Journey with Juana Maria via email")
+        button_open = html.rfind("<button ", 0, button_start)
+        button_close = html.index("</button>", button_start)
+        email_button = html[button_open:button_close]
+        copy_button_open = html.index('<button class="copy-icon-button schedule-email-copy-button', button_close)
+        copy_button_close = html.index("</button>", copy_button_open)
+        copy_button = html[copy_button_open:copy_button_close]
+
+        self.assertIn('data-view-only-allowed="true"', email_button)
+        self.assertIn("data-session-journey-email", email_button)
+        self.assertIn('data-contact-email="juana@example.com"', email_button)
+        self.assertIn('data-session-name="June exam session"', email_button)
+        self.assertIn('data-session-date="25/06/2026"', email_button)
+        self.assertIn('data-contact-name="Juana Maria"', email_button)
+        self.assertIn("path-session-journey", email_button)
+        self.assertIn("/institution", email_button)
+        self.assertNotIn("/public", email_button)
+        self.assertNotIn("mailto:", email_button)
+        self.assertNotIn("Please review the schedules", email_button)
+        self.assertNotIn("undefined", email_button)
+        self.assertNotIn("null", email_button)
+        self.assertNotIn("None", email_button)
+        self.assertIn("data-copy-session-journey-email", copy_button)
+        self.assertIn('aria-label="Copy Session Journey email for Juana Maria"', copy_button)
+        self.assertIn('data-contact-email="juana@example.com"', copy_button)
+        self.assertIn('data-journey-link="', copy_button)
+        self.assertLess(button_close, copy_button_open)
+
+    def test_session_journey_email_js_builds_modern_html_and_plain_text(self):
+        with open("app/static/js/app.js", encoding="utf-8") as js_file:
+            js_source = js_file.read()
+
+        handler_start = js_source.index("const SESSION_JOURNEY_EMAIL_EMOJIS")
+        handler_end = js_source.index("const applyViewOnlyMode", handler_start)
+        handler_source = js_source[handler_start:handler_end]
+
+        self.assertIn("SESSION JOURNEY", handler_source)
+        self.assertIn("<em>Path session journey</em> ya está disponible", handler_source)
+        self.assertIn("Acceder al <em>Session journey</em>", handler_source)
+        self.assertIn("Path International Examinations", handler_source)
+        self.assertNotIn(">Brenda<", handler_source)
+        self.assertIn("Path Session Journey \\u2013", handler_source)
+        self.assertIn("copyRichTextToClipboard(payload)", handler_source)
+        self.assertIn("text/html", js_source)
+        self.assertIn("text/plain", js_source)
+        self.assertIn("buildSessionJourneyGmailUrl(payload)", handler_source)
+        self.assertIn("[data-copy-session-journey-email]", handler_source)
+        self.assertIn("sessionJourneyEmailPayloadFromButton(button)", handler_source)
+        self.assertIn("mail.google.com/mail/?view=cm&fs=1", handler_source)
+        self.assertIn("Session Journey email copied.", handler_source)
+        self.assertIn("Could not copy the Session Journey email. Please try again.", handler_source)
+        self.assertIn("Institution Journey link is required.", handler_source)
+        self.assertIn("Point of contact is required.", handler_source)
+        self.assertIn("<strong>48 horas hábiles</strong>", handler_source)
+        self.assertIn("48 horas hábiles", handler_source)
+        self.assertIn('href="${safeJourneyLink}"', handler_source)
+        self.assertNotIn(">*_Exam session journey_*<", handler_source)
+        self.assertNotIn(">*_Journey_*<", handler_source)
+        self.assertNotIn(">*_Exam session schedule_*<", handler_source)
+        self.assertNotIn("�", handler_source)
+        for emoji_escape in ["\\u{1F4AB}", "\\u{1F680}", "\\u{23F3}", "\\u{2757}"]:
+            self.assertIn(emoji_escape, handler_source)
+
+    def test_schedule_modal_disables_whatsapp_button_without_institution_journey_link(self):
+        self.close_monthly_registration_gate()
+        self.session_record.contact_points = json.dumps([
+            {"full_name": "Juana Maria", "phone": "+54 9 11 2850 8482", "email": "juana@example.com"}
+        ])
+        db.session.add(ExamSessionScheduleWorkflow(
+            exam_session_id=self.session_record.id,
+            status="Ready to send",
+        ))
+        db.session.commit()
+        view = schedule_workflow_view(
+            self.session_record,
+            ExamSessionScheduleWorkflow.query.filter_by(exam_session_id=self.session_record.id).first(),
+            journey_shares={"institution": {"enabled": False, "url": ""}, "public": {"enabled": True, "url": "http://public.example"}},
+        )
+
+        result = schedule_journey_whatsapp_link(
+            self.session_record,
+            self.session_record.contact_points_list()[0],
+            view["journey_shares"]["institution"],
+        )
+
+        self.assertFalse(result["enabled"])
+        self.assertEqual(result["url"], "")
+        self.assertIn("Institution Journey link is required.", result["error"])
+
     def test_schedule_modal_renders_status_track_for_status_changes(self):
         workflow = ExamSessionScheduleWorkflow(
             exam_session_id=self.session_record.id,
@@ -3607,6 +3874,10 @@ class ScheduleWorkflowTest(unittest.TestCase):
 
     def test_ready_to_send_action_shows_schedule_share_buttons_before_review(self):
         self.session_record.details_url = "https://example.com/schedules"
+        self.session_record.monthly_registrations_closed = True
+        self.session_record.contact_points = json.dumps([
+            {"full_name": "Juana Maria", "phone": "+54 9 11 2850 8482", "email": "juana@example.com"}
+        ])
         db.session.add(ExamSessionScheduleWorkflow(
             exam_session_id=self.session_record.id,
             status="Ready to send",
@@ -3626,14 +3897,49 @@ class ScheduleWorkflowTest(unittest.TestCase):
 
         self.assertNotIn("View schedule", action)
         self.assertIn("View schedule", other_actions)
+        self.assertIn("View journey", other_actions)
         self.assertIn('href="https://example.com/schedules"', other_actions)
-        self.assertIn("WhatsApp schedule", action)
-        self.assertIn("Email schedule", action)
-        self.assertIn("https://wa.me/?text=", action)
-        self.assertIn("mailto:?subject=", action)
+        self.assertIn("path-session-journey", other_actions)
+        self.assertIn("/institution", other_actions)
+        self.assertNotIn("/public", other_actions)
+        self.assertLess(other_actions.index("View schedule"), other_actions.index("View journey"))
+        self.assertLess(other_actions.index("View journey"), other_actions.index("Continue editing schedules"))
+        self.assertIn("Share journey with Juana Maria via WhatsApp", action)
+        self.assertIn("Share Journey with Juana Maria via email", action)
+        self.assertIn("data-session-journey-whatsapp", action)
+        self.assertIn("data-session-journey-email", action)
+        self.assertIn("data-copy-session-journey-email", action)
+        self.assertIn('data-contact-email="juana@example.com"', action)
+        self.assertNotIn("mailto:juana@example.com", action)
         review_button_index = action.index('aria-expanded="false">Mark as sent for review</button>')
-        self.assertLess(action.index("WhatsApp schedule"), review_button_index)
-        self.assertLess(action.index("Email schedule"), review_button_index)
+        self.assertLess(action.index("Share journey with Juana Maria via WhatsApp"), review_button_index)
+        self.assertLess(action.index("Share Journey with Juana Maria via email"), review_button_index)
+        self.assertLess(action.index("data-copy-session-journey-email"), review_button_index)
+
+    def test_schedule_other_actions_always_show_schedule_and_journey_links(self):
+        self.session_record.details_url = "https://example.com/schedules"
+        self.session_record.monthly_registrations_closed = True
+        db.session.add(ExamSessionScheduleWorkflow(
+            exam_session_id=self.session_record.id,
+            status="In progress",
+        ))
+        db.session.commit()
+        client = self.login_client()
+
+        response = client.get("/pre-session-control-tower?session_year=2026&view=sessions")
+        html = response.data.decode()
+        action_start = html.index('<article class="schedule-recommended-action">')
+        action_end = html.index("</article>", action_start)
+        other_actions_start = html.index('<section class="schedule-other-actions"', action_end)
+        other_actions_end = html.index("</section>", other_actions_start)
+        other_actions = html[other_actions_start:other_actions_end]
+
+        self.assertIn("View schedule", other_actions)
+        self.assertIn("View journey", other_actions)
+        self.assertIn('href="https://example.com/schedules"', other_actions)
+        self.assertIn("path-session-journey", other_actions)
+        self.assertIn("/institution", other_actions)
+        self.assertLess(other_actions.index("View schedule"), other_actions.index("View journey"))
 
     def test_send_for_review_sets_review_deadline_automatically(self):
         db.session.add(ExamSessionScheduleWorkflow(

@@ -238,6 +238,7 @@ MENU_PERMISSION_PATHS = (
     ("internship_stages", ("/intern-stages",)),
     ("exam_session_planner", ("/exam-session-planner",)),
     ("pre_session_control_tower", ("/pre-session-control-tower",)),
+    ("path_session_journey", ("/path-session-journeys",)),
     ("monthly_exam_session_registrations", ("/monthly-exam-session-registrations",)),
     ("staff_payments", ("/staff-payments",)),
     ("finance_requests", ("/finance-requests",)),
@@ -531,6 +532,23 @@ def inject_menu_permissions():
     current_menu_can_view = user_can_view(current_menu_key) if current_menu_key else True
     current_menu_can_edit = user_can_edit(current_menu_key) if current_menu_key else True
     current_user = getattr(g, "current_user", None)
+    path_session_journey_menu_sessions = []
+    if current_user and request.args.get("session_fullscreen") != "1" and user_can_view("path_session_journey"):
+        archived_session_years = [
+            year for (year,) in ExamSessionYear.query.with_entities(ExamSessionYear.year)
+            .filter_by(is_archived=True)
+            .all()
+        ]
+        path_session_journey_menu_query = ExamSession.query
+        if archived_session_years:
+            path_session_journey_menu_query = path_session_journey_menu_query.filter(
+                ~db.extract("year", ExamSession.session_date).in_(archived_session_years)
+            )
+        path_session_journey_menu_sessions = (
+            path_session_journey_menu_query
+            .order_by(ExamSession.session_date.asc(), ExamSession.exam_session_name.asc())
+            .all()
+        )
     return {
         "menu_permissions": MENU_PERMISSIONS,
         "current_menu_key": current_menu_key,
@@ -552,6 +570,8 @@ def inject_menu_permissions():
         "potential_perform_action_modal_id": potential_perform_action_modal_id,
         "user_can_view": user_can_view,
         "user_can_edit": user_can_edit,
+        "path_session_journey_menu_sessions": path_session_journey_menu_sessions,
+        "schedule_journey_whatsapp_link": schedule_journey_whatsapp_link,
     }
 COMMUNICATIONS_GROUPS = [
     ("STAFF_COMMUNICATIONS", "Staff communications"),
@@ -2671,6 +2691,48 @@ def normalize_exam_session_shifts(shifts):
     return [shift for shift in clean_shifts if shift in partial_shifts]
 
 
+def is_valid_contact_email(value):
+    return bool(re.match(r"^[^@\s]+@[^@\s]+\.[^@\s]+$", value or ""))
+
+
+def parse_exam_session_contact_points(form):
+    names = form.getlist("contact_point_full_name")
+    phones = form.getlist("contact_point_phone")
+    emails = form.getlist("contact_point_email")
+    total_rows = max(len(names), len(phones), len(emails), 0)
+    contact_points = []
+    errors = []
+
+    for index in range(total_rows):
+        full_name = (names[index] if index < len(names) else "").strip()
+        phone = (phones[index] if index < len(phones) else "").strip()
+        email = (emails[index] if index < len(emails) else "").strip()
+        if not any([full_name, phone, email]):
+            continue
+        if email and not is_valid_contact_email(email):
+            errors.append(f"Contact point {len(contact_points) + 1} email must be valid.")
+        contact_points.append({
+            "full_name": full_name,
+            "phone": phone,
+            "email": email,
+        })
+        if len(contact_points) >= 10:
+            break
+
+    if total_rows > 10:
+        extra_has_values = any(
+            any([
+                (names[index] if index < len(names) else "").strip(),
+                (phones[index] if index < len(phones) else "").strip(),
+                (emails[index] if index < len(emails) else "").strip(),
+            ])
+            for index in range(10, total_rows)
+        )
+        if extra_has_values:
+            errors.append("A maximum of 10 contact points can be added.")
+    return contact_points, errors
+
+
 def validate_exam_session_form(form):
     errors = []
     exam_session_name = form.get("exam_session_name", "").strip()
@@ -2681,6 +2743,7 @@ def validate_exam_session_form(form):
     minimum_candidates_value = form.get("minimum_candidates_required", "30").strip()
     minimum_candidates_required = None
     exam_session_organised_by = form.get("exam_session_organised_by", "the exam centre").strip()
+    contact_points, contact_point_errors = parse_exam_session_contact_points(form)
     shifts = normalize_exam_session_shifts(form.getlist("shifts"))
     modules = [module for module in form.getlist("modules") if module in EXAM_SESSION_MODULE_OPTIONS]
     session_format = form.get("format", "").strip()
@@ -2709,6 +2772,7 @@ def validate_exam_session_form(form):
         minimum_candidates_required = int(minimum_candidates_value)
     if exam_session_organised_by not in EXAM_SESSION_ORGANISED_BY_OPTIONS:
         errors.append("Exam session organised by is required.")
+    errors.extend(contact_point_errors)
     if not modules:
         errors.append("At least one module is required.")
     if session_format not in EXAM_SESSION_FORMAT_OPTIONS:
@@ -2728,6 +2792,7 @@ def validate_exam_session_form(form):
         "session_date": session_date,
         "minimum_candidates_required": minimum_candidates_required,
         "exam_session_organised_by": exam_session_organised_by,
+        "contact_points": contact_points,
         "shifts": shifts,
         "modules": modules,
         "full_address_google_maps": full_address_google_maps,
@@ -2746,6 +2811,7 @@ def apply_exam_session_form(session_record, data):
     session_record.session_date = data["session_date"]
     session_record.minimum_candidates_required = data["minimum_candidates_required"]
     session_record.exam_session_organised_by = data["exam_session_organised_by"]
+    session_record.contact_points = json.dumps(data["contact_points"], ensure_ascii=False)
     session_record.shifts = ", ".join(data["shifts"])
     session_record.modules = ", ".join(data["modules"])
     session_record.full_address_google_maps = data["full_address_google_maps"]
@@ -3617,6 +3683,48 @@ def normalize_whatsapp_phone(value):
 @staff_bp.app_template_filter("whatsapp_phone")
 def whatsapp_phone_filter(value):
     return normalize_whatsapp_phone(value)
+
+
+def schedule_journey_whatsapp_link(session_record, contact_point, institution_journey_share):
+    session_name = str(getattr(session_record, "exam_session_name", "") or "").strip()
+    session_date = display_session_date(getattr(session_record, "session_date", None))
+    contact_point = contact_point or {}
+    contact_name = str(contact_point.get("full_name") or "").strip()
+    phone = normalize_whatsapp_phone(contact_point.get("phone"))
+    journey_link = str((institution_journey_share or {}).get("url") or "").strip()
+    journey_enabled = bool((institution_journey_share or {}).get("enabled"))
+    missing = []
+    if not session_name:
+        missing.append("Session name is required.")
+    if not session_date:
+        missing.append("Session date is required.")
+    if not contact_name:
+        missing.append("Point of contact name is required.")
+    if not phone:
+        missing.append("Point of contact phone number is required.")
+    if not journey_link or not journey_enabled:
+        missing.append("Institution Journey link is required.")
+    if missing:
+        return {
+            "url": "",
+            "session_name": session_name,
+            "session_date": session_date,
+            "contact_name": contact_name,
+            "phone": phone,
+            "journey_link": journey_link,
+            "error": " ".join(missing),
+            "enabled": False,
+        }
+    return {
+        "url": "",
+        "session_name": session_name,
+        "session_date": session_date,
+        "contact_name": contact_name,
+        "phone": phone,
+        "journey_link": journey_link,
+        "error": "",
+        "enabled": True,
+    }
 
 
 def current_user_audit_department():
@@ -12820,7 +12928,7 @@ def session_readiness_contract(operational_readiness, finance, sinapsis, communi
 
 JOURNEY_AUDIENCES = {"institution", "public"}
 JOURNEY_TITLES = {
-    "institution": "Path Session Journey \u2014 for institutions",
+    "institution": "Path Session Journey",
     "public": "Path Session Journey \u2014 for families and candidates",
 }
 JOURNEY_FINANCE_READINESS = {
@@ -12911,6 +13019,106 @@ def journey_milestone(key, label, completed, message, in_progress_message=None, 
     }
 
 
+def schedule_workflow_approved_datetime(workflow):
+    if not workflow:
+        return None
+    approved_at = workflow.approved_at
+    if not approved_at:
+        approved_events = sorted(
+            (event for event in workflow.events if event.new_status == "Approved"),
+            key=lambda event: (event.created_at or datetime.min.replace(tzinfo=timezone.utc), event.id or 0),
+        )
+        approved_at = approved_events[0].created_at if approved_events else None
+    if approved_at and approved_at.tzinfo is None:
+        approved_at = approved_at.replace(tzinfo=timezone.utc)
+    return approved_at.astimezone(LOCAL_TZ) if approved_at else None
+
+
+def material_shipment_journey_contract(session_record, workflow, now=None):
+    now = now or datetime.now(timezone.utc).astimezone(LOCAL_TZ)
+    approved_at = schedule_workflow_approved_datetime(workflow)
+    session_date = getattr(session_record, "session_date", None)
+    if not workflow or workflow.status != "Approved" or not approved_at or not session_date:
+        return {"status": "Pending", "status_key": "pending", "progress_percent": 0}
+
+    movement_starts_at = approved_at + timedelta(hours=24)
+    arrival_date = session_date - timedelta(days=12)
+    arrival_at = datetime.combine(arrival_date, datetime.min.time()).replace(tzinfo=LOCAL_TZ)
+
+    if now >= arrival_at:
+        return {"status": "Dispatched", "status_key": "dispatched", "progress_percent": 100}
+    if now >= movement_starts_at:
+        total_seconds = max((arrival_at - movement_starts_at).total_seconds(), 1)
+        elapsed_seconds = max((now - movement_starts_at).total_seconds(), 0)
+        progress_percent = min(max(round((elapsed_seconds / total_seconds) * 100), 0), 100)
+        return {"status": "In transit", "status_key": "in_transit", "progress_percent": progress_percent}
+    return {"status": "Pending", "status_key": "pending", "progress_percent": 0}
+
+
+def journey_staff_status_contract(workflow, now=None):
+    now = now or datetime.now(timezone.utc).astimezone(LOCAL_TZ)
+    approved_at = schedule_workflow_approved_datetime(workflow)
+    if not workflow or workflow.status != "Approved" or not approved_at:
+        return {"status": "In progress", "status_key": "in_progress"}
+    if now >= approved_at + timedelta(days=4):
+        return {"status": "Confirmed", "status_key": "confirmed"}
+    return {"status": "In progress", "status_key": "in_progress"}
+
+
+def journey_staff_summary(session_record=None, supervisor_assignments=None, examiner_assignments=None, intern_assignments=None):
+    emergency_contact_member_id = getattr(session_record, "emergency_contact_member_id", None)
+    counted_assignments = [
+        assignment
+        for assignment in supervisor_assignments or []
+        if not getattr(assignment, "is_remote", False)
+        and (
+            not emergency_contact_member_id
+            or getattr(assignment, "team_member_id", None) != emergency_contact_member_id
+        )
+    ]
+    counted_assignments.extend(
+        assignment
+        for assignment in examiner_assignments or []
+        if not emergency_contact_member_id
+        or getattr(assignment, "team_member_id", None) != emergency_contact_member_id
+    )
+    counted_assignments.extend(
+        assignment
+        for assignment in intern_assignments or []
+        if not emergency_contact_member_id
+        or getattr(assignment, "team_member_id", None) != emergency_contact_member_id
+    )
+    dietary_assignments = [
+        assignment
+        for assignment in (
+            list(supervisor_assignments or [])
+            + list(examiner_assignments or [])
+            + list(intern_assignments or [])
+        )
+    ]
+    dietary_requirements = []
+    dietary_member_count = 0
+    seen_requirements = set()
+    for assignment in dietary_assignments:
+        member = getattr(assignment, "team_member", None)
+        requirement = (getattr(member, "dietary_requirements", "") or "").strip()
+        if not requirement:
+            continue
+        dietary_member_count += 1
+        if requirement.lower() not in seen_requirements:
+            dietary_requirements.append(requirement)
+            seen_requirements.add(requirement.lower())
+    staff_count = len(counted_assignments)
+    staff_noun = "staff member" if staff_count == 1 else "staff members"
+    staff_verb = "has" if staff_count == 1 else "have"
+    return {
+        "count": staff_count,
+        "message": f"{staff_count} {staff_noun} {staff_verb} been assigned to this international exam session.",
+        "dietary_requirements": dietary_requirements,
+        "dietary_count": dietary_member_count,
+    }
+
+
 def mark_journey_milestone_progress(milestones):
     first_open_seen = False
     for milestone in milestones:
@@ -12946,17 +13154,12 @@ def finalize_journey_milestones(milestones, audience):
 
 
 def journey_finance_readiness(finance):
-    raw_status = (finance or {}).get("raw_status") or "Not reviewed"
-    status, message, milestone_status = JOURNEY_FINANCE_READINESS.get(
-        raw_status,
-        JOURNEY_FINANCE_READINESS["Not reviewed"],
-    )
     return {
         "visible": True,
         "label": "Administrative & payment readiness",
-        "status": status,
-        "milestone_status": milestone_status,
-        "message": message,
+        "status": "Finance approved and cleared",
+        "milestone_status": "completed",
+        "message": "Finance approved and cleared",
     }
 
 
@@ -13049,6 +13252,9 @@ def path_session_journey_sources(session_record, today=None):
     )
     return {
         "workflow": workflow,
+        "supervisor_assignments": supervisor_assignments,
+        "examiner_assignments": examiner_assignments,
+        "intern_assignments": intern_assignments,
         "staffing": staffing,
         "logistics": logistics,
         "logistics_config": logistics_config,
@@ -13076,6 +13282,13 @@ def path_session_journey_contract(session_record, audience, today=None, sources=
     sources = sources or path_session_journey_sources(session_record, today=today)
     countdown = journey_countdown(session_record.session_date, today=today)
     schedule_ready = bool(schedule_gate_status(sources.get("workflow")).get("is_ready"))
+    session_journey_schedule_override_pending = (
+        audience == "institution"
+        and "colegio nuestra señora de la salette" in (session_record.exam_session_name or "").casefold()
+    )
+    if session_journey_schedule_override_pending:
+        schedule_ready = False
+    journey_workflow = None if session_journey_schedule_override_pending else sources.get("workflow")
     staffing_ready = bool((sources.get("staffing") or {}).get("ready"))
     logistics = sources.get("logistics") or {}
     logistics_ready = bool(logistics.get("final_email_ready")) or logistics.get("status") == "not_applicable"
@@ -13100,30 +13313,26 @@ def path_session_journey_contract(session_record, audience, today=None, sources=
     communications_ready = bool((sources.get("communications") or {}).get("ready"))
     operational_ready = bool((sources.get("operational") or {}).get("is_ready"))
     session_ready = bool((sources.get("session_readiness") or {}).get("is_ready"))
+    material_shipment = material_shipment_journey_contract(session_record, journey_workflow)
+    staff_status = journey_staff_status_contract(journey_workflow)
+    staff_summary = journey_staff_summary(
+        session_record=session_record,
+        supervisor_assignments=sources.get("supervisor_assignments"),
+        examiner_assignments=sources.get("examiner_assignments"),
+        intern_assignments=sources.get("intern_assignments"),
+    )
 
     if audience == "institution":
         milestones = [
-            journey_milestone("confirmed", "Exam session confirmed", True, "The exam session has been created in Path."),
-            journey_milestone("schedule", "Exam session schedules approved", schedule_ready, "The exam session schedules have been confirmed.", "Schedule preparation is in progress."),
-            journey_milestone("staffing", "Path team assigned and confirmed", staffing_ready, "The Path team is assigned and confirmed.", "Path is confirming the session team."),
+            journey_milestone("confirmed", "Exam session date", True, "The exam session date has been created in Path."),
+            journey_milestone("schedule", "Exam session schedule", schedule_ready, "The exam session schedule has been confirmed.", "Schedule preparation is in progress."),
+            journey_milestone("entry_slips", "Entry slips for candidates", True, "Download candidate entry slips for this session."),
+            journey_milestone("staffing", "Exam session staff", staff_status["status"] == "Confirmed", staff_summary["message"], staff_summary["message"]),
+            journey_milestone("material_shipment", "Exam material shipment", material_shipment["status"] == "Dispatched", "Exam materials have been dispatched.", "Exam materials are in transit.", "Exam material shipment is pending."),
         ]
-        if logistics_applicable:
-            milestones.append(journey_milestone("logistics", "Staff logistics completed", logistics_ready, "Staff logistics are complete.", "Staff logistics are being completed."))
-        else:
-            milestones.append(journey_milestone("logistics", "Staff logistics completed", True, "No additional staff logistics are required for this session."))
-        milestones.extend([
-            journey_milestone("materials_prepared", "Session materials prepared", packages_ready, "Session materials are prepared.", "Session materials are being prepared."),
-            journey_milestone("materials_dispatched", "Session materials dispatched", shipment_dispatched, "Session materials have been dispatched.", "Materials dispatch is being coordinated."),
-            journey_milestone("materials_delivered", "Session materials delivered", shipment_delivered, "Session materials have been delivered.", "Materials delivery is in progress."),
-            journey_milestone("digital", "Digital readiness checked", sinapsis_ready, "Digital readiness has been checked.", "Digital readiness checks are in progress."),
-            journey_milestone("communications", "Final session details shared", communications_ready, "Final session details have been shared.", "Final session details are being prepared."),
-            journey_milestone("session_ready", "Session ready", session_ready, "The session is ready.", "Final readiness checks are in progress."),
-        ])
-        hero_message = "Follow the key milestones as we prepare your upcoming Path exam session."
-        final_message = "The session is ready." if session_ready else "Final readiness checks are in progress."
-        if countdown.get("has_passed"):
-            final_message = "This Path exam session has taken place."
-        next_steps = [] if session_ready else ["Final readiness checks are in progress."]
+        hero_message = "Follow the key stages as we prepare your upcoming Path exam session."
+        final_message = "Path International Examinations"
+        next_steps = [] if session_ready else ["Path International Examinations"]
     else:
         milestones = [
             journey_milestone("confirmed", "Your Path exam session is confirmed", True, "Your Path exam session is confirmed."),
@@ -13165,11 +13374,28 @@ def path_session_journey_contract(session_record, audience, today=None, sources=
         sources.get("sinapsis_control"),
         sources.get("communications_control"),
     )
+    public_journey_share = journey_share_for_session(session_record.id, "public") if audience == "institution" else None
+    public_journey_url = (
+        url_for("staff.shared_path_session_journey", token=public_journey_share.token, audience="public", _external=True)
+        if public_journey_share and public_journey_share.is_enabled and not public_journey_share.revoked_at
+        else ""
+    )
     return {
         "audience": audience,
         "title": JOURNEY_TITLES[audience],
         "session_name": session_record.exam_session_name,
         "session_date": session_record.session_date,
+        "session_id": session_record.id,
+        "date_confirmation_label": "Confirmed" if session_record.date_confirmation_status == "Confirmed" else "In progress",
+        "date_confirmation_confirmed": session_record.date_confirmation_status == "Confirmed",
+        "schedule_confirmation_label": "Confirmed" if schedule_ready else "In progress",
+        "schedule_confirmed": schedule_ready,
+        "schedule_url": (session_record.details_url or "").strip(),
+        "entry_slips_url": "#",
+        "public_journey_url": public_journey_url,
+        "material_shipment": material_shipment,
+        "staff_status": staff_status,
+        "staff_summary": staff_summary,
         "format": session_record.format,
         "venue": journey_safe_location(session_record),
         "countdown": countdown,
@@ -13181,7 +13407,7 @@ def path_session_journey_contract(session_record, audience, today=None, sources=
         "administrative_readiness": journey_finance_readiness(sources.get("finance")) if audience == "institution" else {"visible": False},
         "next_steps": next_steps,
         "final_message": final_message,
-        "visibility_note": "This journey shows selected milestones for external visibility. Internal operational details are not displayed." if audience == "institution" else "",
+        "visibility_note": "Evolution in language assessment" if audience == "institution" else "",
     }
 
 
@@ -13281,8 +13507,11 @@ def journey_share_view(session_record, audience, share=None):
     }
 
 
-def journey_share_views(session_record, shares_by_audience=None):
+def journey_share_views(session_record, shares_by_audience=None, ensure_institution=False, created_by=None):
     shares_by_audience = shares_by_audience or {}
+    if ensure_institution:
+        institution_share = ensure_journey_share_token(session_record, "institution", created_by=created_by)
+        shares_by_audience = {**shares_by_audience, "institution": institution_share}
     return {
         audience: journey_share_view(session_record, audience, shares_by_audience.get(audience))
         for audience in sorted(JOURNEY_AUDIENCES)
@@ -13290,7 +13519,6 @@ def journey_share_views(session_record, shares_by_audience=None):
 
 
 def render_journey_unavailable(status_code=404):
-    annual_meeting_date_value, annual_meeting_time_value = certification_config_annual_meeting_values(year_configuration)
     return render_template(
         "pre_session_control_tower/session_journey.html",
         journey=None,
@@ -13481,7 +13709,11 @@ def schedule_workflow_view(session_record, workflow=None, today=None, staffing=N
             logistics_control=logistics_control_view,
         ),
         "activity_timeline": activity_timeline or session_activity_timeline_contract(session_record, schedule_events=list(workflow.events or []) if workflow else []),
-        "journey_shares": journey_shares or journey_share_views(session_record),
+        "journey_shares": journey_shares or journey_share_views(
+            session_record,
+            ensure_institution=True,
+            created_by=session.get("user") if has_request_context() else None,
+        ),
         "available_transitions": available_schedule_transitions(status),
         "sinapsis_url": sinapsis_url,
         "sinapsis_available": bool(sinapsis_url and is_valid_url(sinapsis_url)),
@@ -16829,7 +17061,12 @@ def pre_session_control_tower():
             priority_action=priority_action,
             schedule_gate=schedule_gate,
             activity_timeline=activity_timeline,
-            journey_shares=journey_share_views(session_record, journey_shares_by_session.get(session_record.id, {})),
+            journey_shares=journey_share_views(
+                session_record,
+                journey_shares_by_session.get(session_record.id, {}),
+                ensure_institution=True,
+                created_by=session.get("user") if has_request_context() else None,
+            ),
             staffing_rows=staffing_assignment_rows(
                 session_record,
                 supervisor_assignments,
@@ -16991,6 +17228,14 @@ def preview_path_session_journey(session_id, audience):
         return render_journey_unavailable(404)
     session_record = ExamSession.query.get_or_404(session_id)
     journey = path_session_journey_contract(session_record, audience)
+    return render_template("pre_session_control_tower/session_journey.html", journey=journey, share=None, is_preview=True)
+
+
+@staff_bp.route("/path-session-journeys/sessions/<int:session_id>")
+@login_required
+def path_session_journey(session_id):
+    session_record = ExamSession.query.get_or_404(session_id)
+    journey = path_session_journey_contract(session_record, "institution")
     return render_template("pre_session_control_tower/session_journey.html", journey=journey, share=None, is_preview=True)
 
 
@@ -21615,6 +21860,7 @@ def duplicate_exam_session_year():
             format=source_session.format,
             location_url=source_session.location_url,
             details_url=source_session.details_url,
+            contact_points=source_session.contact_points,
         )
         db.session.add(new_session)
         db.session.flush()

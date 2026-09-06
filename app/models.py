@@ -15,6 +15,7 @@ MENU_PERMISSIONS = (
     ("internship_stages", "Internship stages"),
     ("exam_session_planner", "Exam session planner"),
     ("pre_session_control_tower", "Pre onsite session control tower"),
+    ("path_session_journey", "Path Session Journey"),
     ("monthly_exam_session_registrations", "Monthly exam session registrations"),
     ("staff_payments", "Staff payments"),
     ("finance_requests", "Finance requests"),
@@ -668,6 +669,7 @@ class ExamSession(db.Model):
     date_confirmation_status = db.Column(db.String(40), nullable=False, default="Pending", index=True)
     minimum_candidates_required = db.Column(db.Integer, nullable=False, default=30)
     exam_session_organised_by = db.Column(db.String(40), nullable=False, default="the exam centre", index=True)
+    contact_points = db.Column(db.Text, nullable=False, default="[]")
     shifts = db.Column(db.String(80), nullable=False, default="")
     modules = db.Column(db.String(120), nullable=False, default="")
     full_address_google_maps = db.Column(db.String(500), nullable=True)
@@ -730,6 +732,29 @@ class ExamSession(db.Model):
             for shift in self.shifts.split(",")
             if shift.strip()
         ]
+
+    def contact_points_list(self):
+        try:
+            values = json.loads(self.contact_points or "[]")
+        except (TypeError, ValueError, json.JSONDecodeError):
+            return []
+        if not isinstance(values, list):
+            return []
+        contacts = []
+        for value in values:
+            if not isinstance(value, dict):
+                continue
+            full_name = (value.get("full_name") or "").strip()
+            phone = (value.get("phone") or "").strip()
+            email = (value.get("email") or "").strip()
+            if not any([full_name, phone, email]):
+                continue
+            contacts.append({
+                "full_name": full_name,
+                "phone": phone,
+                "email": email,
+            })
+        return contacts[:10]
 
     def non_available_ids(self):
         try:

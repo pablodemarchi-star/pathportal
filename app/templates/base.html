@@ -4,11 +4,11 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>{% block title %}Path Examinations Internal App{% endblock %}</title>
-    <link rel="stylesheet" href="{{ url_for('static', filename='css/styles.css', v='20260821-sessions-readiness-heading-centered-01') }}">
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/styles.css', v='20260906-session-journey-email-copy-01') }}">
   </head>
   <body>
     <div class="app-shell {% if request.args.get('session_fullscreen') == '1' %}session-fullscreen-shell{% endif %}">
-      {% if g.user %}
+      {% if g.user and request.args.get('session_fullscreen') != '1' %}
       <aside class="sidebar">
         <div class="brand">
           <img class="brand-logo brand-logo-white" src="{{ url_for('static', filename='img/path-logo-white-transparent.png') }}" alt="Path International Examinations">
@@ -202,7 +202,7 @@
             </div>
           {% endif %}
         {% endwith %}
-        {% if g.user and current_user_is_view_only %}
+        {% if g.user and current_user_is_view_only and request.args.get('session_fullscreen') != '1' %}
           <section class="view-only-banner" data-view-only-banner>
             <div>
               <h2>View-only access</h2>
@@ -214,6 +214,6 @@
         {% block content %}{% endblock %}
       </main>
     </div>
-    <script src="{{ url_for('static', filename='js/app.js', v='20260821-potential-interview-options-05') }}"></script>
+    <script src="{{ url_for('static', filename='js/app.js', v='20260906-session-journey-email-copy-01') }}"></script>
   </body>
 </html>
