@@ -762,14 +762,19 @@
     <input type="hidden" name="schedule_status" value="{{ selected_schedule_status }}">
     {{ pre_session_return_fields(selected_view, selected_bundle) }}
     <div class="schedule-form-error" data-schedule-action-error hidden></div>
-    {% if action.key == 'mark_ready' %}
+    {% if action.key in ['mark_ready', 'mark_revised_ready'] %}
       {% set preload_schedule_link = view and view.review_round and view.review_round > 0 %}
       {% set schedule_link_value = session.details_url if preload_schedule_link and session.details_url else '' %}
+      {% set entry_slips_link_value = session.exam_entry_slips_url if preload_schedule_link and session.exam_entry_slips_url else '' %}
       <label for="exam-session-schedule-{{ session.id }}-{{ action.key }}">
         Exam session schedule <span class="required-marker">*</span>
       </label>
       <input id="exam-session-schedule-{{ session.id }}-{{ action.key }}" type="url" name="exam_session_schedule_url" value="{{ schedule_link_value }}" placeholder="https://..." required data-schedule-link-input>
       <p class="field-help">Add the link to the completed schedules before marking them as ready to send.</p>
+      <label for="exam-entry-slips-{{ session.id }}-{{ action.key }}">
+        Exam entry slips <span class="required-marker">*</span>
+      </label>
+      <input id="exam-entry-slips-{{ session.id }}-{{ action.key }}" type="url" name="exam_entry_slips_url" value="{{ entry_slips_link_value }}" placeholder="https://..." required data-schedule-link-input>
     {% endif %}
     {% if action.deadline_required %}
       <label for="schedule-deadline-{{ session.id }}-{{ action.key }}">
@@ -816,7 +821,7 @@
     </div>
     <div class="form-actions">
       <button class="secondary-button compact-action" type="button" data-schedule-action-cancel>Cancel</button>
-      <button class="primary-button compact-action" type="submit"{% if action.key == 'mark_ready' %} data-schedule-link-submit{% if not schedule_link_value or schedule_monthly_blocked %} disabled{% endif %}{% elif schedule_monthly_blocked %} disabled{% endif %}>{{ schedule_confirm_label(action.key) }}</button>
+      <button class="primary-button compact-action" type="submit"{% if action.key in ['mark_ready', 'mark_revised_ready'] %} data-schedule-link-submit{% if not schedule_link_value or not entry_slips_link_value or schedule_monthly_blocked %} disabled{% endif %}{% elif schedule_monthly_blocked %} disabled{% endif %}>{{ schedule_confirm_label(action.key) }}</button>
     </div>
   </form>
 {%- endmacro %}
@@ -1314,37 +1319,236 @@
   </div>
 </header>
 
-<section class="toolbar {% if archived_session_years %}toolbar-with-archive{% endif %}">
-  <div>
-    <p class="archived-year-title">Session years</p>
-    <p class="archived-year-copy">Use the active year selector to manage schedule workflows by year.</p>
-  </div>
-  {% if archived_session_years %}
-    <section class="archived-year-panel" aria-label="Archived Pre onsite session control tower years">
-      <div>
-        <p class="archived-year-title">Archived years</p>
-        <p class="archived-year-copy">Archived years are hidden from the active selector, but their records are preserved.</p>
-      </div>
-      <div class="archived-year-list">
-        {% for year_item in archived_session_years %}
-          <article class="archived-year-item">
-            <span>{{ year_item.year }}</span>
-            <form method="post" action="{{ url_for('staff.unarchive_exam_session_year', year=year_item.year) }}" data-confirm-submit="Restore {{ year_item.year }} to active years?">
-              <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-              <input type="hidden" name="return_to_endpoint" value="staff.pre_session_control_tower">
-              <button class="secondary-button compact-action" type="submit">Unarchive</button>
-            </form>
-            <form method="post" action="{{ url_for('staff.delete_exam_session_year', year=year_item.year) }}" data-confirm-submit="Permanently delete {{ year_item.year }} and all its exam session records? This cannot be undone.">
-              <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-              <input type="hidden" name="return_to_endpoint" value="staff.pre_session_control_tower">
-              <button class="danger-button compact-action" type="submit">Delete permanently</button>
-            </form>
-          </article>
+{% if selected_view == 'bundles' %}
+<section class="toolbar pre-session-bundle-filters-toolbar">
+  <form method="get" class="filters pre-session-bundle-filters" data-auto-filter>
+    <input type="hidden" name="session_year" value="{{ selected_session_year }}">
+    <input type="hidden" name="view" value="bundles">
+    <input type="search" name="bundle_q" value="{{ bundle_filters.q }}" placeholder="Bundle number, exam sessions, recipient" aria-label="Search by bundle number, exam sessions, recipient">
+    <select name="bundle_department" aria-label="Filter by department">
+      <option value="">Department</option>
+      {% for department_option, department_label in [('ADMIN', 'Admin'), ('FINANCE', 'Finance'), ('LOGISTICS', 'Logistics'), ('MANAGEMENT', 'Management')] %}
+        <option value="{{ department_option }}" {% if bundle_filters.department == department_option %}selected{% endif %}>{{ department_label }}</option>
+      {% endfor %}
+    </select>
+    <details class="exam-filter-dropdown">
+      <summary>Shipment{% if bundle_filters.shipment %} ({{ bundle_filters.shipment|length }}){% endif %}</summary>
+      <div class="exam-filter-dropdown-panel">
+        {% for shipment_value, shipment_label in [('blocked', 'Blocked'), ('semi_unblocked', 'Semi-unblocked'), ('unblocked', 'Unblocked')] %}
+          <label>
+            <input type="checkbox" name="bundle_shipment" value="{{ shipment_value }}" {% if shipment_value in bundle_filters.shipment %}checked{% endif %}>
+            <span>{{ shipment_label }}</span>
+          </label>
         {% endfor %}
       </div>
-    </section>
-  {% endif %}
+    </details>
+    <label class="monthly-marker-filter">
+      <input type="checkbox" name="bundle_overdue" value="1" {% if bundle_filters.overdue %}checked{% endif %}>
+      <span>Overdue</span>
+    </label>
+    <label class="monthly-marker-filter">
+      <input type="checkbox" name="bundle_risk" value="1" {% if bundle_filters.risk %}checked{% endif %}>
+      <span>At risk</span>
+    </label>
+  </form>
+  <div class="pre-session-bundle-filter-actions">
+    <a class="text-link" href="{{ url_for('staff.pre_session_control_tower', session_year=selected_session_year, view='bundles') }}">Reset</a>
+    <details class="exam-archived-years-dropdown">
+      <summary class="secondary-button compact-action">Archived years</summary>
+      <div class="exam-archived-years-panel">
+        {% if archived_session_years %}
+          {% for year_item in archived_session_years %}
+            <article class="archived-year-item">
+              <span>{{ year_item.year }}</span>
+              <form method="post" action="{{ url_for('staff.unarchive_exam_session_year', year=year_item.year) }}" data-confirm-submit="Restore {{ year_item.year }} to active years?">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                <input type="hidden" name="return_to_endpoint" value="staff.pre_session_control_tower">
+                <button class="secondary-button compact-action" type="submit">Unarchive</button>
+              </form>
+              <form method="post" action="{{ url_for('staff.delete_exam_session_year', year=year_item.year) }}" data-confirm-submit="Permanently delete {{ year_item.year }} and all its exam session records? This cannot be undone.">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                <input type="hidden" name="return_to_endpoint" value="staff.pre_session_control_tower">
+                <button class="danger-button compact-action" type="submit">Delete permanently</button>
+              </form>
+            </article>
+          {% endfor %}
+        {% else %}
+          <p class="archived-year-copy">No archived years.</p>
+        {% endif %}
+      </div>
+    </details>
+  </div>
 </section>
+{% elif selected_view == 'sessions' %}
+<section class="toolbar pre-session-session-filters-toolbar">
+  <form method="get" class="filters pre-session-session-filters" data-auto-filter>
+    <input type="hidden" name="session_year" value="{{ selected_session_year }}">
+    <input type="hidden" name="view" value="sessions">
+    <input type="search" name="session_q" value="{{ session_filters.q }}" placeholder="Session" aria-label="Search by session name">
+    <select name="session_department" aria-label="Filter by department">
+      <option value="">Department</option>
+      {% for department_option, department_label in [('ADMIN', 'Admin'), ('FINANCE', 'Finance'), ('LOGISTICS', 'Logistics'), ('MANAGEMENT', 'Management')] %}
+        <option value="{{ department_option }}" {% if session_filters.department == department_option %}selected{% endif %}>{{ department_label }}</option>
+      {% endfor %}
+    </select>
+    {% for filter_name, filter_label, selected_values in [
+      ('session_logistics', 'Logistics', session_filters.logistics),
+      ('session_finance', 'Finance', session_filters.finance),
+      ('session_final_checks', 'Final checks', session_filters.final_checks)
+    ] %}
+      <details class="exam-filter-dropdown">
+        <summary>{{ filter_label }}{% if selected_values %} ({{ selected_values|length }}){% endif %}</summary>
+        <div class="exam-filter-dropdown-panel">
+          {% for gate_value, gate_label in [('blocked', 'Blocked'), ('semi_unblocked', 'Semi-unblocked'), ('unblocked', 'Unblocked')] %}
+            <label>
+              <input type="checkbox" name="{{ filter_name }}" value="{{ gate_value }}" {% if gate_value in selected_values %}checked{% endif %}>
+              <span>{{ gate_label }}</span>
+            </label>
+          {% endfor %}
+        </div>
+      </details>
+    {% endfor %}
+    <select name="session_readiness" aria-label="Filter by session readiness">
+      <option value="">Session readiness</option>
+      <option value="ready" {% if session_filters.readiness == 'ready' %}selected{% endif %}>Ready</option>
+      <option value="not_ready" {% if session_filters.readiness == 'not_ready' %}selected{% endif %}>Not ready</option>
+    </select>
+    <select name="session_incidents" aria-label="Filter by incidents">
+      <option value="">Incidents</option>
+      <option value="with" {% if session_filters.incidents == 'with' %}selected{% endif %}>With</option>
+      <option value="without" {% if session_filters.incidents == 'without' %}selected{% endif %}>Without</option>
+    </select>
+    <label class="monthly-marker-filter">
+      <input type="checkbox" name="session_overdue" value="1" {% if session_filters.overdue %}checked{% endif %}>
+      <span>Overdue</span>
+    </label>
+  </form>
+  <div class="pre-session-session-filter-actions">
+    <a class="text-link" href="{{ url_for('staff.pre_session_control_tower', session_year=selected_session_year, view='sessions') }}">Reset</a>
+    <details class="exam-archived-years-dropdown">
+      <summary class="secondary-button compact-action">Archived years</summary>
+      <div class="exam-archived-years-panel">
+        {% if archived_session_years %}
+          {% for year_item in archived_session_years %}
+            <article class="archived-year-item">
+              <span>{{ year_item.year }}</span>
+              <form method="post" action="{{ url_for('staff.unarchive_exam_session_year', year=year_item.year) }}" data-confirm-submit="Restore {{ year_item.year }} to active years?">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                <input type="hidden" name="return_to_endpoint" value="staff.pre_session_control_tower">
+                <button class="secondary-button compact-action" type="submit">Unarchive</button>
+              </form>
+              <form method="post" action="{{ url_for('staff.delete_exam_session_year', year=year_item.year) }}" data-confirm-submit="Permanently delete {{ year_item.year }} and all its exam session records? This cannot be undone.">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                <input type="hidden" name="return_to_endpoint" value="staff.pre_session_control_tower">
+                <button class="danger-button compact-action" type="submit">Delete permanently</button>
+              </form>
+            </article>
+          {% endfor %}
+        {% else %}
+          <p class="archived-year-copy">No archived years.</p>
+        {% endif %}
+      </div>
+    </details>
+  </div>
+</section>
+{% elif selected_view == 'bundle' %}
+<section class="toolbar pre-session-bundle-detail-filters-toolbar">
+  <form method="get" class="filters pre-session-bundle-detail-filters" data-auto-filter>
+    <input type="hidden" name="session_year" value="{{ selected_session_year }}">
+    <input type="hidden" name="view" value="bundle">
+    {% if selected_bundle %}
+      <input type="hidden" name="bundle_id" value="{{ selected_bundle.id }}">
+    {% endif %}
+    <input type="search" name="bundle_session_q" value="{{ bundle_session_filters.q }}" placeholder="Session" aria-label="Search by session name">
+    <select name="bundle_session_department" aria-label="Filter by department">
+      <option value="">Department</option>
+      {% for department_option, department_label in [('ADMIN', 'Admin'), ('FINANCE', 'Finance'), ('LOGISTICS', 'Logistics'), ('MANAGEMENT', 'Management')] %}
+        <option value="{{ department_option }}" {% if bundle_session_filters.department == department_option %}selected{% endif %}>{{ department_label }}</option>
+      {% endfor %}
+    </select>
+    {% for filter_name, filter_label, selected_values in [
+      ('bundle_session_schedule', 'Schedule', bundle_session_filters.schedule),
+      ('bundle_session_staffing', 'Staffing', bundle_session_filters.staffing),
+      ('bundle_session_package', 'Package', bundle_session_filters.package)
+    ] %}
+      <details class="exam-filter-dropdown">
+        <summary>{{ filter_label }}{% if selected_values %} ({{ selected_values|length }}){% endif %}</summary>
+        <div class="exam-filter-dropdown-panel">
+          {% for gate_value, gate_label in [('blocked', 'Blocked'), ('semi_unblocked', 'Semi-unblocked'), ('unblocked', 'Unblocked')] %}
+            <label>
+              <input type="checkbox" name="{{ filter_name }}" value="{{ gate_value }}" {% if gate_value in selected_values %}checked{% endif %}>
+              <span>{{ gate_label }}</span>
+            </label>
+          {% endfor %}
+        </div>
+      </details>
+    {% endfor %}
+    <label class="monthly-marker-filter">
+      <input type="checkbox" name="bundle_session_overdue" value="1" {% if bundle_session_filters.overdue %}checked{% endif %}>
+      <span>Overdue</span>
+    </label>
+  </form>
+  <div class="pre-session-bundle-detail-filter-actions">
+    <a class="text-link" href="{{ url_for('staff.pre_session_control_tower', session_year=selected_session_year, view='bundle', bundle_id=selected_bundle.id if selected_bundle else '') }}">Reset</a>
+    <details class="exam-archived-years-dropdown">
+      <summary class="secondary-button compact-action">Archived years</summary>
+      <div class="exam-archived-years-panel">
+        {% if archived_session_years %}
+          {% for year_item in archived_session_years %}
+            <article class="archived-year-item">
+              <span>{{ year_item.year }}</span>
+              <form method="post" action="{{ url_for('staff.unarchive_exam_session_year', year=year_item.year) }}" data-confirm-submit="Restore {{ year_item.year }} to active years?">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                <input type="hidden" name="return_to_endpoint" value="staff.pre_session_control_tower">
+                <button class="secondary-button compact-action" type="submit">Unarchive</button>
+              </form>
+              <form method="post" action="{{ url_for('staff.delete_exam_session_year', year=year_item.year) }}" data-confirm-submit="Permanently delete {{ year_item.year }} and all its exam session records? This cannot be undone.">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                <input type="hidden" name="return_to_endpoint" value="staff.pre_session_control_tower">
+                <button class="danger-button compact-action" type="submit">Delete permanently</button>
+              </form>
+            </article>
+          {% endfor %}
+        {% else %}
+          <p class="archived-year-copy">No archived years.</p>
+        {% endif %}
+      </div>
+    </details>
+  </div>
+</section>
+{% else %}
+  <section class="toolbar {% if archived_session_years %}toolbar-with-archive{% endif %}">
+    <div>
+      <p class="archived-year-title">Session years</p>
+      <p class="archived-year-copy">Use the active year selector to manage schedule workflows by year.</p>
+    </div>
+    {% if archived_session_years %}
+      <section class="archived-year-panel" aria-label="Archived Pre onsite session control tower years">
+        <div>
+          <p class="archived-year-title">Archived years</p>
+          <p class="archived-year-copy">Archived years are hidden from the active selector, but their records are preserved.</p>
+        </div>
+        <div class="archived-year-list">
+          {% for year_item in archived_session_years %}
+            <article class="archived-year-item">
+              <span>{{ year_item.year }}</span>
+              <form method="post" action="{{ url_for('staff.unarchive_exam_session_year', year=year_item.year) }}" data-confirm-submit="Restore {{ year_item.year }} to active years?">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                <input type="hidden" name="return_to_endpoint" value="staff.pre_session_control_tower">
+                <button class="secondary-button compact-action" type="submit">Unarchive</button>
+              </form>
+              <form method="post" action="{{ url_for('staff.delete_exam_session_year', year=year_item.year) }}" data-confirm-submit="Permanently delete {{ year_item.year }} and all its exam session records? This cannot be undone.">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                <input type="hidden" name="return_to_endpoint" value="staff.pre_session_control_tower">
+                <button class="danger-button compact-action" type="submit">Delete permanently</button>
+              </form>
+            </article>
+          {% endfor %}
+        </div>
+      </section>
+    {% endif %}
+  </section>
+{% endif %}
 
 {% if session_years %}
 <section class="year-toolbar" aria-label="Pre onsite session control tower years">
@@ -4510,14 +4714,16 @@ This stage has already been marked as complete. Reopening it may affect package 
                       {% set schedule_whatsapp_disabled = not schedule_whatsapp.enabled or not view.monthly_registrations_closed %}
                       {% set schedule_email_missing_journey = not schedule_whatsapp.journey_link or not institution_journey_share.enabled %}
                       {% set schedule_email_disabled = not contact_point_email or not schedule_whatsapp.session_name or not schedule_whatsapp.session_date or not schedule_whatsapp.contact_name or schedule_email_missing_journey or not view.monthly_registrations_closed %}
-                      <button class="schedule-share-button compact-action{% if schedule_whatsapp_disabled %} is-disabled{% endif %}" type="button" data-session-journey-whatsapp data-view-only-allowed="true" data-session-name="{{ schedule_whatsapp.session_name }}" data-session-date="{{ schedule_whatsapp.session_date }}" data-contact-name="{{ schedule_whatsapp.contact_name }}" data-contact-phone="{{ schedule_whatsapp.phone }}" data-journey-link="{{ schedule_whatsapp.journey_link }}"{% if schedule_whatsapp_disabled %} disabled aria-disabled="true" title="{% if schedule_whatsapp.error %}{{ schedule_whatsapp.error }}{% else %}Monthly registrations must be closed before sharing this message.{% endif %}"{% endif %}>Share journey with {{ contact_point_name }} via WhatsApp</button>
-                      <button class="schedule-share-button compact-action{% if schedule_email_disabled %} is-disabled{% endif %}" type="button" data-session-journey-email data-view-only-allowed="true" data-session-name="{{ schedule_whatsapp.session_name }}" data-session-date="{{ schedule_whatsapp.session_date }}" data-contact-name="{{ schedule_whatsapp.contact_name }}" data-contact-email="{{ contact_point_email }}" data-journey-link="{{ schedule_whatsapp.journey_link }}"{% if schedule_email_disabled %} disabled aria-disabled="true" title="{% if not contact_point_email %}Point of contact email is required.{% elif schedule_email_missing_journey %}Institution Journey link is required.{% elif not schedule_whatsapp.contact_name %}Point of contact is required.{% else %}Monthly registrations must be closed before sharing this message.{% endif %}"{% endif %}>Share Journey with {{ contact_point_name }} via email</button>
-                      <button class="copy-icon-button schedule-email-copy-button{% if schedule_email_disabled %} is-disabled{% endif %}" type="button" data-copy-session-journey-email data-view-only-allowed="true" data-session-name="{{ schedule_whatsapp.session_name }}" data-session-date="{{ schedule_whatsapp.session_date }}" data-contact-name="{{ schedule_whatsapp.contact_name }}" data-contact-email="{{ contact_point_email }}" data-journey-link="{{ schedule_whatsapp.journey_link }}" aria-label="Copy Session Journey email for {{ contact_point_name }}" title="{% if schedule_email_disabled %}{% if not contact_point_email %}Point of contact email is required.{% elif schedule_email_missing_journey %}Institution Journey link is required.{% elif not schedule_whatsapp.contact_name %}Point of contact is required.{% else %}Monthly registrations must be closed before sharing this message.{% endif %}{% else %}Copy Session Journey email{% endif %}"{% if schedule_email_disabled %} disabled aria-disabled="true"{% endif %}>
-                        <svg class="copy-icon" viewBox="0 0 24 24" aria-hidden="true">
-                          <rect x="9" y="9" width="10" height="10" rx="2"></rect>
-                          <path d="M5 15V7a2 2 0 0 1 2-2h8"></path>
-                        </svg>
-                      </button>
+                      <div class="schedule-contact-share-row">
+                        <button class="schedule-share-button compact-action{% if schedule_whatsapp_disabled %} is-disabled{% endif %}" type="button" data-session-journey-whatsapp data-view-only-allowed="true" data-session-name="{{ schedule_whatsapp.session_name }}" data-session-date="{{ schedule_whatsapp.session_date }}" data-contact-name="{{ schedule_whatsapp.contact_name }}" data-contact-phone="{{ schedule_whatsapp.phone }}" data-journey-link="{{ schedule_whatsapp.journey_link }}"{% if schedule_whatsapp_disabled %} disabled aria-disabled="true" title="{% if schedule_whatsapp.error %}{{ schedule_whatsapp.error }}{% else %}Monthly registrations must be closed before sharing this message.{% endif %}"{% endif %}>Share journey with {{ contact_point_name }} via WhatsApp</button>
+                        <button class="schedule-share-button compact-action{% if schedule_email_disabled %} is-disabled{% endif %}" type="button" data-session-journey-email data-view-only-allowed="true" data-session-name="{{ schedule_whatsapp.session_name }}" data-session-date="{{ schedule_whatsapp.session_date }}" data-contact-name="{{ schedule_whatsapp.contact_name }}" data-contact-email="{{ contact_point_email }}" data-journey-link="{{ schedule_whatsapp.journey_link }}"{% if schedule_email_disabled %} disabled aria-disabled="true" title="{% if not contact_point_email %}Point of contact email is required.{% elif schedule_email_missing_journey %}Institution Journey link is required.{% elif not schedule_whatsapp.contact_name %}Point of contact is required.{% else %}Monthly registrations must be closed before sharing this message.{% endif %}"{% endif %}>Share Journey with {{ contact_point_name }} via email</button>
+                        <button class="copy-icon-button schedule-email-copy-button{% if schedule_email_disabled %} is-disabled{% endif %}" type="button" data-copy-session-journey-email data-view-only-allowed="true" data-session-name="{{ schedule_whatsapp.session_name }}" data-session-date="{{ schedule_whatsapp.session_date }}" data-contact-name="{{ schedule_whatsapp.contact_name }}" data-contact-email="{{ contact_point_email }}" data-journey-link="{{ schedule_whatsapp.journey_link }}" aria-label="Copy Session Journey email for {{ contact_point_name }}" title="{% if schedule_email_disabled %}{% if not contact_point_email %}Point of contact email is required.{% elif schedule_email_missing_journey %}Institution Journey link is required.{% elif not schedule_whatsapp.contact_name %}Point of contact is required.{% else %}Monthly registrations must be closed before sharing this message.{% endif %}{% else %}Copy Session Journey email{% endif %}"{% if schedule_email_disabled %} disabled aria-disabled="true"{% endif %}>
+                          <svg class="copy-icon" viewBox="0 0 24 24" aria-hidden="true">
+                            <rect x="9" y="9" width="10" height="10" rx="2"></rect>
+                            <path d="M5 15V7a2 2 0 0 1 2-2h8"></path>
+                          </svg>
+                        </button>
+                      </div>
                     {% endfor %}
                     <span class="bulk-status" data-session-journey-email-status></span>
                   {% else %}

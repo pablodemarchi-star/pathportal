@@ -3,6 +3,9 @@ import json
 import unittest
 from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
+from io import BytesIO
+from urllib.parse import unquote, urlparse
+from unittest.mock import patch
 
 os.environ["DATABASE_URL"] = "sqlite:///:memory:"
 
@@ -541,7 +544,7 @@ class FinanceRequestsTest(unittest.TestCase):
         self.assertIn("tab=link_folders", response.headers["Location"])
         self.assertEqual(FinanceLinkFolder.query.count(), 0)
 
-    def test_new_payment_request_form_shows_access_folder_link(self):
+    def test_new_payment_request_form_shows_upload_dropzone_instead_of_access_folder_link(self):
         superadmin = self.create_user("admin@example.com", is_superadmin=True)
         db.session.add(FinanceLinkFolder(
             link_type="New payment request",
@@ -556,11 +559,9 @@ class FinanceRequestsTest(unittest.TestCase):
         self.assertIn("data-finance-card-receipt-row", body)
         self.assertIn('name="payment_proof_url"', body)
         self.assertIn("Receipt", body)
-        self.assertIn(
-            '<a class="finance-access-folder-link" href="https://example.com/new-payment-folder" target="_blank" rel="noopener noreferrer">Access folder</a>',
-            body,
-        )
-        self.assertGreaterEqual(body.count('href="https://example.com/new-payment-folder"'), 2)
+        self.assertIn('name="supporting_documentation_file"', body)
+        self.assertIn("Select file or drop it here", body)
+        self.assertNotIn('href="https://example.com/new-payment-folder"', body)
 
     def test_payment_request_currency_field_is_dropdown_with_ars_default(self):
         user = self.create_user("requester@example.com")
@@ -896,10 +897,9 @@ class FinanceRequestsTest(unittest.TestCase):
         self.assertIn('<span class="finance-status-chip status-management-approved">Scheduled</span>', body)
         self.assertIn("Payment proof", body)
         self.assertIn("data-payment-proof-input", body)
-        self.assertIn(
-            '<a class="finance-access-folder-link" href="https://example.com/payment-proof-folder" target="_blank" rel="noopener noreferrer">Access folder</a>',
-            body,
-        )
+        self.assertIn('name="payment_proof_file" multiple', body)
+        self.assertIn("Select file or drop it here", body)
+        self.assertNotIn('href="https://example.com/payment-proof-folder"', body)
         self.assertIn("data-requires-payment-proof", body)
         self.assertIn("data-requires-empty-payment-proof", body)
         self.assertIn("Cancel payment", body)
@@ -1067,14 +1067,15 @@ class FinanceRequestsTest(unittest.TestCase):
         payment.description = "Pending payment to approve"
         db.session.commit()
 
-        response = self.client_for(superadmin).post(
-            f"/finance-requests/payment-requests/{payment.id}/management",
-            data={
-                "action": "approve",
-                "scheduled_payment_date": tomorrow.isoformat(),
-            },
-            follow_redirects=True,
-        )
+        with patch("app.routes.send_finance_scheduled_payment_email", return_value=True):
+            response = self.client_for(superadmin).post(
+                f"/finance-requests/payment-requests/{payment.id}/management",
+                data={
+                    "action": "approve",
+                    "scheduled_payment_date": tomorrow.isoformat(),
+                },
+                follow_redirects=True,
+            )
 
         self.assertEqual(response.status_code, 200)
         db.session.refresh(payment)
@@ -1085,6 +1086,30 @@ class FinanceRequestsTest(unittest.TestCase):
         self.assertIn("Tomorrow (1)", finance_body)
         self.assertNotIn("Pending approval (", finance_body)
         self.assertIn('<span class="finance-status-chip status-management-approved">Scheduled</span>', finance_body)
+
+    def test_management_approval_sends_scheduled_payment_email_to_finance(self):
+        finance_user = self.create_user("finance@example.com", department="Finance")
+        superadmin = self.create_user("superadmin@example.com", is_superadmin=True)
+        scheduled_date = date(2026, 10, 5)
+        payment = self.payment(finance_user, status="Pending approval", scheduled_payment_date=scheduled_date)
+        db.session.commit()
+
+        with patch("app.routes.send_plain_email", return_value=True) as send_email:
+            response = self.client_for(superadmin).post(
+                f"/finance-requests/payment-requests/{payment.id}/management",
+                data={
+                    "action": "approve",
+                    "scheduled_payment_date": scheduled_date.isoformat(),
+                },
+                follow_redirects=True,
+            )
+
+        self.assertEqual(response.status_code, 200)
+        send_email.assert_called_once_with(
+            "finance@pathexaminations.com",
+            "New payment scheduled for 05/10/2026",
+            "Please review the payment details available in the internal portal to ensure that all information is accurate before processing the payment.",
+        )
 
     def test_management_rejection_moves_pending_approval_payment_to_finance_archived_payments(self):
         finance_user = self.create_user("finance@example.com", department="Finance")
@@ -1629,6 +1654,40 @@ class FinanceRequestsTest(unittest.TestCase):
 
         archived_payment_requests_body = self.client_for(superadmin).get("/finance-requests?tab=payment_requests&show_archived=1").get_data(as_text=True)
         self.assertNotIn(payment.request_number, archived_payment_requests_body)
+
+    def test_finance_actions_complete_payment_can_upload_payment_proofs(self):
+        user = self.create_user("finance@example.com", department="Finance")
+        payment = self.payment(user, status="Management approved", scheduled_payment_date=date.today())
+
+        response = self.client_for(user).post(
+            f"/finance-requests/payment-requests/{payment.id}/finance",
+            data={
+                "status": "Payment completed",
+                "scheduled_payment_date": date.today().isoformat(),
+                "payment_proof_file": [
+                    (BytesIO(b"proof one"), "proof-one.pdf"),
+                    (BytesIO(b"proof two"), "proof-two.pdf"),
+                ],
+            },
+            content_type="multipart/form-data",
+            follow_redirects=True,
+        )
+
+        self.assertEqual(response.status_code, 200)
+        db.session.refresh(payment)
+        self.assertEqual(payment.status, "Payment completed")
+        proof_links = payment.payment_proof_url.splitlines()
+        self.assertEqual(len(proof_links), 2)
+        for proof_link in proof_links:
+            self.assertIn("/finance-requests/uploads/payment_proofs/", proof_link)
+            uploaded_path = unquote(urlparse(proof_link).path)
+            uploaded_relative_path = uploaded_path.split("/finance-requests/uploads/", 1)[1]
+            uploaded_file_path = os.path.join(self.app.instance_path, "finance_uploads", *uploaded_relative_path.split("/"))
+            self.assertTrue(os.path.exists(uploaded_file_path))
+            file_response = self.client_for(user).get(uploaded_path)
+            self.assertEqual(file_response.status_code, 200)
+            file_response.close()
+            os.remove(uploaded_file_path)
 
     def test_superadmin_can_edit_archived_finance_action_payment_receipt_from_full_info(self):
         requester = self.create_user("requester@example.com")
@@ -2245,6 +2304,48 @@ class FinanceRequestsTest(unittest.TestCase):
         self.assertTrue(payment.request_number.startswith("PAY-"))
         self.assertEqual(payment.concept_name_snapshot, "Accounting")
 
+    def test_new_payment_request_can_upload_supporting_documentation(self):
+        user = self.create_user("requester@example.com")
+        client = self.client_for(user)
+        page = client.get("/finance-requests").get_data(as_text=True)
+        self.assertIn('enctype="multipart/form-data"', page)
+        self.assertIn('name="supporting_documentation_file"', page)
+        self.assertIn('name="supporting_documentation_file" multiple', page)
+        self.assertIn("Select file or drop it here", page)
+
+        response = client.post(
+            "/finance-requests/payment-requests",
+            data={
+                "description": "New local payment",
+                "concept_id": str(self.concept.id),
+                "currency": "ARS",
+                "amount": "2500",
+                "payment_method": "Cash",
+                "visibility_mode": "Standard",
+                "supporting_documentation_file": [
+                    (BytesIO(b"receipt bytes"), "receipt.pdf"),
+                    (BytesIO(b"invoice bytes"), "invoice.pdf"),
+                ],
+            },
+            content_type="multipart/form-data",
+            follow_redirects=True,
+        )
+
+        self.assertEqual(response.status_code, 200)
+        payment = PaymentRequest.query.one()
+        document_links = payment.supporting_documentation_url.splitlines()
+        self.assertEqual(len(document_links), 2)
+        for document_link in document_links:
+            self.assertIn("/finance-requests/uploads/payment_requests/", document_link)
+            uploaded_path = unquote(urlparse(document_link).path)
+            uploaded_relative_path = uploaded_path.split("/finance-requests/uploads/", 1)[1]
+            uploaded_file_path = os.path.join(self.app.instance_path, "finance_uploads", *uploaded_relative_path.split("/"))
+            self.assertTrue(os.path.exists(uploaded_file_path))
+            file_response = client.get(uploaded_path)
+            self.assertEqual(file_response.status_code, 200)
+            file_response.close()
+            os.remove(uploaded_file_path)
+
     def test_payment_request_rejects_invalid_currency(self):
         user = self.create_user("requester@example.com")
         response = self.client_for(user).post(
@@ -2781,8 +2882,8 @@ class FinanceRequestsTest(unittest.TestCase):
         self.assertIn("data-finance-full-address-field hidden", page)
         self.assertIn("data-finance-vat-status", page)
         self.assertLess(page.index("Tax ID / CUIL / CUIT"), page.index("VAT status / Invoice type"))
-        self.assertLess(page.index("VAT status / Invoice type"), page.index("Supporting documentation link"))
-        self.assertLess(page.index("Full address"), page.index("Supporting documentation link"))
+        self.assertLess(page.index("VAT status / Invoice type"), page.index("Supporting documentation"))
+        self.assertLess(page.index("Full address"), page.index("Supporting documentation"))
         self.assertNotIn("Requested invoice issue date", page)
         self.assertNotIn("<label>Description <textarea name=\"description\"", page)
         self.assertIn(billing.request_number, page)

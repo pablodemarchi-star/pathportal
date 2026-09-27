@@ -2,16 +2,18 @@ import json
 import os
 import re
 import secrets
+import smtplib
 import textwrap
 from decimal import Decimal, InvalidOperation, ROUND_FLOOR
 from datetime import date, datetime, timezone, timedelta
 import calendar
 import uuid
 from collections import defaultdict
+from email.message import EmailMessage
 from io import BytesIO
 from urllib.parse import parse_qs, parse_qsl, quote, urlencode, urlparse, urlunparse
 
-from flask import Blueprint, Response, abort, current_app, flash, g, has_request_context, jsonify, redirect, render_template, request, session, url_for
+from flask import Blueprint, Response, abort, current_app, flash, g, has_request_context, jsonify, redirect, render_template, request, send_from_directory, session, url_for
 from openpyxl import load_workbook
 from openpyxl import Workbook
 from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
@@ -19,6 +21,7 @@ from openpyxl.utils import get_column_letter
 from sqlalchemy import or_, union_all
 from sqlalchemy.orm import joinedload
 from werkzeug.datastructures import MultiDict
+from werkzeug.utils import secure_filename
 
 from app import db, login_required, validate_csrf
 from app.models import (
@@ -174,7 +177,7 @@ POTENTIAL_REACTIVATION_STATUS_OPTIONS = [
     "Onboarding finalised",
     "Entry rejected",
 ]
-POTENTIAL_DEPARTMENT_OPTIONS = ["ADMIN", "MANAGEMENT"]
+POTENTIAL_DEPARTMENT_OPTIONS = ["ADMIN", "FINANCE", "LOGISTICS", "MANAGEMENT"]
 INTERVIEWER_OPTIONS = [
     "Prof. Lic. Agustina Savini",
     "Prof. Brenda Sartori",
@@ -5256,6 +5259,15 @@ def build_exam_session_same_date_duplicate_tags(visible_session_ids):
                 for role_key in session_payload["roles"]:
                     tags[session_id][role_key].append(tag)
     return tags
+
+
+def exam_session_ids_with_same_date_member_duplication():
+    grouped, _member_names = same_date_assignment_groups()
+    duplicate_session_ids = set()
+    for _key, sessions_for_member in grouped.items():
+        if len(sessions_for_member) >= 2:
+            duplicate_session_ids.update(sessions_for_member.keys())
+    return duplicate_session_ids
 
 
 def build_exam_session_dietary_requirement_alerts(
@@ -16242,6 +16254,53 @@ def pre_session_control_tower():
     selected_view = request.args.get("view", "bundles").strip()
     if selected_view not in {"bundles", "sessions", "bundle"}:
         selected_view = "bundles"
+    bundle_search_filter = request.args.get("bundle_q", "").strip()
+    bundle_department_filter = request.args.get("bundle_department", "").strip().upper()
+    bundle_shipment_filter_options = {"blocked", "semi_unblocked", "unblocked"}
+    selected_bundle_shipment_filters = [
+        value
+        for value in request.args.getlist("bundle_shipment")
+        if value in bundle_shipment_filter_options
+    ]
+    bundle_overdue_filter = request.args.get("bundle_overdue") == "1"
+    bundle_risk_filter = request.args.get("bundle_risk") == "1"
+    if bundle_department_filter not in {"ADMIN", "FINANCE", "LOGISTICS", "MANAGEMENT"}:
+        bundle_department_filter = ""
+    session_search_filter = request.args.get("session_q", "").strip()
+    session_department_filter = request.args.get("session_department", "").strip().upper()
+    gate_filter_options = {"blocked", "semi_unblocked", "unblocked"}
+    selected_session_logistics_filters = [
+        value for value in request.args.getlist("session_logistics") if value in gate_filter_options
+    ]
+    selected_session_finance_filters = [
+        value for value in request.args.getlist("session_finance") if value in gate_filter_options
+    ]
+    selected_session_final_checks_filters = [
+        value for value in request.args.getlist("session_final_checks") if value in gate_filter_options
+    ]
+    session_readiness_filter = request.args.get("session_readiness", "").strip()
+    session_incidents_filter = request.args.get("session_incidents", "").strip()
+    session_overdue_filter = request.args.get("session_overdue") == "1"
+    if session_department_filter not in {"ADMIN", "FINANCE", "LOGISTICS", "MANAGEMENT"}:
+        session_department_filter = ""
+    if session_readiness_filter not in {"ready", "not_ready"}:
+        session_readiness_filter = ""
+    if session_incidents_filter not in {"with", "without"}:
+        session_incidents_filter = ""
+    bundle_session_search_filter = request.args.get("bundle_session_q", "").strip()
+    bundle_session_department_filter = request.args.get("bundle_session_department", "").strip().upper()
+    selected_bundle_session_schedule_filters = [
+        value for value in request.args.getlist("bundle_session_schedule") if value in gate_filter_options
+    ]
+    selected_bundle_session_staffing_filters = [
+        value for value in request.args.getlist("bundle_session_staffing") if value in gate_filter_options
+    ]
+    selected_bundle_session_package_filters = [
+        value for value in request.args.getlist("bundle_session_package") if value in gate_filter_options
+    ]
+    bundle_session_overdue_filter = request.args.get("bundle_session_overdue") == "1"
+    if bundle_session_department_filter not in {"ADMIN", "FINANCE", "LOGISTICS", "MANAGEMENT"}:
+        bundle_session_department_filter = ""
     try:
         selected_bundle_id = int(request.args.get("bundle_id", ""))
     except (TypeError, ValueError):
@@ -16745,6 +16804,77 @@ def pre_session_control_tower():
             )
         ]
     }
+    def bundle_view_matches_search(bundle_view, search_text):
+        if not search_text:
+            return True
+        needle = search_text.lower()
+        haystack = [
+            str(bundle_view.get("number") or ""),
+            bundle_view.get("supervisor_name") or "",
+            *(session_record.exam_session_name or "" for session_record in bundle_view.get("included_sessions") or []),
+        ]
+        return any(needle in value.lower() for value in haystack)
+
+    def bundle_view_departments(bundle_view):
+        return {
+            (action.get("department") or "").upper()
+            for action in bundle_view.get("action_items", [])
+            if action.get("department")
+        }
+
+    def bundle_view_shipment_state(bundle_view):
+        if bundle_view.get("blocked"):
+            return "blocked"
+        if bundle_view.get("semi_unblocked"):
+            return "semi_unblocked"
+        if bundle_view.get("unblocked"):
+            return "unblocked"
+        return ""
+
+    def bundle_view_is_overdue(bundle_view):
+        return any(action.get("overdue") for action in bundle_view.get("action_items", [])) or deadline_badge_is_red(bundle_view.get("deadline_badge"))
+
+    def bundle_view_is_at_risk(bundle_view):
+        return any(action.get("risk") for action in bundle_view.get("action_items", [])) or bool((bundle_view.get("deadline_badge") or {}).get("risky"))
+
+    def bundle_view_matches_filters(bundle_view):
+        if not bundle_view_matches_search(bundle_view, bundle_search_filter):
+            return False
+        if bundle_department_filter and bundle_department_filter not in bundle_view_departments(bundle_view):
+            return False
+        if selected_bundle_shipment_filters and bundle_view_shipment_state(bundle_view) not in selected_bundle_shipment_filters:
+            return False
+        if bundle_overdue_filter and not bundle_view_is_overdue(bundle_view):
+            return False
+        if bundle_risk_filter and not bundle_view_is_at_risk(bundle_view):
+            return False
+        return True
+
+    def pending_shipment_bundle_matches_filters(pending_bundle):
+        if not pending_bundle or not pending_bundle.get("session_records"):
+            return False
+        if bundle_search_filter:
+            needle = bundle_search_filter.lower()
+            searchable_values = [
+                "pending bundles",
+                "not configured",
+                *(session_record.exam_session_name or "" for session_record in pending_bundle.get("session_records", [])),
+            ]
+            if not any(needle in value.lower() for value in searchable_values):
+                return False
+        if bundle_department_filter and bundle_department_filter != "MANAGEMENT":
+            return False
+        if selected_bundle_shipment_filters:
+            return False
+        if bundle_overdue_filter or bundle_risk_filter:
+            return False
+        return True
+
+    if selected_view == "bundles":
+        bundle_views = [bundle_view for bundle_view in bundle_views if bundle_view_matches_filters(bundle_view)]
+        pending_shipment_bundle_visible = pending_shipment_bundle_matches_filters(pending_shipment_bundle)
+    else:
+        pending_shipment_bundle_visible = bool(pending_shipment_bundle["session_chips"])
 
     today = datetime.now(LOCAL_TZ).date()
     staffing_contracts_by_session = {}
@@ -17098,6 +17228,105 @@ def pre_session_control_tower():
                 for assignment in session_assignments
             ),
         ))
+    def session_view_departments(view):
+        return {
+            (action.get("department") or "").upper()
+            for action in view.get("bundle_detail_actions", [])
+            if action.get("department")
+        }
+
+    def session_finance_gate_state(view):
+        finance = view.get("finance") or {}
+        raw_status = finance.get("raw_status") or finance.get("label")
+        if raw_status == "Cleared":
+            return "unblocked"
+        if raw_status in {"Conditional clearance", "Exception approved"}:
+            return "semi_unblocked"
+        return "blocked"
+
+    def session_view_is_overdue(view):
+        return (
+            any(action.get("overdue") for action in view.get("bundle_detail_actions", []))
+            or deadline_badge_is_red(view.get("logistics_deadline_badge"))
+            or bool((view.get("finance") or {}).get("is_overdue"))
+            or deadline_badge_is_red(view.get("final_checks_deadline_badge"))
+            or bool((view.get("incidents") or {}).get("overdue_count"))
+        )
+
+    def session_view_matches_filters(view):
+        session_record = view.get("session")
+        if session_search_filter and session_search_filter.lower() not in (session_record.exam_session_name or "").lower():
+            return False
+        if session_department_filter and session_department_filter not in session_view_departments(view):
+            return False
+        if selected_session_logistics_filters and (view.get("logistics_gate") or {}).get("status") not in selected_session_logistics_filters:
+            return False
+        if selected_session_finance_filters and session_finance_gate_state(view) not in selected_session_finance_filters:
+            return False
+        if selected_session_final_checks_filters and (view.get("final_checks_gate") or {}).get("status") not in selected_session_final_checks_filters:
+            return False
+        if session_readiness_filter:
+            is_ready = bool((view.get("session_readiness") or {}).get("is_ready"))
+            if is_ready != (session_readiness_filter == "ready"):
+                return False
+        if session_incidents_filter:
+            has_incidents = bool((view.get("incidents") or {}).get("active_count"))
+            if has_incidents != (session_incidents_filter == "with"):
+                return False
+        if session_overdue_filter and not session_view_is_overdue(view):
+            return False
+        return True
+
+    if selected_view == "sessions":
+        schedule_views = [view for view in schedule_views if session_view_matches_filters(view)]
+    def bundle_session_schedule_state(view):
+        if bool((view.get("schedule_gate") or {}).get("is_ready")):
+            return "unblocked"
+        if view.get("monthly_registrations_closed"):
+            return "semi_unblocked"
+        return "blocked"
+
+    def bundle_session_staffing_state(view):
+        staffing = view.get("staffing") or {}
+        if staffing.get("ready") or staffing.get("status") == "confirmed":
+            return "unblocked"
+        if bool((view.get("schedule_gate") or {}).get("is_ready")):
+            return "semi_unblocked"
+        return "blocked"
+
+    def bundle_session_package_state(view):
+        packages = view.get("packages") or {}
+        if packages.get("schedule_ready") and packages.get("staffing_ready"):
+            return "unblocked"
+        if packages.get("schedule_ready"):
+            return "semi_unblocked"
+        return "blocked"
+
+    def bundle_session_view_is_overdue(view):
+        packages = view.get("packages") or {}
+        return (
+            any(action.get("overdue") for action in view.get("bundle_detail_actions", []))
+            or deadline_badge_is_red(view.get("deadline_badge"))
+            or deadline_badge_is_red(view.get("staffing_deadline_badge"))
+            or deadline_badge_is_red(packages.get("deadline_badge"))
+        )
+
+    def bundle_session_view_matches_filters(view):
+        session_record = view.get("session")
+        if bundle_session_search_filter and bundle_session_search_filter.lower() not in (session_record.exam_session_name or "").lower():
+            return False
+        if bundle_session_department_filter and bundle_session_department_filter not in session_view_departments(view):
+            return False
+        if selected_bundle_session_schedule_filters and bundle_session_schedule_state(view) not in selected_bundle_session_schedule_filters:
+            return False
+        if selected_bundle_session_staffing_filters and bundle_session_staffing_state(view) not in selected_bundle_session_staffing_filters:
+            return False
+        if selected_bundle_session_package_filters and bundle_session_package_state(view) not in selected_bundle_session_package_filters:
+            return False
+        if bundle_session_overdue_filter and not bundle_session_view_is_overdue(view):
+            return False
+        return True
+
     summary = {
         "Not started": 0,
         "In progress": 0,
@@ -17123,7 +17352,7 @@ def pre_session_control_tower():
     modal_views = list(schedule_views)
     my_actions = visible_department_chip_action_rows(
         bundle_views,
-        pending_shipment_bundle if pending_shipment_bundle["session_chips"] else None,
+        pending_shipment_bundle if pending_shipment_bundle_visible else None,
         schedule_views,
     )
     my_actions = sort_my_actions(my_actions)
@@ -17153,6 +17382,7 @@ def pre_session_control_tower():
     if selected_view == "bundle" and selected_bundle_view:
         selected_bundle_session_ids = set(selected_bundle_view["included_session_ids"])
         schedule_views = [view for view in schedule_views if view["session"].id in selected_bundle_session_ids]
+        schedule_views = [view for view in schedule_views if bundle_session_view_matches_filters(view)]
     schedule_views.sort(key=lambda view: (
         view["session"].session_date or max_date,
         view["session"].exam_session_name.lower(),
@@ -17167,7 +17397,7 @@ def pre_session_control_tower():
         schedule_views=schedule_views,
         modal_views=modal_views,
         bundle_views=bundle_views,
-        pending_shipment_bundle=pending_shipment_bundle if pending_shipment_bundle["session_chips"] else None,
+        pending_shipment_bundle=pending_shipment_bundle if pending_shipment_bundle_visible else None,
         selected_bundle=selected_bundle_view,
         summary=summary,
         selected_view=selected_view,
@@ -17180,6 +17410,31 @@ def pre_session_control_tower():
         selected_my_action_source=my_action_source_filter,
         selected_my_action_responsible=my_action_responsible_filter,
         selected_my_action_status=my_action_status_filter,
+        bundle_filters={
+            "q": bundle_search_filter,
+            "department": bundle_department_filter,
+            "shipment": selected_bundle_shipment_filters,
+            "overdue": bundle_overdue_filter,
+            "risk": bundle_risk_filter,
+        },
+        session_filters={
+            "q": session_search_filter,
+            "department": session_department_filter,
+            "logistics": selected_session_logistics_filters,
+            "finance": selected_session_finance_filters,
+            "final_checks": selected_session_final_checks_filters,
+            "readiness": session_readiness_filter,
+            "incidents": session_incidents_filter,
+            "overdue": session_overdue_filter,
+        },
+        bundle_session_filters={
+            "q": bundle_session_search_filter,
+            "department": bundle_session_department_filter,
+            "schedule": selected_bundle_session_schedule_filters,
+            "staffing": selected_bundle_session_staffing_filters,
+            "package": selected_bundle_session_package_filters,
+            "overdue": bundle_session_overdue_filter,
+        },
         session_years=session_years,
         archived_session_years=(
             ExamSessionYear.query.filter_by(is_archived=True)
@@ -17324,15 +17579,23 @@ def update_schedule_workflow(session_id):
     due_at = parse_schedule_deadline(request.form.get("next_action_due_at", ""))
     if action_key in {"start_preparation", "reopen"}:
         due_at = schedule_preparation_deadline_for_session_bundle(session_record)
-    if action_key == "mark_ready":
+    if action_key in {"mark_ready", "mark_revised_ready"}:
         schedule_url = request.form.get("exam_session_schedule_url", "").strip()
+        entry_slips_url = request.form.get("exam_entry_slips_url", "").strip()
         if not schedule_url:
             flash("Please add the Exam session schedule link before marking schedules as ready to send.", "error")
             return schedule_workflow_redirect(session_record, status_filter, action_key)
         if not is_valid_url(schedule_url):
             flash("Please enter a valid Exam session schedule link.", "error")
             return schedule_workflow_redirect(session_record, status_filter, action_key)
+        if not entry_slips_url:
+            flash("Please add the Exam entry slips link before marking schedules as ready to send.", "error")
+            return schedule_workflow_redirect(session_record, status_filter, action_key)
+        if not is_valid_url(entry_slips_url):
+            flash("Please enter a valid Exam entry slips link.", "error")
+            return schedule_workflow_redirect(session_record, status_filter, action_key)
         session_record.details_url = schedule_url
+        session_record.exam_entry_slips_url = entry_slips_url
         due_at = argentina_next_business_day(datetime.now(LOCAL_TZ).date())
     if action_key == "send_for_review":
         due_at = argentina_add_business_days(datetime.now(LOCAL_TZ).date(), 2)
@@ -20126,6 +20389,65 @@ def exam_session_planner():
     selected_year, session_years = selected_exam_session_year()
     session_fullscreen = request.args.get("session_fullscreen") == "1"
     fullscreen_session_id = request.args.get("open_session_modal", "").strip()
+    session_name_filter = request.args.get("q", "").strip()
+    date_status_filter = request.args.get("date_status", "").strip()
+    selected_shifts_filter = [shift for shift in request.args.getlist("shifts") if shift in EXAM_SESSION_SHIFT_OPTIONS]
+    module_filter_options = [*EXAM_SESSION_MODULE_OPTIONS, "RSG", "PEN"]
+    selected_modules_filter = [module for module in request.args.getlist("modules") if module in module_filter_options]
+    format_filter = request.args.get("format", "").strip()
+    roles_required_filter = request.args.get("roles_required", "").strip()
+    logistics_filter = request.args.get("logistics", "").strip()
+    member_duplication_filter = request.args.get("member_duplication", "").strip()
+    session_minimum_filter = request.args.get("session_minimum", "").strip()
+    sort_by = request.args.get("sort", "").strip()
+    sort_dir = request.args.get("dir", "asc").strip()
+    selected_role_status_filter = [
+        status
+        for status in request.args.getlist("role_status")
+        if status in {"Pending", "Pre-confirmation sent", "Pre-confirmed", "Confirmed"}
+    ]
+    sortable_columns = {
+        "status",
+        "exam_session_name",
+        "session_date",
+        "format",
+        "supervisors",
+        "examiners",
+        "interns",
+        "logistics",
+        "city",
+        "province",
+        "supervisors_cost",
+        "examiners_cost",
+        "interns_cost",
+        "logistics_cost",
+        "total_cost",
+        "created_on",
+        "updated_on",
+    }
+    cost_sort_columns = {
+        "supervisors_cost": "supervisors",
+        "examiners_cost": "examiners",
+        "interns_cost": "interns",
+        "logistics_cost": "logistics",
+        "total_cost": "total",
+    }
+    if sort_by not in sortable_columns:
+        sort_by = ""
+    if sort_dir not in {"asc", "desc"}:
+        sort_dir = "asc"
+    if date_status_filter not in EXAM_SESSION_DATE_CONFIRMATION_STATUSES:
+        date_status_filter = ""
+    if format_filter not in EXAM_SESSION_FORMAT_OPTIONS:
+        format_filter = ""
+    if roles_required_filter not in {"covered", "not_covered"}:
+        roles_required_filter = ""
+    if logistics_filter not in {"yes", "no"}:
+        logistics_filter = ""
+    if member_duplication_filter not in {"yes", "no"}:
+        member_duplication_filter = ""
+    if session_minimum_filter not in {"reached", "not_reached"}:
+        session_minimum_filter = ""
     examiner_certification_year = latest_active_examiner_certification_year()
     supervisor_certification_year = latest_active_supervisor_certification_year()
     intern_stage_year = latest_active_intern_stage_year()
@@ -20134,9 +20456,191 @@ def exam_session_planner():
             ExamSession.id == int(fullscreen_session_id) if fullscreen_session_id.isdigit() else -1
         )
     else:
+        def comma_list_has_value(column, value):
+            return db.or_(
+                column == value,
+                column.like(f"{value}, %"),
+                column.like(f"%, {value}, %"),
+                column.like(f"%, {value}"),
+            )
+
         query = ExamSession.query.filter(db.extract("year", ExamSession.session_date) == selected_year)
-    query = query.order_by(ExamSession.session_date.asc(), ExamSession.updated_on.desc())
-    sessions, pagination = paginate_query(query)
+        if session_name_filter:
+            query = query.filter(ExamSession.exam_session_name.ilike(f"%{session_name_filter}%"))
+        if date_status_filter:
+            query = query.filter(ExamSession.date_confirmation_status == date_status_filter)
+        if selected_shifts_filter:
+            query = query.filter(db.or_(*(comma_list_has_value(ExamSession.shifts, shift) for shift in selected_shifts_filter)))
+        if selected_modules_filter:
+            module_conditions = []
+            for module in selected_modules_filter:
+                if module == "RSG":
+                    module_conditions.append(ExamSession.rsg_enabled.is_(True))
+                elif module == "PEN":
+                    module_conditions.append(ExamSession.pen_enabled.is_(True))
+                else:
+                    module_conditions.append(comma_list_has_value(ExamSession.modules, module))
+            query = query.filter(db.or_(*module_conditions))
+        if format_filter:
+            query = query.filter(ExamSession.format == format_filter)
+        assignment_models = (ExamSessionSupervisorAssignment, ExamSessionExaminerAssignment, ExamSessionInternAssignment)
+        if roles_required_filter:
+            uncovered_conditions = [
+                model.query.with_entities(model.id)
+                .filter(model.exam_session_id == ExamSession.id)
+                .filter(model.team_member_id.is_(None), model.potential_entry_id.is_(None))
+                .exists()
+                for model in assignment_models
+            ]
+            uncovered_exists = db.or_(*uncovered_conditions)
+            query = query.filter(~uncovered_exists if roles_required_filter == "covered" else uncovered_exists)
+        if selected_role_status_filter:
+            role_status_conditions = [
+                model.query.with_entities(model.id)
+                .filter(model.exam_session_id == ExamSession.id)
+                .filter(model.participation_status.in_(selected_role_status_filter))
+                .exists()
+                for model in assignment_models
+            ]
+            query = query.filter(db.or_(*role_status_conditions))
+        if logistics_filter:
+            logistics_conditions = [
+                model.query.with_entities(model.id)
+                .filter(model.exam_session_id == ExamSession.id)
+                .filter(model.logistics_enabled.is_(True))
+                .exists()
+                for model in assignment_models
+            ]
+            logistics_conditions.append(
+                ExamSessionLogisticsConcept.query.with_entities(ExamSessionLogisticsConcept.id)
+                .filter(ExamSessionLogisticsConcept.exam_session_id == ExamSession.id)
+                .exists()
+            )
+            logistics_exists = db.or_(*logistics_conditions)
+            query = query.filter(logistics_exists if logistics_filter == "yes" else ~logistics_exists)
+        if member_duplication_filter:
+            duplicate_session_ids = exam_session_ids_with_same_date_member_duplication()
+            if member_duplication_filter == "yes":
+                query = query.filter(ExamSession.id.in_(duplicate_session_ids or {-1}))
+            else:
+                query = query.filter(~ExamSession.id.in_(duplicate_session_ids))
+        if session_minimum_filter:
+            year_session_ids_for_minimum = [
+                session_id
+                for (session_id,) in db.session.query(ExamSession.id)
+                .filter(db.extract("year", ExamSession.session_date) == selected_year)
+                .all()
+            ]
+            candidate_contracts_for_filter = monthly_candidate_requirement_contracts(year_session_ids_for_minimum)
+            matching_minimum_ids = {
+                session_id
+                for session_id, contract in candidate_contracts_for_filter.items()
+                if bool(contract.get("ready")) == (session_minimum_filter == "reached")
+            }
+            query = query.filter(ExamSession.id.in_(matching_minimum_ids or {-1}))
+    def count_assignments_subquery(model):
+        return (
+            db.session.query(db.func.count(model.id))
+            .filter(model.exam_session_id == ExamSession.id)
+            .correlate(ExamSession)
+            .scalar_subquery()
+        )
+
+    def logistics_exists_expression():
+        logistics_conditions = [
+            model.query.with_entities(model.id)
+            .filter(model.exam_session_id == ExamSession.id)
+            .filter(model.logistics_enabled.is_(True))
+            .exists()
+            for model in (ExamSessionSupervisorAssignment, ExamSessionExaminerAssignment, ExamSessionInternAssignment)
+        ]
+        logistics_conditions.append(
+            ExamSessionLogisticsConcept.query.with_entities(ExamSessionLogisticsConcept.id)
+            .filter(ExamSessionLogisticsConcept.exam_session_id == ExamSession.id)
+            .exists()
+        )
+        return db.or_(*logistics_conditions)
+
+    def apply_exam_session_sort(query):
+        if not sort_by:
+            return query.order_by(ExamSession.session_date.asc(), ExamSession.updated_on.desc())
+        count_sort_models = {
+            "supervisors": ExamSessionSupervisorAssignment,
+            "examiners": ExamSessionExaminerAssignment,
+            "interns": ExamSessionInternAssignment,
+        }
+        text_sort_columns = {
+            "status": ExamSession.status,
+            "exam_session_name": ExamSession.exam_session_name,
+            "format": ExamSession.format,
+            "city": ExamSession.city,
+            "province": ExamSession.province,
+        }
+        direct_sort_columns = {
+            "session_date": ExamSession.session_date,
+            "created_on": ExamSession.created_on,
+            "updated_on": ExamSession.updated_on,
+        }
+        if sort_by in count_sort_models:
+            sort_column = count_assignments_subquery(count_sort_models[sort_by])
+        elif sort_by == "logistics":
+            sort_column = db.case((logistics_exists_expression(), 1), else_=0)
+        elif sort_by in text_sort_columns:
+            sort_column = db.func.lower(db.func.coalesce(text_sort_columns[sort_by], ""))
+        elif sort_by in direct_sort_columns:
+            sort_column = direct_sort_columns[sort_by]
+        else:
+            return query.order_by(ExamSession.session_date.asc(), ExamSession.updated_on.desc())
+        sort_expression = sort_column.desc() if sort_dir == "desc" else sort_column.asc()
+        return query.order_by(sort_expression, ExamSession.session_date.asc(), ExamSession.exam_session_name.asc())
+
+    def money_sort_value(display_value):
+        return sum(parse_formatted_currency_totals(display_value).values(), Decimal("0"))
+
+    def session_cost_sort_value(session_record, cost_summaries):
+        summary_key = cost_sort_columns.get(sort_by, "")
+        return money_sort_value(cost_summaries.get(session_record.id, {}).get(summary_key, "-"))
+
+    if sort_by in cost_sort_columns:
+        all_sessions = query.order_by(ExamSession.session_date.asc(), ExamSession.updated_on.desc()).all()
+        all_session_ids = [session_record.id for session_record in all_sessions]
+        all_supervisor_assignments = []
+        all_examiner_assignments = []
+        all_intern_assignments = []
+        all_logistics_concepts = []
+        if all_session_ids:
+            all_supervisor_assignments = ExamSessionSupervisorAssignment.query.filter(
+                ExamSessionSupervisorAssignment.exam_session_id.in_(all_session_ids)
+            ).all()
+            all_examiner_assignments = ExamSessionExaminerAssignment.query.filter(
+                ExamSessionExaminerAssignment.exam_session_id.in_(all_session_ids)
+            ).all()
+            all_intern_assignments = ExamSessionInternAssignment.query.filter(
+                ExamSessionInternAssignment.exam_session_id.in_(all_session_ids)
+            ).all()
+            all_logistics_concepts = ExamSessionLogisticsConcept.query.filter(
+                ExamSessionLogisticsConcept.exam_session_id.in_(all_session_ids)
+            ).all()
+        all_cost_summaries = build_exam_session_cost_summaries(
+            all_session_ids,
+            all_supervisor_assignments,
+            all_examiner_assignments,
+            all_intern_assignments,
+            all_logistics_concepts,
+        )
+        all_sessions = sorted(
+            all_sessions,
+            key=lambda session_record: (
+                session_cost_sort_value(session_record, all_cost_summaries),
+                session_record.session_date,
+                (session_record.exam_session_name or "").lower(),
+            ),
+            reverse=sort_dir == "desc",
+        )
+        sessions, pagination = paginate_items(all_sessions)
+    else:
+        query = apply_exam_session_sort(query)
+        sessions, pagination = paginate_query(query)
     sync_exam_session_overall_statuses(sessions)
     supervisor_members = supervisor_member_options()
     examiner_members = examiner_session_member_options()
@@ -20442,6 +20946,16 @@ def exam_session_planner():
         ):
             selected_non_available_ids.update(assignment.non_available_refs())
         session_non_available_member_ids[session_record.id] = selected_non_available_ids
+    def sort_url(column):
+        args = request.args.to_dict(flat=False)
+        current_sort = args.get("sort", [""])[0]
+        current_dir = args.get("dir", ["asc"])[0]
+        next_dir = "desc" if current_sort == column and current_dir == "asc" else "asc"
+        args["sort"] = [column]
+        args["dir"] = [next_dir]
+        args["page"] = ["1"]
+        return url_for("staff.exam_session_planner", **args)
+
     return render_template(
         "exam_sessions/index.html",
         sessions=sessions,
@@ -20509,6 +21023,21 @@ def exam_session_planner():
         ),
         session_fullscreen=session_fullscreen,
         selected_session_year=selected_year,
+        filters={
+            "q": session_name_filter,
+            "date_status": date_status_filter,
+            "shifts": selected_shifts_filter,
+            "modules": selected_modules_filter,
+            "format": format_filter,
+            "roles_required": roles_required_filter,
+            "logistics": logistics_filter,
+            "member_duplication": member_duplication_filter,
+            "session_minimum": session_minimum_filter,
+            "role_status": selected_role_status_filter,
+            "sort": sort_by,
+            "dir": sort_dir,
+        },
+        sort_url=sort_url,
         staff_preconfirmation_certifications=staff_preconfirmation_email_certifications(),
         staff_payment_next_payment_date=staff_payment_settings_values(staff_payment_settings())["next_payment_date"],
         status_options=EXAM_SESSION_STATUS_OPTIONS,
@@ -20525,10 +21054,95 @@ def exam_session_planner():
 @login_required
 def monthly_exam_session_registrations():
     selected_year, session_years = selected_exam_session_year()
-    query = (
-        ExamSession.query.filter(db.extract("year", ExamSession.session_date) == selected_year)
-        .order_by(ExamSession.session_date.asc(), ExamSession.exam_session_name.asc())
-    )
+    query_text = request.args.get("q", "").strip()
+    status_filter = request.args.get("status", "").strip()
+    selected_month_values = request.args.getlist("months")
+    all_months_selected = "all" in selected_month_values
+    selected_months = [
+        int(month)
+        for month in selected_month_values
+        if month.isdigit() and 1 <= int(month) <= 12
+    ]
+    if all_months_selected:
+        selected_months = []
+    variation_options = {"not_active", "no_variation", "increased", "decreased"}
+    selected_variations = [
+        variation
+        for variation in request.args.getlist("candidate_variation")
+        if variation in variation_options
+    ]
+    rsg_filter = request.args.get("rsg") == "1"
+    pen_filter = request.args.get("pen") == "1"
+    if status_filter not in {"pending", "closed"}:
+        status_filter = ""
+    query = ExamSession.query.filter(db.extract("year", ExamSession.session_date) == selected_year)
+    if query_text:
+        query = query.filter(ExamSession.exam_session_name.ilike(f"%{query_text}%"))
+    if status_filter == "pending":
+        query = query.filter(ExamSession.monthly_registrations_closed.is_(False))
+    elif status_filter == "closed":
+        query = query.filter(ExamSession.monthly_registrations_closed.is_(True))
+    if rsg_filter:
+        query = query.filter(ExamSession.rsg_enabled.is_(True))
+    if pen_filter:
+        query = query.filter(ExamSession.pen_enabled.is_(True))
+    query = query.order_by(ExamSession.session_date.asc(), ExamSession.exam_session_name.asc())
+    filtered_session_ids = [session_id for (session_id,) in query.with_entities(ExamSession.id).all()]
+    candidate_totals_for_filter = {}
+    registrations_for_filter = {}
+    if filtered_session_ids and (selected_months or selected_variations):
+        total_rows_for_filter = ExamSessionMonthlyCandidateTotal.query.filter(
+            ExamSessionMonthlyCandidateTotal.exam_session_id.in_(filtered_session_ids)
+        ).all()
+        for record in total_rows_for_filter:
+            candidate_totals_for_filter.setdefault(record.exam_session_id, {})[record.month] = record.total_candidates
+        registration_rows_for_filter = ExamSessionMonthlyRegistration.query.filter(
+            ExamSessionMonthlyRegistration.exam_session_id.in_(filtered_session_ids)
+        ).all()
+        for record in registration_rows_for_filter:
+            registrations_for_filter.setdefault(record.exam_session_id, {}).setdefault(record.month, {})[
+                record.module
+            ] = record.registration_number
+        candidate_trends_for_filter = monthly_candidate_total_trends(candidate_totals_for_filter)
+        month_scope = selected_months or [month_number for month_number, _month_name in MONTHLY_REGISTRATION_MONTHS]
+
+        def month_has_activity(session_id, month_number):
+            return (
+                month_number in candidate_totals_for_filter.get(session_id, {})
+                or bool(registrations_for_filter.get(session_id, {}).get(month_number))
+            )
+
+        def month_matches_variation(session_record, month_number):
+            session_id = session_record.id
+            active = month_has_activity(session_id, month_number)
+            trend = candidate_trends_for_filter.get(session_id, {}).get(month_number, {}).get("trend")
+            if not selected_variations:
+                return active
+            if "not_active" in selected_variations and session_record.monthly_registrations_closed and not active:
+                return True
+            if "no_variation" in selected_variations and trend == "neutral":
+                return True
+            if "increased" in selected_variations and trend == "increase":
+                return True
+            if "decreased" in selected_variations and trend == "decrease":
+                return True
+            return False
+
+        def session_matches_monthly_filters(session_record):
+            month_results = [
+                month_matches_variation(session_record, month_number)
+                for month_number in month_scope
+            ]
+            if (selected_months or all_months_selected) and selected_variations:
+                return all(month_results)
+            return any(month_results)
+
+        matching_ids = {
+            session_record.id
+            for session_record in query.all()
+            if session_matches_monthly_filters(session_record)
+        }
+        query = query.filter(ExamSession.id.in_(matching_ids or {-1}))
     filtered_session_ids = [session_id for (session_id,) in query.with_entities(ExamSession.id).all()]
     monthly_totals = monthly_candidate_total_sums(filtered_session_ids)
     sessions, pagination = paginate_query(query)
@@ -20584,6 +21198,15 @@ def monthly_exam_session_registrations():
             .all()
         ),
         selected_session_year=selected_year,
+        filters={
+            "q": query_text,
+            "status": status_filter,
+            "months": selected_months,
+            "all_months": all_months_selected,
+            "candidate_variation": selected_variations,
+            "rsg": rsg_filter,
+            "pen": pen_filter,
+        },
         csrf_token=session.get("csrf_token"),
     )
 
@@ -21860,6 +22483,7 @@ def duplicate_exam_session_year():
             format=source_session.format,
             location_url=source_session.location_url,
             details_url=source_session.details_url,
+            exam_entry_slips_url=source_session.exam_entry_slips_url,
             contact_points=source_session.contact_points,
         )
         db.session.add(new_session)
@@ -22787,6 +23411,8 @@ VAT_STATUS_REQUIRES_FULL_ADDRESS = {
 FINANCE_VISIBILITY_MODES = ("Standard", "Restricted", "Superadmin only")
 FINANCE_LINK_TYPES = ("New payment request", "New invoice request", "Payment proof", "Invoice proof")
 FINANCE_NON_BUSINESS_PAYMENT_DATE_MESSAGE = "Payments cannot be processed on Saturdays, Sundays or public holidays."
+FINANCE_SCHEDULED_PAYMENT_EMAIL_RECIPIENT = "finance@pathexaminations.com"
+FINANCE_SCHEDULED_PAYMENT_EMAIL_BODY = "Please review the payment details available in the internal portal to ensure that all information is accurate before processing the payment."
 PAYMENT_DESCRIPTION_MAX_LENGTH = 90
 FINANCE_CONCEPT_SEEDS = (
     "Accounting",
@@ -22880,9 +23506,80 @@ def parse_finance_amount(value):
 
 def clean_optional_url(value, field_label):
     value = (value or "").strip()
-    if value and not is_valid_url(value):
-        raise ValueError(f"{field_label} must be a valid URL.")
+    if value:
+        urls = [line.strip() for line in value.splitlines() if line.strip()]
+        if any(not is_valid_url(url) for url in urls):
+            raise ValueError(f"{field_label} must be a valid URL.")
+        value = "\n".join(urls)
     return value
+
+
+def finance_upload_root():
+    path = os.path.join(current_app.instance_path, "finance_uploads")
+    os.makedirs(path, exist_ok=True)
+    return path
+
+
+def save_finance_supporting_document(upload, payment, category="payment_requests"):
+    if not upload or not upload.filename:
+        return ""
+    filename = secure_filename(upload.filename)
+    if not filename:
+        filename = f"supporting-document-{secrets.token_hex(4)}"
+    request_folder = secure_filename(payment.request_number or f"payment-{payment.id}") or f"payment-{payment.id}"
+    stored_filename = f"{datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S')}-{secrets.token_hex(4)}-{filename}"
+    relative_path = "/".join([category, request_folder, stored_filename])
+    target_dir = os.path.join(finance_upload_root(), category, request_folder)
+    os.makedirs(target_dir, exist_ok=True)
+    upload.save(os.path.join(target_dir, stored_filename))
+    return url_for("staff.finance_uploaded_file", filename=relative_path, _external=True)
+
+
+@staff_bp.route("/finance-requests/uploads/<path:filename>")
+@login_required
+def finance_uploaded_file(filename):
+    require_menu_view(FINANCE_REQUESTS_MENU_KEY)
+    return send_from_directory(finance_upload_root(), filename)
+
+
+def send_plain_email(recipient, subject, body):
+    smtp_host = current_app.config.get("SMTP_HOST") or os.getenv("SMTP_HOST", "")
+    if not smtp_host:
+        current_app.logger.warning("SMTP_HOST is not configured; email to %s was not sent.", recipient)
+        return False
+    smtp_port = int(current_app.config.get("SMTP_PORT") or os.getenv("SMTP_PORT", "587"))
+    smtp_username = current_app.config.get("SMTP_USERNAME") or os.getenv("SMTP_USERNAME", "")
+    smtp_password = current_app.config.get("SMTP_PASSWORD") or os.getenv("SMTP_PASSWORD", "")
+    smtp_use_tls = str(current_app.config.get("SMTP_USE_TLS", os.getenv("SMTP_USE_TLS", "1"))).lower() not in {"0", "false", "no"}
+    sender = current_app.config.get("SMTP_FROM_EMAIL") or os.getenv("SMTP_FROM_EMAIL") or smtp_username or "no-reply@pathexaminations.com"
+    message = EmailMessage()
+    message["From"] = sender
+    message["To"] = recipient
+    message["Subject"] = subject
+    message.set_content(body)
+    try:
+        with smtplib.SMTP(smtp_host, smtp_port, timeout=10) as smtp:
+            if smtp_use_tls:
+                smtp.starttls()
+            if smtp_username or smtp_password:
+                smtp.login(smtp_username, smtp_password)
+            smtp.send_message(message)
+    except Exception:
+        current_app.logger.exception("Email to %s could not be sent.", recipient)
+        return False
+    return True
+
+
+def send_finance_scheduled_payment_email(payment):
+    if not payment.scheduled_payment_date:
+        current_app.logger.warning("Payment %s has no scheduled date; finance email was not sent.", payment.request_number)
+        return False
+    scheduled_date = payment.scheduled_payment_date.strftime("%d/%m/%Y")
+    return send_plain_email(
+        FINANCE_SCHEDULED_PAYMENT_EMAIL_RECIPIENT,
+        f"New payment scheduled for {scheduled_date}",
+        FINANCE_SCHEDULED_PAYMENT_EMAIL_BODY,
+    )
 
 
 def finance_contact_name(contact, fallback=""):
@@ -24124,6 +24821,25 @@ def create_payment_request():
         payment.payment_completed_at = datetime.now(timezone.utc)
     db.session.add(payment)
     db.session.flush()
+    uploaded_documents = [
+        upload for upload in request.files.getlist("supporting_documentation_file")
+        if upload and upload.filename
+    ]
+    if uploaded_documents:
+        try:
+            payment.supporting_documentation_url = "\n".join(
+                save_finance_supporting_document(upload, payment)
+                for upload in uploaded_documents
+            )
+        except OSError:
+            db.session.rollback()
+            flash("Supporting documentation file could not be saved. Please try again.", "error")
+            if return_url:
+                return redirect(return_url)
+            redirect_params = {"open_staff_modal": "new-payment-request-modal"}
+            if source_tab == "finance_payments":
+                redirect_params["finance_filter"] = "pending_approval"
+            return finance_request_redirect(source_tab, **redirect_params)
     if payment.status == "Payment completed":
         add_payment_event(payment, "Payment completed", new_status=payment.status)
     else:
@@ -24226,6 +24942,7 @@ def manage_payment_request(payment_id):
     action = request.form.get("action")
     comment = (request.form.get("management_comments") or "").strip()
     previous = payment.status
+    notify_finance_scheduled_payment = False
     if action == "approve":
         if payment_amount_is_pending(payment):
             flash("Amount must be set before approving this payment request.", "error")
@@ -24239,6 +24956,7 @@ def manage_payment_request(payment_id):
             flash("Scheduled payment date must be valid.", "error")
             return finance_request_redirect("management_review")
         add_payment_event(payment, "Approved by Management", previous_status=previous, new_status=payment.status, comment=comment)
+        notify_finance_scheduled_payment = True
     elif action == "needs_correction":
         if not comment:
             flash("Management comments are required for Needs correction.", "error")
@@ -24256,6 +24974,8 @@ def manage_payment_request(payment_id):
     else:
         abort(403)
     db.session.commit()
+    if notify_finance_scheduled_payment:
+        send_finance_scheduled_payment_email(payment)
     flash("Management review saved.", "success")
     return finance_request_redirect("management_review")
 
@@ -24277,15 +24997,27 @@ def process_payment_request(payment_id):
     except ValueError:
         flash("Scheduled payment date must be valid.", "error")
         return finance_request_redirect("finance_payments")
+    uploaded_proofs = [
+        upload for upload in request.files.getlist("payment_proof_file")
+        if upload and upload.filename
+    ]
     proof_url = (request.form.get("payment_proof_url") or "").strip()
-    if status == "Payment completed" and not proof_url:
+    if status == "Payment completed" and not proof_url and not uploaded_proofs:
         flash("Payment proof is required to complete a payment.", "error")
         return finance_request_redirect("finance_payments", finance_filter=request.form.get("finance_filter") or None)
-    if status in {"Payment cancelled", "Payment scheduled"} and proof_url:
+    if status in {"Payment cancelled", "Payment scheduled"} and (proof_url or uploaded_proofs):
         flash("Payment proof must be empty to cancel or process a payment.", "error")
         return finance_request_redirect("finance_payments", finance_filter=request.form.get("finance_filter") or None)
     try:
+        if uploaded_proofs:
+            proof_url = "\n".join(
+                save_finance_supporting_document(upload, payment, category="payment_proofs")
+                for upload in uploaded_proofs
+            )
         payment.payment_proof_url = clean_optional_url(proof_url, "Payment proof")
+    except OSError:
+        flash("Payment proof file could not be saved. Please try again.", "error")
+        return finance_request_redirect("finance_payments", finance_filter=request.form.get("finance_filter") or None)
     except ValueError as exc:
         flash(str(exc), "error")
         return finance_request_redirect("finance_payments", finance_filter=request.form.get("finance_filter") or None)
@@ -24787,6 +25519,10 @@ def dashboard():
 def index():
     query_text = request.args.get("q", "").strip()
     status = request.args.get("status", "").strip()
+    id_status = request.args.get("id_status", "").strip()
+    history_status = request.args.get("history_status", "").strip()
+    dietary_status = request.args.get("dietary_status", "").strip()
+    senior_status = request.args.get("senior_status", "").strip()
     selected_roles = [role for role in request.args.getlist("roles") if role in ROLE_OPTIONS]
     legacy_role = request.args.get("role", "").strip()
     if legacy_role in ROLE_OPTIONS and legacy_role not in selected_roles:
@@ -24815,6 +25551,14 @@ def index():
         sort_dir = "asc"
     if status not in EDIT_STATUS_OPTIONS:
         status = ""
+    if id_status not in {"issued", "not_issued"}:
+        id_status = ""
+    if history_status not in {"with", "without"}:
+        history_status = ""
+    if dietary_status not in {"with", "without"}:
+        dietary_status = ""
+    if senior_status not in {"yes", "no"}:
+        senior_status = ""
 
     query = AcademicStaff.query
     if show_archived:
@@ -24844,6 +25588,16 @@ def index():
         )
     if has_car:
         query = query.filter(AcademicStaff.has_car == has_car)
+    if id_status:
+        query = query.filter(AcademicStaff.id_issued.is_(id_status == "issued"))
+    if senior_status:
+        query = query.filter(AcademicStaff.seniority.is_(senior_status == "yes"))
+    if history_status:
+        has_history = db.func.length(db.func.trim(db.func.coalesce(AcademicStaff.interview, ""))) > 0
+        query = query.filter(has_history if history_status == "with" else ~has_history)
+    if dietary_status:
+        has_dietary_requirements = db.func.length(db.func.trim(db.func.coalesce(AcademicStaff.dietary_requirements, ""))) > 0
+        query = query.filter(has_dietary_requirements if dietary_status == "with" else ~has_dietary_requirements)
 
     staff_sessions_year = latest_active_exam_session_year()
     session_counts_sort = None
@@ -24915,6 +25669,10 @@ def index():
         filters={
             "q": query_text,
             "status": status,
+            "id_status": id_status,
+            "history_status": history_status,
+            "dietary_status": dietary_status,
+            "senior_status": senior_status,
             "roles": selected_roles,
             "has_car": has_car,
             "show_archived": show_archived,
@@ -24935,16 +25693,15 @@ def potential_department_expression():
     )
 
 
-def ordered_potential_entries(show_archived=False, status="", department="", action_scope="", sort_by="", sort_dir="asc"):
+def ordered_potential_entries(show_archived=False, status="", department="", action_scope="", sort_by="", sort_dir="asc", q=""):
     if show_archived:
         query = PotentialEntry.query.filter(PotentialEntry.status.in_(POTENTIAL_ARCHIVED_STATUSES))
     else:
         query = PotentialEntry.query.filter(~PotentialEntry.status.in_(POTENTIAL_ARCHIVED_STATUSES))
+    if q:
+        query = query.filter(db.func.lower(PotentialEntry.full_name).contains(q.lower()))
     if status:
         query = query.filter(PotentialEntry.status == status)
-    if action_scope == "my_actions":
-        department = current_user_audit_department()
-        query = query.filter(PotentialEntry.is_rejected == False, potential_pending_action_filter())
     if department:
         query = query.filter(potential_department_expression() == department)
 
@@ -24979,15 +25736,14 @@ def potential_entries():
     show_archived = request.args.get("show_archived") == "1" or request.args.get("show_rejected") == "1" or mentions_only
     status = request.args.get("status", "").strip()
     department = request.args.get("department", "").strip().upper()
-    action_scope = request.args.get("action_scope", "all").strip()
+    q = request.args.get("q", "").strip()
+    action_scope = "all"
     sort_by = request.args.get("sort", "").strip()
     sort_dir = request.args.get("dir", "asc").strip()
     if status not in POTENTIAL_STATUS_OPTIONS:
         status = ""
     if department not in POTENTIAL_DEPARTMENT_OPTIONS:
         department = ""
-    if action_scope not in {"all", "my_actions"}:
-        action_scope = "all"
     if sort_by not in {"status", "full_name", "city", "province", "department"}:
         sort_by = ""
     if sort_dir not in {"asc", "desc"}:
@@ -25007,6 +25763,8 @@ def potential_entries():
         return url_for("staff.potential_entries", **args)
 
     toggle_args = {}
+    if q:
+        toggle_args["q"] = q
     if status:
         toggle_args["status"] = status
     if department:
@@ -25014,13 +25772,11 @@ def potential_entries():
     if sort_by:
         toggle_args["sort"] = sort_by
         toggle_args["dir"] = sort_dir
-    if action_scope != "all":
-        toggle_args["action_scope"] = action_scope
     if not show_archived:
         toggle_args["show_archived"] = 1
 
     staff_settings = staff_members_settings()
-    potential_entry_rows = ordered_potential_entries(show_archived, status, department, action_scope, sort_by, sort_dir)
+    potential_entry_rows = ordered_potential_entries(show_archived, status, department, action_scope, sort_by, sort_dir, q)
     if mentions_only:
         mention_entry_ids = {
             mention.potential_entry_id
@@ -25054,7 +25810,7 @@ def potential_entries():
         staff_settings_values=staff_members_settings_values(staff_settings),
         create_member_draft=None,
         filters={
-            "q": "",
+            "q": q,
             "status": status,
             "roles": [],
             "has_car": "",

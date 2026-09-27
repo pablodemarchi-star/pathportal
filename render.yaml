@@ -20,3 +20,15 @@ services:
         sync: false
       - key: DATABASE_URL
         value: sqlite:////var/data/academic_staff.db
+      - key: SMTP_HOST
+        sync: false
+      - key: SMTP_PORT
+        sync: false
+      - key: SMTP_USERNAME
+        sync: false
+      - key: SMTP_PASSWORD
+        sync: false
+      - key: SMTP_FROM_EMAIL
+        sync: false
+      - key: SMTP_USE_TLS
+        sync: false

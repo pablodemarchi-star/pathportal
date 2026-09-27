@@ -712,6 +712,9 @@ def create_app():
                 text("ALTER TABLE exam_session ADD COLUMN exam_session_name VARCHAR(160) NOT NULL DEFAULT 'Untitled exam session'")
             )
             db.session.commit()
+        if exam_session_columns and "exam_entry_slips_url" not in exam_session_columns:
+            db.session.execute(text("ALTER TABLE exam_session ADD COLUMN exam_entry_slips_url VARCHAR(500)"))
+            db.session.commit()
         if exam_session_columns and "category" not in exam_session_columns:
             db.session.execute(text("ALTER TABLE exam_session ADD COLUMN category VARCHAR(80) NOT NULL DEFAULT ''"))
             if "exam_centre_type" in exam_session_columns:

@@ -67,11 +67,22 @@ Configurar:
 ADMIN_USERNAME=admin
 ADMIN_PASSWORD_HASH=<el hash generado>
 DATABASE_URL=sqlite:////var/data/academic_staff.db
+SMTP_HOST=<host smtp>
+SMTP_PORT=587
+SMTP_USERNAME=<usuario smtp>
+SMTP_PASSWORD=<password smtp>
+SMTP_FROM_EMAIL=no-reply@pathexaminations.com
+SMTP_USE_TLS=1
 ```
 
 `SECRET_KEY` se genera automaticamente desde `render.yaml`. Si Render te pide
 completar alguna variable manualmente, usa un texto largo y aleatorio para
 `SECRET_KEY`.
+
+Las variables `SMTP_*` se usan para enviar avisos automaticos, por ejemplo el
+email a Finance cuando Management aprueba una solicitud de pago y queda
+programada. Si no se configuran, la aprobacion funciona igual pero el email no
+se envia.
 
 ## 5. Deploy
 

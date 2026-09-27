@@ -4348,11 +4348,15 @@ console.log(JSON.stringify({ enabledState, missingState }));
         html = response.get_data(as_text=True)
 
         self.assertEqual(response.status_code, 200)
-        self.assertIn('<option value="MANAGEMENT" selected>MANAGEMENT</option>', html)
+        self.assertIn('<option value="MANAGEMENT" selected>Management</option>', html)
         self.assertIn("Management Candidate", html)
         self.assertIn("Confirmed Candidate", html)
         self.assertNotIn("Admin Candidate", html)
-        self.assertNotIn("Finalised Candidate", html)
+        self.assertIn('placeholder="Full name"', html)
+        self.assertIn('option value="FINANCE"', html)
+        self.assertIn(">Finance</option>", html)
+        self.assertIn('option value="LOGISTICS"', html)
+        self.assertIn(">Logistics</option>", html)
 
         status_response = self.client().get("/potential-entries?status=Interview+to+be+arranged")
         status_html = status_response.get_data(as_text=True)
@@ -4361,8 +4365,19 @@ console.log(JSON.stringify({ enabledState, missingState }));
         self.assertIn("Admin Candidate", status_html)
         self.assertNotIn("Management Candidate", status_html)
 
-    def test_my_actions_hides_on_hold_entries_until_reactivation_date(self):
+        search_response = self.client().get("/potential-entries?q=confirmed")
+        search_html = search_response.get_data(as_text=True)
+        self.assertEqual(search_response.status_code, 200)
+        self.assertIn('name="q" value="confirmed"', search_html)
+        self.assertIn("Confirmed Candidate", search_html)
+        self.assertNotIn("Admin Candidate", search_html)
+        self.assertNotIn("Management Candidate", search_html)
+
+    def test_my_actions_scope_is_no_longer_rendered_or_applied(self):
         client, _user = self.permission_client(can_view=True, can_edit=True, department="Management")
+        permission = UserMenuPermission.query.filter_by(menu_key="staff_members").one()
+        permission.menu_key = "potential_entries"
+        db.session.commit()
         self.add_entry(full_name="Management Candidate", email="management-action@example.com", status="CV to be reviewed")
         self.add_entry(full_name="Admin Candidate", email="admin-action@example.com", status="Interview to be arranged")
         future_hold = self.add_entry(full_name="Future Hold Candidate", email="future-hold@example.com", status="Entry accepted (on hold)")
@@ -4377,13 +4392,12 @@ console.log(JSON.stringify({ enabledState, missingState }));
         html = response.get_data(as_text=True)
 
         self.assertEqual(response.status_code, 200)
-        self.assertIn('class="scope-tab is-active"', html)
+        self.assertNotIn("My actions", html)
+        self.assertNotIn("potential-scope-tabs", html)
         self.assertIn("Management Candidate", html)
+        self.assertIn("Admin Candidate", html)
+        self.assertIn("Future Hold Candidate", html)
         self.assertIn("Due Hold Candidate", html)
-        self.assertIn("Reactivation date for accepted entry has been reached", html)
-        self.assertNotIn("Entry accepted and placed on hold until reativation date", html)
-        self.assertNotIn("Future Hold Candidate", html)
-        self.assertNotIn("Admin Candidate", html)
         self.assertNotIn("Archived Candidate", html)
 
     def test_potential_entries_sort_links_and_ordering(self):
@@ -4560,6 +4574,105 @@ console.log(JSON.stringify({ enabledState, missingState }));
         self.assertIn("Second counted session (rejected)", sessions_html)
         self.assertIn("data-staff-sessions-copy-email", sessions_html)
         self.assertIn("Copy sessions email", sessions_html)
+
+    def test_staff_members_can_filter_by_id_status(self):
+        self.add_member(
+            full_name="Issued ID Staff",
+            email="issued-id-filter@example.com",
+            id_issued=True,
+        )
+        self.add_member(
+            full_name="Pending ID Staff",
+            email="pending-id-filter@example.com",
+            id_issued=False,
+        )
+        self.add_member(
+            full_name="Archived Card Staff",
+            email="archived-issued-id-filter@example.com",
+            status="Archived",
+            id_issued=True,
+        )
+
+        issued_html = self.client().get("/staff-members?id_status=issued").get_data(as_text=True)
+        self.assertIn('name="id_status"', issued_html)
+        self.assertIn('value="issued" selected', issued_html)
+        self.assertIn("Issued ID Staff", issued_html)
+        self.assertNotIn("Pending ID Staff", issued_html)
+        self.assertNotIn("Archived Card Staff", issued_html)
+
+        not_issued_html = self.client().get("/staff-members?id_status=not_issued").get_data(as_text=True)
+        self.assertIn('value="not_issued" selected', not_issued_html)
+        self.assertIn("Pending ID Staff", not_issued_html)
+        self.assertNotIn("Issued ID Staff", not_issued_html)
+
+        archived_html = self.client().get("/staff-members?id_status=issued&show_archived=1").get_data(as_text=True)
+        self.assertIn("Archived Card Staff", archived_html)
+        self.assertNotIn("Issued ID Staff", archived_html)
+        self.assertIn('name="id_status" value="issued"', archived_html)
+
+    def test_staff_members_can_filter_by_seniority(self):
+        self.add_member(
+            full_name="Senior Staff",
+            email="senior-filter@example.com",
+            seniority=True,
+        )
+        self.add_member(
+            full_name="Junior Staff",
+            email="junior-filter@example.com",
+            seniority=False,
+        )
+
+        senior_html = self.client().get("/staff-members?senior_status=yes").get_data(as_text=True)
+        self.assertIn('name="senior_status"', senior_html)
+        self.assertIn('value="yes" selected', senior_html)
+        self.assertIn("Senior Staff", senior_html)
+        self.assertNotIn("Junior Staff", senior_html)
+
+        not_senior_html = self.client().get("/staff-members?senior_status=no").get_data(as_text=True)
+        self.assertIn('value="no" selected', not_senior_html)
+        self.assertIn("Junior Staff", not_senior_html)
+        self.assertNotIn("Senior Staff", not_senior_html)
+
+    def test_staff_members_can_filter_by_history_and_dietary_requirements(self):
+        self.add_member(
+            full_name="History Staff",
+            email="history-filter@example.com",
+            interview="26/09/2026 10:00 - Admin: Strong history note",
+        )
+        self.add_member(
+            full_name="Dietary Staff",
+            email="dietary-filter@example.com",
+            dietary_requirements="Vegetarian",
+        )
+        self.add_member(
+            full_name="Blank Staff",
+            email="blank-filter@example.com",
+        )
+
+        history_html = self.client().get("/staff-members?history_status=with").get_data(as_text=True)
+        self.assertIn('name="history_status"', history_html)
+        self.assertIn('value="with" selected', history_html)
+        self.assertIn("History Staff", history_html)
+        self.assertNotIn("Dietary Staff", history_html)
+        self.assertNotIn("Blank Staff", history_html)
+
+        no_history_html = self.client().get("/staff-members?history_status=without").get_data(as_text=True)
+        self.assertIn('value="without" selected', no_history_html)
+        self.assertIn("Dietary Staff", no_history_html)
+        self.assertIn("Blank Staff", no_history_html)
+        self.assertNotIn("History Staff", no_history_html)
+
+        dietary_html = self.client().get("/staff-members?dietary_status=with").get_data(as_text=True)
+        self.assertIn('name="dietary_status"', dietary_html)
+        self.assertIn("Dietary requirements", dietary_html)
+        self.assertIn("Dietary Staff", dietary_html)
+        self.assertNotIn("History Staff", dietary_html)
+        self.assertNotIn("Blank Staff", dietary_html)
+
+        no_dietary_html = self.client().get("/staff-members?dietary_status=without").get_data(as_text=True)
+        self.assertIn("History Staff", no_dietary_html)
+        self.assertIn("Blank Staff", no_dietary_html)
+        self.assertNotIn("Dietary Staff", no_dietary_html)
 
     def test_staff_member_session_count_includes_all_assignment_roles_and_statuses(self):
         member = self.add_member(full_name="Assigned Everywhere", email="assigned-everywhere@example.com")

@@ -939,10 +939,23 @@ const dismissFlashNotification = (button) => {
   const flash = button?.closest?.("[data-dismissible-flash], .flash");
   if (!flash) return;
   const stack = flash.closest(".flash-stack");
-  flash.remove();
-  if (stack && !stack.children.length) {
-    stack.hidden = true;
-  }
+  if (flash.dataset.dismissTimer) window.clearTimeout(Number(flash.dataset.dismissTimer));
+  flash.classList.add("is-dismissing");
+  window.setTimeout(() => {
+    flash.remove();
+    if (stack && !stack.children.length) {
+      stack.hidden = true;
+    }
+  }, 220);
+};
+
+const scheduleFlashDismissal = (flash) => {
+  if (!flash || flash.dataset.autoDismissScheduled === "true") return;
+  flash.dataset.autoDismissScheduled = "true";
+  const timer = window.setTimeout(() => {
+    dismissFlashNotification(flash.querySelector("[data-dismiss-flash]") || flash);
+  }, 5000);
+  flash.dataset.dismissTimer = String(timer);
 };
 
 const createFlashCloseButton = () => {
@@ -961,6 +974,7 @@ const appendFlashContent = (item, message) => {
   text.className = "flash-message";
   text.textContent = message;
   item.replaceChildren(text, createFlashCloseButton());
+  scheduleFlashDismissal(item);
 };
 
 const flashNotificationMessage = (flash) => (
@@ -973,6 +987,8 @@ document.addEventListener("click", (event) => {
   event.preventDefault();
   dismissFlashNotification(button);
 });
+
+document.querySelectorAll("[data-dismissible-flash], .flash").forEach(scheduleFlashDismissal);
 
 document.querySelectorAll("[data-password-toggle]").forEach((button) => {
   const inputId = button.dataset.passwordInput;
@@ -1527,14 +1543,14 @@ const closeScheduleActionPanel = (form, { restoreFocus = true } = {}) => {
 
 const syncScheduleLinkRequirement = (form) => {
   if (!form) return;
-  const input = form.querySelector("[data-schedule-link-input]");
+  const inputs = Array.from(form.querySelectorAll("[data-schedule-link-input]"));
   const submit = form.querySelector("[data-schedule-link-submit]");
-  if (!input || !submit) return;
+  if (!inputs.length || !submit) return;
   if (form.dataset.scheduleMonthlyBlocked === "true") {
     submit.disabled = true;
     return;
   }
-  submit.disabled = !input.value.trim();
+  submit.disabled = inputs.some((input) => !input.value.trim());
 };
 
 const openScheduleActionPanel = (form, trigger, { focus = true } = {}) => {
@@ -2582,9 +2598,60 @@ document.addEventListener("submit", (event) => {
   }
 });
 
+const autoFilterFocusStorageKey = "pathAutoFilterFocus";
+
+const rememberAutoFilterFocus = (field) => {
+  if (!field?.name) return;
+  try {
+    window.sessionStorage.setItem(autoFilterFocusStorageKey, JSON.stringify({
+      path: window.location.pathname,
+      name: field.name,
+      value: field.value,
+      selectionStart: field.selectionStart,
+      selectionEnd: field.selectionEnd,
+    }));
+  } catch (_error) {
+    // Browsers may block storage in strict privacy modes.
+  }
+};
+
+const restoreAutoFilterFocus = () => {
+  let focusState;
+  try {
+    focusState = JSON.parse(window.sessionStorage.getItem(autoFilterFocusStorageKey) || "null");
+    window.sessionStorage.removeItem(autoFilterFocusStorageKey);
+  } catch (_error) {
+    focusState = null;
+  }
+  if (!focusState || focusState.path !== window.location.pathname || !focusState.name) return;
+  const field = Array.from(document.querySelectorAll("[data-auto-filter] input")).find((input) => (
+    input.name === focusState.name && input.value === focusState.value
+  ));
+  if (!field) return;
+  window.requestAnimationFrame(() => {
+    field.focus({ preventScroll: true });
+    if (typeof field.setSelectionRange === "function") {
+      const start = Number.isInteger(focusState.selectionStart) ? focusState.selectionStart : field.value.length;
+      const end = Number.isInteger(focusState.selectionEnd) ? focusState.selectionEnd : start;
+      field.setSelectionRange(start, end);
+    }
+  });
+};
+
 document.querySelectorAll("[data-auto-filter]").forEach((form) => {
   let searchTimer;
+  const monthAll = form.querySelector("[data-month-filter-all]");
+  const monthOptions = Array.from(form.querySelectorAll("[data-month-filter-option]"));
+  const syncMonthFilterOptions = () => {
+    if (!monthAll) return;
+    monthOptions.forEach((option) => {
+      if (monthAll.checked) option.checked = false;
+      option.disabled = monthAll.checked;
+    });
+  };
+  syncMonthFilterOptions();
   const submitFilters = () => {
+    syncMonthFilterOptions();
     if (form.requestSubmit) {
       form.requestSubmit();
     } else {
@@ -2597,14 +2664,20 @@ document.querySelectorAll("[data-auto-filter]").forEach((form) => {
   });
 
   form.querySelectorAll("input[type='checkbox']").forEach((field) => {
-    field.addEventListener("change", submitFilters);
+    field.addEventListener("change", () => {
+      if (field === monthAll) syncMonthFilterOptions();
+      submitFilters();
+    });
   });
 
-  const search = form.querySelector("input[name='q']");
+  const search = form.querySelector("input[name='q'], input[name='bundle_q'], input[name='session_q'], input[name='bundle_session_q']");
   if (search) {
     search.addEventListener("input", () => {
       window.clearTimeout(searchTimer);
-      searchTimer = window.setTimeout(submitFilters, 450);
+      searchTimer = window.setTimeout(() => {
+        rememberAutoFilterFocus(search);
+        submitFilters();
+      }, 450);
     });
   }
 
@@ -2613,10 +2686,64 @@ document.querySelectorAll("[data-auto-filter]").forEach((form) => {
     year.addEventListener("input", () => {
       if (year.value && year.value.length < 4) return;
       window.clearTimeout(searchTimer);
-      searchTimer = window.setTimeout(submitFilters, 450);
+      searchTimer = window.setTimeout(() => {
+        rememberAutoFilterFocus(year);
+        submitFilters();
+      }, 450);
     });
   }
 });
+
+restoreAutoFilterFocus();
+
+document.querySelectorAll("[data-archive-payment-search]").forEach((input) => {
+  const searchContainer = input.closest(".finance-archive-search");
+  const tableWrap = searchContainer?.nextElementSibling;
+  const rows = Array.from(tableWrap?.querySelectorAll("[data-archive-payment-row]") || []);
+  const noResultsRow = tableWrap?.querySelector("[data-archive-payment-no-results]");
+  const applyArchivePaymentSearch = () => {
+    const query = input.value.trim().toLowerCase();
+    let visibleCount = 0;
+    rows.forEach((row) => {
+      const matches = !query || (row.dataset.archivePaymentSearchText || "").includes(query);
+      row.hidden = !matches;
+      if (matches) visibleCount += 1;
+    });
+    if (noResultsRow) noResultsRow.hidden = !query || visibleCount > 0;
+  };
+  input.addEventListener("input", applyArchivePaymentSearch);
+  applyArchivePaymentSearch();
+});
+
+(() => {
+  const dropdownSelector = ".exam-filter-dropdown";
+  const closeDropdowns = (except = null) => {
+    document.querySelectorAll(dropdownSelector).forEach((dropdown) => {
+      if (dropdown !== except) dropdown.removeAttribute("open");
+    });
+  };
+
+  document.querySelectorAll(dropdownSelector).forEach((dropdown) => {
+    dropdown.addEventListener("toggle", () => {
+      if (dropdown.open) closeDropdowns(dropdown);
+    });
+  });
+
+  document.addEventListener("click", (event) => {
+    const dropdown = event.target.closest?.(dropdownSelector);
+    if (!dropdown) {
+      closeDropdowns();
+      return;
+    }
+    if (event.target.closest?.("summary")) {
+      closeDropdowns(dropdown);
+    }
+  });
+
+  document.addEventListener("keydown", (event) => {
+    if (event.key === "Escape") closeDropdowns();
+  });
+})();
 
 document.querySelectorAll("[data-bulk-form], [data-bulk-root]").forEach((form) => {
   const scope = form.dataset.bulkScope ? document.querySelector(form.dataset.bulkScope) : form;
@@ -8370,28 +8497,36 @@ const initFinancePaymentExecutionActions = () => {
   document.querySelectorAll(".finance-payment-execution-actions").forEach((form) => {
     const proofInput = form.querySelector("[data-payment-proof-input]");
     if (!proofInput) return;
+    const proofFileInput = form.querySelector("[data-payment-proof-file-input]");
+    const proofHasValue = () => Boolean(proofInput.value.trim() || proofFileInput?.files?.length);
+    const validationTarget = proofFileInput || proofInput;
+    const clearProofValidation = () => {
+      proofInput.setCustomValidity("");
+      validationTarget?.setCustomValidity?.("");
+    };
     const requiredProofMessage = form.dataset.requiredPaymentProofMessage || "Payment proof is required to complete a payment.";
     const emptyProofMessage = form.dataset.emptyPaymentProofMessage || "Payment proof must be empty to continue.";
-    proofInput.addEventListener("input", () => proofInput.setCustomValidity(""));
+    proofInput.addEventListener("input", clearProofValidation);
+    proofFileInput?.addEventListener("change", clearProofValidation);
     form.querySelectorAll("[data-requires-payment-proof]").forEach((button) => {
       button.addEventListener("click", (event) => {
-        if (proofInput.value.trim()) {
-          proofInput.setCustomValidity("");
+        if (proofHasValue()) {
+          clearProofValidation();
           return;
         }
-        proofInput.setCustomValidity(button.dataset.requiredPaymentProofMessage || requiredProofMessage);
-        proofInput.reportValidity();
+        validationTarget.setCustomValidity(button.dataset.requiredPaymentProofMessage || requiredProofMessage);
+        validationTarget.reportValidity();
         event.preventDefault();
       });
     });
     form.querySelectorAll("[data-requires-empty-payment-proof]").forEach((button) => {
       button.addEventListener("click", (event) => {
-        if (!proofInput.value.trim()) {
-          proofInput.setCustomValidity("");
+        if (!proofHasValue()) {
+          clearProofValidation();
           return;
         }
-        proofInput.setCustomValidity(button.dataset.emptyPaymentProofMessage || emptyProofMessage);
-        proofInput.reportValidity();
+        validationTarget.setCustomValidity(button.dataset.emptyPaymentProofMessage || emptyProofMessage);
+        validationTarget.reportValidity();
         event.preventDefault();
       });
     });
@@ -8596,6 +8731,102 @@ document.addEventListener("input", (event) => {
   const amountInput = event.target.closest?.("[data-finance-amount]");
   if (!amountInput) return;
   normalizeFinanceAmountInput(amountInput);
+});
+
+const financeUploadFiles = new WeakMap();
+
+const syncFinanceUploadInputFiles = (input, files) => {
+  if (!input) return;
+  const transfer = new DataTransfer();
+  files.forEach((file) => transfer.items.add(file));
+  input.files = transfer.files;
+  financeUploadFiles.set(input, files);
+};
+
+const renderFinanceUploadFiles = (input) => {
+  if (!input) return;
+  const dropzone = input.closest("[data-finance-upload-dropzone]");
+  const row = dropzone?.closest(".finance-supporting-document-row");
+  const text = dropzone?.querySelector("[data-finance-upload-text]");
+  const list = row?.querySelector("[data-finance-upload-list]");
+  const files = financeUploadFiles.get(input) || Array.from(input.files || []);
+  if (text) {
+    text.textContent = files.length
+      ? `${files.length} file${files.length === 1 ? "" : "s"} selected`
+      : "Select file or drop it here";
+  }
+  if (!list) return;
+  list.replaceChildren(...files.map((file, index) => {
+    const item = document.createElement("div");
+    item.className = "finance-upload-file-item";
+    const name = document.createElement("span");
+    name.className = "finance-upload-file-name";
+    name.textContent = file.name;
+    const remove = document.createElement("button");
+    remove.className = "finance-upload-file-remove";
+    remove.type = "button";
+    remove.dataset.financeUploadRemove = String(index);
+    remove.setAttribute("aria-label", `Remove ${file.name}`);
+    remove.textContent = "x";
+    item.replaceChildren(name, remove);
+    return item;
+  }));
+};
+
+const addFinanceUploadFiles = (input, incomingFiles) => {
+  if (!input || !incomingFiles?.length) return;
+  const currentFiles = financeUploadFiles.get(input) || [];
+  const nextFiles = [...currentFiles, ...Array.from(incomingFiles)];
+  syncFinanceUploadInputFiles(input, nextFiles);
+  renderFinanceUploadFiles(input);
+};
+
+document.addEventListener("change", (event) => {
+  const input = event.target.closest?.("[data-finance-upload-input]");
+  if (!input) return;
+  addFinanceUploadFiles(input, input.files);
+});
+
+document.addEventListener("dragenter", (event) => {
+  const dropzone = event.target.closest?.("[data-finance-upload-dropzone]");
+  if (!dropzone) return;
+  event.preventDefault();
+  dropzone.classList.add("is-drag-over");
+});
+
+document.addEventListener("dragover", (event) => {
+  const dropzone = event.target.closest?.("[data-finance-upload-dropzone]");
+  if (!dropzone) return;
+  event.preventDefault();
+});
+
+document.addEventListener("dragleave", (event) => {
+  const dropzone = event.target.closest?.("[data-finance-upload-dropzone]");
+  if (!dropzone || dropzone.contains(event.relatedTarget)) return;
+  dropzone.classList.remove("is-drag-over");
+});
+
+document.addEventListener("drop", (event) => {
+  const dropzone = event.target.closest?.("[data-finance-upload-dropzone]");
+  if (!dropzone) return;
+  event.preventDefault();
+  dropzone.classList.remove("is-drag-over");
+  const input = dropzone.querySelector("[data-finance-upload-input]");
+  if (!input || !event.dataTransfer?.files?.length) return;
+  addFinanceUploadFiles(input, event.dataTransfer.files);
+});
+
+document.addEventListener("click", (event) => {
+  const remove = event.target.closest?.("[data-finance-upload-remove]");
+  if (!remove) return;
+  const row = remove.closest(".finance-supporting-document-row");
+  const input = row?.querySelector("[data-finance-upload-input]");
+  if (!input) return;
+  const removeIndex = Number.parseInt(remove.dataset.financeUploadRemove || "-1", 10);
+  const files = financeUploadFiles.get(input) || Array.from(input.files || []);
+  const nextFiles = files.filter((_file, index) => index !== removeIndex);
+  syncFinanceUploadInputFiles(input, nextFiles);
+  renderFinanceUploadFiles(input);
 });
 
 document.addEventListener("change", (event) => {

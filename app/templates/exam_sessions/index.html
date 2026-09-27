@@ -714,34 +714,102 @@
   </div>
 </header>
 
-<section class="toolbar {% if archived_session_years %}toolbar-with-archive{% endif %}">
-  <div>
-    <p class="archived-year-title">Session years</p>
-    <p class="archived-year-copy">Use the active year selector to manage exam sessions by year.</p>
-  </div>
-  {% if archived_session_years %}
-    <section class="archived-year-panel" aria-label="Archived Exam session planner years">
-      <div>
-        <p class="archived-year-title">Archived years</p>
-        <p class="archived-year-copy">Archived years are hidden from the active selector, but their records are preserved.</p>
-      </div>
-      <div class="archived-year-list">
-        {% for year_item in archived_session_years %}
-          <article class="archived-year-item">
-            <span>{{ year_item.year }}</span>
-            <form method="post" action="{{ url_for('staff.unarchive_exam_session_year', year=year_item.year) }}" data-confirm-submit="Restore {{ year_item.year }} to active years?">
-              <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-              <button class="secondary-button compact-action" type="submit">Unarchive</button>
-            </form>
-            <form method="post" action="{{ url_for('staff.delete_exam_session_year', year=year_item.year) }}" data-confirm-submit="Permanently delete {{ year_item.year }} and all its exam session records? This cannot be undone.">
-              <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-              <button class="danger-button compact-action" type="submit">Delete permanently</button>
-            </form>
-          </article>
+<section class="toolbar exam-session-filters-toolbar">
+  <form method="get" class="filters exam-session-planner-filters" data-auto-filter>
+    <input type="hidden" name="session_year" value="{{ selected_session_year }}">
+    <input type="hidden" name="page_size" value="{{ pagination.page_size if pagination else '10' }}">
+    <input name="q" value="{{ filters.q }}" placeholder="Session name">
+    <select name="date_status" aria-label="Filter by date status">
+      <option value="">Date status</option>
+      <option value="Pending" {% if filters.date_status == 'Pending' %}selected{% endif %}>Pending</option>
+      <option value="Waiting for confirmation" {% if filters.date_status == 'Waiting for confirmation' %}selected{% endif %}>Waiting for confirmation</option>
+      <option value="Confirmed" {% if filters.date_status == 'Confirmed' %}selected{% endif %}>Confirmed</option>
+    </select>
+    <details class="exam-filter-dropdown">
+      <summary>Shifts{% if filters.shifts %} ({{ filters.shifts|length }}){% endif %}</summary>
+      <div class="exam-filter-dropdown-panel">
+        {% for shift in ['All day', 'Morning', 'Afternoon', 'Evening'] %}
+          <label>
+            <input type="checkbox" name="shifts" value="{{ shift }}" {% if shift in filters.shifts %}checked{% endif %}>
+            <span>{{ shift }}</span>
+          </label>
         {% endfor %}
       </div>
-    </section>
-  {% endif %}
+    </details>
+    <details class="exam-filter-dropdown">
+      <summary>Modules{% if filters.modules %} ({{ filters.modules|length }}){% endif %}</summary>
+      <div class="exam-filter-dropdown-panel">
+        {% for module in ['Speaking', 'Listening and speaking', 'Reading and writing', 'RSG', 'PEN'] %}
+          <label>
+            <input type="checkbox" name="modules" value="{{ module }}" {% if module in filters.modules %}checked{% endif %}>
+            <span>{{ 'Speaking and listening' if module == 'Listening and speaking' else module }}</span>
+          </label>
+        {% endfor %}
+      </div>
+    </details>
+    <select name="format" aria-label="Filter by format">
+      <option value="">Format</option>
+      <option value="Online" {% if filters.format == 'Online' %}selected{% endif %}>Online</option>
+      <option value="Onsite" {% if filters.format == 'Onsite' %}selected{% endif %}>Onsite</option>
+      <option value="Online at exam centre" {% if filters.format == 'Online at exam centre' %}selected{% endif %}>Online at exam centre</option>
+    </select>
+    <select name="roles_required" aria-label="Filter by roles required">
+      <option value="">Roles required</option>
+      <option value="covered" {% if filters.roles_required == 'covered' %}selected{% endif %}>Covered</option>
+      <option value="not_covered" {% if filters.roles_required == 'not_covered' %}selected{% endif %}>Not covered</option>
+    </select>
+    <select name="member_duplication" aria-label="Filter by member duplication">
+      <option value="">Member duplication</option>
+      <option value="yes" {% if filters.member_duplication == 'yes' %}selected{% endif %}>Yes</option>
+      <option value="no" {% if filters.member_duplication == 'no' %}selected{% endif %}>No</option>
+    </select>
+    <select name="session_minimum" aria-label="Filter by session minimum">
+      <option value="">Session minimum</option>
+      <option value="reached" {% if filters.session_minimum == 'reached' %}selected{% endif %}>Reached</option>
+      <option value="not_reached" {% if filters.session_minimum == 'not_reached' %}selected{% endif %}>Not reached</option>
+    </select>
+    <details class="exam-filter-dropdown">
+      <summary>Role status{% if filters.role_status %} ({{ filters.role_status|length }}){% endif %}</summary>
+      <div class="exam-filter-dropdown-panel">
+        {% for role_status in ['Pending', 'Pre-confirmation sent', 'Pre-confirmed', 'Confirmed'] %}
+          <label>
+            <input type="checkbox" name="role_status" value="{{ role_status }}" {% if role_status in filters.role_status %}checked{% endif %}>
+            <span>{{ role_status }}</span>
+          </label>
+        {% endfor %}
+      </div>
+    </details>
+    <select name="logistics" aria-label="Filter by logistics">
+      <option value="">Logistics</option>
+      <option value="yes" {% if filters.logistics == 'yes' %}selected{% endif %}>Yes</option>
+      <option value="no" {% if filters.logistics == 'no' %}selected{% endif %}>No</option>
+    </select>
+  </form>
+  <div class="exam-session-filter-actions">
+    <a class="text-link" href="{{ url_for('staff.exam_session_planner', session_year=selected_session_year) }}">Reset</a>
+    <details class="exam-archived-years-dropdown">
+      <summary class="secondary-button compact-action">Archived years</summary>
+      <div class="exam-archived-years-panel">
+        {% if archived_session_years %}
+          {% for year_item in archived_session_years %}
+            <article class="archived-year-item">
+              <span>{{ year_item.year }}</span>
+              <form method="post" action="{{ url_for('staff.unarchive_exam_session_year', year=year_item.year) }}" data-confirm-submit="Restore {{ year_item.year }} to active years?">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                <button class="secondary-button compact-action" type="submit">Unarchive</button>
+              </form>
+              <form method="post" action="{{ url_for('staff.delete_exam_session_year', year=year_item.year) }}" data-confirm-submit="Permanently delete {{ year_item.year }} and all its exam session records? This cannot be undone.">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                <button class="danger-button compact-action" type="submit">Delete permanently</button>
+              </form>
+            </article>
+          {% endfor %}
+        {% else %}
+          <p class="archived-year-copy">No archived years.</p>
+        {% endif %}
+      </div>
+    </details>
+  </div>
 </section>
 
 {% if session_years %}
@@ -766,32 +834,41 @@
 </section>
 {% endif %}
 
+{% macro exam_session_sort_header(column, label, class_name='') -%}
+  <th{% if class_name %} class="{{ class_name }}"{% endif %}>
+    <a class="table-sort {% if filters.sort == column %}is-active{% endif %}" href="{{ sort_url(column) }}">
+      {{ label }}
+      <span>{{ '↑' if filters.sort == column and filters.dir == 'asc' else '↓' if filters.sort == column else '↕' }}</span>
+    </a>
+  </th>
+{%- endmacro %}
+
 <section class="table-wrap" aria-label="Exam session list">
   <table class="exam-session-table">
     <thead>
       <tr>
         <th aria-label="Enter"></th>
-        <th>Status</th>
-        <th>Exam session name</th>
-        <th>Date</th>
+        {{ exam_session_sort_header('status', 'Status') }}
+        {{ exam_session_sort_header('exam_session_name', 'Exam session name') }}
+        {{ exam_session_sort_header('session_date', 'Date') }}
         <th>Shifts</th>
         <th>Modules</th>
-        <th>Format</th>
-        <th>Supervisors</th>
-        <th>Examiners</th>
-        <th>Interns</th>
-        <th>Logistics</th>
+        {{ exam_session_sort_header('format', 'Format') }}
+        {{ exam_session_sort_header('supervisors', 'Supervisors') }}
+        {{ exam_session_sort_header('examiners', 'Examiners') }}
+        {{ exam_session_sort_header('interns', 'Interns') }}
+        {{ exam_session_sort_header('logistics', 'Logistics') }}
         <th>Full address</th>
-        <th class="centered-table-column">City</th>
-        <th class="centered-table-column">Province</th>
+        {{ exam_session_sort_header('city', 'City', 'centered-table-column') }}
+        {{ exam_session_sort_header('province', 'Province', 'centered-table-column') }}
         <th class="all-session-details-column">All session details</th>
-        <th>Supervisors cost</th>
-        <th>Examiners cost</th>
-        <th>Interns cost</th>
-        <th>Logistics cost</th>
-        <th>TOTAL COST</th>
-        <th>Created on</th>
-        <th>Updated on</th>
+        {{ exam_session_sort_header('supervisors_cost', 'Supervisors cost') }}
+        {{ exam_session_sort_header('examiners_cost', 'Examiners cost') }}
+        {{ exam_session_sort_header('interns_cost', 'Interns cost') }}
+        {{ exam_session_sort_header('logistics_cost', 'Logistics cost') }}
+        {{ exam_session_sort_header('total_cost', 'TOTAL COST') }}
+        {{ exam_session_sort_header('created_on', 'Created on') }}
+        {{ exam_session_sort_header('updated_on', 'Updated on') }}
         <th>Edit</th>
         <th>Delete</th>
       </tr>

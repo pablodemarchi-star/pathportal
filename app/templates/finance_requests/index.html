@@ -208,6 +208,10 @@
 {% endmacro %}
 
 {% macro archived_payment_table(payments, empty_message='No archived payment requests yet.', tab_name='payment_requests', show_copy_actions=false) %}
+  <label class="finance-archive-search">
+    <span class="sr-only">Search archived payment requests</span>
+    <input type="search" placeholder="Payment no. payee, description" aria-label="Search archived payment requests by payment number, payee, or description" data-archive-payment-search>
+  </label>
   <div class="finance-table-wrap finance-archived-payments-table-wrap">
     <table class="finance-archive-table">
       <colgroup>
@@ -240,7 +244,7 @@
         {% for payment in payments %}
           {% set whatsapp_copy = payment_whatsapp_copy_contract(payment) %}
           {% set whatsapp_copy_sp = payment_whatsapp_copy_contract(payment, 'sp') %}
-          <tr>
+          <tr data-archive-payment-row data-archive-payment-search-text="{{ (payment.request_number ~ ' ' ~ (payment.payee_name_snapshot or '') ~ ' ' ~ (payment.description or ''))|lower|e }}">
             <td><strong>{{ payment.request_number }}</strong></td>
             <td>{{ payment_finalized_at(payment)|display_date if payment_finalized_at(payment) else 'Not set' }}</td>
             <td>{{ status_chip(payment.status) }}</td>
@@ -260,10 +264,13 @@
             {% endif %}
           </tr>
         {% else %}
-          <tr>
+          <tr data-archive-payment-empty-row>
             <td colspan="{{ 10 if show_copy_actions else 9 }}" class="empty-state">{{ empty_message }}</td>
           </tr>
         {% endfor %}
+        <tr data-archive-payment-no-results hidden>
+          <td colspan="{{ 10 if show_copy_actions else 9 }}" class="empty-state">No archived payment requests match this search.</td>
+        </tr>
       </tbody>
     </table>
   </div>
@@ -417,7 +424,16 @@
     {% if payment.supporting_documentation_url %}
       <details class="finance-detail-panel">
         <summary>Supporting documents</summary>
-        <a href="{{ payment.supporting_documentation_url }}" target="_blank" rel="noopener">View documents here</a>
+        {% set supporting_document_links = payment.supporting_documentation_url.splitlines() %}
+        {% if supporting_document_links|length > 1 %}
+          <div class="finance-document-link-list">
+            {% for document_link in supporting_document_links %}
+              <a href="{{ document_link }}" target="_blank" rel="noopener">Document {{ loop.index }}</a>
+            {% endfor %}
+          </div>
+        {% else %}
+          <a href="{{ payment.supporting_documentation_url }}" target="_blank" rel="noopener">View documents here</a>
+        {% endif %}
       </details>
     {% endif %}
 
@@ -508,7 +524,7 @@
   {% endif %}
 {% endmacro %}
 
-{% macro payment_form_fields(payment=none, amount_required=true, show_supporting_folder_link=false) %}
+{% macro payment_form_fields(payment=none, amount_required=true, show_supporting_folder_link=false, show_supporting_upload=false) %}
   {% set bank_snapshot = finance_bank_snapshot(payment) %}
   {% set date_mode = payment.payment_date_mode if payment and payment.payment_date_mode else ('specific' if payment and payment.scheduled_payment_date else 'asap') %}
   {% set asap_payment_date = payment.scheduled_payment_date if payment and date_mode == 'asap' and payment.scheduled_payment_date else next_payment_run_date %}
@@ -604,24 +620,33 @@
     </div>
   </fieldset>
   <div class="finance-supporting-document-row">
-    <span class="finance-supporting-document-label">Supporting documentation link</span>
-    <div class="finance-supporting-document-control-row">
-      <input name="supporting_documentation_url" value="{{ payment.supporting_documentation_url if payment else '' }}" aria-label="Supporting documentation link">
-      {% if show_supporting_folder_link and new_payment_request_folder_link %}
-        <a class="finance-access-folder-link" href="{{ new_payment_request_folder_link }}" target="_blank" rel="noopener noreferrer">Access folder</a>
-      {% endif %}
-    </div>
+    <span class="finance-supporting-document-label">Supporting documentation</span>
+    {% if show_supporting_upload %}
+      <input type="hidden" name="supporting_documentation_url" value="{{ payment.supporting_documentation_url if payment else '' }}">
+      <label class="finance-upload-dropzone" data-finance-upload-dropzone>
+        <input type="file" name="supporting_documentation_file" multiple data-finance-upload-input>
+        <span data-finance-upload-text>Select file or drop it here</span>
+      </label>
+      <div class="finance-upload-file-list" data-finance-upload-list></div>
+    {% else %}
+      <div class="finance-supporting-document-control-row">
+        <input name="supporting_documentation_url" value="{{ payment.supporting_documentation_url if payment else '' }}" aria-label="Supporting documentation">
+        {% if show_supporting_folder_link and new_payment_request_folder_link %}
+          <a class="finance-access-folder-link" href="{{ new_payment_request_folder_link }}" target="_blank" rel="noopener noreferrer">Access folder</a>
+        {% endif %}
+      </div>
+    {% endif %}
   </div>
   <div class="finance-supporting-document-row" data-finance-card-receipt-row hidden>
     <span class="finance-supporting-document-label">Receipt</span>
     <div class="finance-supporting-document-control-row">
       <input name="payment_proof_url" value="{{ payment.payment_proof_url if payment else '' }}" aria-label="Receipt">
-      {% if show_supporting_folder_link and new_payment_request_folder_link %}
+      {% if show_supporting_folder_link and not show_supporting_upload and new_payment_request_folder_link %}
         <a class="finance-access-folder-link" href="{{ new_payment_request_folder_link }}" target="_blank" rel="noopener noreferrer">Access folder</a>
       {% endif %}
     </div>
   </div>
-  <label>Requester comments <textarea name="requester_comments" rows="3">{{ payment.requester_comments if payment else '' }}</textarea></label>
+  <label class="finance-requester-comments-field">Requester comments <textarea name="requester_comments" rows="3">{{ payment.requester_comments if payment else '' }}</textarea></label>
   {% if can_manage_payment_visibility %}
     <label>Visibility
       <select name="visibility_mode">
@@ -691,9 +716,9 @@
   </label>
   <label data-finance-full-address-field {% if not needs_full_address %}hidden{% endif %}>Full address <input name="client_full_address" value="{{ billing.client_full_address or '' if billing else '' }}" {% if not needs_full_address %}disabled{% else %}required{% endif %}></label>
   <div class="finance-supporting-document-row">
-    <span class="finance-supporting-document-label">Supporting documentation link</span>
+    <span class="finance-supporting-document-label">Supporting documentation</span>
     <div class="finance-supporting-document-control-row">
-      <input name="supporting_documentation_url" value="{{ billing.supporting_documentation_url or '' if billing else '' }}" aria-label="Supporting documentation link">
+      <input name="supporting_documentation_url" value="{{ billing.supporting_documentation_url or '' if billing else '' }}" aria-label="Supporting documentation">
       {% if show_supporting_folder_link and new_invoice_request_folder_link %}
         <a class="finance-access-folder-link" href="{{ new_invoice_request_folder_link }}" target="_blank" rel="noopener noreferrer">Access folder</a>
       {% endif %}
@@ -941,17 +966,17 @@
           <div class="finance-action-payment-item">
             {{ payment_card(payment, 'finance_payments') }}
             {% if payment.status in ['Management approved', 'Payment scheduled'] and can_manage_finance %}
-              <form class="finance-payment-execution-actions" method="post" action="{{ url_for('staff.process_payment_request', payment_id=payment.id) }}" data-required-payment-proof-message="Payment proof is required to complete a payment." data-empty-payment-proof-message="Payment proof must be empty to cancel or process a payment.">
+              <form class="finance-payment-execution-actions" method="post" action="{{ url_for('staff.process_payment_request', payment_id=payment.id) }}" enctype="multipart/form-data" data-required-payment-proof-message="Payment proof is required to complete a payment." data-empty-payment-proof-message="Payment proof must be empty to cancel or process a payment.">
                 <input type="hidden" name="scheduled_payment_date" value="{{ payment.scheduled_payment_date.isoformat() if payment.scheduled_payment_date else '' }}">
                 <input type="hidden" name="finance_filter" value="{{ active_finance_filter }}">
                 <div class="finance-supporting-document-row">
                   <span class="finance-supporting-document-label">Payment proof</span>
-                  <div class="finance-supporting-document-control-row">
-                    <input name="payment_proof_url" value="{{ payment.payment_proof_url or '' }}" placeholder="https://" data-payment-proof-input aria-label="Payment proof">
-                    {% if payment_proof_folder_link %}
-                      <a class="finance-access-folder-link" href="{{ payment_proof_folder_link }}" target="_blank" rel="noopener noreferrer">Access folder</a>
-                    {% endif %}
-                  </div>
+                  <input type="hidden" name="payment_proof_url" value="{{ payment.payment_proof_url or '' }}" data-payment-proof-input>
+                  <label class="finance-upload-dropzone" data-finance-upload-dropzone>
+                    <input type="file" name="payment_proof_file" multiple data-finance-upload-input data-payment-proof-file-input>
+                    <span data-finance-upload-text>Select file or drop it here</span>
+                  </label>
+                  <div class="finance-upload-file-list" data-finance-upload-list></div>
                 </div>
                 <div class="finance-payment-execution-buttons">
                   <button class="finance-review-button reject" type="submit" name="status" value="Payment cancelled" data-requires-empty-payment-proof>Cancel payment</button>
@@ -1095,9 +1120,9 @@
         </div>
         <button class="icon-button" type="button" data-close-modal aria-label="Close modal">&times;</button>
       </div>
-      <form class="finance-form-panel finance-modal-form" method="post" action="{{ url_for('staff.create_payment_request') }}">
+      <form class="finance-form-panel finance-modal-form" method="post" action="{{ url_for('staff.create_payment_request') }}" enctype="multipart/form-data">
         <input type="hidden" name="source_tab" value="{{ active_tab }}">
-        {{ payment_form_fields(amount_required=active_tab != 'finance_payments', show_supporting_folder_link=true) }}
+        {{ payment_form_fields(amount_required=active_tab != 'finance_payments', show_supporting_folder_link=true, show_supporting_upload=true) }}
         <div class="form-actions">
           <button class="secondary-button" type="button" data-close-modal>Cancel</button>
           <button class="primary-button" type="submit">Create payment request</button>

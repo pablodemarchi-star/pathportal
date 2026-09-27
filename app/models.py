@@ -678,6 +678,7 @@ class ExamSession(db.Model):
     format = db.Column(db.String(20), nullable=False, index=True)
     location_url = db.Column(db.String(500), nullable=True)
     details_url = db.Column(db.String(500), nullable=True)
+    exam_entry_slips_url = db.Column(db.String(500), nullable=True)
     non_available_member_ids = db.Column(db.Text, nullable=False, default="[]")
     emergency_contact_required = db.Column(db.Boolean, nullable=False, default=False)
     emergency_contact_not_required = db.Column(db.Boolean, nullable=False, default=False)

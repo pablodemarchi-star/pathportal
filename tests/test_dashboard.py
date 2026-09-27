@@ -163,7 +163,8 @@ class DashboardTest(unittest.TestCase):
         self.assertIn("2 actions", body)
         self.assertNotIn("0 notes", body)
         self.assertIn("You have 2 actions to complete in this menu.", body)
-        self.assertIn('href="/potential-entries?action_scope=my_actions"', body)
+        self.assertIn('href="/potential-entries"', body)
+        self.assertNotIn("action_scope=my_actions", body)
         self.assertIn(">Go to menu<", body)
         self.assertNotIn('<span class="dashboard-count-chip">2</span>', body)
 

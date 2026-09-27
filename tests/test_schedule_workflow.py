@@ -171,6 +171,205 @@ class ScheduleWorkflowTest(unittest.TestCase):
             user_session["csrf_token"] = "token"
         return client
 
+    def test_exam_session_planner_filters_render_and_filter_sessions(self):
+        self.session_record.exam_session_name = "Alpha speaking session"
+        self.session_record.date_confirmation_status = "Pending"
+        self.session_record.shifts = "Morning"
+        self.session_record.modules = "Speaking"
+        self.session_record.format = "Onsite"
+        self.session_record.rsg_enabled = True
+        covered_member = AcademicStaff(
+            id=101,
+            status="Active",
+            full_name="Covered Supervisor",
+            roles="Supervisor",
+        )
+        waiting_session = ExamSession(
+            exam_session_name="Beta reading session",
+            category="Path School",
+            status="Pending",
+            session_date=date(2026, 7, 25),
+            date_confirmation_status="Waiting for confirmation",
+            shifts="Evening",
+            modules="Reading and writing",
+            format="Online",
+            pen_enabled=True,
+        )
+        confirmed_session = ExamSession(
+            exam_session_name="Gamma listening session",
+            category="Path School",
+            status="Pending",
+            session_date=date(2026, 8, 25),
+            date_confirmation_status="Confirmed",
+            shifts="Afternoon",
+            modules="Listening and speaking",
+            format="Online at exam centre",
+        )
+        duplicate_session = ExamSession(
+            exam_session_name="Delta duplicate session",
+            category="Path School",
+            status="Pending",
+            session_date=date(2026, 8, 25),
+            date_confirmation_status="Confirmed",
+            shifts="Afternoon",
+            modules="Speaking",
+            format="Onsite",
+        )
+        db.session.add_all([covered_member, waiting_session, confirmed_session, duplicate_session])
+        db.session.flush()
+        db.session.add_all([
+            ExamSessionMonthlyCandidateTotal(
+                exam_session_id=self.session_record.id,
+                month=6,
+                total_candidates=30,
+            ),
+            ExamSessionSupervisorAssignment(
+                exam_session_id=waiting_session.id,
+                participation_status="Pending",
+                logistics_enabled=True,
+            ),
+            ExamSessionSupervisorAssignment(
+                exam_session_id=confirmed_session.id,
+                team_member_id=covered_member.id,
+                participation_status="Confirmed",
+            ),
+            ExamSessionSupervisorAssignment(
+                exam_session_id=duplicate_session.id,
+                team_member_id=covered_member.id,
+                participation_status="Confirmed",
+            ),
+        ])
+        db.session.commit()
+        client = self.login_client()
+
+        html = client.get("/exam-session-planner?session_year=2026").get_data(as_text=True)
+        self.assertIn('placeholder="Session name"', html)
+        self.assertIn("Date status", html)
+        self.assertIn("Speaking and listening", html)
+        self.assertIn("RSG", html)
+        self.assertIn("PEN", html)
+        self.assertIn("Member duplication", html)
+        self.assertIn("Role status", html)
+        self.assertIn("Session minimum", html)
+        self.assertIn("Archived years", html)
+        self.assertNotIn("Session years", html)
+        for sort_key in [
+            "status",
+            "exam_session_name",
+            "session_date",
+            "format",
+            "supervisors",
+            "examiners",
+            "interns",
+            "logistics",
+            "city",
+            "province",
+            "supervisors_cost",
+            "examiners_cost",
+            "interns_cost",
+            "logistics_cost",
+            "total_cost",
+            "created_on",
+            "updated_on",
+        ]:
+            self.assertIn(f"sort={sort_key}", html)
+
+        name_html = client.get("/exam-session-planner?session_year=2026&q=Beta").get_data(as_text=True)
+        self.assertIn("Beta reading session", name_html)
+        self.assertNotIn("Alpha speaking session", name_html)
+
+        status_html = client.get(
+            "/exam-session-planner",
+            query_string={"session_year": "2026", "date_status": "Confirmed"},
+        ).get_data(as_text=True)
+        self.assertIn("Gamma listening session", status_html)
+        self.assertNotIn("Beta reading session", status_html)
+
+        shift_module_html = client.get(
+            "/exam-session-planner",
+            query_string={"session_year": "2026", "shifts": "Evening", "modules": "Reading and writing"},
+        ).get_data(as_text=True)
+        self.assertIn("Beta reading session", shift_module_html)
+        self.assertNotIn("Gamma listening session", shift_module_html)
+
+        speaking_html = client.get(
+            "/exam-session-planner",
+            query_string={"session_year": "2026", "modules": "Speaking"},
+        ).get_data(as_text=True)
+        self.assertIn("Alpha speaking session", speaking_html)
+        self.assertNotIn("<span>Gamma listening session</span>", speaking_html)
+
+        rsg_html = client.get(
+            "/exam-session-planner",
+            query_string={"session_year": "2026", "modules": "RSG"},
+        ).get_data(as_text=True)
+        self.assertIn("Alpha speaking session", rsg_html)
+        self.assertNotIn("Beta reading session", rsg_html)
+
+        pen_html = client.get(
+            "/exam-session-planner",
+            query_string={"session_year": "2026", "modules": "PEN"},
+        ).get_data(as_text=True)
+        self.assertIn("Beta reading session", pen_html)
+        self.assertNotIn("Alpha speaking session", pen_html)
+
+        format_roles_logistics_html = client.get(
+            "/exam-session-planner",
+            query_string={
+                "session_year": "2026",
+                "format": "Online",
+                "roles_required": "not_covered",
+                "logistics": "yes",
+            },
+        ).get_data(as_text=True)
+        self.assertIn("Beta reading session", format_roles_logistics_html)
+        self.assertNotIn("Alpha speaking session", format_roles_logistics_html)
+        self.assertNotIn("Gamma listening session", format_roles_logistics_html)
+
+        role_status_html = client.get(
+            "/exam-session-planner",
+            query_string={"session_year": "2026", "role_status": "Confirmed"},
+        ).get_data(as_text=True)
+        self.assertIn("Gamma listening session", role_status_html)
+        self.assertIn("Delta duplicate session", role_status_html)
+        self.assertNotIn("Beta reading session", role_status_html)
+
+        duplication_html = client.get(
+            "/exam-session-planner",
+            query_string={"session_year": "2026", "member_duplication": "yes"},
+        ).get_data(as_text=True)
+        self.assertIn("Gamma listening session", duplication_html)
+        self.assertIn("Delta duplicate session", duplication_html)
+        self.assertNotIn("Alpha speaking session", duplication_html)
+
+        minimum_reached_html = client.get(
+            "/exam-session-planner",
+            query_string={"session_year": "2026", "session_minimum": "reached"},
+        ).get_data(as_text=True)
+        self.assertIn("Alpha speaking session", minimum_reached_html)
+        self.assertNotIn("Beta reading session", minimum_reached_html)
+
+        minimum_not_reached_html = client.get(
+            "/exam-session-planner",
+            query_string={"session_year": "2026", "session_minimum": "not_reached"},
+        ).get_data(as_text=True)
+        self.assertIn("Beta reading session", minimum_not_reached_html)
+        self.assertNotIn("Alpha speaking session", minimum_not_reached_html)
+
+        supervisor_sort_html = client.get(
+            "/exam-session-planner",
+            query_string={"session_year": "2026", "sort": "supervisors", "dir": "desc"},
+        ).get_data(as_text=True)
+        self.assertLess(
+            supervisor_sort_html.index("Beta reading session"),
+            supervisor_sort_html.index("Alpha speaking session"),
+        )
+        cost_sort_response = client.get(
+            "/exam-session-planner",
+            query_string={"session_year": "2026", "sort": "total_cost", "dir": "desc"},
+        )
+        self.assertEqual(cost_sort_response.status_code, 200)
+
     def close_monthly_registration_gate(self, session_record=None):
         session_record = session_record or self.session_record
         session_record.monthly_registrations_closed = True
@@ -2178,6 +2377,121 @@ class ScheduleWorkflowTest(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertIn('class="badge exam-status-closed" data-monthly-session-status>Closed</span>', html)
 
+    def test_monthly_registration_filters_render_and_filter_sessions(self):
+        self.session_record.exam_session_name = "Alpha monthly session"
+        self.session_record.rsg_enabled = True
+        closed_session = ExamSession(
+            exam_session_name="Beta closed session",
+            category="Path School",
+            status="Pending",
+            session_date=date(2026, 7, 25),
+            shifts="Morning",
+            modules="Speaking",
+            format="Online",
+            monthly_registrations_closed=True,
+            monthly_registrations_closed_at=datetime.now(timezone.utc),
+            pen_enabled=True,
+        )
+        db.session.add(closed_session)
+        db.session.flush()
+        db.session.add_all([
+            ExamSessionMonthlyCandidateTotal(
+                exam_session_id=self.session_record.id,
+                month=6,
+                total_candidates=30,
+            ),
+            ExamSessionMonthlyCandidateTotal(
+                exam_session_id=self.session_record.id,
+                month=7,
+                total_candidates=35,
+            ),
+            ExamSessionMonthlyCandidateTotal(
+                exam_session_id=closed_session.id,
+                month=1,
+                total_candidates=12,
+            ),
+        ])
+        db.session.commit()
+        client = self.login_client()
+
+        html = client.get("/monthly-exam-session-registrations?session_year=2026").get_data(as_text=True)
+        self.assertIn('placeholder="Exam session name"', html)
+        self.assertIn("Candidate variation", html)
+        self.assertIn('name="months" value="all"', html)
+        self.assertIn("Not active", html)
+        self.assertIn("No variation", html)
+        self.assertIn("Increased", html)
+        self.assertIn("Decreased", html)
+        self.assertIn("RSG", html)
+        self.assertIn("PEN", html)
+        self.assertIn("Archived years", html)
+        self.assertNotIn("Session years", html)
+
+        name_html = client.get(
+            "/monthly-exam-session-registrations",
+            query_string={"session_year": "2026", "q": "Beta"},
+        ).get_data(as_text=True)
+        self.assertIn("Beta closed session", name_html)
+        self.assertNotIn("Alpha monthly session", name_html)
+
+        pending_html = client.get(
+            "/monthly-exam-session-registrations",
+            query_string={"session_year": "2026", "status": "pending"},
+        ).get_data(as_text=True)
+        self.assertIn("Alpha monthly session", pending_html)
+        self.assertNotIn("Beta closed session", pending_html)
+
+        increased_html = client.get(
+            "/monthly-exam-session-registrations",
+            query_string={"session_year": "2026", "months": "7", "candidate_variation": "increased"},
+        ).get_data(as_text=True)
+        self.assertIn("Alpha monthly session", increased_html)
+        self.assertNotIn("Beta closed session", increased_html)
+
+        inactive_html = client.get(
+            "/monthly-exam-session-registrations",
+            query_string={"session_year": "2026", "months": "6", "candidate_variation": "not_active"},
+        ).get_data(as_text=True)
+        self.assertIn("Beta closed session", inactive_html)
+        self.assertNotIn("Alpha monthly session", inactive_html)
+
+        fully_inactive_html = client.get(
+            "/monthly-exam-session-registrations",
+            query_string=[
+                ("session_year", "2026"),
+                ("months", "1"),
+                ("months", "2"),
+                ("candidate_variation", "not_active"),
+            ],
+        ).get_data(as_text=True)
+        self.assertNotIn("Beta closed session", fully_inactive_html)
+        self.assertNotIn("Alpha monthly session", fully_inactive_html)
+
+        all_inactive_html = client.get(
+            "/monthly-exam-session-registrations",
+            query_string=[
+                ("session_year", "2026"),
+                ("months", "all"),
+                ("candidate_variation", "not_active"),
+            ],
+        ).get_data(as_text=True)
+        self.assertNotIn("Beta closed session", all_inactive_html)
+        self.assertNotIn("Alpha monthly session", all_inactive_html)
+
+        rsg_html = client.get(
+            "/monthly-exam-session-registrations",
+            query_string={"session_year": "2026", "rsg": "1"},
+        ).get_data(as_text=True)
+        self.assertIn("Alpha monthly session", rsg_html)
+        self.assertNotIn("Beta closed session", rsg_html)
+
+        pen_html = client.get(
+            "/monthly-exam-session-registrations",
+            query_string={"session_year": "2026", "pen": "1"},
+        ).get_data(as_text=True)
+        self.assertIn("Beta closed session", pen_html)
+        self.assertNotIn("Alpha monthly session", pen_html)
+
     def test_monthly_registration_update_returns_monthly_status(self):
         client = self.login_client()
 
@@ -3634,6 +3948,7 @@ class ScheduleWorkflowTest(unittest.TestCase):
                 "csrf_token": "token",
                 "action_key": "mark_ready",
                 "exam_session_schedule_url": "https://example.com/session-schedule",
+                "exam_entry_slips_url": "https://example.com/entry-slips",
                 "note": "Schedules are ready for review.",
                 "note_to_user_id": str(recipient.id),
             },
@@ -3916,6 +4231,41 @@ class ScheduleWorkflowTest(unittest.TestCase):
         self.assertLess(action.index("Share Journey with Juana Maria via email"), review_button_index)
         self.assertLess(action.index("data-copy-session-journey-email"), review_button_index)
 
+    def test_ready_to_send_share_buttons_are_grouped_by_contact(self):
+        self.session_record.details_url = "https://example.com/schedules"
+        self.session_record.monthly_registrations_closed = True
+        self.session_record.contact_points = json.dumps([
+            {"full_name": "Juana Maria", "phone": "+54 9 11 2850 8482", "email": "juana@example.com"},
+            {"full_name": "pedro claipole", "phone": "+54 9 11 2850 8483", "email": "pedro@example.com"},
+        ])
+        db.session.add(ExamSessionScheduleWorkflow(
+            exam_session_id=self.session_record.id,
+            status="Ready to send",
+            next_action_due_at=date(2026, 6, 30),
+        ))
+        db.session.commit()
+        client = self.login_client()
+
+        response = client.get("/pre-session-control-tower?session_year=2026&view=sessions")
+        html = response.data.decode()
+        action_start = html.index('<article class="schedule-recommended-action">')
+        action_end = html.index("</article>", action_start)
+        action = html[action_start:action_end]
+        first_row_start = action.index('<div class="schedule-contact-share-row">')
+        first_row_end = action.index("</div>", first_row_start)
+        first_row = action[first_row_start:first_row_end]
+        second_row_start = action.index('<div class="schedule-contact-share-row">', first_row_end)
+        second_row_end = action.index("</div>", second_row_start)
+        second_row = action[second_row_start:second_row_end]
+
+        self.assertEqual(action.count('class="schedule-contact-share-row"'), 2)
+        self.assertIn("Share journey with Juana Maria via WhatsApp", first_row)
+        self.assertIn("Share Journey with Juana Maria via email", first_row)
+        self.assertIn('aria-label="Copy Session Journey email for Juana Maria"', first_row)
+        self.assertIn("Share journey with pedro claipole via WhatsApp", second_row)
+        self.assertIn("Share Journey with pedro claipole via email", second_row)
+        self.assertIn('aria-label="Copy Session Journey email for pedro claipole"', second_row)
+
     def test_schedule_other_actions_always_show_schedule_and_journey_links(self):
         self.session_record.details_url = "https://example.com/schedules"
         self.session_record.monthly_registrations_closed = True
@@ -4024,8 +4374,37 @@ class ScheduleWorkflowTest(unittest.TestCase):
         form_end = html.index("</form>", form_start)
         form = html[form_start:form_end]
 
+        self.assertIn("Exam session schedule", form)
+        self.assertIn('name="exam_session_schedule_url"', form)
+        self.assertIn("Exam entry slips", form)
+        self.assertIn('name="exam_entry_slips_url"', form)
+        self.assertIn("data-schedule-link-submit disabled", form)
         self.assertNotIn("Resending deadline", form)
         self.assertNotIn('name="next_action_due_at"', form)
+
+    def test_mark_revised_ready_form_preloads_existing_links_after_first_review_round(self):
+        self.session_record.details_url = "https://example.com/revised-schedule"
+        self.session_record.exam_entry_slips_url = "https://example.com/revised-entry-slips"
+        self.session_record.monthly_registrations_closed = True
+        db.session.add(ExamSessionScheduleWorkflow(
+            exam_session_id=self.session_record.id,
+            status="Changes requested",
+            review_round=1,
+            next_action_due_at=date(2026, 6, 30),
+        ))
+        db.session.commit()
+        client = self.login_client()
+
+        response = client.get("/pre-session-control-tower?session_year=2026&view=sessions")
+        html = response.data.decode()
+        form_start = html.index(f'id="schedule-action-form-{self.session_record.id}-mark_revised_ready"')
+        form_end = html.index("</form>", form_start)
+        form = html[form_start:form_end]
+
+        self.assertIn('name="exam_session_schedule_url" value="https://example.com/revised-schedule"', form)
+        self.assertIn('name="exam_entry_slips_url" value="https://example.com/revised-entry-slips"', form)
+        self.assertIn("data-schedule-link-submit", form)
+        self.assertNotIn("data-schedule-link-submit disabled", form)
 
     def test_mark_revised_ready_sets_resending_deadline_automatically(self):
         db.session.add(ExamSessionScheduleWorkflow(
@@ -4042,12 +4421,17 @@ class ScheduleWorkflowTest(unittest.TestCase):
             data={
                 "csrf_token": "token",
                 "action_key": "mark_revised_ready",
+                "exam_session_schedule_url": "https://example.com/revised-schedule",
+                "exam_entry_slips_url": "https://example.com/revised-entry-slips",
             },
             follow_redirects=False,
         )
 
         self.assertEqual(response.status_code, 302)
         workflow = ExamSessionScheduleWorkflow.query.filter_by(exam_session_id=self.session_record.id).one()
+        db.session.refresh(self.session_record)
+        self.assertEqual(self.session_record.details_url, "https://example.com/revised-schedule")
+        self.assertEqual(self.session_record.exam_entry_slips_url, "https://example.com/revised-entry-slips")
         self.assertEqual(workflow.status, "Ready to send")
         self.assertEqual(workflow.next_action_due_at, argentina_add_business_days(datetime.now(LOCAL_TZ).date(), 2))
 
@@ -4069,6 +4453,8 @@ class ScheduleWorkflowTest(unittest.TestCase):
 
         self.assertIn("Exam session schedule", form)
         self.assertIn('name="exam_session_schedule_url"', form)
+        self.assertIn("Exam entry slips", form)
+        self.assertIn('name="exam_entry_slips_url"', form)
         self.assertIn("data-schedule-link-input", form)
         self.assertIn("data-schedule-link-submit disabled", form)
         self.assertNotIn("Sending deadline", form)
@@ -4076,6 +4462,7 @@ class ScheduleWorkflowTest(unittest.TestCase):
 
     def test_mark_ready_form_does_not_preload_existing_exam_session_schedule_link(self):
         self.session_record.details_url = "https://example.com/existing-schedule"
+        self.session_record.exam_entry_slips_url = "https://example.com/existing-entry-slips"
         db.session.add(ExamSessionScheduleWorkflow(
             exam_session_id=self.session_record.id,
             status="In progress",
@@ -4091,11 +4478,14 @@ class ScheduleWorkflowTest(unittest.TestCase):
         form = html[form_start:form_end]
 
         self.assertIn('name="exam_session_schedule_url" value=""', form)
+        self.assertIn('name="exam_entry_slips_url" value=""', form)
         self.assertNotIn("https://example.com/existing-schedule", form)
+        self.assertNotIn("https://example.com/existing-entry-slips", form)
         self.assertIn("data-schedule-link-submit disabled", form)
 
-    def test_mark_ready_form_preloads_existing_schedule_link_after_first_review_round(self):
+    def test_mark_ready_form_preloads_existing_links_after_first_review_round(self):
         self.session_record.details_url = "https://example.com/existing-schedule"
+        self.session_record.exam_entry_slips_url = "https://example.com/existing-entry-slips"
         self.session_record.monthly_registrations_closed = True
         db.session.add(ExamSessionScheduleWorkflow(
             exam_session_id=self.session_record.id,
@@ -4113,6 +4503,7 @@ class ScheduleWorkflowTest(unittest.TestCase):
         form = html[form_start:form_end]
 
         self.assertIn('name="exam_session_schedule_url" value="https://example.com/existing-schedule"', form)
+        self.assertIn('name="exam_entry_slips_url" value="https://example.com/existing-entry-slips"', form)
         self.assertIn("data-schedule-link-input", form)
         self.assertIn("data-schedule-link-submit", form)
         self.assertNotIn("data-schedule-link-submit disabled", form)
@@ -4134,6 +4525,7 @@ class ScheduleWorkflowTest(unittest.TestCase):
                 "action_key": "mark_ready",
                 "next_action_due_at": "2026-07-01",
                 "exam_session_schedule_url": "https://example.com/session-schedule",
+                "exam_entry_slips_url": "https://example.com/entry-slips",
             },
             follow_redirects=False,
         )
@@ -4142,6 +4534,7 @@ class ScheduleWorkflowTest(unittest.TestCase):
         db.session.refresh(self.session_record)
         workflow = ExamSessionScheduleWorkflow.query.filter_by(exam_session_id=self.session_record.id).one()
         self.assertEqual(self.session_record.details_url, "https://example.com/session-schedule")
+        self.assertEqual(self.session_record.exam_entry_slips_url, "https://example.com/entry-slips")
         self.assertEqual(workflow.status, "Ready to send")
         self.assertEqual(workflow.next_action_due_at, argentina_next_business_day(datetime.now(LOCAL_TZ).date()))
 
@@ -4162,6 +4555,61 @@ class ScheduleWorkflowTest(unittest.TestCase):
                 "action_key": "mark_ready",
                 "next_action_due_at": "2026-07-01",
                 "exam_session_schedule_url": "",
+                "exam_entry_slips_url": "https://example.com/entry-slips",
+            },
+            follow_redirects=False,
+        )
+
+        self.assertEqual(response.status_code, 302)
+        self.assertIn("open_schedule_action=mark_ready", response.headers["Location"])
+        workflow = ExamSessionScheduleWorkflow.query.filter_by(exam_session_id=self.session_record.id).one()
+        self.assertEqual(workflow.status, "In progress")
+
+    def test_mark_ready_rejects_missing_exam_entry_slips_link(self):
+        db.session.add(ExamSessionScheduleWorkflow(
+            exam_session_id=self.session_record.id,
+            status="In progress",
+            next_action_due_at=date(2026, 6, 30),
+        ))
+        self.session_record.monthly_registrations_closed = True
+        db.session.commit()
+        client = self.login_client()
+
+        response = client.post(
+            f"/pre-session-control-tower/sessions/{self.session_record.id}/schedule",
+            data={
+                "csrf_token": "token",
+                "action_key": "mark_ready",
+                "next_action_due_at": "2026-07-01",
+                "exam_session_schedule_url": "https://example.com/session-schedule",
+                "exam_entry_slips_url": "",
+            },
+            follow_redirects=False,
+        )
+
+        self.assertEqual(response.status_code, 302)
+        self.assertIn("open_schedule_action=mark_ready", response.headers["Location"])
+        workflow = ExamSessionScheduleWorkflow.query.filter_by(exam_session_id=self.session_record.id).one()
+        self.assertEqual(workflow.status, "In progress")
+
+    def test_mark_ready_rejects_invalid_exam_entry_slips_link(self):
+        db.session.add(ExamSessionScheduleWorkflow(
+            exam_session_id=self.session_record.id,
+            status="In progress",
+            next_action_due_at=date(2026, 6, 30),
+        ))
+        self.session_record.monthly_registrations_closed = True
+        db.session.commit()
+        client = self.login_client()
+
+        response = client.post(
+            f"/pre-session-control-tower/sessions/{self.session_record.id}/schedule",
+            data={
+                "csrf_token": "token",
+                "action_key": "mark_ready",
+                "next_action_due_at": "2026-07-01",
+                "exam_session_schedule_url": "https://example.com/session-schedule",
+                "exam_entry_slips_url": "not-a-url",
             },
             follow_redirects=False,
         )
@@ -9537,6 +9985,13 @@ class ScheduleWorkflowTest(unittest.TestCase):
         self.assertIn('>Sessions</a>', html)
         self.assertIn("<th>Bundle number</th>", html)
         self.assertIn("<th>Exam sessions</th>", html)
+        self.assertIn('placeholder="Bundle number, exam sessions, recipient"', html)
+        self.assertIn("Department", html)
+        self.assertIn("Semi-unblocked", html)
+        self.assertIn("Overdue", html)
+        self.assertIn("At risk", html)
+        self.assertIn("Archived years", html)
+        self.assertNotIn("Session years", html)
         self.assertIn("Open bundle", html)
         self.assertIn("Axis English", html)
         bundle = ExamSessionShipmentBundle.query.one()
@@ -9552,6 +10007,35 @@ class ScheduleWorkflowTest(unittest.TestCase):
         self.assertIn('data-modal-target-label="Track shipment"', bundle_row)
         self.assertIn('data-modal-shipments-only="true"', bundle_row)
 
+        by_session = client.get("/pre-session-control-tower", query_string={
+            "session_year": "2026",
+            "view": "bundles",
+            "bundle_q": "Lincoln",
+        }).get_data(as_text=True)
+        self.assertIn("Lincoln", by_session)
+        self.assertNotIn("No pending shipment bundles.", by_session)
+
+        by_recipient = client.get("/pre-session-control-tower", query_string={
+            "session_year": "2026",
+            "view": "bundles",
+            "bundle_q": "Laura",
+        }).get_data(as_text=True)
+        self.assertIn("Laura Mendez", by_recipient)
+
+        by_number = client.get("/pre-session-control-tower", query_string={
+            "session_year": "2026",
+            "view": "bundles",
+            "bundle_q": bundle.bundle_number,
+        }).get_data(as_text=True)
+        self.assertIn(f"Bundle {bundle.bundle_number}", by_number)
+
+        unblocked_filter = client.get("/pre-session-control-tower", query_string={
+            "session_year": "2026",
+            "view": "bundles",
+            "bundle_shipment": "unblocked",
+        })
+        self.assertEqual(unblocked_filter.status_code, 200)
+
         detail = client.get(f"/pre-session-control-tower?session_year=2026&view=bundle&bundle_id={bundle.id}")
         detail_html = detail.get_data(as_text=True)
         detail_table = detail_html[detail_html.index('aria-label="Schedule preparation and approval"'):detail_html.index('<div class="modal"', detail_html.index('aria-label="Schedule preparation and approval"'))]
@@ -9561,6 +10045,12 @@ class ScheduleWorkflowTest(unittest.TestCase):
         self.assertIn("Back to Bundles", detail_html)
         self.assertNotIn('aria-label="Schedule status filter"', detail_html)
         self.assertNotIn("<select name=\"schedule_status\"", detail_html)
+        self.assertIn('name="bundle_session_q"', detail_html)
+        self.assertIn("Schedule", detail_html)
+        self.assertIn("Staffing", detail_html)
+        self.assertIn("Package", detail_html)
+        self.assertIn("Archived years", detail_html)
+        self.assertNotIn("Session years", detail_html)
         self.assertNotIn("<th>Action</th>", detail_table)
         self.assertIn("<th>Session</th>", detail_table)
         self.assertNotIn("<th>Date</th>", detail_table)
@@ -9570,6 +10060,21 @@ class ScheduleWorkflowTest(unittest.TestCase):
         self.assertIn("<th>Staffing</th>", detail_table)
         self.assertIn("<th>Package</th>", detail_table)
         self.assertLess(detail_table.index("<th>Session</th>"), detail_table.index("<th>Department</th>"))
+        filtered_detail = client.get(
+            "/pre-session-control-tower",
+            query_string={
+                "session_year": "2026",
+                "view": "bundle",
+                "bundle_id": str(bundle.id),
+                "bundle_session_q": "Lincoln",
+            },
+        )
+        filtered_detail_html = filtered_detail.get_data(as_text=True)
+        filtered_detail_table = filtered_detail_html[
+            filtered_detail_html.index('aria-label="Schedule preparation and approval"'):filtered_detail_html.index('<div class="modal"', filtered_detail_html.index('aria-label="Schedule preparation and approval"'))
+        ]
+        self.assertIn("Lincoln", filtered_detail_table)
+        self.assertNotIn("Axis English", filtered_detail_table)
         self.assertLess(detail_table.index("<th>Department</th>"), detail_table.index("<th>Action description</th>"))
         self.assertLess(detail_table.index("<th>Action description</th>"), detail_table.index("<th>Schedule</th>"))
         self.assertNotIn("<th>Logistics</th>", detail_table)
@@ -14507,6 +15012,16 @@ class ScheduleWorkflowTest(unittest.TestCase):
         self.assertNotIn("<th>Schedule gate</th>", sessions_table)
         self.assertNotIn('aria-label="Schedule status filter"', html)
         self.assertNotIn("<select name=\"schedule_status\"", html)
+        self.assertIn('placeholder="Session"', html)
+        self.assertIn("Department", html)
+        self.assertIn("Logistics", html)
+        self.assertIn("Finance", html)
+        self.assertIn("Final checks", html)
+        self.assertIn("Session readiness", html)
+        self.assertIn("Incidents", html)
+        self.assertIn("Overdue", html)
+        self.assertIn("Archived years", html)
+        self.assertNotIn("Session years", html)
         self.assertNotIn('aria-label="Schedule preparation and approval summary"', html)
         self.assertNotIn("schedule-gate-ready", sessions_table)
         self.assertNotIn("schedule-gate-blocked", sessions_table)
@@ -14514,6 +15029,14 @@ class ScheduleWorkflowTest(unittest.TestCase):
         self.assertNotIn("This session cannot move to the next pre-session stages until the schedules are approved.", sessions_table)
         self.assertNotIn("Schedules are approved. The session can move to the next pre-session stages.", sessions_table)
         self.assertNotIn("Other year session", html)
+
+        search_response = client.get("/pre-session-control-tower?session_year=2026&view=sessions&session_q=Approved")
+        search_html = search_response.data.decode()
+        search_table = search_html[
+            search_html.index('aria-label="Schedule preparation and approval"'):search_html.index('<div class="modal"', search_html.index('aria-label="Schedule preparation and approval"'))
+        ]
+        self.assertIn("Approved session", search_table)
+        self.assertNotIn("June exam session", search_table)
 
         filtered_response = client.get("/pre-session-control-tower?session_year=2026&view=sessions&schedule_status=Approved")
         filtered_html = filtered_response.data.decode()

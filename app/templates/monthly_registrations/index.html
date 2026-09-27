@@ -25,36 +25,87 @@
   </div>
 </header>
 
-<section class="toolbar {% if archived_session_years %}toolbar-with-archive{% endif %}">
-  <div>
-    <p class="archived-year-title">Session years</p>
-    <p class="archived-year-copy">Use the active year selector to manage monthly registrations by year.</p>
-  </div>
-  {% if archived_session_years %}
-    <section class="archived-year-panel" aria-label="Archived Monthly exam session registration years">
-      <div>
-        <p class="archived-year-title">Archived years</p>
-        <p class="archived-year-copy">Archived years are hidden from the active selector, but their records are preserved.</p>
-      </div>
-      <div class="archived-year-list">
-        {% for year_item in archived_session_years %}
-          <article class="archived-year-item">
-            <span>{{ year_item.year }}</span>
-            <form method="post" action="{{ url_for('staff.unarchive_exam_session_year', year=year_item.year) }}" data-confirm-submit="Restore {{ year_item.year }} to active years?">
-              <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-              <input type="hidden" name="return_to" value="{{ url_for('staff.monthly_exam_session_registrations', session_year=year_item.year) }}">
-              <button class="secondary-button compact-action" type="submit">Unarchive</button>
-            </form>
-            <form method="post" action="{{ url_for('staff.delete_exam_session_year', year=year_item.year) }}" data-confirm-submit="Permanently delete {{ year_item.year }} and all its exam session records? This cannot be undone.">
-              <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-              <input type="hidden" name="return_to" value="{{ url_for('staff.monthly_exam_session_registrations') }}">
-              <button class="danger-button compact-action" type="submit">Delete permanently</button>
-            </form>
-          </article>
+<section class="toolbar monthly-registration-filters-toolbar">
+  <form method="get" class="filters monthly-registration-filters" data-auto-filter>
+    <input type="hidden" name="session_year" value="{{ selected_session_year }}">
+    <input type="search" name="q" value="{{ filters.q }}" placeholder="Exam session name" aria-label="Search by exam session name">
+    <select name="status" aria-label="Filter by status">
+      <option value="">Status</option>
+      <option value="pending" {% if filters.status == 'pending' %}selected{% endif %}>Pending</option>
+      <option value="closed" {% if filters.status == 'closed' %}selected{% endif %}>Closed</option>
+    </select>
+    <details class="exam-filter-dropdown">
+      <summary>Month{% if filters.all_months %} (All){% elif filters.months %} ({{ filters.months|length }}){% endif %}</summary>
+      <div class="exam-filter-dropdown-panel">
+        <label>
+          <input type="checkbox" name="months" value="all" data-month-filter-all {% if filters.all_months %}checked{% endif %}>
+          <span>All</span>
+        </label>
+        {% for month_number, month_name in months %}
+          <label>
+            <input type="checkbox" name="months" value="{{ month_number }}" data-month-filter-option {% if month_number in filters.months %}checked{% endif %} {% if filters.all_months %}disabled{% endif %}>
+            <span>{{ month_name }}</span>
+          </label>
         {% endfor %}
       </div>
-    </section>
-  {% endif %}
+    </details>
+    <details class="exam-filter-dropdown">
+      <summary>Candidate variation{% if filters.candidate_variation %} ({{ filters.candidate_variation|length }}){% endif %}</summary>
+      <div class="exam-filter-dropdown-panel">
+        <label>
+          <input type="checkbox" name="candidate_variation" value="not_active" {% if 'not_active' in filters.candidate_variation %}checked{% endif %}>
+          <span>Not active</span>
+        </label>
+        <label>
+          <input type="checkbox" name="candidate_variation" value="no_variation" {% if 'no_variation' in filters.candidate_variation %}checked{% endif %}>
+          <span>No variation</span>
+        </label>
+        <label>
+          <input type="checkbox" name="candidate_variation" value="increased" {% if 'increased' in filters.candidate_variation %}checked{% endif %}>
+          <span>Increased</span>
+        </label>
+        <label>
+          <input type="checkbox" name="candidate_variation" value="decreased" {% if 'decreased' in filters.candidate_variation %}checked{% endif %}>
+          <span>Decreased</span>
+        </label>
+      </div>
+    </details>
+    <label class="monthly-marker-filter">
+      <input type="checkbox" name="rsg" value="1" {% if filters.rsg %}checked{% endif %}>
+      <span>RSG</span>
+    </label>
+    <label class="monthly-marker-filter">
+      <input type="checkbox" name="pen" value="1" {% if filters.pen %}checked{% endif %}>
+      <span>PEN</span>
+    </label>
+  </form>
+  <div class="monthly-registration-filter-actions">
+    <a class="text-link" href="{{ url_for('staff.monthly_exam_session_registrations', session_year=selected_session_year) }}">Reset</a>
+    <details class="exam-archived-years-dropdown">
+      <summary class="secondary-button compact-action">Archived years</summary>
+      <div class="exam-archived-years-panel">
+        {% if archived_session_years %}
+          {% for year_item in archived_session_years %}
+            <article class="archived-year-item">
+              <span>{{ year_item.year }}</span>
+              <form method="post" action="{{ url_for('staff.unarchive_exam_session_year', year=year_item.year) }}" data-confirm-submit="Restore {{ year_item.year }} to active years?">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                <input type="hidden" name="return_to" value="{{ url_for('staff.monthly_exam_session_registrations', session_year=year_item.year) }}">
+                <button class="secondary-button compact-action" type="submit">Unarchive</button>
+              </form>
+              <form method="post" action="{{ url_for('staff.delete_exam_session_year', year=year_item.year) }}" data-confirm-submit="Permanently delete {{ year_item.year }} and all its exam session records? This cannot be undone.">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                <input type="hidden" name="return_to" value="{{ url_for('staff.monthly_exam_session_registrations') }}">
+                <button class="danger-button compact-action" type="submit">Delete permanently</button>
+              </form>
+            </article>
+          {% endfor %}
+        {% else %}
+          <p class="archived-year-copy">No archived years.</p>
+        {% endif %}
+      </div>
+    </details>
+  </div>
 </section>
 
 {% if session_years %}
