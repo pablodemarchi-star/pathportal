@@ -85,6 +85,8 @@
       <strong>
         {% if role_label == 'supervisor' %}
           {{ total }} supervisor{{ '' if total == 1 else 's' }} required{% if counts.remote_total and counts.regular_total %} ({{ counts.remote_total }} remote){% elif counts.remote_total %} (remote){% endif %}
+        {% elif role_label == 'emergency contact' %}
+          {{ total }} EMERGENCY CONTACT{{ '' if total == 1 else 'S' }} REQUIRED
         {% else %}
           {{ total }} {{ role_label }}{{ '' if total == 1 else 's' }} required
         {% endif %}
@@ -854,6 +856,7 @@
         <th>Shifts</th>
         <th>Modules</th>
         {{ exam_session_sort_header('format', 'Format') }}
+        {{ exam_session_sort_header('emergency_contacts', 'Emergency contacts') }}
         {{ exam_session_sort_header('supervisors', 'Supervisors') }}
         {{ exam_session_sort_header('examiners', 'Examiners') }}
         {{ exam_session_sort_header('interns', 'Interns') }}
@@ -862,6 +865,7 @@
         {{ exam_session_sort_header('city', 'City', 'centered-table-column') }}
         {{ exam_session_sort_header('province', 'Province', 'centered-table-column') }}
         <th class="all-session-details-column">All session details</th>
+        {{ exam_session_sort_header('emergency_contacts_cost', 'Emergency contacts cost') }}
         {{ exam_session_sort_header('supervisors_cost', 'Supervisors cost') }}
         {{ exam_session_sort_header('examiners_cost', 'Examiners cost') }}
         {{ exam_session_sort_header('interns_cost', 'Interns cost') }}
@@ -948,6 +952,13 @@
           </td>
           <td>{{ format_badge(session.format) }}</td>
           {% set duplicate_tags_by_role = same_date_duplicate_tags.get(session.id, {}) %}
+          <td class="session-staffing-summary-cell">
+            {% if session.emergency_contact_not_required %}
+              <span class="emergency-contact-not-required">Not required</span>
+            {% else %}
+              {{ staffing_summary(emergency_contact_assignments.get(session.id, []), 'emergency contact', duplicate_tags_by_role.get('emergency_contact', [])) }}
+            {% endif %}
+          </td>
           <td class="session-staffing-summary-cell">{{ staffing_summary(supervisor_assignments.get(session.id, []), 'supervisor', duplicate_tags_by_role.get('supervisor', [])) }}</td>
           <td class="session-staffing-summary-cell">{{ staffing_summary(examiner_assignments.get(session.id, []), 'examiner', duplicate_tags_by_role.get('examiner', [])) }}</td>
           <td class="session-staffing-summary-cell">{{ staffing_summary(intern_assignments.get(session.id, []), 'intern', duplicate_tags_by_role.get('intern', [])) }}</td>
@@ -990,6 +1001,7 @@
             {% endif %}
           </td>
           {% set session_costs = session_cost_summaries.get(session.id, {}) %}
+          <td class="session-cost-cell">{{ session_costs.get('emergency_contacts', '-') }}</td>
           <td class="session-cost-cell">{{ session_costs.get('supervisors', '-') }}</td>
           <td class="session-cost-cell">{{ session_costs.get('examiners', '-') }}</td>
           <td class="session-cost-cell">{{ session_costs.get('interns', '-') }}</td>
@@ -1014,13 +1026,14 @@
         </tr>
       {% else %}
         <tr>
-          <td colspan="24" class="empty-state">No exam sessions found.</td>
+          <td colspan="26" class="empty-state">No exam sessions found.</td>
         </tr>
       {% endfor %}
     </tbody>
     <tfoot class="exam-session-cost-footer">
       <tr>
-        <td colspan="15">Visible total</td>
+        <td colspan="16">Visible total</td>
+        <td class="session-cost-cell">{{ session_page_cost_totals.get('emergency_contacts', '-') }}</td>
         <td class="session-cost-cell">{{ session_page_cost_totals.get('supervisors', '-') }}</td>
         <td class="session-cost-cell">{{ session_page_cost_totals.get('examiners', '-') }}</td>
         <td class="session-cost-cell">{{ session_page_cost_totals.get('interns', '-') }}</td>

@@ -258,12 +258,14 @@ class ScheduleWorkflowTest(unittest.TestCase):
             "exam_session_name",
             "session_date",
             "format",
+            "emergency_contacts",
             "supervisors",
             "examiners",
             "interns",
             "logistics",
             "city",
             "province",
+            "emergency_contacts_cost",
             "supervisors_cost",
             "examiners_cost",
             "interns_cost",
@@ -593,6 +595,126 @@ class ScheduleWorkflowTest(unittest.TestCase):
         self.assertLess(html.index('name="format" value="Onsite"'), html.index('name="format" value="Online"'))
         self.assertLess(html.index('name="format" value="Online"'), html.index('name="format" value="Online at exam centre"'))
         self.assertNotIn("Minimum number of candidates required", table_head)
+
+    def test_exam_session_table_shows_emergency_contact_column(self):
+        emergency_member = AcademicStaff(
+            id=101,
+            status="Active",
+            full_name="Eva Emergency",
+            roles="Supervisor",
+            email="eva@example.com",
+        )
+        db.session.add(emergency_member)
+        self.session_record.exam_session_name = "Emergency assigned"
+        self.session_record.emergency_contact_required = True
+        self.session_record.emergency_contact_member_id = emergency_member.id
+        self.session_record.emergency_contact_participation_status = "Pre-confirmed"
+        self.session_record.emergency_contact_additional_contacts = json.dumps([{
+            "member_id": emergency_member.id,
+            "status": "Pre-confirmed",
+            "start_time": "",
+            "end_time": "",
+        }])
+        not_required_session = ExamSession(
+            exam_session_name="Emergency not required",
+            category="Path School",
+            status="Pending",
+            session_date=self.session_record.session_date,
+            shifts="Morning",
+            modules="Speaking",
+            format="Onsite",
+            emergency_contact_not_required=True,
+        )
+        no_decision_session = ExamSession(
+            exam_session_name="Emergency no decision",
+            category="Path School",
+            status="Pending",
+            session_date=self.session_record.session_date,
+            shifts="Morning",
+            modules="Speaking",
+            format="Onsite",
+        )
+        uncovered_session = ExamSession(
+            exam_session_name="Emergency uncovered",
+            category="Path School",
+            status="Pending",
+            session_date=self.session_record.session_date,
+            shifts="Morning",
+            modules="Speaking",
+            format="Onsite",
+            emergency_contact_required=True,
+        )
+        db.session.add_all([not_required_session, no_decision_session, uncovered_session])
+        db.session.flush()
+        db.session.add(ExamSessionSupervisorAssignment(
+            exam_session_id=not_required_session.id,
+            team_member_id=emergency_member.id,
+            participation_status="Confirmed",
+        ))
+        db.session.commit()
+
+        response = self.login_client().get("/exam-session-planner?session_year=2026")
+        html = response.get_data(as_text=True)
+        table_html = html.split('<section class="table-wrap"', 1)[1].split('<div class="modal"', 1)[0]
+        header_html = table_html.split("<thead>", 1)[1].split("</thead>", 1)[0]
+
+        self.assertEqual(response.status_code, 200)
+        self.assertLess(header_html.index("Format"), header_html.index("Emergency contacts"))
+        self.assertLess(header_html.index("Emergency contacts"), header_html.index("Supervisors"))
+        self.assertLess(header_html.index("All session details"), header_html.index("Emergency contacts cost"))
+        self.assertLess(header_html.index("Emergency contacts cost"), header_html.index("Supervisors cost"))
+        self.assertIn("sort=emergency_contacts", header_html)
+        self.assertIn("sort=emergency_contacts_cost", header_html)
+        assigned_marker = "<span>Emergency assigned</span>"
+        assigned_index = table_html.index(assigned_marker)
+        assigned_row = table_html[table_html.rfind("<tr", 0, assigned_index):table_html.index("</tr>", assigned_index)]
+        self.assertIn("2 EMERGENCY CONTACTS REQUIRED", assigned_row)
+        self.assertIn("Member duplication", assigned_row)
+        self.assertIn("Eva Emergency", assigned_row)
+        self.assertIn("(pre-confirmed)", assigned_row)
+        not_required_marker = "<span>Emergency not required</span>"
+        not_required_index = table_html.index(not_required_marker)
+        not_required_row = table_html[table_html.rfind("<tr", 0, not_required_index):table_html.index("</tr>", not_required_index)]
+        self.assertIn("Not required", not_required_row)
+        uncovered_marker = "<span>Emergency uncovered</span>"
+        uncovered_index = table_html.index(uncovered_marker)
+        uncovered_row = table_html[table_html.rfind("<tr", 0, uncovered_index):table_html.index("</tr>", uncovered_index)]
+        self.assertIn("1 EMERGENCY CONTACT REQUIRED", uncovered_row)
+        self.assertIn("1 role to cover", uncovered_row)
+        emergency_contacts_sort_asc_html = self.login_client().get(
+            "/exam-session-planner",
+            query_string={"session_year": "2026", "sort": "emergency_contacts", "dir": "asc"},
+        ).get_data(as_text=True)
+        emergency_contacts_sort_asc_table = emergency_contacts_sort_asc_html.split('<section class="table-wrap"', 1)[1].split('<div class="modal"', 1)[0]
+        self.assertLess(
+            emergency_contacts_sort_asc_table.index("<span>Emergency no decision</span>"),
+            emergency_contacts_sort_asc_table.index("<span>Emergency not required</span>"),
+        )
+        self.assertLess(
+            emergency_contacts_sort_asc_table.index("<span>Emergency not required</span>"),
+            emergency_contacts_sort_asc_table.index("<span>Emergency uncovered</span>"),
+        )
+        self.assertLess(
+            emergency_contacts_sort_asc_table.index("<span>Emergency uncovered</span>"),
+            emergency_contacts_sort_asc_table.index("<span>Emergency assigned</span>"),
+        )
+        emergency_contacts_sort_desc_html = self.login_client().get(
+            "/exam-session-planner",
+            query_string={"session_year": "2026", "sort": "emergency_contacts", "dir": "desc"},
+        ).get_data(as_text=True)
+        emergency_contacts_sort_desc_table = emergency_contacts_sort_desc_html.split('<section class="table-wrap"', 1)[1].split('<div class="modal"', 1)[0]
+        self.assertLess(
+            emergency_contacts_sort_desc_table.index("<span>Emergency assigned</span>"),
+            emergency_contacts_sort_desc_table.index("<span>Emergency uncovered</span>"),
+        )
+        self.assertLess(
+            emergency_contacts_sort_desc_table.index("<span>Emergency uncovered</span>"),
+            emergency_contacts_sort_desc_table.index("<span>Emergency not required</span>"),
+        )
+        self.assertLess(
+            emergency_contacts_sort_desc_table.index("<span>Emergency not required</span>"),
+            emergency_contacts_sort_desc_table.index("<span>Emergency no decision</span>"),
+        )
 
     def test_exam_session_shifts_use_evening_instead_of_night(self):
         self.session_record.shifts = "Night"
@@ -6758,6 +6880,7 @@ class ScheduleWorkflowTest(unittest.TestCase):
         self.assertIn("Mateo Silva", html)
         self.assertIn("(confirmed)", html)
         self.assertIn("1 role to cover", html)
+        self.assertIn("Emergency contacts cost", html)
         self.assertIn("Supervisors cost", html)
         self.assertIn("Examiners cost", html)
         self.assertIn("Interns cost", html)

@@ -4221,6 +4221,12 @@ td .centered-dash {
   font-weight: 900;
 }
 
+.emergency-contact-not-required {
+  color: var(--color-primary-dark);
+  font-size: 13px;
+  font-weight: 400;
+}
+
 .total-cost-cell {
   background: rgba(0, 76, 101, 0.04);
   color: var(--color-primary);

@@ -5086,6 +5086,7 @@ def build_exam_session_cost_summaries(
 ):
     summaries = {
         session_id: {
+            "emergency_contacts": empty_currency_totals(),
             "supervisors": empty_currency_totals(),
             "examiners": empty_currency_totals(),
             "interns": empty_currency_totals(),
@@ -5095,6 +5096,7 @@ def build_exam_session_cost_summaries(
     }
     for assignment in supervisor_assignment_records:
         add_assignment_fee_totals(summaries.setdefault(assignment.exam_session_id, {
+            "emergency_contacts": empty_currency_totals(),
             "supervisors": empty_currency_totals(),
             "examiners": empty_currency_totals(),
             "interns": empty_currency_totals(),
@@ -5102,6 +5104,7 @@ def build_exam_session_cost_summaries(
         })["supervisors"], assignment)
     for assignment in examiner_assignment_records:
         add_assignment_fee_totals(summaries.setdefault(assignment.exam_session_id, {
+            "emergency_contacts": empty_currency_totals(),
             "supervisors": empty_currency_totals(),
             "examiners": empty_currency_totals(),
             "interns": empty_currency_totals(),
@@ -5109,6 +5112,7 @@ def build_exam_session_cost_summaries(
         })["examiners"], assignment)
     for assignment in intern_assignment_records:
         add_assignment_fee_totals(summaries.setdefault(assignment.exam_session_id, {
+            "emergency_contacts": empty_currency_totals(),
             "supervisors": empty_currency_totals(),
             "examiners": empty_currency_totals(),
             "interns": empty_currency_totals(),
@@ -5116,6 +5120,7 @@ def build_exam_session_cost_summaries(
         })["interns"], assignment)
     for concept in logistics_concept_records:
         add_logistics_fee_totals(summaries.setdefault(concept.exam_session_id, {
+            "emergency_contacts": empty_currency_totals(),
             "supervisors": empty_currency_totals(),
             "examiners": empty_currency_totals(),
             "interns": empty_currency_totals(),
@@ -5124,12 +5129,14 @@ def build_exam_session_cost_summaries(
     formatted = {}
     for session_id, totals in summaries.items():
         total_cost = merge_currency_totals(
+            totals["emergency_contacts"],
             totals["supervisors"],
             totals["examiners"],
             totals["interns"],
             totals["logistics"],
         )
         formatted[session_id] = {
+            "emergency_contacts": format_currency_totals(totals["emergency_contacts"]),
             "supervisors": format_currency_totals(totals["supervisors"]),
             "examiners": format_currency_totals(totals["examiners"]),
             "interns": format_currency_totals(totals["interns"]),
@@ -5141,6 +5148,7 @@ def build_exam_session_cost_summaries(
 
 def build_exam_session_page_cost_totals(session_cost_summaries):
     page_totals = {
+        "emergency_contacts": empty_currency_totals(),
         "supervisors": empty_currency_totals(),
         "examiners": empty_currency_totals(),
         "interns": empty_currency_totals(),
@@ -5151,12 +5159,14 @@ def build_exam_session_page_cost_totals(session_cost_summaries):
             merge_source = parse_formatted_currency_totals(summary.get(section_key, "-"))
             page_totals[section_key] = merge_currency_totals(page_totals[section_key], merge_source)
     page_total_cost = merge_currency_totals(
+        page_totals["emergency_contacts"],
         page_totals["supervisors"],
         page_totals["examiners"],
         page_totals["interns"],
         page_totals["logistics"],
     )
     return {
+        "emergency_contacts": format_currency_totals(page_totals["emergency_contacts"]),
         "supervisors": format_currency_totals(page_totals["supervisors"]),
         "examiners": format_currency_totals(page_totals["examiners"]),
         "interns": format_currency_totals(page_totals["interns"]),
@@ -5191,15 +5201,28 @@ def same_date_assignment_groups():
             if not session_record:
                 continue
             member_ids.add(assignment.team_member_id)
-            assignment_rows.append((assignment, role_key))
+            assignment_rows.append((assignment.exam_session_id, assignment.team_member_id, role_key))
+    for session_record in session_records:
+        if not session_record.emergency_contact_required or session_record.emergency_contact_not_required:
+            continue
+        for emergency_contact_row in session_record.emergency_contact_rows():
+            member_id = emergency_contact_row.get("member_id")
+            if not member_id:
+                continue
+            try:
+                member_id = int(member_id)
+            except (TypeError, ValueError):
+                continue
+            member_ids.add(member_id)
+            assignment_rows.append((session_record.id, member_id, "emergency_contact"))
     member_names = {
         member.id: member.full_name
         for member in AcademicStaff.query.filter(AcademicStaff.id.in_(member_ids)).all()
     } if member_ids else {}
     grouped = {}
-    for assignment, role_key in assignment_rows:
-        session_record = session_map.get(assignment.exam_session_id)
-        key = (assignment.team_member_id, session_record.session_date)
+    for session_id, member_id, role_key in assignment_rows:
+        session_record = session_map.get(session_id)
+        key = (member_id, session_record.session_date)
         grouped.setdefault(key, {})
         grouped[key].setdefault(session_record.id, {"session": session_record, "roles": set()})
         grouped[key][session_record.id]["roles"].add(role_key)
@@ -5234,7 +5257,7 @@ def build_exam_session_same_date_conflicts(visible_session_ids):
 def build_exam_session_same_date_duplicate_tags(visible_session_ids):
     grouped, member_names = same_date_assignment_groups()
     visible_session_ids = set(visible_session_ids)
-    role_keys = ("supervisor", "examiner", "intern")
+    role_keys = ("supervisor", "emergency_contact", "examiner", "intern")
     tags = {session_id: {role_key: [] for role_key in role_keys} for session_id in visible_session_ids}
     duplicate_groups = [
         (member_id, session_date, sessions_for_member)
@@ -20411,12 +20434,14 @@ def exam_session_planner():
         "exam_session_name",
         "session_date",
         "format",
+        "emergency_contacts",
         "supervisors",
         "examiners",
         "interns",
         "logistics",
         "city",
         "province",
+        "emergency_contacts_cost",
         "supervisors_cost",
         "examiners_cost",
         "interns_cost",
@@ -20426,6 +20451,7 @@ def exam_session_planner():
         "updated_on",
     }
     cost_sort_columns = {
+        "emergency_contacts_cost": "emergency_contacts",
         "supervisors_cost": "supervisors",
         "examiners_cost": "examiners",
         "interns_cost": "interns",
@@ -20601,7 +20627,28 @@ def exam_session_planner():
         summary_key = cost_sort_columns.get(sort_by, "")
         return money_sort_value(cost_summaries.get(session_record.id, {}).get(summary_key, "-"))
 
-    if sort_by in cost_sort_columns:
+    def emergency_contact_sort_value(session_record):
+        if session_record.emergency_contact_not_required:
+            return (1, 0)
+        if not session_record.emergency_contact_required:
+            return (0, 0)
+        rows = session_record.emergency_contact_rows()
+        assigned_count = sum(1 for row in rows if row.get("member_id"))
+        return (2, assigned_count or 1)
+
+    if sort_by == "emergency_contacts":
+        all_sessions = query.order_by(ExamSession.session_date.asc(), ExamSession.updated_on.desc()).all()
+        all_sessions = sorted(
+            all_sessions,
+            key=lambda session_record: (
+                emergency_contact_sort_value(session_record),
+                session_record.session_date,
+                (session_record.exam_session_name or "").lower(),
+            ),
+            reverse=sort_dir == "desc",
+        )
+        sessions, pagination = paginate_items(all_sessions)
+    elif sort_by in cost_sort_columns:
         all_sessions = query.order_by(ExamSession.session_date.asc(), ExamSession.updated_on.desc()).all()
         all_session_ids = [session_record.id for session_record in all_sessions]
         all_supervisor_assignments = []
@@ -20876,6 +20923,40 @@ def exam_session_planner():
         examiner_assignment_records,
         intern_assignment_records,
     )
+    emergency_contact_member_ids = set()
+    for session_record in sessions:
+        if session_record.emergency_contact_required and not session_record.emergency_contact_not_required:
+            for emergency_contact_row in session_record.emergency_contact_rows():
+                member_id = emergency_contact_row.get("member_id")
+                if member_id:
+                    try:
+                        emergency_contact_member_ids.add(int(member_id))
+                    except (TypeError, ValueError):
+                        continue
+    emergency_contact_member_lookup = {
+        member.id: member
+        for member in AcademicStaff.query.filter(AcademicStaff.id.in_(emergency_contact_member_ids)).all()
+    } if emergency_contact_member_ids else {}
+    emergency_contact_assignments = {}
+    for session_record in sessions:
+        rows = []
+        if session_record.emergency_contact_required and not session_record.emergency_contact_not_required:
+            for emergency_contact_row in session_record.emergency_contact_rows():
+                member_id = emergency_contact_row.get("member_id")
+                try:
+                    member_id = int(member_id) if member_id else None
+                except (TypeError, ValueError):
+                    member_id = None
+                status = emergency_contact_row.get("status") or "Pending"
+                if status == "Sent":
+                    status = "Pre-confirmation sent"
+                rows.append({
+                    "team_member": emergency_contact_member_lookup.get(member_id) if member_id else None,
+                    "potential_entry": None,
+                    "participation_status": status,
+                    "is_remote": False,
+                })
+        emergency_contact_assignments[session_record.id] = rows
     supervisor_member_map = {
         **{str(member.id): member for member in supervisor_members},
         **{member.option_value: member for member in potential_entry_members},
@@ -20981,6 +21062,7 @@ def exam_session_planner():
         examiner_member_map=examiner_member_map,
         intern_member_map=intern_member_map,
         supervisor_assignments=supervisor_assignments,
+        emergency_contact_assignments=emergency_contact_assignments,
         shipment_recipient_supervisors=shipment_recipient_supervisors,
         examiner_assignments=examiner_assignments,
         intern_assignments=intern_assignments,
