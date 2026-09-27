@@ -715,10 +715,25 @@ def create_app():
         if exam_session_columns and "exam_entry_slips_url" not in exam_session_columns:
             db.session.execute(text("ALTER TABLE exam_session ADD COLUMN exam_entry_slips_url VARCHAR(500)"))
             db.session.commit()
-        if exam_session_columns and "schedule_folder_url" not in exam_session_columns:
+        schedule_folder_column_exists = bool(exam_session_columns and "schedule_folder_url" in exam_session_columns)
+        if exam_session_columns and not schedule_folder_column_exists:
             db.session.execute(text("ALTER TABLE exam_session ADD COLUMN schedule_folder_url VARCHAR(500)"))
-            db.session.execute(text("UPDATE exam_session SET schedule_folder_url = details_url WHERE details_url IS NOT NULL AND details_url != ''"))
             db.session.commit()
+            schedule_folder_column_exists = True
+        if schedule_folder_column_exists:
+            db.session.execute(text("CREATE TABLE IF NOT EXISTS schema_cleanup_marker (cleanup_key VARCHAR(120) PRIMARY KEY)"))
+            schedule_folder_cleanup_key = "clear_auto_prefilled_schedule_folder_url"
+            schedule_folder_cleanup_done = db.session.execute(
+                text("SELECT cleanup_key FROM schema_cleanup_marker WHERE cleanup_key = :cleanup_key"),
+                {"cleanup_key": schedule_folder_cleanup_key},
+            ).first()
+            if not schedule_folder_cleanup_done:
+                db.session.execute(text("UPDATE exam_session SET schedule_folder_url = NULL WHERE schedule_folder_url IS NOT NULL AND schedule_folder_url != ''"))
+                db.session.execute(
+                    text("INSERT INTO schema_cleanup_marker (cleanup_key) VALUES (:cleanup_key)"),
+                    {"cleanup_key": schedule_folder_cleanup_key},
+                )
+                db.session.commit()
         if exam_session_columns and "category" not in exam_session_columns:
             db.session.execute(text("ALTER TABLE exam_session ADD COLUMN category VARCHAR(80) NOT NULL DEFAULT ''"))
             if "exam_centre_type" in exam_session_columns:
