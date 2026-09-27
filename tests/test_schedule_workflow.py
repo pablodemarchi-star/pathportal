@@ -149,6 +149,8 @@ class ScheduleWorkflowTest(unittest.TestCase):
             modules="Speaking",
             format="Onsite",
             details_url="https://example.com/sinapsis",
+            schedule_folder_url="https://example.com/schedule-folder",
+            exam_entry_slips_url="https://example.com/entry-slips-folder",
         )
         db.session.add(self.session_record)
         db.session.commit()
@@ -661,7 +663,8 @@ class ScheduleWorkflowTest(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertLess(header_html.index("Format"), header_html.index("Emergency contacts"))
         self.assertLess(header_html.index("Emergency contacts"), header_html.index("Supervisors"))
-        self.assertLess(header_html.index("All session details"), header_html.index("Emergency contacts cost"))
+        self.assertLess(header_html.index("All session details"), header_html.index("Session folders"))
+        self.assertLess(header_html.index("Session folders"), header_html.index("Emergency contacts cost"))
         self.assertLess(header_html.index("Emergency contacts cost"), header_html.index("Supervisors cost"))
         self.assertIn("sort=emergency_contacts", header_html)
         self.assertIn("sort=emergency_contacts_cost", header_html)
@@ -800,6 +803,8 @@ class ScheduleWorkflowTest(unittest.TestCase):
             modules="Speaking",
             format="Online",
             emergency_contact_not_required=True,
+            schedule_folder_url="https://example.com/schedule-folder",
+            exam_entry_slips_url="https://example.com/entry-slips-folder",
         )
         db.session.add(session_record)
         db.session.flush()
@@ -1020,6 +1025,8 @@ class ScheduleWorkflowTest(unittest.TestCase):
                 "city": "Buenos Aires",
                 "province": "Buenos Aires",
                 "details_url": "https://example.com/details",
+                "schedule_folder_url": "https://example.com/schedule-folder",
+                "exam_entry_slips_url": "https://example.com/entry-slips-folder",
             },
             follow_redirects=True,
         )
@@ -1033,6 +1040,8 @@ class ScheduleWorkflowTest(unittest.TestCase):
         self.assertEqual(created_session.city, "Buenos Aires")
         self.assertEqual(created_session.province, "Buenos Aires")
         self.assertEqual(created_session.date_confirmation_status, "Pending")
+        self.assertEqual(created_session.schedule_folder_url, "https://example.com/schedule-folder")
+        self.assertEqual(created_session.exam_entry_slips_url, "https://example.com/entry-slips-folder")
 
         response = client.post(
             f"/exam-session-planner/sessions/{created_session.id}",
@@ -1049,6 +1058,8 @@ class ScheduleWorkflowTest(unittest.TestCase):
                 "modules": "Speaking",
                 "format": "Online",
                 "details_url": "https://example.com/details",
+                "schedule_folder_url": "https://example.com/revised-schedule-folder",
+                "exam_entry_slips_url": "https://example.com/revised-entry-slips-folder",
             },
             follow_redirects=True,
         )
@@ -1057,6 +1068,8 @@ class ScheduleWorkflowTest(unittest.TestCase):
         self.assertEqual(db.session.get(ExamSession, created_session.id).minimum_candidates_required, 0)
         self.assertEqual(db.session.get(ExamSession, created_session.id).exam_session_organised_by, "the exam centre")
         self.assertEqual(db.session.get(ExamSession, created_session.id).full_address_google_maps, "")
+        self.assertEqual(db.session.get(ExamSession, created_session.id).schedule_folder_url, "https://example.com/revised-schedule-folder")
+        self.assertEqual(db.session.get(ExamSession, created_session.id).exam_entry_slips_url, "https://example.com/revised-entry-slips-folder")
 
     def test_exam_session_rejects_invalid_minimum_candidates_required(self):
         client = self.login_client()
@@ -1850,6 +1863,8 @@ class ScheduleWorkflowTest(unittest.TestCase):
             shifts="Morning",
             modules="Speaking",
             format="Online",
+            schedule_folder_url="https://example.com/schedule-folder",
+            exam_entry_slips_url="https://example.com/entry-slips-folder",
         )
         upcoming_session = ExamSession(
             exam_session_name="Upcoming action",
@@ -2143,6 +2158,8 @@ class ScheduleWorkflowTest(unittest.TestCase):
             modules="Speaking",
             format="Online",
             emergency_contact_not_required=True,
+            schedule_folder_url="https://example.com/schedule-folder",
+            exam_entry_slips_url="https://example.com/entry-slips-folder",
         )
         db.session.add(session_record)
         db.session.flush()
@@ -2188,6 +2205,8 @@ class ScheduleWorkflowTest(unittest.TestCase):
             shifts="Morning",
             modules="Speaking",
             format="Online",
+            schedule_folder_url="https://example.com/schedule-folder",
+            exam_entry_slips_url="https://example.com/entry-slips-folder",
         )
         db.session.add(session_record)
         db.session.flush()
@@ -2247,6 +2266,8 @@ class ScheduleWorkflowTest(unittest.TestCase):
             modules="Speaking",
             format="Onsite",
             emergency_contact_not_required=True,
+            schedule_folder_url="https://example.com/schedule-folder",
+            exam_entry_slips_url="https://example.com/entry-slips-folder",
         )
         db.session.add(session_record)
         db.session.flush()
@@ -2289,6 +2310,8 @@ class ScheduleWorkflowTest(unittest.TestCase):
             modules="Speaking",
             format="Online",
             emergency_contact_not_required=True,
+            schedule_folder_url="https://example.com/schedule-folder",
+            exam_entry_slips_url="https://example.com/entry-slips-folder",
         )
         db.session.add(session_record)
         db.session.flush()
@@ -2316,6 +2339,48 @@ class ScheduleWorkflowTest(unittest.TestCase):
         self.assertEqual(statuses[session_record.id], "Pending")
 
         session_record.date_confirmation_status = "Confirmed"
+        db.session.commit()
+        statuses = exam_session_overall_statuses_by_session_ids([session_record.id])
+        self.assertEqual(statuses[session_record.id], "Confirmed")
+
+    def test_exam_session_overall_status_requires_session_folder_links(self):
+        session_record = ExamSession(
+            exam_session_name="Session links required",
+            category="Path School",
+            status="Pending",
+            session_date=date(2026, 7, 1),
+            minimum_candidates_required=30,
+            shifts="Morning",
+            modules="Speaking",
+            format="Online",
+            emergency_contact_not_required=True,
+            date_confirmation_status="Confirmed",
+        )
+        db.session.add(session_record)
+        db.session.flush()
+        db.session.add_all([
+            ExamSessionSupervisorAssignment(
+                exam_session_id=session_record.id,
+                team_member_id=1,
+                participation_status="Confirmed",
+            ),
+            ExamSessionMonthlyCandidateTotal(
+                exam_session_id=session_record.id,
+                month=6,
+                total_candidates=30,
+            ),
+        ])
+        db.session.commit()
+
+        statuses = exam_session_overall_statuses_by_session_ids([session_record.id])
+        self.assertEqual(statuses[session_record.id], "Pending")
+
+        session_record.schedule_folder_url = "https://example.com/schedule-folder"
+        db.session.commit()
+        statuses = exam_session_overall_statuses_by_session_ids([session_record.id])
+        self.assertEqual(statuses[session_record.id], "Pending")
+
+        session_record.exam_entry_slips_url = "https://example.com/entry-slips-folder"
         db.session.commit()
         statuses = exam_session_overall_statuses_by_session_ids([session_record.id])
         self.assertEqual(statuses[session_record.id], "Confirmed")
@@ -2399,6 +2464,45 @@ class ScheduleWorkflowTest(unittest.TestCase):
 
         self.assertIn("Assign staff member as Emergency contact.", tooltip)
         self.assertNotIn("Select Emergency contact required or Emergency contact NOT required.", tooltip)
+
+    def test_exam_session_pending_tooltip_lists_missing_session_links(self):
+        session_record = ExamSession(
+            exam_session_name="Session links tooltip",
+            category="Path School",
+            status="Pending",
+            session_date=date(2026, 7, 2),
+            shifts="Morning",
+            modules="Speaking",
+            format="Online",
+            emergency_contact_not_required=True,
+            date_confirmation_status="Confirmed",
+        )
+        db.session.add(session_record)
+        db.session.flush()
+        assignment = ExamSessionSupervisorAssignment(
+            exam_session_id=session_record.id,
+            team_member_id=1,
+            participation_status="Confirmed",
+        )
+        db.session.add_all([
+            assignment,
+            ExamSessionMonthlyCandidateTotal(
+                exam_session_id=session_record.id,
+                month=6,
+                total_candidates=30,
+            ),
+        ])
+        db.session.commit()
+        candidate_contract = monthly_candidate_requirement_contracts([session_record.id])[session_record.id]
+        tooltip = exam_session_pending_status_tooltip(
+            staffing_readiness_contract([assignment], [], []),
+            logistics_readiness_contract([assignment], [], None),
+            session_record,
+            [assignment],
+            candidate_contract,
+        )
+
+        self.assertIn("Session links have not been configured.", tooltip)
 
     def test_monthly_registration_update_recalculates_exam_session_status(self):
         session_record = ExamSession(
@@ -4505,7 +4609,7 @@ class ScheduleWorkflowTest(unittest.TestCase):
         self.assertNotIn('name="next_action_due_at"', form)
 
     def test_mark_revised_ready_form_preloads_existing_links_after_first_review_round(self):
-        self.session_record.details_url = "https://example.com/revised-schedule"
+        self.session_record.schedule_folder_url = "https://example.com/revised-schedule"
         self.session_record.exam_entry_slips_url = "https://example.com/revised-entry-slips"
         self.session_record.monthly_registrations_closed = True
         db.session.add(ExamSessionScheduleWorkflow(
@@ -4552,7 +4656,8 @@ class ScheduleWorkflowTest(unittest.TestCase):
         self.assertEqual(response.status_code, 302)
         workflow = ExamSessionScheduleWorkflow.query.filter_by(exam_session_id=self.session_record.id).one()
         db.session.refresh(self.session_record)
-        self.assertEqual(self.session_record.details_url, "https://example.com/revised-schedule")
+        self.assertEqual(self.session_record.details_url, "https://example.com/sinapsis")
+        self.assertEqual(self.session_record.schedule_folder_url, "https://example.com/revised-schedule")
         self.assertEqual(self.session_record.exam_entry_slips_url, "https://example.com/revised-entry-slips")
         self.assertEqual(workflow.status, "Ready to send")
         self.assertEqual(workflow.next_action_due_at, argentina_add_business_days(datetime.now(LOCAL_TZ).date(), 2))
@@ -4583,7 +4688,7 @@ class ScheduleWorkflowTest(unittest.TestCase):
         self.assertNotIn('name="next_action_due_at"', form)
 
     def test_mark_ready_form_does_not_preload_existing_exam_session_schedule_link(self):
-        self.session_record.details_url = "https://example.com/existing-schedule"
+        self.session_record.schedule_folder_url = "https://example.com/existing-schedule"
         self.session_record.exam_entry_slips_url = "https://example.com/existing-entry-slips"
         db.session.add(ExamSessionScheduleWorkflow(
             exam_session_id=self.session_record.id,
@@ -4606,7 +4711,7 @@ class ScheduleWorkflowTest(unittest.TestCase):
         self.assertIn("data-schedule-link-submit disabled", form)
 
     def test_mark_ready_form_preloads_existing_links_after_first_review_round(self):
-        self.session_record.details_url = "https://example.com/existing-schedule"
+        self.session_record.schedule_folder_url = "https://example.com/existing-schedule"
         self.session_record.exam_entry_slips_url = "https://example.com/existing-entry-slips"
         self.session_record.monthly_registrations_closed = True
         db.session.add(ExamSessionScheduleWorkflow(
@@ -4655,7 +4760,8 @@ class ScheduleWorkflowTest(unittest.TestCase):
         self.assertEqual(response.status_code, 302)
         db.session.refresh(self.session_record)
         workflow = ExamSessionScheduleWorkflow.query.filter_by(exam_session_id=self.session_record.id).one()
-        self.assertEqual(self.session_record.details_url, "https://example.com/session-schedule")
+        self.assertEqual(self.session_record.details_url, "https://example.com/sinapsis")
+        self.assertEqual(self.session_record.schedule_folder_url, "https://example.com/session-schedule")
         self.assertEqual(self.session_record.exam_entry_slips_url, "https://example.com/entry-slips")
         self.assertEqual(workflow.status, "Ready to send")
         self.assertEqual(workflow.next_action_due_at, argentina_next_business_day(datetime.now(LOCAL_TZ).date()))

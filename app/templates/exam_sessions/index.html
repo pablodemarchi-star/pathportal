@@ -693,6 +693,23 @@
       All session details
       <input name="details_url" value="{{ session.details_url if session else '' }}" placeholder="https://...">
     </label>
+    <fieldset class="full-span session-folders-fieldset">
+      <legend>Session folders</legend>
+      <ul class="session-folder-input-list">
+        <li>
+          <label>
+            <span>Schedule folder:</span>
+            <input type="url" name="schedule_folder_url" value="{{ session.schedule_folder_url if session else '' }}" placeholder="https://...">
+          </label>
+        </li>
+        <li>
+          <label>
+            <span>Exam entry slips folder:</span>
+            <input type="url" name="exam_entry_slips_url" value="{{ session.exam_entry_slips_url if session else '' }}" placeholder="https://...">
+          </label>
+        </li>
+      </ul>
+    </fieldset>
     <div class="form-actions full-span">
       <button class="secondary-button" type="button" data-close-modal>Cancel</button>
       <button class="primary-button" type="submit" data-exam-session-submit disabled>{{ submit_label }}</button>
@@ -865,6 +882,7 @@
         {{ exam_session_sort_header('city', 'City', 'centered-table-column') }}
         {{ exam_session_sort_header('province', 'Province', 'centered-table-column') }}
         <th class="all-session-details-column">All session details</th>
+        <th class="session-folders-column">Session folders</th>
         {{ exam_session_sort_header('emergency_contacts_cost', 'Emergency contacts cost') }}
         {{ exam_session_sort_header('supervisors_cost', 'Supervisors cost') }}
         {{ exam_session_sort_header('examiners_cost', 'Examiners cost') }}
@@ -1000,6 +1018,20 @@
               <span class="centered-dash muted">-</span>
             {% endif %}
           </td>
+          <td class="session-folders-cell">
+            <div class="session-folders-cell-stack">
+              {% if session.schedule_folder_url %}
+                <a href="{{ session.schedule_folder_url }}" target="_blank" rel="noopener noreferrer">Schedule folder</a>
+              {% else %}
+                <span>Schedule folder</span>
+              {% endif %}
+              {% if session.exam_entry_slips_url %}
+                <a href="{{ session.exam_entry_slips_url }}" target="_blank" rel="noopener noreferrer">Exam entry slips folder</a>
+              {% else %}
+                <span>Exam entry slips folder</span>
+              {% endif %}
+            </div>
+          </td>
           {% set session_costs = session_cost_summaries.get(session.id, {}) %}
           <td class="session-cost-cell">{{ session_costs.get('emergency_contacts', '-') }}</td>
           <td class="session-cost-cell">{{ session_costs.get('supervisors', '-') }}</td>
@@ -1026,13 +1058,13 @@
         </tr>
       {% else %}
         <tr>
-          <td colspan="26" class="empty-state">No exam sessions found.</td>
+          <td colspan="27" class="empty-state">No exam sessions found.</td>
         </tr>
       {% endfor %}
     </tbody>
     <tfoot class="exam-session-cost-footer">
       <tr>
-        <td colspan="16">Visible total</td>
+        <td colspan="17">Visible total</td>
         <td class="session-cost-cell">{{ session_page_cost_totals.get('emergency_contacts', '-') }}</td>
         <td class="session-cost-cell">{{ session_page_cost_totals.get('supervisors', '-') }}</td>
         <td class="session-cost-cell">{{ session_page_cost_totals.get('examiners', '-') }}</td>

@@ -764,7 +764,7 @@
     <div class="schedule-form-error" data-schedule-action-error hidden></div>
     {% if action.key in ['mark_ready', 'mark_revised_ready'] %}
       {% set preload_schedule_link = view and view.review_round and view.review_round > 0 %}
-      {% set schedule_link_value = session.details_url if preload_schedule_link and session.details_url else '' %}
+      {% set schedule_link_value = (session.schedule_folder_url or session.details_url) if preload_schedule_link and (session.schedule_folder_url or session.details_url) else '' %}
       {% set entry_slips_link_value = session.exam_entry_slips_url if preload_schedule_link and session.exam_entry_slips_url else '' %}
       <label for="exam-session-schedule-{{ session.id }}-{{ action.key }}">
         Exam session schedule <span class="required-marker">*</span>
@@ -2706,7 +2706,7 @@
               </div>
               <ol>
                 <li>Enter the exam session in Sinapsis and download the candidate labels for each exam room.</li>
-                <li>Verify that the label count matches the number of candidates in each room on the {% if session.details_url %}<a href="{{ session.details_url }}" target="_blank" rel="noopener noreferrer" aria-label="Open approved schedule folder">approved schedule in this folder</a>{% else %}approved schedule in this folder{% endif %}.</li>
+                <li>Verify that the label count matches the number of candidates in each room on the {% if session.schedule_folder_url or session.details_url %}<a href="{{ session.schedule_folder_url or session.details_url }}" target="_blank" rel="noopener noreferrer" aria-label="Open approved schedule folder">approved schedule in this folder</a>{% else %}approved schedule in this folder{% endif %}.</li>
               </ol>
             </div>
             <div class="package-preparation-actions" aria-label="Candidate label verification actions">
@@ -4746,7 +4746,7 @@ This stage has already been marked as complete. Reopening it may affect package 
           <section class="schedule-other-actions" aria-label="Other schedule workflow actions">
             <h4>Other actions</h4>
             <div class="schedule-other-action-list">
-              <a class="schedule-share-button compact-action{% if not session.details_url or not view.monthly_registrations_closed %} is-disabled{% endif %}" href="{{ session.details_url or '#' }}" target="_blank" rel="noopener"{% if not session.details_url or not view.monthly_registrations_closed %} aria-disabled="true" tabindex="-1" title="{% if not session.details_url %}Session schedule link is required.{% else %}Monthly registrations must be closed before opening this schedule.{% endif %}"{% endif %}>View schedule</a>
+              <a class="schedule-share-button compact-action{% if not (session.schedule_folder_url or session.details_url) or not view.monthly_registrations_closed %} is-disabled{% endif %}" href="{{ session.schedule_folder_url or session.details_url or '#' }}" target="_blank" rel="noopener"{% if not (session.schedule_folder_url or session.details_url) or not view.monthly_registrations_closed %} aria-disabled="true" tabindex="-1" title="{% if not (session.schedule_folder_url or session.details_url) %}Session schedule link is required.{% else %}Monthly registrations must be closed before opening this schedule.{% endif %}"{% endif %}>View schedule</a>
               <a class="schedule-share-button compact-action{% if not institution_journey_share.enabled or not institution_journey_share.url or not view.monthly_registrations_closed %} is-disabled{% endif %}" href="{% if institution_journey_share.enabled and institution_journey_share.url and view.monthly_registrations_closed %}{{ institution_journey_share.url }}{% else %}#{% endif %}" target="_blank" rel="noopener"{% if not institution_journey_share.enabled or not institution_journey_share.url or not view.monthly_registrations_closed %} aria-disabled="true" tabindex="-1" title="{% if not institution_journey_share.enabled or not institution_journey_share.url %}Institution Journey link is required.{% else %}Monthly registrations must be closed before opening this journey.{% endif %}"{% endif %}>View journey</a>
               {% for action in view.available_transitions %}
                 {% if action.key != primary_key and action.key != 'update_deadline' %}

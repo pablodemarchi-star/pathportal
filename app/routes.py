@@ -2339,6 +2339,8 @@ def exam_session_pending_status_tooltip(staffing_contract, logistics_contract, s
         missing_items.append("Confirm the session date.")
     if session_record and not exam_session_shipment_recipient_ready(session_record, assignments or []):
         missing_items.append("Assign Receives shipment for onsite sessions.")
+    if session_record and not exam_session_session_links_ready(session_record):
+        missing_items.append("Session links have not been configured.")
     if candidate_contract and not candidate_contract.get("ready"):
         missing_items.append(
             "Minimum number of candidates not met: "
@@ -2752,6 +2754,8 @@ def validate_exam_session_form(form):
     session_format = form.get("format", "").strip()
     location_url = form.get("location_url", "").strip() if "location_url" in form else None
     details_url = form.get("details_url", "").strip()
+    schedule_folder_url = form.get("schedule_folder_url", "").strip()
+    exam_entry_slips_url = form.get("exam_entry_slips_url", "").strip()
     full_address_google_maps = form.get("full_address_google_maps", "").strip()
     city = form.get("city", "").strip()
     province = form.get("province", "").strip()
@@ -2787,6 +2791,10 @@ def validate_exam_session_form(form):
         province = ""
     if details_url and not is_valid_url(details_url):
         errors.append("Please enter a valid link.")
+    if schedule_folder_url and not is_valid_url(schedule_folder_url):
+        errors.append("Please enter a valid Schedule folder link.")
+    if exam_entry_slips_url and not is_valid_url(exam_entry_slips_url):
+        errors.append("Please enter a valid Exam entry slips folder link.")
 
     return errors, {
         "exam_session_name": exam_session_name,
@@ -2804,6 +2812,8 @@ def validate_exam_session_form(form):
         "format": session_format,
         "location_url": location_url,
         "details_url": details_url,
+        "schedule_folder_url": schedule_folder_url,
+        "exam_entry_slips_url": exam_entry_slips_url,
     }
 
 
@@ -2826,6 +2836,8 @@ def apply_exam_session_form(session_record, data):
     if data["location_url"] is not None:
         session_record.location_url = data["location_url"]
     session_record.details_url = data["details_url"]
+    session_record.schedule_folder_url = data["schedule_folder_url"]
+    session_record.exam_entry_slips_url = data["exam_entry_slips_url"]
 
 
 ACADEMIC_STAFF_EXPORT_HEADERS = [
@@ -13425,7 +13437,7 @@ def path_session_journey_contract(session_record, audience, today=None, sources=
         "date_confirmation_confirmed": session_record.date_confirmation_status == "Confirmed",
         "schedule_confirmation_label": "Confirmed" if schedule_ready else "In progress",
         "schedule_confirmed": schedule_ready,
-        "schedule_url": (session_record.details_url or "").strip(),
+        "schedule_url": ((session_record.schedule_folder_url or session_record.details_url) or "").strip(),
         "entry_slips_url": "#",
         "public_journey_url": public_journey_url,
         "material_shipment": material_shipment,
@@ -17617,7 +17629,7 @@ def update_schedule_workflow(session_id):
         if not is_valid_url(entry_slips_url):
             flash("Please enter a valid Exam entry slips link.", "error")
             return schedule_workflow_redirect(session_record, status_filter, action_key)
-        session_record.details_url = schedule_url
+        session_record.schedule_folder_url = schedule_url
         session_record.exam_entry_slips_url = entry_slips_url
         due_at = argentina_next_business_day(datetime.now(LOCAL_TZ).date())
     if action_key == "send_for_review":
@@ -22164,6 +22176,14 @@ def update_exam_session_overall_status(session_record):
     session_record.status = statuses.get(session_record.id, "Pending")
 
 
+def exam_session_session_links_ready(session_record):
+    return bool(
+        session_record
+        and (session_record.schedule_folder_url or "").strip()
+        and (session_record.exam_entry_slips_url or "").strip()
+    )
+
+
 def exam_session_overall_statuses_by_session_ids(session_ids):
     session_ids = [session_id for session_id in session_ids if session_id is not None]
     statuses_by_session = {session_id: "Pending" for session_id in session_ids}
@@ -22223,6 +22243,7 @@ def exam_session_overall_statuses_by_session_ids(session_ids):
         emergency_contact_ready = exam_session_emergency_contact_decision_ready(session_record)
         date_confirmation_ready = bool(session_record and session_record.date_confirmation_status == "Confirmed")
         shipment_recipient_ready = exam_session_shipment_recipient_ready(session_record, all_assignments)
+        session_links_ready = exam_session_session_links_ready(session_record)
         candidate_requirement_ready = candidate_requirement_contracts.get(session_id, {}).get("ready", False)
         statuses_by_session[session_id] = (
             "Confirmed"
@@ -22231,6 +22252,7 @@ def exam_session_overall_statuses_by_session_ids(session_ids):
                 and emergency_contact_ready
                 and date_confirmation_ready
                 and shipment_recipient_ready
+                and session_links_ready
                 and candidate_requirement_ready
             )
             else "Pending"
@@ -22565,6 +22587,7 @@ def duplicate_exam_session_year():
             format=source_session.format,
             location_url=source_session.location_url,
             details_url=source_session.details_url,
+            schedule_folder_url=source_session.schedule_folder_url,
             exam_entry_slips_url=source_session.exam_entry_slips_url,
             contact_points=source_session.contact_points,
         )

@@ -715,6 +715,10 @@ def create_app():
         if exam_session_columns and "exam_entry_slips_url" not in exam_session_columns:
             db.session.execute(text("ALTER TABLE exam_session ADD COLUMN exam_entry_slips_url VARCHAR(500)"))
             db.session.commit()
+        if exam_session_columns and "schedule_folder_url" not in exam_session_columns:
+            db.session.execute(text("ALTER TABLE exam_session ADD COLUMN schedule_folder_url VARCHAR(500)"))
+            db.session.execute(text("UPDATE exam_session SET schedule_folder_url = details_url WHERE details_url IS NOT NULL AND details_url != ''"))
+            db.session.commit()
         if exam_session_columns and "category" not in exam_session_columns:
             db.session.execute(text("ALTER TABLE exam_session ADD COLUMN category VARCHAR(80) NOT NULL DEFAULT ''"))
             if "exam_centre_type" in exam_session_columns:

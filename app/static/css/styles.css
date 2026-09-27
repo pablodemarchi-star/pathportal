@@ -4067,6 +4067,34 @@ td .centered-dash {
   text-align: center;
 }
 
+.session-folders-column,
+.session-folders-cell {
+  min-width: 150px;
+  text-align: center;
+}
+
+.session-folders-cell {
+  color: var(--color-muted);
+  font-size: 12px;
+  line-height: 1.25;
+}
+
+.session-folders-cell-stack {
+  display: grid;
+  gap: 5px;
+  justify-items: center;
+}
+
+.session-folders-cell a {
+  color: var(--badge-blue-text);
+  font-weight: 700;
+  text-decoration: underline;
+}
+
+.session-folders-cell span {
+  color: var(--color-muted);
+}
+
 .centered-table-column,
 .centered-table-cell {
   text-align: center;
@@ -4082,6 +4110,38 @@ td .centered-dash {
   display: inline-flex;
   justify-content: center;
   margin-inline: auto;
+}
+
+.session-folders-fieldset {
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  padding: 12px 14px;
+  background: var(--path-grey-50);
+}
+
+.session-folders-fieldset legend {
+  padding: 0 6px;
+  color: var(--color-primary-dark);
+  font-size: 12px;
+  font-weight: 850;
+}
+
+.session-folder-input-list {
+  display: grid;
+  gap: 10px;
+  margin: 0;
+  padding-left: 18px;
+}
+
+.session-folder-input-list label {
+  display: grid;
+  grid-template-columns: 180px minmax(0, 1fr);
+  align-items: center;
+  gap: 10px;
+}
+
+.session-folder-input-list input {
+  width: 100%;
 }
 
 .exam-module-picker {
