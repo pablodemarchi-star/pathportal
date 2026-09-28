@@ -78,6 +78,7 @@ from app.models import (
 )
 from app.routes import (
     apply_schedule_workflow_transition,
+    argentina_add_business_hours,
     argentina_add_business_days,
     argentina_next_business_day,
     argentina_subtract_business_days,
@@ -378,6 +379,7 @@ class ScheduleWorkflowTest(unittest.TestCase):
         session_record = session_record or self.session_record
         session_record.monthly_registrations_closed = True
         session_record.monthly_registrations_closed_at = datetime.now(timezone.utc)
+        session_record.date_confirmation_status = "Confirmed"
         db.session.commit()
 
     def create_package_unit_record(self, status="Not started", expected=None, actual=None, session_record=None):
@@ -2897,6 +2899,7 @@ class ScheduleWorkflowTest(unittest.TestCase):
             status="In progress",
         ))
         self.session_record.monthly_registrations_closed = True
+        self.session_record.date_confirmation_status = "Confirmed"
         db.session.commit()
         client = self.login_client()
 
@@ -2914,7 +2917,7 @@ class ScheduleWorkflowTest(unittest.TestCase):
         self.assertIn("open_schedule_modal", response.headers["Location"])
         self.assertIn("open_schedule_action=update_deadline", response.headers["Location"])
 
-    def test_start_schedule_preparation_form_does_not_show_manual_deadline(self):
+    def test_start_schedule_preparation_form_submits_directly_without_fields(self):
         client = self.login_client()
 
         response = client.get("/pre-session-control-tower?session_year=2026&view=sessions")
@@ -2926,6 +2929,13 @@ class ScheduleWorkflowTest(unittest.TestCase):
         self.assertNotIn("Schedule preparation deadline", form)
         self.assertNotIn("Set the date by which schedule preparation should be completed.", form)
         self.assertNotIn('name="next_action_due_at"', form)
+        self.assertNotIn('name="note"', form)
+        self.assertNotIn("Confirm and start preparation", form)
+        self.assertIn('data-schedule-action-key="start_preparation"', form)
+        with open("app/static/js/app.js", encoding="utf-8") as script_file:
+            script = script_file.read()
+        self.assertIn('form.dataset.scheduleActionKey === "start_preparation"', script)
+        self.assertIn("form.requestSubmit();", script)
 
     def test_schedule_modal_action_buttons_are_disabled_until_monthly_registrations_are_closed(self):
         client = self.login_client()
@@ -2940,13 +2950,13 @@ class ScheduleWorkflowTest(unittest.TestCase):
         actions = schedule_actions_html()
         self.assertIn('aria-expanded="false" disabled>Start schedule preparation</button>', actions)
         self.assertIn('data-schedule-monthly-blocked="true"', actions)
-        self.assertIn("Monthly exam session registrations must be closed before proceeding with schedule preparation.", actions)
+        self.assertIn("Close exam registrations and confirm exam session date.", actions)
 
         self.close_monthly_registration_gate()
         actions = schedule_actions_html()
         self.assertIn('aria-expanded="false">Start schedule preparation</button>', actions)
         self.assertNotIn('data-schedule-monthly-blocked="true"', actions)
-        self.assertNotIn("Monthly exam session registrations must be closed before proceeding with schedule preparation.", actions)
+        self.assertNotIn("Close exam registrations to begin pre-session preparation.", actions)
 
     def test_schedule_workflow_post_is_blocked_until_monthly_registrations_are_closed(self):
         client = self.login_client()
@@ -2962,7 +2972,7 @@ class ScheduleWorkflowTest(unittest.TestCase):
 
         self.assertEqual(response.status_code, 200)
         self.assertEqual(ExamSessionScheduleWorkflow.query.count(), 0)
-        self.assertIn("Schedule actions are blocked until Monthly exam session registrations is Closed.", response.get_data(as_text=True))
+        self.assertIn("Close exam registrations and confirm exam session date.", response.get_data(as_text=True))
 
     def test_start_schedule_preparation_redirects_to_schedule_only_modal(self):
         self.close_monthly_registration_gate()
@@ -4153,7 +4163,7 @@ class ScheduleWorkflowTest(unittest.TestCase):
                 note = ExamSessionScheduleNote.query.one()
                 self.assertEqual(note.note_text, f"Review {context} details.")
 
-    def test_schedule_action_note_creates_visible_note_mention(self):
+    def test_mark_ready_ignores_manual_note_payload(self):
         actor = User(full_name="Admin User", email="admin-action-note@example.com", department="Admin", is_active=True)
         recipient = User(full_name="Schedule Reviewer", email="reviewer-action-note@example.com", department="Management", is_active=True)
         actor.set_password("secret123")
@@ -4165,6 +4175,7 @@ class ScheduleWorkflowTest(unittest.TestCase):
             next_action_due_at=date(2026, 6, 30),
         ))
         self.session_record.monthly_registrations_closed = True
+        self.session_record.date_confirmation_status = "Confirmed"
         db.session.commit()
         client = self.login_client_for_user(actor)
 
@@ -4173,8 +4184,8 @@ class ScheduleWorkflowTest(unittest.TestCase):
             data={
                 "csrf_token": "token",
                 "action_key": "mark_ready",
-                "exam_session_schedule_url": "https://example.com/session-schedule",
-                "exam_entry_slips_url": "https://example.com/entry-slips",
+                "schedule_uploaded_confirmation": "1",
+                "entry_slips_uploaded_confirmation": "1",
                 "note": "Schedules are ready for review.",
                 "note_to_user_id": str(recipient.id),
             },
@@ -4182,11 +4193,10 @@ class ScheduleWorkflowTest(unittest.TestCase):
         )
 
         self.assertEqual(response.status_code, 302)
-        note = ExamSessionScheduleNote.query.one()
-        mention = ExamSessionScheduleNoteMention.query.one()
-        self.assertEqual(note.note_text, "Schedules are ready for review.")
-        self.assertEqual(note.from_user_id, actor.id)
-        self.assertEqual(mention.to_user_id, recipient.id)
+        self.assertEqual(ExamSessionScheduleNote.query.count(), 0)
+        self.assertEqual(ExamSessionScheduleNoteMention.query.count(), 0)
+        workflow = ExamSessionScheduleWorkflow.query.filter_by(exam_session_id=self.session_record.id).one()
+        self.assertEqual(workflow.status, "Ready to send")
 
     def test_staffing_notes_panel_adds_mentions_and_can_be_marked_read(self):
         actor = User(full_name="Admin User", email="admin-staffing-note@example.com", department="Admin", is_active=True)
@@ -4378,6 +4388,7 @@ class ScheduleWorkflowTest(unittest.TestCase):
             next_action_due_at=original_deadline,
         ))
         self.session_record.monthly_registrations_closed = True
+        self.session_record.date_confirmation_status = "Confirmed"
         db.session.commit()
         client = self.login_client()
 
@@ -4395,7 +4406,7 @@ class ScheduleWorkflowTest(unittest.TestCase):
         self.assertEqual(workflow.status, "In progress")
         self.assertEqual(workflow.next_action_due_at, original_deadline)
 
-    def test_send_for_review_form_does_not_show_manual_review_deadline(self):
+    def test_send_for_review_form_submits_directly_without_fields(self):
         db.session.add(ExamSessionScheduleWorkflow(
             exam_session_id=self.session_record.id,
             status="Ready to send",
@@ -4412,6 +4423,13 @@ class ScheduleWorkflowTest(unittest.TestCase):
 
         self.assertNotIn("Review deadline", form)
         self.assertNotIn('name="next_action_due_at"', form)
+        self.assertNotIn('name="note"', form)
+        self.assertNotIn("Confirm and mark as sent", form)
+        self.assertIn('data-schedule-action-key="send_for_review"', form)
+        with open("app/static/js/app.js", encoding="utf-8") as script_file:
+            script = script_file.read()
+        self.assertIn('"send_for_review"', script)
+        self.assertIn("form.requestSubmit();", script)
 
     def test_ready_to_send_action_shows_schedule_share_buttons_before_review(self):
         self.session_record.details_url = "https://example.com/schedules"
@@ -4524,6 +4542,7 @@ class ScheduleWorkflowTest(unittest.TestCase):
             next_action_due_at=date(2026, 6, 30),
         ))
         self.session_record.monthly_registrations_closed = True
+        self.session_record.date_confirmation_status = "Confirmed"
         db.session.commit()
         client = self.login_client()
 
@@ -4532,6 +4551,7 @@ class ScheduleWorkflowTest(unittest.TestCase):
             data={
                 "csrf_token": "token",
                 "action_key": "send_for_review",
+                "note": "Should not be saved.",
             },
             follow_redirects=False,
         )
@@ -4539,7 +4559,8 @@ class ScheduleWorkflowTest(unittest.TestCase):
         self.assertEqual(response.status_code, 302)
         workflow = ExamSessionScheduleWorkflow.query.filter_by(exam_session_id=self.session_record.id).one()
         self.assertEqual(workflow.status, "Sent for review")
-        self.assertEqual(workflow.next_action_due_at, argentina_add_business_days(datetime.now(LOCAL_TZ).date(), 2))
+        self.assertEqual(workflow.next_action_due_at, argentina_add_business_hours(datetime.now(LOCAL_TZ), 48).date())
+        self.assertIsNone(ExamSessionScheduleEvent.query.filter_by(workflow_id=workflow.id).order_by(ExamSessionScheduleEvent.id.desc()).first().note)
 
     def test_record_changes_form_does_not_show_manual_modification_deadline(self):
         db.session.add(ExamSessionScheduleWorkflow(
@@ -4567,6 +4588,7 @@ class ScheduleWorkflowTest(unittest.TestCase):
             next_action_due_at=date(2026, 6, 30),
         ))
         self.session_record.monthly_registrations_closed = True
+        self.session_record.date_confirmation_status = "Confirmed"
         db.session.commit()
         client = self.login_client()
 
@@ -4601,17 +4623,27 @@ class ScheduleWorkflowTest(unittest.TestCase):
         form = html[form_start:form_end]
 
         self.assertIn("Exam session schedule", form)
-        self.assertIn('name="exam_session_schedule_url"', form)
+        self.assertIn("I confirm the new exam session schedule has been uploaded to the Schedule folder.", form)
+        self.assertNotIn("I confirm the exam session schedule has been uploaded to the Schedule folder.", form)
+        self.assertIn('name="schedule_uploaded_confirmation"', form)
         self.assertIn("Exam entry slips", form)
-        self.assertIn('name="exam_entry_slips_url"', form)
+        self.assertIn("I confirm the new exam entry slips have been uploaded to the Exam entry slips folder.", form)
+        self.assertNotIn("I confirm the exam entry slips have been uploaded to the Exam entry slips folder.", form)
+        self.assertIn('name="entry_slips_uploaded_confirmation"', form)
+        self.assertIn("data-schedule-ready-checkbox", form)
         self.assertIn("data-schedule-link-submit disabled", form)
+        self.assertNotIn('name="exam_session_schedule_url"', form)
+        self.assertNotIn('name="exam_entry_slips_url"', form)
+        self.assertNotIn("Add the link to the completed schedules before marking them as ready to send.", form)
+        self.assertNotIn('name="note"', form)
         self.assertNotIn("Resending deadline", form)
         self.assertNotIn('name="next_action_due_at"', form)
 
-    def test_mark_revised_ready_form_preloads_existing_links_after_first_review_round(self):
+    def test_mark_revised_ready_form_uses_existing_folder_access_chips(self):
         self.session_record.schedule_folder_url = "https://example.com/revised-schedule"
         self.session_record.exam_entry_slips_url = "https://example.com/revised-entry-slips"
         self.session_record.monthly_registrations_closed = True
+        self.session_record.date_confirmation_status = "Confirmed"
         db.session.add(ExamSessionScheduleWorkflow(
             exam_session_id=self.session_record.id,
             status="Changes requested",
@@ -4627,10 +4659,14 @@ class ScheduleWorkflowTest(unittest.TestCase):
         form_end = html.index("</form>", form_start)
         form = html[form_start:form_end]
 
-        self.assertIn('name="exam_session_schedule_url" value="https://example.com/revised-schedule"', form)
-        self.assertIn('name="exam_entry_slips_url" value="https://example.com/revised-entry-slips"', form)
+        self.assertIn('href="https://example.com/revised-schedule"', form)
+        self.assertIn('href="https://example.com/revised-entry-slips"', form)
+        self.assertIn("data-schedule-ready-checkbox", form)
         self.assertIn("data-schedule-link-submit", form)
-        self.assertNotIn("data-schedule-link-submit disabled", form)
+        self.assertIn("data-schedule-link-submit disabled", form)
+        self.assertNotIn('name="exam_session_schedule_url"', form)
+        self.assertNotIn('name="exam_entry_slips_url"', form)
+        self.assertNotIn('name="note"', form)
 
     def test_mark_revised_ready_sets_resending_deadline_automatically(self):
         db.session.add(ExamSessionScheduleWorkflow(
@@ -4639,6 +4675,7 @@ class ScheduleWorkflowTest(unittest.TestCase):
             next_action_due_at=date(2026, 6, 30),
         ))
         self.session_record.monthly_registrations_closed = True
+        self.session_record.date_confirmation_status = "Confirmed"
         db.session.commit()
         client = self.login_client()
 
@@ -4647,8 +4684,8 @@ class ScheduleWorkflowTest(unittest.TestCase):
             data={
                 "csrf_token": "token",
                 "action_key": "mark_revised_ready",
-                "exam_session_schedule_url": "https://example.com/revised-schedule",
-                "exam_entry_slips_url": "https://example.com/revised-entry-slips",
+                "schedule_uploaded_confirmation": "1",
+                "entry_slips_uploaded_confirmation": "1",
             },
             follow_redirects=False,
         )
@@ -4657,13 +4694,37 @@ class ScheduleWorkflowTest(unittest.TestCase):
         workflow = ExamSessionScheduleWorkflow.query.filter_by(exam_session_id=self.session_record.id).one()
         db.session.refresh(self.session_record)
         self.assertEqual(self.session_record.details_url, "https://example.com/sinapsis")
-        self.assertEqual(self.session_record.schedule_folder_url, "https://example.com/revised-schedule")
-        self.assertEqual(self.session_record.exam_entry_slips_url, "https://example.com/revised-entry-slips")
+        self.assertEqual(self.session_record.schedule_folder_url, "https://example.com/schedule-folder")
+        self.assertEqual(self.session_record.exam_entry_slips_url, "https://example.com/entry-slips-folder")
         self.assertEqual(workflow.status, "Ready to send")
         self.assertEqual(workflow.next_action_due_at, argentina_add_business_days(datetime.now(LOCAL_TZ).date(), 2))
 
-    def test_mark_ready_form_requires_exam_session_schedule_link(self):
-        self.session_record.details_url = ""
+    def test_mark_revised_ready_rejects_missing_upload_confirmations(self):
+        db.session.add(ExamSessionScheduleWorkflow(
+            exam_session_id=self.session_record.id,
+            status="Changes requested",
+            next_action_due_at=date(2026, 6, 30),
+        ))
+        self.session_record.monthly_registrations_closed = True
+        self.session_record.date_confirmation_status = "Confirmed"
+        db.session.commit()
+        client = self.login_client()
+
+        response = client.post(
+            f"/pre-session-control-tower/sessions/{self.session_record.id}/schedule",
+            data={
+                "csrf_token": "token",
+                "action_key": "mark_revised_ready",
+            },
+            follow_redirects=False,
+        )
+
+        self.assertEqual(response.status_code, 302)
+        self.assertIn("open_schedule_action=mark_revised_ready", response.headers["Location"])
+        workflow = ExamSessionScheduleWorkflow.query.filter_by(exam_session_id=self.session_record.id).one()
+        self.assertEqual(workflow.status, "Changes requested")
+
+    def test_mark_ready_form_requires_upload_confirmations(self):
         db.session.add(ExamSessionScheduleWorkflow(
             exam_session_id=self.session_record.id,
             status="In progress",
@@ -4679,17 +4740,27 @@ class ScheduleWorkflowTest(unittest.TestCase):
         form = html[form_start:form_end]
 
         self.assertIn("Exam session schedule", form)
-        self.assertIn('name="exam_session_schedule_url"', form)
+        self.assertIn("I confirm the exam session schedule has been uploaded to the Schedule folder.", form)
+        self.assertIn('name="schedule_uploaded_confirmation"', form)
+        self.assertIn('href="https://example.com/schedule-folder"', form)
+        self.assertIn("Access Schedule folder", form)
         self.assertIn("Exam entry slips", form)
-        self.assertIn('name="exam_entry_slips_url"', form)
-        self.assertIn("data-schedule-link-input", form)
+        self.assertIn("I confirm the exam entry slips have been uploaded to the Exam entry slips folder.", form)
+        self.assertIn('name="entry_slips_uploaded_confirmation"', form)
+        self.assertIn('href="https://example.com/entry-slips-folder"', form)
+        self.assertIn("Access Exam entry slips folder", form)
+        self.assertIn("data-schedule-ready-checkbox", form)
         self.assertIn("data-schedule-link-submit disabled", form)
+        self.assertNotIn('name="exam_session_schedule_url"', form)
+        self.assertNotIn('name="exam_entry_slips_url"', form)
+        self.assertNotIn("Add the link to the completed schedules before marking them as ready to send.", form)
+        self.assertNotIn('name="note"', form)
         self.assertNotIn("Sending deadline", form)
         self.assertNotIn('name="next_action_due_at"', form)
 
-    def test_mark_ready_form_does_not_preload_existing_exam_session_schedule_link(self):
+    def test_mark_ready_form_shows_disabled_access_chips_when_folders_are_missing(self):
         self.session_record.schedule_folder_url = "https://example.com/existing-schedule"
-        self.session_record.exam_entry_slips_url = "https://example.com/existing-entry-slips"
+        self.session_record.exam_entry_slips_url = ""
         db.session.add(ExamSessionScheduleWorkflow(
             exam_session_id=self.session_record.id,
             status="In progress",
@@ -4704,13 +4775,11 @@ class ScheduleWorkflowTest(unittest.TestCase):
         form_end = html.index("</form>", form_start)
         form = html[form_start:form_end]
 
-        self.assertIn('name="exam_session_schedule_url" value=""', form)
-        self.assertIn('name="exam_entry_slips_url" value=""', form)
-        self.assertNotIn("https://example.com/existing-schedule", form)
-        self.assertNotIn("https://example.com/existing-entry-slips", form)
+        self.assertIn('href="https://example.com/existing-schedule"', form)
+        self.assertIn('<span class="schedule-folder-access-chip is-disabled" aria-disabled="true">Access Exam entry slips folder</span>', form)
         self.assertIn("data-schedule-link-submit disabled", form)
 
-    def test_mark_ready_form_preloads_existing_links_after_first_review_round(self):
+    def test_mark_ready_form_does_not_show_url_inputs_after_first_review_round(self):
         self.session_record.schedule_folder_url = "https://example.com/existing-schedule"
         self.session_record.exam_entry_slips_url = "https://example.com/existing-entry-slips"
         self.session_record.monthly_registrations_closed = True
@@ -4729,19 +4798,21 @@ class ScheduleWorkflowTest(unittest.TestCase):
         form_end = html.index("</form>", form_start)
         form = html[form_start:form_end]
 
-        self.assertIn('name="exam_session_schedule_url" value="https://example.com/existing-schedule"', form)
-        self.assertIn('name="exam_entry_slips_url" value="https://example.com/existing-entry-slips"', form)
-        self.assertIn("data-schedule-link-input", form)
-        self.assertIn("data-schedule-link-submit", form)
-        self.assertNotIn("data-schedule-link-submit disabled", form)
+        self.assertNotIn('name="exam_session_schedule_url"', form)
+        self.assertNotIn('name="exam_entry_slips_url"', form)
+        self.assertIn('href="https://example.com/existing-schedule"', form)
+        self.assertIn('href="https://example.com/existing-entry-slips"', form)
+        self.assertIn("data-schedule-ready-checkbox", form)
+        self.assertIn("data-schedule-link-submit disabled", form)
 
-    def test_mark_ready_saves_exam_session_schedule_link(self):
+    def test_mark_ready_confirms_uploaded_files_without_changing_folder_links(self):
         db.session.add(ExamSessionScheduleWorkflow(
             exam_session_id=self.session_record.id,
             status="In progress",
             next_action_due_at=date(2026, 6, 30),
         ))
         self.session_record.monthly_registrations_closed = True
+        self.session_record.date_confirmation_status = "Confirmed"
         db.session.commit()
         client = self.login_client()
 
@@ -4751,8 +4822,8 @@ class ScheduleWorkflowTest(unittest.TestCase):
                 "csrf_token": "token",
                 "action_key": "mark_ready",
                 "next_action_due_at": "2026-07-01",
-                "exam_session_schedule_url": "https://example.com/session-schedule",
-                "exam_entry_slips_url": "https://example.com/entry-slips",
+                "schedule_uploaded_confirmation": "1",
+                "entry_slips_uploaded_confirmation": "1",
             },
             follow_redirects=False,
         )
@@ -4761,17 +4832,18 @@ class ScheduleWorkflowTest(unittest.TestCase):
         db.session.refresh(self.session_record)
         workflow = ExamSessionScheduleWorkflow.query.filter_by(exam_session_id=self.session_record.id).one()
         self.assertEqual(self.session_record.details_url, "https://example.com/sinapsis")
-        self.assertEqual(self.session_record.schedule_folder_url, "https://example.com/session-schedule")
-        self.assertEqual(self.session_record.exam_entry_slips_url, "https://example.com/entry-slips")
+        self.assertEqual(self.session_record.schedule_folder_url, "https://example.com/schedule-folder")
+        self.assertEqual(self.session_record.exam_entry_slips_url, "https://example.com/entry-slips-folder")
         self.assertEqual(workflow.status, "Ready to send")
         self.assertEqual(workflow.next_action_due_at, argentina_next_business_day(datetime.now(LOCAL_TZ).date()))
 
-    def test_mark_ready_rejects_missing_exam_session_schedule_link(self):
+    def test_mark_ready_rejects_missing_schedule_folder_configuration(self):
         db.session.add(ExamSessionScheduleWorkflow(
             exam_session_id=self.session_record.id,
             status="In progress",
             next_action_due_at=date(2026, 6, 30),
         ))
+        self.session_record.schedule_folder_url = ""
         self.session_record.monthly_registrations_closed = True
         db.session.commit()
         client = self.login_client()
@@ -4782,8 +4854,8 @@ class ScheduleWorkflowTest(unittest.TestCase):
                 "csrf_token": "token",
                 "action_key": "mark_ready",
                 "next_action_due_at": "2026-07-01",
-                "exam_session_schedule_url": "",
-                "exam_entry_slips_url": "https://example.com/entry-slips",
+                "schedule_uploaded_confirmation": "1",
+                "entry_slips_uploaded_confirmation": "1",
             },
             follow_redirects=False,
         )
@@ -4793,7 +4865,7 @@ class ScheduleWorkflowTest(unittest.TestCase):
         workflow = ExamSessionScheduleWorkflow.query.filter_by(exam_session_id=self.session_record.id).one()
         self.assertEqual(workflow.status, "In progress")
 
-    def test_mark_ready_rejects_missing_exam_entry_slips_link(self):
+    def test_mark_ready_rejects_missing_upload_confirmations(self):
         db.session.add(ExamSessionScheduleWorkflow(
             exam_session_id=self.session_record.id,
             status="In progress",
@@ -4809,35 +4881,6 @@ class ScheduleWorkflowTest(unittest.TestCase):
                 "csrf_token": "token",
                 "action_key": "mark_ready",
                 "next_action_due_at": "2026-07-01",
-                "exam_session_schedule_url": "https://example.com/session-schedule",
-                "exam_entry_slips_url": "",
-            },
-            follow_redirects=False,
-        )
-
-        self.assertEqual(response.status_code, 302)
-        self.assertIn("open_schedule_action=mark_ready", response.headers["Location"])
-        workflow = ExamSessionScheduleWorkflow.query.filter_by(exam_session_id=self.session_record.id).one()
-        self.assertEqual(workflow.status, "In progress")
-
-    def test_mark_ready_rejects_invalid_exam_entry_slips_link(self):
-        db.session.add(ExamSessionScheduleWorkflow(
-            exam_session_id=self.session_record.id,
-            status="In progress",
-            next_action_due_at=date(2026, 6, 30),
-        ))
-        self.session_record.monthly_registrations_closed = True
-        db.session.commit()
-        client = self.login_client()
-
-        response = client.post(
-            f"/pre-session-control-tower/sessions/{self.session_record.id}/schedule",
-            data={
-                "csrf_token": "token",
-                "action_key": "mark_ready",
-                "next_action_due_at": "2026-07-01",
-                "exam_session_schedule_url": "https://example.com/session-schedule",
-                "exam_entry_slips_url": "not-a-url",
             },
             follow_redirects=False,
         )
@@ -4854,6 +4897,20 @@ class ScheduleWorkflowTest(unittest.TestCase):
     def test_argentina_add_business_days_skips_weekends_and_holidays(self):
         self.assertEqual(argentina_add_business_days(date(2026, 7, 10), 2), date(2026, 7, 14))
         self.assertEqual(argentina_add_business_days(date(2026, 12, 4), 2), date(2026, 12, 9))
+
+    def test_argentina_add_business_hours_pauses_for_weekends(self):
+        sent_at = datetime(2026, 7, 10, 10, 30, tzinfo=LOCAL_TZ)
+
+        due_at = argentina_add_business_hours(sent_at, 48)
+
+        self.assertEqual(due_at, datetime(2026, 7, 14, 10, 30, tzinfo=LOCAL_TZ))
+
+    def test_argentina_add_business_hours_pauses_for_holidays(self):
+        sent_at = datetime(2026, 12, 4, 10, 30, tzinfo=LOCAL_TZ)
+
+        due_at = argentina_add_business_hours(sent_at, 48)
+
+        self.assertEqual(due_at, datetime(2026, 12, 9, 10, 30, tzinfo=LOCAL_TZ))
 
     def test_staffing_control_view_does_not_create_record(self):
         client = self.login_client()
@@ -10352,6 +10409,7 @@ class ScheduleWorkflowTest(unittest.TestCase):
         ])
         session_record.monthly_registrations_closed = True
         session_record.monthly_registrations_closed_at = datetime.now(timezone.utc)
+        session_record.date_confirmation_status = "Confirmed"
         db.session.flush()
         bundle = self.create_shipment_bundle_record(status="Preparing", session_record=session_record)
         db.session.commit()
@@ -10374,6 +10432,52 @@ class ScheduleWorkflowTest(unittest.TestCase):
         self.assertIn(".bundle-action-department-slot,\n.bundle-action-description-stack > span", css)
         self.assertNotIn(".bundle-action-stack > .responsible-chip", css)
         self.assertIn("min-height: 34px;", css)
+
+    def test_bundle_detail_schedule_action_messages_require_registrations_closed_and_date_confirmed(self):
+        bundle = self.create_shipment_bundle_record(session_record=self.session_record)
+        client = self.login_client()
+
+        def detail_table():
+            response = client.get(f"/pre-session-control-tower?session_year=2026&view=bundle&bundle_id={bundle.id}")
+            html = response.get_data(as_text=True)
+            return html[html.index('aria-label="Schedule preparation and approval"'):html.index('<div class="modal"', html.index('aria-label="Schedule preparation and approval"'))]
+
+        self.session_record.monthly_registrations_closed = False
+        self.session_record.date_confirmation_status = "Waiting for confirmation"
+        db.session.commit()
+        table = detail_table()
+        self.assertIn("Close exam registrations and confirm exam session date", table)
+        self.assertIn('<span class="responsible-chip users-department-chip">ADMIN</span>', table)
+        self.assertNotIn("ADMIN / MANAGEMENT", table)
+        self.assertIn("workflow-gate-blocked", table)
+        self.assertNotIn("workflow-gate-unblocked", table)
+
+        self.session_record.date_confirmation_status = "Confirmed"
+        db.session.commit()
+        table = detail_table()
+        self.assertIn("Close exam registrations to begin pre-session preparation", table)
+        self.assertIn('<span class="responsible-chip users-department-chip">ADMIN</span>', table)
+        self.assertNotIn("Close exam registrations and confirm exam session date to begin pre-session preparation", table)
+        self.assertIn("workflow-gate-blocked", table)
+
+        self.session_record.monthly_registrations_closed = True
+        self.session_record.monthly_registrations_closed_at = datetime.now(timezone.utc)
+        self.session_record.date_confirmation_status = "Waiting for confirmation"
+        db.session.commit()
+        table = detail_table()
+        self.assertIn("Confirm exam session date to begin pre-session preparation", table)
+        self.assertIn('<span class="responsible-chip users-department-chip">ADMIN</span>', table)
+        self.assertNotIn("MANAGEMENT", table)
+        self.assertNotIn("Close exam registrations to begin pre-session preparation", table)
+        self.assertIn("workflow-gate-blocked", table)
+
+        self.session_record.date_confirmation_status = "Confirmed"
+        db.session.commit()
+        table = detail_table()
+        self.assertIn("workflow-gate-unblocked", table)
+        self.assertIn("UNBLOCKED", table)
+        self.assertNotIn("Confirm exam session date to begin pre-session preparation", table)
+        self.assertNotIn("Close exam registrations to begin pre-session preparation", table)
 
     def test_bundle_detail_hides_staffing_confirmation_action_until_schedule_approved(self):
         self.create_supervisor(staff_id=1, name="Laura Mendez")
@@ -10399,6 +10503,7 @@ class ScheduleWorkflowTest(unittest.TestCase):
         ])
         session_record.monthly_registrations_closed = True
         session_record.monthly_registrations_closed_at = datetime.now(timezone.utc)
+        session_record.date_confirmation_status = "Confirmed"
         db.session.flush()
         bundle = self.create_shipment_bundle_record(status="Preparing", session_record=session_record)
         db.session.commit()
@@ -15844,6 +15949,365 @@ class ScheduleWorkflowTest(unittest.TestCase):
         )
         self.assertNotIn("Package discrepancy", institution_text)
         self.assertNotIn("Internal debt note", institution_text)
+
+    def test_path_session_journey_schedule_countdown_uses_recorded_sent_for_review_event(self):
+        sent_at = datetime(2026, 10, 2, 10, 30, tzinfo=LOCAL_TZ)
+        now = datetime(2026, 10, 5, 10, 30, tzinfo=LOCAL_TZ)
+        workflow = ExamSessionScheduleWorkflow(
+            exam_session_id=self.session_record.id,
+            status="Sent for review",
+            next_action_due_at=date(2026, 10, 6),
+            review_round=1,
+            last_sent_at=sent_at.astimezone(timezone.utc),
+        )
+        db.session.add(workflow)
+        db.session.flush()
+        db.session.add(ExamSessionScheduleEvent(
+            workflow_id=workflow.id,
+            previous_status="Ready to send",
+            new_status="Sent for review",
+            due_at=date(2026, 10, 5),
+            created_at=datetime(2026, 10, 1, 10, 30, tzinfo=LOCAL_TZ).astimezone(timezone.utc),
+        ))
+        db.session.add(ExamSessionScheduleEvent(
+            workflow_id=workflow.id,
+            previous_status="Ready to send",
+            new_status="Sent for review",
+            due_at=date(2026, 10, 6),
+            created_at=sent_at.astimezone(timezone.utc),
+        ))
+        db.session.commit()
+
+        journey = path_session_journey_contract(self.session_record, "institution", now=now)
+
+        countdown = journey["schedule_review_countdown"]
+        self.assertTrue(countdown["visible"])
+        self.assertEqual(countdown["sent_at"], sent_at)
+        self.assertEqual(countdown["due_at"], datetime(2026, 10, 6, 10, 30, tzinfo=LOCAL_TZ))
+        self.assertEqual(countdown["remaining_seconds"], 24 * 60 * 60)
+
+        response = self.login_client().get(f"/path-session-journeys/sessions/{self.session_record.id}")
+        html = response.data.decode()
+        self.assertIn("data-journey-schedule-countdown", html)
+        self.assertIn('data-deadline="2026-10-06T10:30:00-03:00"', html)
+        self.assertNotIn("data-start-minutes", html)
+
+    def test_path_session_journey_confirm_schedule_approves_workflow(self):
+        sent_at = datetime(2026, 7, 10, 10, 30, tzinfo=LOCAL_TZ)
+        workflow = ExamSessionScheduleWorkflow(
+            exam_session_id=self.session_record.id,
+            status="Sent for review",
+            review_round=1,
+            next_action_due_at=date(2026, 7, 14),
+            last_sent_at=sent_at.astimezone(timezone.utc),
+        )
+        db.session.add(workflow)
+        db.session.flush()
+        db.session.add(ExamSessionScheduleEvent(
+            workflow_id=workflow.id,
+            previous_status="Ready to send",
+            new_status="Sent for review",
+            created_at=sent_at.astimezone(timezone.utc),
+        ))
+        db.session.commit()
+        client = self.login_client()
+
+        response = client.post(
+            f"/path-session-journeys/sessions/{self.session_record.id}/schedule/confirm",
+            data={"csrf_token": "token"},
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.get_json()["status"], "Approved")
+        db.session.refresh(workflow)
+        self.assertEqual(workflow.status, "Approved")
+        self.assertIsNone(workflow.next_action_due_at)
+        journey = path_session_journey_contract(self.session_record, "institution")
+        self.assertEqual(journey["schedule_confirmation_label"], "Confirmed")
+        self.assertEqual(journey["schedule_confirmation_class"], "is-confirmed")
+        self.assertFalse(journey["schedule_review_countdown"]["visible"])
+        milestones = {milestone["key"]: milestone for milestone in journey["milestones"]}
+        self.assertEqual(milestones["schedule"]["status"], "completed")
+
+        html = client.get(f"/path-session-journeys/sessions/{self.session_record.id}").get_data(as_text=True)
+        schedule_title = html.index("Exam session schedule")
+        schedule_section = html[html.rfind('<li class="journey-milestone', 0, schedule_title):html.index("Entry slips for candidates")]
+        self.assertIn("journey-status-chip is-confirmed", schedule_section)
+        self.assertIn(">Confirmed</span>", schedule_section)
+        self.assertIn("journey-milestone is-completed", schedule_section)
+        self.assertIn('<span class="journey-milestone-marker" aria-hidden="true">✓</span>', schedule_section)
+        self.assertNotIn("data-journey-schedule-countdown", html)
+
+    def test_shared_path_session_journey_request_changes_updates_bundle_schedule(self):
+        sent_at = datetime(2026, 7, 10, 10, 30, tzinfo=LOCAL_TZ)
+        self.session_record.monthly_registrations_closed = True
+        self.session_record.date_confirmation_status = "Confirmed"
+        workflow = ExamSessionScheduleWorkflow(
+            exam_session_id=self.session_record.id,
+            status="Sent for review",
+            review_round=1,
+            next_action_due_at=date(2026, 7, 14),
+            last_sent_at=sent_at.astimezone(timezone.utc),
+        )
+        share = ExamSessionJourneyShare(
+            exam_session_id=self.session_record.id,
+            audience="institution",
+            token="journey-schedule-review-token",
+            created_by="admin",
+        )
+        db.session.add_all([workflow, share])
+        db.session.flush()
+        db.session.add(ExamSessionScheduleEvent(
+            workflow_id=workflow.id,
+            previous_status="Ready to send",
+            new_status="Sent for review",
+            created_at=sent_at.astimezone(timezone.utc),
+        ))
+        bundle = self.create_shipment_bundle_record(session_record=self.session_record)
+
+        response = self.app.test_client().post(
+            f"/path-session-journey/{share.token}/institution/schedule/request-changes",
+            data={"note": "Please revise Room 2 capacity."},
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.get_json()["status"], "Changes requested")
+        db.session.refresh(workflow)
+        self.assertEqual(workflow.status, "Changes requested")
+        self.assertEqual(workflow.next_action_due_at, argentina_add_business_days(datetime.now(LOCAL_TZ).date(), 2))
+        latest_event = ExamSessionScheduleEvent.query.filter_by(workflow_id=workflow.id).order_by(ExamSessionScheduleEvent.id.desc()).first()
+        self.assertEqual(latest_event.note, "Please revise Room 2 capacity.")
+        journey = path_session_journey_contract(self.session_record, "institution")
+        self.assertEqual(journey["schedule_confirmation_label"], "Pending")
+        self.assertEqual(journey["schedule_confirmation_class"], "is-pending")
+        self.assertFalse(journey["schedule_link_enabled"])
+        self.assertFalse(journey["schedule_review_countdown"]["visible"])
+
+        journey_html = self.app.test_client().get(
+            f"/path-session-journey/{share.token}/institution"
+        ).get_data(as_text=True)
+        journey_schedule_start = journey_html.index("Exam session schedule")
+        journey_schedule_section = journey_html[
+            journey_html.rfind('<li class="journey-milestone', 0, journey_schedule_start):journey_html.index("Entry slips for candidates")
+        ]
+        self.assertIn("journey-status-chip is-pending", journey_schedule_section)
+        self.assertIn(">Pending</span>", journey_schedule_section)
+        self.assertIn('<span class="journey-schedule-link is-disabled" aria-disabled="true">View session schedule</span>', journey_schedule_section)
+        self.assertNotIn('href="https://example.com/schedule-folder"', journey_schedule_section)
+        self.assertNotIn("data-journey-schedule-countdown", journey_schedule_section)
+
+        html = self.login_client().get(
+            "/pre-session-control-tower",
+            query_string={"session_year": "2026", "view": "bundle", "bundle_id": str(bundle.id)},
+        ).get_data(as_text=True)
+        self.assertIn("Changes requested", html)
+        self.assertIn("Mark revised schedules as ready to send", html)
+        self.assertIn("schedule-change-request-card", html)
+        self.assertIn("Please revise Room 2 capacity.", html)
+
+    def test_expired_path_session_journey_countdown_confirms_schedule_automatically(self):
+        sent_at = datetime(2026, 7, 10, 10, 30, tzinfo=LOCAL_TZ)
+        now = datetime(2026, 7, 14, 10, 31, tzinfo=LOCAL_TZ)
+        self.session_record.monthly_registrations_closed = True
+        self.session_record.date_confirmation_status = "Confirmed"
+        workflow = ExamSessionScheduleWorkflow(
+            exam_session_id=self.session_record.id,
+            status="Sent for review",
+            review_round=1,
+            next_action_due_at=date(2026, 7, 14),
+            last_sent_at=sent_at.astimezone(timezone.utc),
+        )
+        share = ExamSessionJourneyShare(
+            exam_session_id=self.session_record.id,
+            audience="institution",
+            token="journey-expired-countdown-token",
+            created_by="admin",
+        )
+        db.session.add_all([workflow, share])
+        db.session.flush()
+        db.session.add(ExamSessionScheduleEvent(
+            workflow_id=workflow.id,
+            previous_status="Ready to send",
+            new_status="Sent for review",
+            created_at=sent_at.astimezone(timezone.utc),
+        ))
+        bundle = self.create_shipment_bundle_record(session_record=self.session_record)
+
+        journey = path_session_journey_contract(self.session_record, "institution", now=now)
+
+        db.session.refresh(workflow)
+        self.assertEqual(workflow.status, "Approved")
+        self.assertIsNone(workflow.next_action_due_at)
+        self.assertEqual(journey["schedule_confirmation_label"], "Confirmed automatically")
+        self.assertEqual(journey["schedule_confirmation_class"], "is-confirmed")
+        self.assertFalse(journey["schedule_review_countdown"]["visible"])
+        latest_event = ExamSessionScheduleEvent.query.filter_by(workflow_id=workflow.id).order_by(ExamSessionScheduleEvent.id.desc()).first()
+        self.assertEqual(latest_event.new_status, "Approved")
+        self.assertEqual(latest_event.created_by, "Automatic countdown")
+
+        journey_html = self.app.test_client().get(
+            f"/path-session-journey/{share.token}/institution"
+        ).get_data(as_text=True)
+        schedule_title = journey_html.index("Exam session schedule")
+        schedule_section = journey_html[
+            journey_html.rfind('<li class="journey-milestone', 0, schedule_title):journey_html.index("Entry slips for candidates")
+        ]
+        self.assertIn("journey-status-chip is-confirmed", schedule_section)
+        self.assertIn(">Confirmed automatically</span>", schedule_section)
+        self.assertEqual(schedule_section.count("data-journey-schedule-checkbox"), 5)
+        self.assertEqual(schedule_section.count("checked disabled"), 5)
+        self.assertNotIn("data-journey-schedule-countdown", schedule_section)
+
+        tower_html = self.login_client().get(
+            "/pre-session-control-tower",
+            query_string={"session_year": "2026", "view": "bundle", "bundle_id": str(bundle.id)},
+        ).get_data(as_text=True)
+        session_index = tower_html.index("June exam session")
+        session_row = tower_html[tower_html.rfind("<tr", 0, session_index):tower_html.index("</tr>", session_index)]
+        self.assertIn("Approved", session_row)
+        self.assertIn("Rounds: 1", session_row)
+        self.assertIn('<span class="schedule-automatic-chip">Automatic</span>', session_row)
+        self.assertLess(session_row.index("Rounds: 1"), session_row.index("Automatic"))
+        db.session.refresh(workflow)
+        self.assertEqual(workflow.status, "Approved")
+
+    def test_path_session_journey_links_use_configured_session_folders(self):
+        self.session_record.details_url = "https://example.com/all-session-details"
+        self.session_record.schedule_folder_url = "https://example.com/schedule-folder"
+        self.session_record.exam_entry_slips_url = "https://example.com/entry-slips-folder"
+        db.session.add(ExamSessionScheduleWorkflow(
+            exam_session_id=self.session_record.id,
+            status="Approved",
+        ))
+        db.session.commit()
+
+        response = self.login_client().get(f"/path-session-journeys/sessions/{self.session_record.id}")
+        html = response.data.decode()
+
+        self.assertIn('href="https://example.com/schedule-folder"', html)
+        self.assertIn(">View session schedule</a>", html)
+        self.assertIn('href="https://example.com/entry-slips-folder"', html)
+        self.assertIn(">Access</a>", html)
+        self.assertNotIn('href="https://example.com/all-session-details"', html)
+        self.assertNotIn('data-open-modal="journey-entry-slip-modal"', html)
+
+    def test_path_session_journey_entry_slips_are_in_progress_when_schedule_is_in_progress(self):
+        self.session_record.exam_entry_slips_url = "https://example.com/entry-slips-folder"
+        db.session.add(ExamSessionScheduleWorkflow(
+            exam_session_id=self.session_record.id,
+            status="In progress",
+        ))
+        db.session.commit()
+
+        journey = path_session_journey_contract(self.session_record, "institution", today=date(2026, 6, 20))
+        milestones = {milestone["key"]: milestone for milestone in journey["milestones"]}
+
+        self.assertEqual(journey["schedule_confirmation_label"], "In progress")
+        self.assertEqual(journey["entry_slips_confirmation_label"], "In progress")
+        self.assertFalse(journey["entry_slips_confirmed"])
+        self.assertNotEqual(milestones["entry_slips"]["status"], "completed")
+
+        response = self.login_client().get(f"/path-session-journeys/sessions/{self.session_record.id}")
+        html = response.data.decode()
+        entry_title = html.index("Entry slips for candidates")
+        entry_section = html[html.rfind('<li class="journey-milestone', 0, entry_title):html.index("Exam session staff")]
+        self.assertIn("journey-status-chip is-in-progress", entry_section)
+        self.assertIn(">In progress</span>", entry_section)
+        self.assertIn("journey-access-chip is-disabled", entry_section)
+        self.assertNotIn('href="https://example.com/entry-slips-folder"', entry_section)
+        self.assertIn("journey-milestone is-upcoming is-entry-slips-pending", html)
+
+    def test_path_session_journey_entry_slips_are_confirmed_when_schedule_is_confirmed(self):
+        self.session_record.exam_entry_slips_url = "https://example.com/entry-slips-folder"
+        db.session.add(ExamSessionScheduleWorkflow(
+            exam_session_id=self.session_record.id,
+            status="Approved",
+        ))
+        db.session.commit()
+
+        journey = path_session_journey_contract(self.session_record, "institution", today=date(2026, 6, 20))
+        milestones = {milestone["key"]: milestone for milestone in journey["milestones"]}
+
+        self.assertEqual(journey["schedule_confirmation_label"], "Confirmed")
+        self.assertEqual(journey["entry_slips_confirmation_label"], "Confirmed")
+        self.assertTrue(journey["entry_slips_confirmed"])
+        self.assertEqual(milestones["entry_slips"]["status"], "completed")
+
+        response = self.login_client().get(f"/path-session-journeys/sessions/{self.session_record.id}")
+        html = response.data.decode()
+        entry_title = html.index("Entry slips for candidates")
+        entry_section = html[html.rfind('<li class="journey-milestone', 0, entry_title):html.index("Exam session staff")]
+        self.assertIn("journey-status-chip is-confirmed", entry_section)
+        self.assertIn(">Confirmed</span>", entry_section)
+        self.assertIn('href="https://example.com/entry-slips-folder"', entry_section)
+        self.assertNotIn("journey-access-chip is-disabled", entry_section)
+        self.assertIn('<span class="journey-milestone-marker" aria-hidden="true">✓</span>', entry_section)
+
+    def test_path_session_journey_date_stage_is_in_progress_until_date_confirmed(self):
+        self.session_record.date_confirmation_status = "Waiting for confirmation"
+        db.session.commit()
+
+        journey = path_session_journey_contract(self.session_record, "institution", today=date(2026, 6, 20))
+        date_milestone = journey["milestones"][0]
+
+        self.assertEqual(date_milestone["key"], "confirmed")
+        self.assertEqual(date_milestone["status"], "in_progress")
+        self.assertEqual(journey["date_confirmation_label"], "In progress")
+        self.assertFalse(journey["date_confirmation_confirmed"])
+
+        response = self.login_client().get(f"/path-session-journeys/sessions/{self.session_record.id}")
+        html = response.data.decode()
+        date_section = html[html.index("Exam session date"):html.index("Exam session schedule")]
+        self.assertIn("journey-status-chip is-in-progress", date_section)
+        self.assertIn(">In progress</span>", date_section)
+        self.assertIn("journey-milestone is-in_progress is-date-pending", html)
+        self.assertIn('<span class="journey-milestone-marker" aria-hidden="true">•</span>', html)
+
+    def test_path_session_journey_date_stage_is_confirmed_when_date_confirmed(self):
+        self.session_record.date_confirmation_status = "Confirmed"
+        db.session.commit()
+
+        journey = path_session_journey_contract(self.session_record, "institution", today=date(2026, 6, 20))
+        date_milestone = journey["milestones"][0]
+
+        self.assertEqual(date_milestone["key"], "confirmed")
+        self.assertEqual(date_milestone["status"], "completed")
+        self.assertEqual(journey["date_confirmation_label"], "Confirmed")
+        self.assertTrue(journey["date_confirmation_confirmed"])
+
+        response = self.login_client().get(f"/path-session-journeys/sessions/{self.session_record.id}")
+        html = response.data.decode()
+        date_section = html[html.index("Exam session date"):html.index("Exam session schedule")]
+        self.assertIn("journey-status-chip is-confirmed", date_section)
+        self.assertIn(">Confirmed</span>", date_section)
+        self.assertIn("journey-milestone is-completed", html)
+        self.assertIn('<span class="journey-milestone-marker" aria-hidden="true">✓</span>', html)
+
+    def test_path_session_journey_material_shipment_dispatches_fifteen_days_before_session(self):
+        self.session_record.session_date = date(2026, 7, 25)
+        workflow = ExamSessionScheduleWorkflow(
+            exam_session_id=self.session_record.id,
+            status="Approved",
+            approved_at=datetime(2026, 7, 1, 10, 0, tzinfo=timezone.utc),
+        )
+        db.session.add(workflow)
+        db.session.commit()
+
+        before_dispatch = path_session_journey_contract(
+            self.session_record,
+            "institution",
+            now=datetime(2026, 7, 9, 23, 59, tzinfo=LOCAL_TZ),
+        )
+        dispatched = path_session_journey_contract(
+            self.session_record,
+            "institution",
+            now=datetime(2026, 7, 10, 0, 0, tzinfo=LOCAL_TZ),
+        )
+
+        self.assertEqual(before_dispatch["material_shipment"]["status"], "In transit")
+        self.assertEqual(dispatched["material_shipment"]["status"], "Dispatched")
+        milestones = {milestone["key"]: milestone for milestone in dispatched["milestones"]}
+        self.assertEqual(milestones["material_shipment"]["status"], "completed")
 
     def test_path_session_journey_milestones_follow_safe_readiness_sources(self):
         self.mark_session_operationally_ready()

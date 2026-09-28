@@ -5,7 +5,7 @@ import secrets
 import smtplib
 import textwrap
 from decimal import Decimal, InvalidOperation, ROUND_FLOOR
-from datetime import date, datetime, timezone, timedelta
+from datetime import date, datetime, time, timezone, timedelta
 import calendar
 import uuid
 from collections import defaultdict
@@ -9205,12 +9205,23 @@ def staffing_open_position_action_items(staffing_contract, overdue=False):
     return actions
 
 
+def schedule_preparation_blocker_message(monthly_registrations_closed, date_confirmation_confirmed):
+    if not monthly_registrations_closed and not date_confirmation_confirmed:
+        return "Close exam registrations and confirm exam session date"
+    if not monthly_registrations_closed:
+        return "Close exam registrations to begin pre-session preparation"
+    if not date_confirmation_confirmed:
+        return "Confirm exam session date to begin pre-session preparation"
+    return ""
+
+
 def bundle_detail_action_items(
     schedule_status,
     schedule_gate,
     schedule_next_action,
     schedule_responsible,
     monthly_registrations_closed=True,
+    date_confirmation_confirmed=True,
     staffing_contract=None,
     staffing_control=None,
     packages_action=None,
@@ -9229,13 +9240,15 @@ def bundle_detail_action_items(
     staffing_overdue = deadline_badge_is_red(staffing_deadline_badge)
     logistics_overdue = deadline_badge_is_red(logistics_deadline_badge)
     package_overdue = deadline_badge_is_red(package_deadline_badge)
-    if not monthly_registrations_closed:
+    schedule_preparation_unlocked = bool(monthly_registrations_closed and date_confirmation_confirmed)
+    blocker_message = schedule_preparation_blocker_message(monthly_registrations_closed, date_confirmation_confirmed)
+    if blocker_message:
         actions.append({
             "department": "ADMIN",
-            "description": "Close exam registrations to begin pre-session preparation",
+            "description": blocker_message,
         })
 
-    if monthly_registrations_closed and not (schedule_gate or {}).get("is_ready"):
+    if schedule_preparation_unlocked and not (schedule_gate or {}).get("is_ready"):
         actions.append({
             "department": schedule_responsible or "MANAGEMENT",
             "description": schedule_next_action or "Complete schedule preparation and approval.",
@@ -9247,7 +9260,7 @@ def bundle_detail_action_items(
     actions.extend(open_position_actions)
 
     staffing_status = staffing_contract.get("status")
-    if monthly_registrations_closed and staffing_status != "confirmed":
+    if schedule_preparation_unlocked and staffing_status != "confirmed":
         schedule_approved = schedule_status == "Approved"
         staffing_messages = []
         if staffing_status in {"not_configured", "invalid"}:
@@ -10663,6 +10676,25 @@ def argentina_add_business_days(value, business_days):
         current += timedelta(days=1)
         if is_argentina_business_day(current):
             remaining -= 1
+    return current
+
+
+def argentina_add_business_hours(value, business_hours):
+    if value.tzinfo is None:
+        current = value.replace(tzinfo=LOCAL_TZ)
+    else:
+        current = value.astimezone(LOCAL_TZ)
+    remaining_seconds = max(int(business_hours * 3600), 0)
+    while remaining_seconds > 0:
+        if not is_argentina_business_day(current.date()):
+            current = datetime.combine(current.date() + timedelta(days=1), time.min).replace(tzinfo=LOCAL_TZ)
+            continue
+        next_day = datetime.combine(current.date() + timedelta(days=1), time.min).replace(tzinfo=LOCAL_TZ)
+        available_seconds = max(int((next_day - current).total_seconds()), 0)
+        if remaining_seconds <= available_seconds:
+            return current + timedelta(seconds=remaining_seconds)
+        remaining_seconds -= available_seconds
+        current = next_day
     return current
 
 
@@ -13081,6 +13113,94 @@ def schedule_workflow_approved_datetime(workflow):
     return approved_at.astimezone(LOCAL_TZ) if approved_at else None
 
 
+def schedule_workflow_sent_for_review_datetime(workflow):
+    if not workflow:
+        return None
+    sent_events = sorted(
+        (event for event in workflow.events if event.new_status == "Sent for review" and event.created_at),
+        key=lambda event: (event.created_at or datetime.min.replace(tzinfo=timezone.utc), event.id or 0),
+        reverse=True,
+    )
+    sent_at = sent_events[0].created_at if sent_events else workflow.last_sent_at
+    if sent_at and sent_at.tzinfo is None:
+        sent_at = sent_at.replace(tzinfo=timezone.utc)
+    return sent_at.astimezone(LOCAL_TZ) if sent_at else None
+
+
+SCHEDULE_AUTO_CONFIRMATION_NOTE = "Confirmed automatically after the schedule review countdown ended."
+SCHEDULE_AUTO_CONFIRMATION_ACTOR = "Automatic countdown"
+
+
+def schedule_workflow_auto_confirmed(workflow):
+    if not workflow or workflow.status != "Approved":
+        return False
+    approved_events = sorted(
+        (event for event in workflow.events if event.new_status == "Approved"),
+        key=lambda event: (event.created_at or datetime.min.replace(tzinfo=timezone.utc), event.id or 0),
+        reverse=True,
+    )
+    if not approved_events:
+        return False
+    latest_approved = approved_events[0]
+    return (
+        (latest_approved.note or "").strip() == SCHEDULE_AUTO_CONFIRMATION_NOTE
+        or (latest_approved.created_by or "").strip() == SCHEDULE_AUTO_CONFIRMATION_ACTOR
+    )
+
+
+def auto_approve_expired_schedule_review(session_record, workflow=None, now=None, commit=False):
+    workflow = workflow or ExamSessionScheduleWorkflow.query.filter_by(exam_session_id=session_record.id).first()
+    sent_at = schedule_workflow_sent_for_review_datetime(workflow)
+    if not workflow or workflow.status != "Sent for review" or not sent_at:
+        return workflow, False
+    now = now or datetime.now(timezone.utc).astimezone(LOCAL_TZ)
+    due_at = argentina_add_business_hours(sent_at, 48)
+    if now < due_at:
+        return workflow, False
+    workflow, error = apply_schedule_workflow_transition(
+        session_record,
+        "approve",
+        note=SCHEDULE_AUTO_CONFIRMATION_NOTE,
+        created_by=SCHEDULE_AUTO_CONFIRMATION_ACTOR,
+    )
+    if error:
+        db.session.rollback()
+        return workflow, False
+    if commit:
+        db.session.commit()
+    else:
+        db.session.flush()
+    return workflow, True
+
+
+def journey_schedule_review_countdown(workflow, now=None):
+    sent_at = schedule_workflow_sent_for_review_datetime(workflow)
+    if not workflow or workflow.status != "Sent for review" or not sent_at:
+        return {"visible": False}
+    now = now or datetime.now(timezone.utc).astimezone(LOCAL_TZ)
+    due_at = argentina_add_business_hours(sent_at, 48)
+    remaining_seconds = max(int((due_at - now).total_seconds()), 0)
+    return {
+        "visible": True,
+        "sent_at": sent_at,
+        "due_at": due_at,
+        "due_at_iso": due_at.isoformat(),
+        "remaining_seconds": remaining_seconds,
+        "is_overdue": now >= due_at,
+    }
+
+
+def schedule_workflow_latest_change_request(workflow):
+    if not workflow:
+        return ""
+    change_events = sorted(
+        (event for event in workflow.events if event.new_status == "Changes requested" and (event.note or "").strip()),
+        key=lambda event: (event.created_at or datetime.min.replace(tzinfo=timezone.utc), event.id or 0),
+        reverse=True,
+    )
+    return (change_events[0].note or "").strip() if change_events else ""
+
+
 def material_shipment_journey_contract(session_record, workflow, now=None):
     now = now or datetime.now(timezone.utc).astimezone(LOCAL_TZ)
     approved_at = schedule_workflow_approved_datetime(workflow)
@@ -13089,7 +13209,7 @@ def material_shipment_journey_contract(session_record, workflow, now=None):
         return {"status": "Pending", "status_key": "pending", "progress_percent": 0}
 
     movement_starts_at = approved_at + timedelta(hours=24)
-    arrival_date = session_date - timedelta(days=12)
+    arrival_date = session_date - timedelta(days=15)
     arrival_at = datetime.combine(arrival_date, datetime.min.time()).replace(tzinfo=LOCAL_TZ)
 
     if now >= arrival_at:
@@ -13228,7 +13348,13 @@ def journey_last_updated(session_record, *records):
             getattr(record, "updated_on", None),
             getattr(record, "created_on", None),
         ])
-    return max([candidate for candidate in candidates if candidate], default=None)
+    candidates = [candidate for candidate in candidates if candidate]
+    if not candidates:
+        return None
+    return max(
+        candidates,
+        key=lambda value: value.astimezone(timezone.utc).replace(tzinfo=None) if value.tzinfo else value,
+    )
 
 
 def path_session_journey_sources(session_record, today=None):
@@ -13321,12 +13447,17 @@ def path_session_journey_sources(session_record, today=None):
     }
 
 
-def path_session_journey_contract(session_record, audience, today=None, sources=None):
+def path_session_journey_contract(session_record, audience, today=None, sources=None, now=None):
     audience = journey_clean_text(audience)
     if audience not in JOURNEY_AUDIENCES:
         audience = "public"
-    today = today or datetime.now(LOCAL_TZ).date()
+    now = now or datetime.now(timezone.utc).astimezone(LOCAL_TZ)
+    today = today or now.date()
     sources = sources or path_session_journey_sources(session_record, today=today)
+    workflow = sources.get("workflow")
+    if workflow and workflow.status == "Sent for review":
+        workflow, _auto_approved = auto_approve_expired_schedule_review(session_record, workflow=workflow, now=now)
+        sources["workflow"] = workflow
     countdown = journey_countdown(session_record.session_date, today=today)
     schedule_ready = bool(schedule_gate_status(sources.get("workflow")).get("is_ready"))
     session_journey_schedule_override_pending = (
@@ -13360,20 +13491,34 @@ def path_session_journey_contract(session_record, audience, today=None, sources=
     communications_ready = bool((sources.get("communications") or {}).get("ready"))
     operational_ready = bool((sources.get("operational") or {}).get("is_ready"))
     session_ready = bool((sources.get("session_readiness") or {}).get("is_ready"))
-    material_shipment = material_shipment_journey_contract(session_record, journey_workflow)
+    material_shipment = material_shipment_journey_contract(session_record, journey_workflow, now=now)
     staff_status = journey_staff_status_contract(journey_workflow)
+    schedule_review_countdown = journey_schedule_review_countdown(journey_workflow, now=now)
+    schedule_workflow_status_value = getattr(journey_workflow, "status", "")
+    if schedule_ready:
+        schedule_confirmation_label = "Confirmed automatically" if schedule_workflow_auto_confirmed(journey_workflow) else "Confirmed"
+        schedule_confirmation_class = "is-confirmed"
+    elif schedule_workflow_status_value == "Changes requested":
+        schedule_confirmation_label = "Pending"
+        schedule_confirmation_class = "is-pending"
+    else:
+        schedule_confirmation_label = "In progress"
+        schedule_confirmation_class = "is-in-progress"
+    schedule_link_enabled = schedule_workflow_status_value != "Changes requested"
     staff_summary = journey_staff_summary(
         session_record=session_record,
         supervisor_assignments=sources.get("supervisor_assignments"),
         examiner_assignments=sources.get("examiner_assignments"),
         intern_assignments=sources.get("intern_assignments"),
     )
+    date_confirmed = session_record.date_confirmation_status == "Confirmed"
+    entry_slips_ready = schedule_ready
 
     if audience == "institution":
         milestones = [
-            journey_milestone("confirmed", "Exam session date", True, "The exam session date has been created in Path."),
+            journey_milestone("confirmed", "Exam session date", date_confirmed, "The exam session date has been confirmed.", "The exam session date is in progress."),
             journey_milestone("schedule", "Exam session schedule", schedule_ready, "The exam session schedule has been confirmed.", "Schedule preparation is in progress."),
-            journey_milestone("entry_slips", "Entry slips for candidates", True, "Download candidate entry slips for this session."),
+            journey_milestone("entry_slips", "Entry slips for candidates", entry_slips_ready, "Download candidate entry slips for this session.", "Entry slips will be available once the exam session schedule is confirmed."),
             journey_milestone("staffing", "Exam session staff", staff_status["status"] == "Confirmed", staff_summary["message"], staff_summary["message"]),
             journey_milestone("material_shipment", "Exam material shipment", material_shipment["status"] == "Dispatched", "Exam materials have been dispatched.", "Exam materials are in transit.", "Exam material shipment is pending."),
         ]
@@ -13433,12 +13578,17 @@ def path_session_journey_contract(session_record, audience, today=None, sources=
         "session_name": session_record.exam_session_name,
         "session_date": session_record.session_date,
         "session_id": session_record.id,
-        "date_confirmation_label": "Confirmed" if session_record.date_confirmation_status == "Confirmed" else "In progress",
-        "date_confirmation_confirmed": session_record.date_confirmation_status == "Confirmed",
-        "schedule_confirmation_label": "Confirmed" if schedule_ready else "In progress",
+        "date_confirmation_label": "Confirmed" if date_confirmed else "In progress",
+        "date_confirmation_confirmed": date_confirmed,
+        "schedule_confirmation_label": schedule_confirmation_label,
+        "schedule_confirmation_class": schedule_confirmation_class,
         "schedule_confirmed": schedule_ready,
-        "schedule_url": ((session_record.schedule_folder_url or session_record.details_url) or "").strip(),
-        "entry_slips_url": "#",
+        "schedule_review_countdown": schedule_review_countdown,
+        "schedule_url": (session_record.schedule_folder_url or "").strip(),
+        "schedule_link_enabled": schedule_link_enabled,
+        "entry_slips_url": (session_record.exam_entry_slips_url or "").strip(),
+        "entry_slips_confirmation_label": "Confirmed" if entry_slips_ready else "In progress",
+        "entry_slips_confirmed": entry_slips_ready,
         "public_journey_url": public_journey_url,
         "material_shipment": material_shipment,
         "staff_status": staff_status,
@@ -13630,6 +13780,12 @@ def schedule_workflow_view(session_record, workflow=None, today=None, staffing=N
     sinapsis_url = (session_record.details_url or "").strip()
     gate = schedule_gate or schedule_gate_status(workflow)
     monthly_registrations_closed = bool(getattr(session_record, "monthly_registrations_closed", False))
+    date_confirmation_confirmed = getattr(session_record, "date_confirmation_status", None) == "Confirmed"
+    schedule_preparation_unlocked = monthly_registrations_closed and date_confirmation_confirmed
+    schedule_preparation_blocker = schedule_preparation_blocker_message(
+        monthly_registrations_closed,
+        date_confirmation_confirmed,
+    )
     fallback_staffing_contract = staffing_readiness_contract([], [], [])
     staffing_control_view = staffing_control or staffing_control_contract(None, fallback_staffing_contract, today=today)
     fallback_logistics_contract = logistics_readiness_contract([], [], None)
@@ -13696,9 +13852,14 @@ def schedule_workflow_view(session_record, workflow=None, today=None, staffing=N
         "deadline": deadline,
         "deadline_badge": schedule_deadline_badge_contract(workflow, status=status, today=today),
         "review_round": schedule_workflow_review_round(workflow),
+        "schedule_auto_confirmed": schedule_workflow_auto_confirmed(workflow),
+        "latest_schedule_change_request": schedule_workflow_latest_change_request(workflow),
         "health": schedule_workflow_health(status, deadline, today=today),
         "schedule_gate": gate,
         "monthly_registrations_closed": monthly_registrations_closed,
+        "date_confirmation_confirmed": date_confirmation_confirmed,
+        "schedule_preparation_unlocked": schedule_preparation_unlocked,
+        "schedule_preparation_blocker": schedule_preparation_blocker,
         "schedule_locked_by_staffing": bool(schedule_locked_by_staffing),
         "schedule_reopen_affects_packages": package_preparation_started(session_record),
         "staffing_status_change_affects_packages": package_staffing_sensitive_stages_started(session_record),
@@ -16363,6 +16524,28 @@ def pre_session_control_tower():
         if session_ids else []
     )
     workflows_by_session = {workflow.exam_session_id: workflow for workflow in workflow_records}
+    auto_approved_schedule_reviews = False
+    for session_record in sessions:
+        workflow = workflows_by_session.get(session_record.id)
+        if not workflow:
+            continue
+        updated_workflow, auto_approved = auto_approve_expired_schedule_review(
+            session_record,
+            workflow=workflow,
+            now=datetime.now(timezone.utc).astimezone(LOCAL_TZ),
+        )
+        if auto_approved:
+            workflows_by_session[session_record.id] = updated_workflow
+            auto_approved_schedule_reviews = True
+    if auto_approved_schedule_reviews:
+        db.session.commit()
+        workflow_records = (
+            ExamSessionScheduleWorkflow.query.filter(
+                ExamSessionScheduleWorkflow.exam_session_id.in_(session_ids)
+            ).all()
+            if session_ids else []
+        )
+        workflows_by_session = {workflow.exam_session_id: workflow for workflow in workflow_records}
     workflow_ids = [workflow.id for workflow in workflow_records]
     event_records = (
         ExamSessionScheduleEvent.query.filter(
@@ -17245,6 +17428,7 @@ def pre_session_control_tower():
                 priority_action.get("label") if priority_action.get("source") == "schedule" else schedule_workflow_next_action(status=schedule_status),
                 schedule_workflow_responsible(schedule_status),
                 monthly_registrations_closed=bool(getattr(session_record, "monthly_registrations_closed", False)),
+                date_confirmation_confirmed=getattr(session_record, "date_confirmation_status", None) == "Confirmed",
                 staffing_contract=staffing_contract,
                 staffing_control=staffing_control_presentation,
                 packages_action=packages_action,
@@ -17317,7 +17501,9 @@ def pre_session_control_tower():
     def bundle_session_schedule_state(view):
         if bool((view.get("schedule_gate") or {}).get("is_ready")):
             return "unblocked"
-        if view.get("monthly_registrations_closed"):
+        if view.get("schedule_preparation_unlocked"):
+            return "unblocked"
+        if view.get("monthly_registrations_closed") or view.get("date_confirmation_confirmed"):
             return "semi_unblocked"
         return "blocked"
 
@@ -17517,16 +17703,18 @@ def preview_path_session_journey(session_id, audience):
     if audience not in JOURNEY_AUDIENCES:
         return render_journey_unavailable(404)
     session_record = ExamSession.query.get_or_404(session_id)
+    auto_approve_expired_schedule_review(session_record, commit=True)
     journey = path_session_journey_contract(session_record, audience)
-    return render_template("pre_session_control_tower/session_journey.html", journey=journey, share=None, is_preview=True)
+    return render_template("pre_session_control_tower/session_journey.html", journey=journey, share=None, is_preview=True, csrf_token=session.get("csrf_token"))
 
 
 @staff_bp.route("/path-session-journeys/sessions/<int:session_id>")
 @login_required
 def path_session_journey(session_id):
     session_record = ExamSession.query.get_or_404(session_id)
+    auto_approve_expired_schedule_review(session_record, commit=True)
     journey = path_session_journey_contract(session_record, "institution")
-    return render_template("pre_session_control_tower/session_journey.html", journey=journey, share=None, is_preview=True)
+    return render_template("pre_session_control_tower/session_journey.html", journey=journey, share=None, is_preview=True, csrf_token=session.get("csrf_token"))
 
 
 @staff_bp.route("/path-session-journey/<token>/<audience>")
@@ -17540,8 +17728,74 @@ def shared_path_session_journey(token, audience):
         return render_journey_unavailable(404)
     if not share.is_enabled or share.revoked_at:
         return render_journey_unavailable(410)
+    auto_approve_expired_schedule_review(share.exam_session, commit=True)
     journey = path_session_journey_contract(share.exam_session, audience)
-    return render_template("pre_session_control_tower/session_journey.html", journey=journey, share=share, is_preview=False)
+    return render_template("pre_session_control_tower/session_journey.html", journey=journey, share=share, is_preview=False, csrf_token="")
+
+
+def journey_schedule_action_response(session_record, action, note="", created_by="Path Session Journey", auto_confirm=False):
+    workflow = ExamSessionScheduleWorkflow.query.filter_by(exam_session_id=session_record.id).first()
+    if not workflow or workflow.status != "Sent for review":
+        return jsonify({"ok": False, "message": "The schedule is no longer waiting for review."}), 409
+    action_key = "approve" if action == "confirm" else "record_changes"
+    clean_note = (note or "").strip()
+    if action_key == "record_changes" and not clean_note:
+        return jsonify({"ok": False, "message": "Please describe the requested schedule changes."}), 400
+    if action_key == "approve" and auto_confirm:
+        sent_at = schedule_workflow_sent_for_review_datetime(workflow)
+        due_at = argentina_add_business_hours(sent_at, 48) if sent_at else None
+        if not due_at or datetime.now(timezone.utc).astimezone(LOCAL_TZ) < due_at:
+            return jsonify({"ok": False, "message": "The automatic confirmation countdown has not ended yet."}), 409
+        clean_note = SCHEDULE_AUTO_CONFIRMATION_NOTE
+        created_by = SCHEDULE_AUTO_CONFIRMATION_ACTOR
+    due_at = argentina_add_business_days(datetime.now(LOCAL_TZ).date(), 2) if action_key == "record_changes" else None
+    workflow, error = apply_schedule_workflow_transition(
+        session_record,
+        action_key,
+        due_at=due_at,
+        note=clean_note,
+        created_by=created_by,
+    )
+    if error:
+        db.session.rollback()
+        return jsonify({"ok": False, "message": error}), 400
+    db.session.commit()
+    return jsonify({"ok": True, "status": workflow.status})
+
+
+@staff_bp.route("/path-session-journeys/sessions/<int:session_id>/schedule/<action>", methods=["POST"])
+@login_required
+def path_session_journey_schedule_action(session_id, action):
+    if action not in {"confirm", "request-changes"}:
+        return jsonify({"ok": False, "message": "Invalid schedule action."}), 404
+    if not validate_csrf():
+        return jsonify({"ok": False, "message": "Security token expired. Please try again."}), 400
+    session_record = ExamSession.query.get_or_404(session_id)
+    return journey_schedule_action_response(
+        session_record,
+        action,
+        note=request.form.get("note", ""),
+        created_by=session.get("user") or "Path Session Journey",
+        auto_confirm=request.form.get("auto_confirm") == "1",
+    )
+
+
+@staff_bp.route("/path-session-journey/<token>/<audience>/schedule/<action>", methods=["POST"])
+def shared_path_session_journey_schedule_action(token, audience, action):
+    if action not in {"confirm", "request-changes"} or audience != "institution":
+        return jsonify({"ok": False, "message": "Invalid schedule action."}), 404
+    share = ExamSessionJourneyShare.query.filter_by(token=token).first()
+    if not share or share.audience != audience:
+        return jsonify({"ok": False, "message": "Journey link unavailable."}), 404
+    if not share.is_enabled or share.revoked_at:
+        return jsonify({"ok": False, "message": "Journey link unavailable."}), 410
+    return journey_schedule_action_response(
+        share.exam_session,
+        action,
+        note=request.form.get("note", ""),
+        created_by="Path Session Journey",
+        auto_confirm=request.form.get("auto_confirm") == "1",
+    )
 
 
 @staff_bp.route("/pre-session-control-tower/sessions/<int:session_id>/journey-share-token", methods=["POST"])
@@ -17597,12 +17851,18 @@ def update_schedule_workflow(session_id):
         return schedule_workflow_redirect(session_record, status_filter)
     action_key = request.form.get("action_key", "").strip()
     note = request.form.get("note", "")
+    if action_key in {"mark_ready", "mark_revised_ready", "send_for_review"}:
+        note = ""
     transition = schedule_transition_by_key(action_key)
     if not transition:
         flash("Please select a valid schedule workflow action.", "error")
         return schedule_workflow_redirect(session_record, status_filter)
-    if not session_record.monthly_registrations_closed:
-        flash("Schedule actions are blocked until Monthly exam session registrations is Closed.", "error")
+    schedule_blocker_message = schedule_preparation_blocker_message(
+        bool(session_record.monthly_registrations_closed),
+        session_record.date_confirmation_status == "Confirmed",
+    )
+    if schedule_blocker_message:
+        flash(f"{schedule_blocker_message}.", "error")
         return schedule_workflow_redirect(session_record, status_filter, action_key)
     if (
         action_key == "reopen"
@@ -17615,25 +17875,18 @@ def update_schedule_workflow(session_id):
     if action_key in {"start_preparation", "reopen"}:
         due_at = schedule_preparation_deadline_for_session_bundle(session_record)
     if action_key in {"mark_ready", "mark_revised_ready"}:
-        schedule_url = request.form.get("exam_session_schedule_url", "").strip()
-        entry_slips_url = request.form.get("exam_entry_slips_url", "").strip()
-        if not schedule_url:
-            flash("Please add the Exam session schedule link before marking schedules as ready to send.", "error")
+        if not (session_record.schedule_folder_url or "").strip():
+            flash("Please configure the Schedule folder before marking schedules as ready to send.", "error")
             return schedule_workflow_redirect(session_record, status_filter, action_key)
-        if not is_valid_url(schedule_url):
-            flash("Please enter a valid Exam session schedule link.", "error")
+        if not (session_record.exam_entry_slips_url or "").strip():
+            flash("Please configure the Exam entry slips folder before marking schedules as ready to send.", "error")
             return schedule_workflow_redirect(session_record, status_filter, action_key)
-        if not entry_slips_url:
-            flash("Please add the Exam entry slips link before marking schedules as ready to send.", "error")
+        if request.form.get("schedule_uploaded_confirmation") != "1" or request.form.get("entry_slips_uploaded_confirmation") != "1":
+            flash("Please confirm the schedules and exam entry slips have been uploaded before marking schedules as ready to send.", "error")
             return schedule_workflow_redirect(session_record, status_filter, action_key)
-        if not is_valid_url(entry_slips_url):
-            flash("Please enter a valid Exam entry slips link.", "error")
-            return schedule_workflow_redirect(session_record, status_filter, action_key)
-        session_record.schedule_folder_url = schedule_url
-        session_record.exam_entry_slips_url = entry_slips_url
         due_at = argentina_next_business_day(datetime.now(LOCAL_TZ).date())
     if action_key == "send_for_review":
-        due_at = argentina_add_business_days(datetime.now(LOCAL_TZ).date(), 2)
+        due_at = argentina_add_business_hours(datetime.now(LOCAL_TZ), 48).date()
     if action_key in {"record_changes", "mark_revised_ready"}:
         due_at = argentina_add_business_days(datetime.now(LOCAL_TZ).date(), 2)
     if action_key == "continue_editing":
@@ -23163,6 +23416,7 @@ def pre_session_dashboard_department_actions(department):
             schedule_workflow_next_action(status=schedule_status),
             schedule_workflow_responsible(schedule_status),
             monthly_registrations_closed=bool(getattr(session_record, "monthly_registrations_closed", False)),
+            date_confirmation_confirmed=getattr(session_record, "date_confirmation_status", None) == "Confirmed",
             staffing_contract=staffing_contract,
             staffing_control=staffing_control,
             packages_action=packages_action,
@@ -23331,6 +23585,7 @@ def pre_session_dashboard_sessions_department_action_count(department, selected_
             schedule_workflow_next_action(status=schedule_status),
             schedule_workflow_responsible(schedule_status),
             monthly_registrations_closed=bool(getattr(session_record, "monthly_registrations_closed", False)),
+            date_confirmation_confirmed=getattr(session_record, "date_confirmation_status", None) == "Confirmed",
             staffing_contract=staffing_contract,
             logistics=logistics_presentation,
             logistics_gate=logistics_gate,

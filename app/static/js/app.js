@@ -1544,10 +1544,15 @@ const closeScheduleActionPanel = (form, { restoreFocus = true } = {}) => {
 const syncScheduleLinkRequirement = (form) => {
   if (!form) return;
   const inputs = Array.from(form.querySelectorAll("[data-schedule-link-input]"));
+  const confirmations = Array.from(form.querySelectorAll("[data-schedule-ready-checkbox]"));
   const submit = form.querySelector("[data-schedule-link-submit]");
-  if (!inputs.length || !submit) return;
+  if ((!inputs.length && !confirmations.length) || !submit) return;
   if (form.dataset.scheduleMonthlyBlocked === "true") {
     submit.disabled = true;
+    return;
+  }
+  if (confirmations.length) {
+    submit.disabled = confirmations.some((input) => !input.checked);
     return;
   }
   submit.disabled = inputs.some((input) => !input.value.trim());
@@ -1950,6 +1955,11 @@ document.addEventListener("click", (event) => {
     event.preventDefault();
     const form = document.getElementById(scheduleActionToggle.getAttribute("aria-controls"));
     if (!form) return;
+    if (["start_preparation", "send_for_review"].includes(form.dataset.scheduleActionKey)) {
+      if (scheduleActionToggle.disabled || form.dataset.scheduleMonthlyBlocked === "true") return;
+      form.requestSubmit();
+      return;
+    }
     if (!form.hidden) {
       closeScheduleActionPanel(form);
     } else {
@@ -2480,6 +2490,13 @@ document.addEventListener("input", (event) => {
   const scheduleLinkInput = event.target.closest("[data-schedule-link-input]");
   if (scheduleLinkInput) {
     syncScheduleLinkRequirement(scheduleLinkInput.closest("[data-schedule-action-panel]"));
+  }
+});
+
+document.addEventListener("change", (event) => {
+  const scheduleReadyCheckbox = event.target.closest("[data-schedule-ready-checkbox]");
+  if (scheduleReadyCheckbox) {
+    syncScheduleLinkRequirement(scheduleReadyCheckbox.closest("[data-schedule-action-panel]"));
   }
 });
 
@@ -12187,10 +12204,32 @@ document.addEventListener("change", (event) => {
     statusChip: document.querySelector("[data-journey-schedule-status-chip]"),
   });
 
+  const postJourneyScheduleAction = async (root, url, data = {}) => {
+    if (!url) throw new Error("Schedule action is unavailable.");
+    const body = new URLSearchParams();
+    Object.entries(data).forEach(([key, value]) => body.append(key, value));
+    if (root.dataset.csrfToken) body.append("csrf_token", root.dataset.csrfToken);
+    const response = await fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded;charset=UTF-8" },
+      body,
+    });
+    let payload = {};
+    try {
+      payload = await response.json();
+    } catch (_error) {
+      payload = {};
+    }
+    if (!response.ok || payload.ok === false) {
+      throw new Error(payload.message || "The schedule review could not be updated.");
+    }
+    return payload;
+  };
+
   const applyState = (root) => {
     const state = loadState(root);
     const initialConfirmed = root.dataset.initialScheduleConfirmed === "true";
-    const confirmed = initialConfirmed || state.confirmed === true;
+    const confirmed = initialConfirmed;
     const {
       checkboxes,
       confirmButton,
@@ -12214,11 +12253,6 @@ document.addEventListener("change", (event) => {
     if (requestButton) {
       requestButton.disabled = confirmed;
       requestButton.classList.toggle("is-disabled", confirmed);
-    }
-    if (statusChip && state.confirmed === true) {
-      statusChip.textContent = "Confirmed";
-      statusChip.classList.remove("is-in-progress");
-      statusChip.classList.add("is-confirmed");
     }
     if (requestText && typeof state.requestText === "string") {
       requestText.value = state.requestText;
@@ -12256,14 +12290,17 @@ document.addEventListener("change", (event) => {
       });
     });
 
-    confirmButton?.addEventListener("click", () => {
+    confirmButton?.addEventListener("click", async () => {
       if (confirmButton.disabled) return;
-      const state = loadState(root);
-      state.confirmed = true;
-      state.showRequest = false;
-      saveState(root, state);
-      if (requestPanel) requestPanel.hidden = true;
-      applyState(root);
+      confirmButton.disabled = true;
+      try {
+        await postJourneyScheduleAction(root, root.dataset.confirmUrl);
+        if (storageAvailable) window.sessionStorage.removeItem(stateKey(root));
+        window.location.reload();
+      } catch (error) {
+        confirmButton.disabled = false;
+        window.alert(error.message);
+      }
     });
 
     requestButton?.addEventListener("click", () => {
@@ -12282,18 +12319,21 @@ document.addEventListener("change", (event) => {
       if (requestPanel) requestPanel.hidden = true;
     });
 
-    submitButton?.addEventListener("click", () => {
+    submitButton?.addEventListener("click", async () => {
       const value = (requestText?.value || "").trim();
       if (!value) {
         requestText?.focus();
         return;
       }
-      const state = loadState(root);
-      state.requestText = value;
-      state.showRequest = false;
-      saveState(root, state);
-      if (requestPanel) requestPanel.hidden = true;
-      applyState(root);
+      submitButton.disabled = true;
+      try {
+        await postJourneyScheduleAction(root, root.dataset.requestUrl, { note: value });
+        if (storageAvailable) window.sessionStorage.removeItem(stateKey(root));
+        window.location.reload();
+      } catch (error) {
+        submitButton.disabled = false;
+        window.alert(error.message);
+      }
     });
 
     seeRequestButton?.addEventListener("click", () => {
@@ -12313,17 +12353,46 @@ document.addEventListener("change", (event) => {
   const countdowns = document.querySelectorAll("[data-journey-schedule-countdown]");
   if (!countdowns.length) return;
 
+  const postAutomaticScheduleConfirmation = async (countdown) => {
+    const milestone = countdown.closest(".journey-milestone");
+    const root = milestone?.querySelector("[data-journey-schedule-review]");
+    if (!root || root.dataset.autoConfirming === "true" || root.dataset.initialScheduleConfirmed === "true") return;
+    root.dataset.autoConfirming = "true";
+    root.querySelectorAll("[data-journey-schedule-checkbox]").forEach((checkbox) => {
+      checkbox.checked = true;
+      checkbox.disabled = true;
+    });
+    const body = new URLSearchParams();
+    body.append("auto_confirm", "1");
+    if (root.dataset.csrfToken) body.append("csrf_token", root.dataset.csrfToken);
+    try {
+      const response = await fetch(root.dataset.confirmUrl || "", {
+        method: "POST",
+        headers: { "Content-Type": "application/x-www-form-urlencoded;charset=UTF-8" },
+        body,
+      });
+      if (response.ok) {
+        window.location.reload();
+      } else {
+        root.dataset.autoConfirming = "false";
+      }
+    } catch (_error) {
+      root.dataset.autoConfirming = "false";
+    }
+  };
+
   countdowns.forEach((countdown) => {
-    const startMinutes = Number.parseInt(countdown.dataset.startMinutes || "2380", 10);
-    const totalSeconds = Number.isFinite(startMinutes) ? startMinutes * 60 : 2380 * 60;
-    const openedAt = Date.now();
+    const deadline = Date.parse(countdown.dataset.deadline || "");
+    if (!Number.isFinite(deadline)) return;
     const render = () => {
-      const elapsedSeconds = Math.floor((Date.now() - openedAt) / 1000);
-      const remainingSeconds = Math.max(totalSeconds - elapsedSeconds, 0);
+      const remainingSeconds = Math.max(Math.floor((deadline - Date.now()) / 1000), 0);
       const hours = Math.floor(remainingSeconds / 3600);
       const minutes = Math.floor((remainingSeconds % 3600) / 60);
       const seconds = remainingSeconds % 60;
       countdown.textContent = `${hours}:${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")} h`;
+      if (remainingSeconds <= 0) {
+        postAutomaticScheduleConfirmation(countdown);
+      }
     };
     render();
     window.setInterval(render, 1000);

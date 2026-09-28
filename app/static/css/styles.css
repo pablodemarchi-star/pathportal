@@ -7910,6 +7910,28 @@ span.session-marker-chip {
   font-size: 11px;
 }
 
+.schedule-rounds-line {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.schedule-automatic-chip {
+  display: inline-flex;
+  align-items: center;
+  width: fit-content;
+  border-radius: 999px;
+  padding: 3px 7px;
+  background: var(--badge-purple-bg);
+  color: var(--badge-purple-text);
+  font-size: 10px;
+  font-weight: 900;
+  line-height: 1.1;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
 .staffing-column-deadline-chip.workflow-deadline-on-track,
 .package-column-deadline-chip.workflow-deadline-on-track {
   background: var(--badge-grey-bg) !important;
@@ -9217,9 +9239,20 @@ span.session-marker-chip {
   color: #137345;
 }
 
-.journey-milestone.is-in-progress .journey-milestone-marker {
+.journey-milestone.is-in-progress .journey-milestone-marker,
+.journey-milestone.is-in_progress .journey-milestone-marker {
   background: #fff1c7;
   color: #8a5b00;
+}
+
+.journey-milestone.is-date-pending .journey-milestone-marker {
+  background: #e8f2f5;
+  color: #4b6873;
+}
+
+.journey-milestone.is-entry-slips-pending .journey-milestone-marker {
+  background: #e8f2f5;
+  color: #4b6873;
 }
 
 .journey-milestone div {
@@ -9387,6 +9420,12 @@ span.session-marker-chip {
   text-decoration: none;
 }
 
+.journey-access-chip.is-disabled {
+  background: #e5e7eb;
+  color: #7a8086;
+  cursor: not-allowed;
+}
+
 .journey-shipment-timeline {
   position: relative;
   display: grid;
@@ -9494,6 +9533,26 @@ span.session-marker-chip {
   overflow: visible;
   box-shadow: 0 12px 28px rgba(18, 48, 58, 0.22);
   transform: translate(-50%, -50%);
+}
+
+.journey-shipment-timeline.is-in_transit .journey-shipment-plane {
+  animation: journey-plane-float 3.8s ease-in-out infinite;
+}
+
+@keyframes journey-plane-float {
+  0%,
+  100% {
+    transform: translate(-50%, -50%);
+  }
+  50% {
+    transform: translate(-50%, calc(-50% - 8px));
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .journey-shipment-timeline.is-in_transit .journey-shipment-plane {
+    animation: none;
+  }
 }
 
 .journey-shipment-plane img {
@@ -11772,6 +11831,31 @@ span.session-marker-chip {
   font-size: 13px;
 }
 
+.schedule-change-request-card {
+  display: grid;
+  gap: 6px;
+  margin-top: 10px;
+  padding: 14px 16px;
+  border: 1px solid rgba(205, 77, 64, 0.32);
+  border-radius: 8px;
+  background: var(--path-red-50);
+  color: var(--path-red);
+}
+
+.schedule-change-request-card span {
+  font-size: 12px;
+  font-weight: 900;
+  text-transform: uppercase;
+}
+
+.schedule-change-request-card p {
+  margin: 0;
+  color: var(--path-red);
+  font-size: 13px;
+  line-height: 1.4;
+  white-space: pre-wrap;
+}
+
 .schedule-recommended-action-buttons {
   display: flex;
   flex-wrap: wrap;
@@ -11871,6 +11955,54 @@ span.session-marker-chip {
 .schedule-action-form textarea {
   min-height: 72px;
   resize: vertical;
+}
+
+.schedule-upload-confirmation-group {
+  display: grid;
+  gap: 6px;
+}
+
+.schedule-upload-title {
+  color: var(--color-primary-dark);
+  font-size: 12px;
+  font-weight: 850;
+}
+
+.schedule-upload-confirmation-option {
+  display: grid !important;
+  grid-template-columns: auto minmax(0, max-content) auto;
+  align-items: center;
+  gap: 8px;
+  justify-content: start;
+  color: var(--color-primary-dark) !important;
+  font-weight: 650 !important;
+}
+
+.schedule-upload-confirmation-option input {
+  margin: 0;
+}
+
+.schedule-folder-access-chip {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 28px;
+  padding: 5px 9px;
+  border: 1px solid #bad6e4;
+  border-radius: 999px;
+  background: var(--path-cyan-50);
+  color: var(--badge-blue-text);
+  font-size: 11px;
+  font-weight: 800;
+  line-height: 1.1;
+  text-decoration: none;
+  white-space: nowrap;
+}
+
+.schedule-folder-access-chip.is-disabled {
+  border-color: var(--badge-grey-bg);
+  background: var(--badge-grey-bg);
+  color: var(--badge-grey-text);
 }
 
 .field-help {

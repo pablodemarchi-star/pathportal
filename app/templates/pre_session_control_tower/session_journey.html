@@ -86,7 +86,7 @@
       <h2>{% if journey.audience == 'institution' %}Exam session stages{% else %}Milestones{% endif %}</h2>
       <ol>
         {% for milestone in journey.milestones %}
-          <li class="journey-milestone is-{{ milestone.status }}">
+          <li class="journey-milestone is-{{ milestone.status }}{% if journey.audience == 'institution' and milestone.key == 'confirmed' and not journey.date_confirmation_confirmed %} is-date-pending{% endif %}{% if journey.audience == 'institution' and milestone.key == 'entry_slips' and not journey.entry_slips_confirmed %} is-entry-slips-pending{% endif %}">
             <span class="journey-milestone-marker" aria-hidden="true">{% if milestone.status == 'completed' %}✓{% else %}•{% endif %}</span>
             <div>
               <span class="journey-stage-heading">
@@ -94,10 +94,12 @@
                 {% if journey.audience == 'institution' and milestone.key == 'confirmed' %}
                   <span class="journey-status-chip {% if journey.date_confirmation_confirmed %}is-confirmed{% else %}is-in-progress{% endif %}">{{ journey.date_confirmation_label }}</span>
                 {% elif journey.audience == 'institution' and milestone.key == 'schedule' %}
-                  <span class="journey-status-chip {% if journey.schedule_confirmed %}is-confirmed{% else %}is-in-progress{% endif %}" data-journey-schedule-status-chip>{{ journey.schedule_confirmation_label }}</span>
-                  <span class="journey-countdown-chip" data-journey-schedule-countdown data-start-minutes="2380">39:40:00 h</span>
+                  <span class="journey-status-chip {{ journey.schedule_confirmation_class }}" data-journey-schedule-status-chip>{{ journey.schedule_confirmation_label }}</span>
+                  {% if journey.schedule_review_countdown.visible %}
+                    <span class="journey-countdown-chip" data-journey-schedule-countdown data-deadline="{{ journey.schedule_review_countdown.due_at_iso }}">{{ (journey.schedule_review_countdown.remaining_seconds // 3600) }}:{{ '%02d'|format((journey.schedule_review_countdown.remaining_seconds % 3600) // 60) }}:{{ '%02d'|format(journey.schedule_review_countdown.remaining_seconds % 60) }} h</span>
+                  {% endif %}
                 {% elif journey.audience == 'institution' and milestone.key == 'entry_slips' %}
-                  <span class="journey-status-chip is-confirmed">Confirmed</span>
+                  <span class="journey-status-chip {% if journey.entry_slips_confirmed %}is-confirmed{% else %}is-in-progress{% endif %}">{{ journey.entry_slips_confirmation_label }}</span>
                 {% elif journey.audience == 'institution' and milestone.key == 'material_shipment' %}
                   <span class="journey-status-chip is-{{ journey.material_shipment.status_key }}">{{ journey.material_shipment.status }}</span>
                 {% elif journey.audience == 'institution' and milestone.key == 'staffing' %}
@@ -110,11 +112,15 @@
               {% if journey.audience == 'institution' and milestone.key == 'entry_slips' %}
                 <p class="journey-inline-action-row">
                   <span>{{ milestone.message }}</span>
-                  <button class="journey-access-chip" type="button" data-open-modal="journey-entry-slip-modal" data-view-only-allowed="true">Access</button>
+                  {% if journey.entry_slips_confirmed and journey.entry_slips_url %}
+                    <a class="journey-access-chip" href="{{ journey.entry_slips_url }}" target="_blank" rel="noopener noreferrer">Access</a>
+                  {% else %}
+                    <span class="journey-access-chip is-disabled" aria-disabled="true">Access</span>
+                  {% endif %}
                 </p>
               {% elif journey.audience == 'institution' and milestone.key == 'material_shipment' %}
                 <p>{{ milestone.message }}</p>
-                <section class="journey-shipment-timeline" style="--journey-plane-progress: {{ journey.material_shipment.progress_percent }}%;" aria-label="Exam material shipment progress">
+                <section class="journey-shipment-timeline is-{{ journey.material_shipment.status_key }}" style="--journey-plane-progress: {{ journey.material_shipment.progress_percent }}%;" aria-label="Exam material shipment progress">
                   <div class="journey-shipment-endpoint">
                     <svg viewBox="0 0 24 24" aria-hidden="true">
                       <path d="M4 21V7l8-4 8 4v14" />
@@ -153,32 +159,34 @@
                 <p>{{ milestone.message }}</p>
               {% endif %}
               {% if journey.audience == 'institution' and milestone.key == 'schedule' %}
-                <section class="journey-schedule-review" data-journey-schedule-review data-journey-review-key="journey-schedule-{{ journey.session_id }}" data-initial-schedule-confirmed="{{ 'true' if journey.schedule_confirmed else 'false' }}" aria-label="Session schedule review">
-                  {% if journey.schedule_url %}
+                {% set schedule_confirm_url = url_for('staff.shared_path_session_journey_schedule_action', token=share.token, audience=journey.audience, action='confirm') if share else url_for('staff.path_session_journey_schedule_action', session_id=journey.session_id, action='confirm') %}
+                {% set schedule_request_url = url_for('staff.shared_path_session_journey_schedule_action', token=share.token, audience=journey.audience, action='request-changes') if share else url_for('staff.path_session_journey_schedule_action', session_id=journey.session_id, action='request-changes') %}
+                <section class="journey-schedule-review" data-journey-schedule-review data-journey-review-key="journey-schedule-{{ journey.session_id }}" data-initial-schedule-confirmed="{{ 'true' if journey.schedule_confirmed else 'false' }}" data-confirm-url="{{ schedule_confirm_url }}" data-request-url="{{ schedule_request_url }}" data-csrf-token="{{ csrf_token or '' }}" aria-label="Session schedule review">
+                  {% if journey.schedule_url and journey.schedule_link_enabled %}
                     <a class="journey-schedule-link" href="{{ journey.schedule_url }}" target="_blank" rel="noopener noreferrer">View session schedule</a>
                   {% else %}
-                    <span class="journey-schedule-link is-disabled">View session schedule</span>
+                    <span class="journey-schedule-link is-disabled" aria-disabled="true">View session schedule</span>
                   {% endif %}
                   <fieldset class="journey-schedule-checklist">
                     <legend>Verify the following information before approving the session schedule:</legend>
                     <label>
-                      <input type="checkbox" data-journey-schedule-checkbox data-view-only-allowed="true">
+                      <input type="checkbox" data-journey-schedule-checkbox data-view-only-allowed="true"{% if journey.schedule_confirmed %} checked disabled{% endif %}>
                       <span>the <strong>exam venue address</strong></span>
                     </label>
                     <label>
-                      <input type="checkbox" data-journey-schedule-checkbox data-view-only-allowed="true">
+                      <input type="checkbox" data-journey-schedule-checkbox data-view-only-allowed="true"{% if journey.schedule_confirmed %} checked disabled{% endif %}>
                       <span>the <strong>number and names of the exam rooms</strong></span>
                     </label>
                     <label>
-                      <input type="checkbox" data-journey-schedule-checkbox data-view-only-allowed="true">
+                      <input type="checkbox" data-journey-schedule-checkbox data-view-only-allowed="true"{% if journey.schedule_confirmed %} checked disabled{% endif %}>
                       <span>the <strong>maximum capacity of each room</strong>, ensuring it matches the number of candidates assigned to that room</span>
                     </label>
                     <label>
-                      <input type="checkbox" data-journey-schedule-checkbox data-view-only-allowed="true">
+                      <input type="checkbox" data-journey-schedule-checkbox data-view-only-allowed="true"{% if journey.schedule_confirmed %} checked disabled{% endif %}>
                       <span>the <strong>start and end time</strong> for each exam room within the session</span>
                     </label>
                     <label>
-                      <input type="checkbox" data-journey-schedule-checkbox data-view-only-allowed="true">
+                      <input type="checkbox" data-journey-schedule-checkbox data-view-only-allowed="true"{% if journey.schedule_confirmed %} checked disabled{% endif %}>
                       <span>the <strong>candidates included in the session</strong></span>
                     </label>
                   </fieldset>
