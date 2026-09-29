@@ -11221,15 +11221,19 @@ span.session-marker-chip {
   gap: 8px;
 }
 
+.shipment-delivery-address-row > strong {
+  color: inherit;
+  font: inherit;
+  font-weight: 700;
+  text-transform: none;
+}
+
 .shipment-reset-address-form {
   margin: 0;
 }
 
 .shipment-reset-address-button {
-  min-height: 24px;
-  padding: 3px 8px;
-  font-size: 11px;
-  line-height: 1;
+  font-size: 12px;
 }
 
 .shipment-address-entry {
@@ -11243,13 +11247,6 @@ span.session-marker-chip {
   justify-content: center;
   justify-self: start;
   line-height: 1;
-}
-
-.shipment-label-link {
-  color: var(--path-cyan);
-  font-size: 13px;
-  font-weight: 700;
-  text-decoration: underline;
 }
 
 .shipment-label-actions {
@@ -11279,6 +11276,62 @@ span.session-marker-chip {
 
 .shipment-detail-grid .shipment-label-card {
   grid-column: span 2;
+  position: relative;
+}
+
+.shipment-delivery-address-card {
+  position: relative;
+}
+
+.shipment-information-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px 12px;
+}
+
+.shipment-label-reset-entry {
+  position: absolute;
+  top: 10px;
+  right: 12px;
+}
+
+.shipment-label-reset-entry[open] {
+  position: static;
+}
+
+.shipment-label-reset-button {
+  display: inline;
+  min-height: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--path-cyan);
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 1;
+  text-decoration: underline;
+  cursor: pointer;
+}
+
+.shipment-label-reset-button:hover,
+.shipment-label-reset-button:focus {
+  color: var(--color-primary-dark);
+}
+
+.shipment-label-link-field {
+  grid-column: span 2;
+}
+
+.shipment-label-link-control {
+  align-items: center;
+  display: grid;
+  gap: 8px;
+  grid-template-columns: minmax(0, 1fr) max-content;
+}
+
+.shipment-label-folder-link {
+  justify-self: start;
+  text-transform: none;
 }
 
 .shipment-address-entry-form {
@@ -11301,6 +11354,10 @@ span.session-marker-chip {
 @media (max-width: 720px) {
   .shipment-detail-grid .shipment-label-card {
     grid-column: 1 / -1;
+  }
+
+  .shipment-information-grid {
+    grid-template-columns: minmax(0, 1fr);
   }
 }
 
@@ -11461,10 +11518,6 @@ span.session-marker-chip {
 
 .shipment-action-summary-row::-webkit-details-marker {
   display: none;
-}
-
-.shipment-action-copy-button {
-  flex: 0 0 auto;
 }
 
 .shipment-notify-recipient-link {

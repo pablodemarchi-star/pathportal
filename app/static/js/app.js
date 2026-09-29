@@ -12438,6 +12438,24 @@ const syncShipmentDeliveryOptions = (fieldset) => {
   });
 };
 
+const clearShipmentDeliveryAddressFields = (form) => {
+  if (!form) return;
+  const addressInput = form.querySelector("input[name='delivery_address']");
+  const cityInput = form.querySelector("input[name='delivery_city']");
+  const provinceInput = form.querySelector("input[name='delivery_province']");
+  if (addressInput) addressInput.value = "";
+  if (cityInput) cityInput.value = "";
+  if (provinceInput) provinceInput.value = "";
+};
+
+const resetShipmentShippingLabelFields = (form) => {
+  if (!form) return;
+  const labelInput = form.querySelector("input[name='shipping_label_url']");
+  const trackingInput = form.querySelector("input[name='tracking_number']");
+  if (labelInput) labelInput.value = "";
+  if (trackingInput) trackingInput.value = "";
+};
+
 document.querySelectorAll(".shipment-delivery-options").forEach(syncShipmentDeliveryOptions);
 
 document.addEventListener("change", (event) => {
@@ -12473,6 +12491,10 @@ document.addEventListener("change", (event) => {
     fieldset?.querySelectorAll("input[name='delivery_option']").forEach((option) => {
       if (option !== input) option.checked = false;
     });
+  }
+  if (nextValue && nextValue !== previousValue) {
+    clearShipmentDeliveryAddressFields(form);
+    resetShipmentShippingLabelFields(form);
   }
   syncShipmentDeliveryOptions(fieldset);
   if (fieldset?.dataset.shipmentDeliveryAutoSave === "true") {

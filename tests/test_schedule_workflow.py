@@ -4,7 +4,7 @@ import os
 import re
 import subprocess
 import unittest
-from urllib.parse import parse_qs, urlparse
+from urllib.parse import parse_qs, unquote, urlparse
 from datetime import date, datetime, time, timedelta, timezone
 
 os.environ["DATABASE_URL"] = "sqlite:///:memory:"
@@ -3598,19 +3598,14 @@ class ScheduleWorkflowTest(unittest.TestCase):
         met_row = row_for("Deadline met schedule")
         missed_row = row_for("Deadline missed schedule")
 
-        self.assertLess(on_track_row.index("Rounds: 2"), on_track_row.index("Deadline 30/12/2026"))
-        self.assertIn("schedule-deadline-chip schedule-deadline-on-track", on_track_row)
-        self.assertIn("Deadline 30/12/2026", on_track_row)
-        self.assertIn("Deadline on track: 30/12/2026", on_track_row)
-        self.assertIn("schedule-deadline-chip schedule-deadline-overdue", overdue_row)
-        self.assertIn("Deadline 30/06/2026", overdue_row)
-        self.assertIn("Deadline overdue: 30/06/2026", overdue_row)
-        self.assertIn("schedule-deadline-chip schedule-deadline-met", met_row)
-        self.assertIn("Deadline 20/12/2026", met_row)
-        self.assertIn("Deadline met on 20/12/2026: 20/12/2026", met_row)
-        self.assertIn("schedule-deadline-chip schedule-deadline-missed", missed_row)
-        self.assertIn("Deadline 20/12/2026", missed_row)
-        self.assertIn("Deadline not met on 22/12/2026: 20/12/2026", missed_row)
+        self.assertNotIn("Rounds: 2", on_track_row)
+        self.assertNotIn("schedule-deadline-chip", table)
+        self.assertNotIn("Deadline 30/12/2026", table)
+        self.assertNotIn("Deadline 30/06/2026", table)
+        self.assertIn("Deadline on track schedule", html)
+        self.assertIn("Deadline overdue schedule", html)
+        self.assertIn("Deadline met schedule", html)
+        self.assertIn("Deadline missed schedule", html)
 
     def test_package_gate_deadline_uses_semi_and_unblocked_rules(self):
         from app.routes import package_gate_deadline
@@ -6475,23 +6470,14 @@ class ScheduleWorkflowTest(unittest.TestCase):
         html = response.data.decode()
 
         self.assertEqual(response.status_code, 200)
-        self.assertIn("<th>Package</th>", html)
-        self.assertLess(html.index("<th>Staffing</th>"), html.index("<th>Package</th>"))
-        self.assertLess(html.index("<th>Package</th>"), html.index("<th>Logistics</th>"))
-        self.assertLess(html.index("<th>Package</th>"), html.index("<th>Shipment</th>"))
-        self.assertIn("SEMI-UNBLOCKED", html)
         table = html[html.index('aria-label="Schedule preparation and approval"'):html.index('<div class="modal"', html.index('aria-label="Schedule preparation and approval"'))]
-        packages_button_start = table.index(f'data-modal-scroll-target="packages-{self.session_record.id}"')
-        packages_button = table[table.rfind("<button", 0, packages_button_start):table.index("</button>", packages_button_start)]
-        self.assertIn('data-modal-packages-only="true"', packages_button)
-        self.assertIn("SEMI-UNBLOCKED", packages_button)
-        self.assertIn("packages-status-not-started", packages_button)
-        self.assertIn("Not started yet", packages_button)
-        self.assertIn("0 / 6 completed", packages_button)
-        self.assertIn("Completed: -", packages_button)
-        self.assertIn("In progress: -", packages_button)
-        self.assertIn("With incident: -", packages_button)
-        self.assertNotIn("Blocked", packages_button)
+        self.assertNotIn("<th>Schedule</th>", table)
+        self.assertNotIn("<th>Staffing</th>", table)
+        self.assertNotIn("<th>Package</th>", table)
+        self.assertNotIn("<th>Shipment</th>", table)
+        self.assertLess(table.index("<th>Action description</th>"), table.index("<th>Logistics</th>"))
+        self.assertLess(table.index("<th>Logistics</th>"), table.index("<th>Finance</th>"))
+        self.assertLess(table.index("<th>Finance</th>"), table.index("<th>Final checks</th>"))
         packages_section_start = html.index(f'<section class="staffing-control-section packages-control-section" id="packages-{self.session_record.id}"')
         packages_section_end = html.index('<section class="staffing-control-section shipments-control-section"', packages_section_start)
         packages_section = html[packages_section_start:packages_section_end]
@@ -6650,17 +6636,16 @@ class ScheduleWorkflowTest(unittest.TestCase):
         response = client.get("/pre-session-control-tower?session_year=2026&view=sessions")
         html = response.get_data(as_text=True)
         table = html[html.index('aria-label="Schedule preparation and approval"'):html.index('<div class="modal"', html.index('aria-label="Schedule preparation and approval"'))]
-        packages_button_start = table.index(f'data-modal-scroll-target="packages-{self.session_record.id}"')
-        packages_button = table[table.rfind("<button", 0, packages_button_start):table.index("</button>", packages_button_start)]
+        self.assertNotIn(f'data-modal-scroll-target="packages-{self.session_record.id}"', table)
+        packages_section_start = html.index(f'id="packages-{self.session_record.id}"')
+        packages_section_end = html.index(f'id="shipments-{self.session_record.id}"', packages_section_start)
+        packages_section = html[packages_section_start:packages_section_end]
 
-        self.assertIn("packages-status-incident", packages_button)
-        self.assertIn("With incident", packages_button)
-        self.assertIn("1 / 6 completed", packages_button)
-        self.assertIn("1 in progress", packages_button)
-        self.assertIn("1 with incident", packages_button)
-        self.assertIn("Completed: Candidate label verification", packages_button)
-        self.assertIn("In progress: Candidate label printing and affixing", packages_button)
-        self.assertIn("With incident: Return packages", packages_button)
+        self.assertIn("packages-status-incident", packages_section)
+        self.assertIn("With incident", packages_section)
+        self.assertIn("Completed: Candidate label verification", packages_section)
+        self.assertIn("In progress: Candidate label printing and affixing", packages_section)
+        self.assertIn("With incident: Return packages", packages_section)
 
     def test_packages_modal_blockers_use_singular_staff_and_incident_copy(self):
         self.approve_schedule()
@@ -6835,11 +6820,7 @@ class ScheduleWorkflowTest(unittest.TestCase):
         html = response.get_data(as_text=True)
         session_id = self.session_record.id
         table = html[html.index('aria-label="Schedule preparation and approval"'):html.index('<div class="modal"', html.index('aria-label="Schedule preparation and approval"'))]
-        packages_button_start = table.index(f'data-modal-scroll-target="packages-{session_id}"')
-        packages_button = table[table.rfind("<button", 0, packages_button_start):table.index("</button>", packages_button_start)]
-
-        self.assertIn('data-modal-packages-only="true"', packages_button)
-        self.assertIn('data-modal-target-label="Manage packages"', packages_button)
+        self.assertNotIn(f'data-modal-scroll-target="packages-{session_id}"', table)
         modal = html[html.index(f'id="schedule-workflow-{session_id}"'):html.index(f'id="shipments-{session_id}"')]
         packages_section = modal[modal.index(f'id="packages-{session_id}"'):]
         package_metadata_index = packages_section.index('aria-label="Package ownership and deadline"')
@@ -6890,14 +6871,11 @@ class ScheduleWorkflowTest(unittest.TestCase):
         html = response.get_data(as_text=True)
         session_id = self.session_record.id
         table = html[html.index('aria-label="Schedule preparation and approval"'):html.index('<div class="modal"', html.index('aria-label="Schedule preparation and approval"'))]
-        shipments_button_start = table.index(f'data-modal-scroll-target="shipments-{session_id}"')
-        shipments_button = table[table.rfind("<button", 0, shipments_button_start):table.index("</button>", shipments_button_start)]
+        self.assertNotIn(f'data-modal-scroll-target="shipments-{session_id}"', table)
         modal_start = html.index(f'id="schedule-workflow-{session_id}"')
         next_modal = html.find('<div class="modal"', modal_start + 1)
         modal = html[modal_start:next_modal if next_modal != -1 else len(html)]
 
-        self.assertIn('data-modal-shipments-only="true"', shipments_button)
-        self.assertIn('data-modal-target-label="Track shipment"', shipments_button)
         self.assertIn('<span class="modal-title-shipments">BUNDLE SHIPMENT</span>', modal)
         self.assertNotIn('<span class="modal-title-shipments">SHIPMENT</span>', modal)
         with open("app/static/css/styles.css", encoding="utf-8") as css_file:
@@ -11306,11 +11284,8 @@ class ScheduleWorkflowTest(unittest.TestCase):
         html = response.get_data(as_text=True)
         session_id = self.session_record.id
         table = html[html.index('aria-label="Schedule preparation and approval"'):html.index('<div class="modal"', html.index('aria-label="Schedule preparation and approval"'))]
-        staffing_button_start = table.index(f'data-modal-scroll-target="staffing-{session_id}"')
-        staffing_button = table[table.rfind("<button", 0, staffing_button_start):table.index("</button>", staffing_button_start)]
+        self.assertNotIn(f'data-modal-scroll-target="staffing-{session_id}"', table)
 
-        self.assertIn('data-modal-staffing-only="true"', staffing_button)
-        self.assertIn('data-modal-target-label="Manage staffing"', staffing_button)
         modal_start = html.index(f'id="schedule-workflow-{session_id}"')
         next_modal = html.find('<div class="modal"', modal_start + 1)
         modal = html[modal_start:next_modal if next_modal != -1 else len(html)]
@@ -12093,16 +12068,27 @@ class ScheduleWorkflowTest(unittest.TestCase):
         self.create_supervisor()
         self.assign_confirmed_supervisor()
         self.mark_session_packages_quality_checked()
+        self.session_record.exam_session_name = "Colegio Holandes"
+        self.session_record.session_date = date(2026, 8, 7)
+        self.session_record.city = "Pilar"
+        self.session_record.province = "Buenos Aires"
+        second_session = self.create_planning_ready_session("Next session name", date(2026, 8, 9))
+        second_session.city = "Rosario"
+        second_session.province = "Santa Fe"
         bundle = ExamSessionShipmentBundle(
             supervisor_staff_id=1,
             delivery_address="Av. Siempre Viva 123",
             delivery_option="listed_address",
             courier="Correo Argentino",
+            tracking_number="ARVGGDGDGD5635",
             status="Ready to dispatch",
         )
         db.session.add(bundle)
         db.session.flush()
-        db.session.add(ExamSessionShipmentBundleSession(bundle_id=bundle.id, exam_session_id=self.session_record.id))
+        db.session.add_all([
+            ExamSessionShipmentBundleSession(bundle_id=bundle.id, exam_session_id=self.session_record.id),
+            ExamSessionShipmentBundleSession(bundle_id=bundle.id, exam_session_id=second_session.id),
+        ])
         from app.routes import ensure_shipment_checklist_items
         ensure_shipment_checklist_items(bundle)
         db.session.commit()
@@ -12135,7 +12121,7 @@ class ScheduleWorkflowTest(unittest.TestCase):
         self.assertEqual(response.status_code, 302)
         bundle = ExamSessionShipmentBundle.query.get(bundle.id)
         self.assertEqual(bundle.status, "Dispatched")
-        self.assertIsNone(bundle.tracking_number)
+        self.assertEqual(bundle.tracking_number, "ARVGGDGDGD5635")
         self.assertIsNotNone(bundle.dispatched_at)
         response = client.get("/pre-session-control-tower?session_year=2026&view=sessions")
         html = response.get_data(as_text=True)
@@ -12167,12 +12153,26 @@ class ScheduleWorkflowTest(unittest.TestCase):
         self.assertNotIn(" checked", recipient_notified_row)
         self.assertNotIn("disabled", recipient_notified_row)
         self.assertIn("Notify recipient", recipient_notified_row)
-        self.assertIn('href="https://wa.me/5493515550101"', recipient_notified_row)
+        self.assertIn('href="https://api.whatsapp.com/send?phone=5493515550101&amp;text=', recipient_notified_row)
         self.assertIn('target="_blank"', recipient_notified_row)
         self.assertIn('rel="noopener noreferrer"', recipient_notified_row)
-        self.assertIn("shipment-action-copy-button", recipient_notified_row)
-        self.assertIn('data-copy-text="Av. Siempre Viva 123"', recipient_notified_row)
-        self.assertIn("Copy delivery address", recipient_notified_row)
+        notify_href_start = recipient_notified_row.index('href="https://api.whatsapp.com/send?phone=5493515550101&amp;text=') + len('href="')
+        notify_href_end = recipient_notified_row.index('"', notify_href_start)
+        notify_href = html_lib.unescape(recipient_notified_row[notify_href_start:notify_href_end])
+        notify_query = parse_qs(urlparse(notify_href).query)
+        notify_text = notify_query["text"][0]
+        self.assertIn("%F0%9F%9A%9A%F0%9F%93%A6", notify_href)
+        self.assertIn("Dear Dana,", notify_text)
+        self.assertIn("🚚📦", notify_text)
+        self.assertIn("- *Colegio Holandes (7th August) – Pilar, Buenos Aires*", notify_text)
+        self.assertIn("- *Next session name (9th August) – Rosario, Santa Fe*", notify_text)
+        self.assertIn("- *Tracking number:* ARVGGDGDGD5635", notify_text)
+        self.assertIn("- *Tracking website:* https://www.correoargentino.com.ar/formularios/e-commerce", notify_text)
+        self.assertIn("Thank you very much,\n*Path Examinations*", notify_text)
+        self.assertNotIn("shipment-action-copy-button", recipient_notified_row)
+        self.assertNotIn("data-copy-shipment-recipient-message", recipient_notified_row)
+        self.assertNotIn('data-copy-text="Av. Siempre Viva 123"', recipient_notified_row)
+        self.assertNotIn("Copy recipient notification message", recipient_notified_row)
 
         self.assertNotIn("Mark as in transit to recipient", html)
         self.assertNotIn("Mark as delayed", html)
@@ -12228,7 +12228,7 @@ class ScheduleWorkflowTest(unittest.TestCase):
             self.assertIn(" checked", row)
             self.assertIn("disabled", row)
         self.assertIn("Notify recipient", delivered_status_panel)
-        self.assertNotIn('href="https://wa.me/5493515550101"', delivered_status_panel)
+        self.assertNotIn('href="https://api.whatsapp.com/send?phone=5493515550101', delivered_status_panel)
         self.assertNotIn("dispatch-current-status-chip", html)
         self.assertNotIn("No primary shipment action available.", html)
         self.assertNotIn("Mark recipient review successful", html)
@@ -12952,18 +12952,23 @@ class ScheduleWorkflowTest(unittest.TestCase):
         self.assertIn("Delivery address", shipment_process_panel)
         self.assertIn("Ship to nearby store", shipment_process_panel)
         self.assertIn("<span>Dispatch deadline</span>", shipment_process_panel)
-        self.assertIn("Shipping label information", shipment_process_panel)
+        self.assertIn("SHIPPING INFORMATION", shipment_process_panel)
+        self.assertIn("shipment-information-grid", shipment_process_panel)
         self.assertIn("Length: 26cm", shipment_process_panel)
         self.assertIn("Width: 30cm", shipment_process_panel)
         self.assertIn("Height: 20cm", shipment_process_panel)
         self.assertIn("Weight: 1kg", shipment_process_panel)
         self.assertIn('class="shipment-label-card"', shipment_process_panel)
-        self.assertIn("Shipping label", shipment_process_panel)
+        self.assertIn("SHIPPING LABEL AND TRACKING NUMBER", shipment_process_panel)
         self.assertIn("Insert link to shipping label and tracking number", shipment_process_panel)
         self.assertIn("Save shipping label and tracking number", shipment_process_panel)
         self.assertIn('name="shipping_label_update" value="1"', shipment_process_panel)
-        self.assertIn("Shipping label link", shipment_process_panel)
+        self.assertIn("Shipping label", shipment_process_panel)
         self.assertIn('name="shipping_label_url" maxlength="500" value="" required', shipment_process_panel)
+        self.assertIn("Access folder", shipment_process_panel)
+        self.assertNotIn("ACCESS FOLDER", shipment_process_panel)
+        self.assertIn('href="https://drive.google.com/drive/folders/1DVzYQDQFFyotWxQH-Z5DTnjRkJ5Z2Thh?usp=drive_link"', shipment_process_panel)
+        self.assertNotIn("Shipping label link", shipment_process_panel)
         self.assertIn("Tracking number", shipment_process_panel)
         self.assertIn('name="tracking_number" maxlength="160" value="" required', shipment_process_panel)
         self.assertIn(">Confirm with the bundle recipient which delivery option they prefer:<", modal)
@@ -13144,6 +13149,13 @@ class ScheduleWorkflowTest(unittest.TestCase):
         self.assertIn("Copy tracking number", shipment_process_panel)
         self.assertIn("Adding a new shipping label will replace the previously uploaded file. Management password authorisation is required to continue.", shipment_process_panel)
         self.assertIn('data-confirm-password-value="EditOK"', shipment_process_panel)
+        self.assertIn('class="shipment-label-reset-button">Reset</summary>', shipment_process_panel)
+        self.assertIn('name="shipping_label_url" maxlength="500" value="https://labels.example.com/bundle-1" required', shipment_process_panel)
+        self.assertIn("Shipping label", shipment_process_panel)
+        self.assertIn("Access folder", shipment_process_panel)
+        self.assertNotIn("Shipping label link", shipment_process_panel)
+        self.assertNotIn("Insert link to shipping label and tracking number", shipment_process_panel)
+        self.assertIn('class="secondary-button compact-action link-button shipment-label-link"', shipment_process_panel)
         final_checklist_index = modal.index("Final checklist before delivery")
         dispatch_actions_index = modal.index("Shipment dispatch", final_checklist_index)
         final_checklist_card = modal[final_checklist_index:dispatch_actions_index]
@@ -13361,7 +13373,7 @@ class ScheduleWorkflowTest(unittest.TestCase):
         self.assertIn('name="delivery_option" value="meeting_point"', shipment_process_panel)
         self.assertIn('name="delivery_address_update" value="1"', shipment_process_panel)
         self.assertIn("<span>Dispatch deadline</span>", shipment_process_panel)
-        self.assertNotIn("Shipping label information", shipment_process_panel)
+        self.assertNotIn("SHIPPING INFORMATION", shipment_process_panel)
 
         response = client.post(
             f"/pre-session-control-tower/shipments/bundles/{bundle.id}",
@@ -13585,6 +13597,252 @@ class ScheduleWorkflowTest(unittest.TestCase):
         self.assertEqual(bundle.delivery_city, "Rosario")
         self.assertEqual(bundle.delivery_province, "Santa Fe")
         self.assertEqual(supervisor.full_address_google_maps, "Av. Siempre Viva 123")
+
+    def test_delivery_option_change_from_meeting_point_resets_to_supervisor_address(self):
+        supervisor = self.create_supervisor(staff_id=1, name="Laura Mendez")
+        supervisor.full_address_google_maps = "Supervisor profile address 123"
+        supervisor.city = "Cordoba"
+        supervisor.province = "Cordoba"
+        first_session = self.create_planning_ready_session("Meeting point reset bundle", date(2026, 8, 20))
+        bundle = self.create_shipment_bundle_record(
+            status="Preparing bundle",
+            dispatch_due_at=date(2026, 8, 10),
+            session_record=first_session,
+        )
+        bundle.delivery_option = "meeting_point"
+        bundle.delivery_address = "Meeting point 789"
+        bundle.delivery_city = "Pilar"
+        bundle.delivery_province = "Buenos Aires"
+        db.session.commit()
+        client = self.login_client()
+
+        response = client.post(
+            f"/pre-session-control-tower/shipments/bundles/{bundle.id}",
+            data={
+                "csrf_token": "token",
+                "view": "sessions",
+                "current_session_id": str(first_session.id),
+                "supervisor_staff_id": "1",
+                "delivery_address": "Meeting point 789",
+                "delivery_city": "Pilar",
+                "delivery_province": "Buenos Aires",
+                "delivery_option": "listed_address",
+                "courier": "Correo Argentino",
+                "dispatch_due_at": "2026-08-10",
+                "included_session_ids": [str(first_session.id)],
+            },
+            follow_redirects=False,
+        )
+
+        self.assertEqual(response.status_code, 302)
+        db.session.refresh(bundle)
+        self.assertEqual(bundle.delivery_option, "listed_address")
+        self.assertEqual(bundle.delivery_address, "Supervisor profile address 123")
+        self.assertEqual(bundle.delivery_city, "Cordoba")
+        self.assertEqual(bundle.delivery_province, "Cordoba")
+
+    def test_delivery_option_change_to_different_address_clears_existing_address(self):
+        supervisor = self.create_supervisor(staff_id=1, name="Laura Mendez")
+        supervisor.full_address_google_maps = "Supervisor profile address 123"
+        supervisor.city = "Cordoba"
+        supervisor.province = "Cordoba"
+        first_session = self.create_planning_ready_session("Different address blank bundle", date(2026, 8, 20))
+        bundle = self.create_shipment_bundle_record(
+            status="Preparing bundle",
+            dispatch_due_at=date(2026, 8, 10),
+            session_record=first_session,
+        )
+        bundle.delivery_option = "meeting_point"
+        bundle.delivery_address = "Meeting point 789"
+        bundle.delivery_city = "Pilar"
+        bundle.delivery_province = "Buenos Aires"
+        db.session.commit()
+        client = self.login_client()
+
+        response = client.post(
+            f"/pre-session-control-tower/shipments/bundles/{bundle.id}",
+            data={
+                "csrf_token": "token",
+                "view": "sessions",
+                "current_session_id": str(first_session.id),
+                "supervisor_staff_id": "1",
+                "delivery_address": "Meeting point 789",
+                "delivery_city": "Pilar",
+                "delivery_province": "Buenos Aires",
+                "delivery_option": "different_address",
+                "courier": "Correo Argentino",
+                "dispatch_due_at": "2026-08-10",
+                "included_session_ids": [str(first_session.id)],
+            },
+            follow_redirects=False,
+        )
+
+        self.assertEqual(response.status_code, 302)
+        db.session.refresh(bundle)
+        self.assertEqual(bundle.delivery_option, "different_address")
+        self.assertEqual(bundle.delivery_address, "")
+        self.assertIsNone(bundle.delivery_city)
+        self.assertIsNone(bundle.delivery_province)
+
+        response = client.get("/pre-session-control-tower?session_year=2026&view=sessions")
+        html = response.get_data(as_text=True)
+        modal_start = html.index(f'id="schedule-workflow-{first_session.id}"')
+        next_modal = html.find('<div class="modal"', modal_start + 1)
+        modal = html[modal_start:next_modal if next_modal != -1 else len(html)]
+        shipment_process_index = modal.index("class=\"shipment-process-section\"")
+        sessions_included_index = modal.index("Sessions included in this bundle", shipment_process_index)
+        shipment_process_panel = modal[shipment_process_index:sessions_included_index]
+        self.assertIn("Enter new delivery address", shipment_process_panel)
+        self.assertNotIn("Meeting point 789", shipment_process_panel)
+        self.assertNotIn("Supervisor profile address 123", shipment_process_panel)
+
+    def test_delivery_option_change_to_meeting_point_clears_loaded_information(self):
+        supervisor = self.create_supervisor(staff_id=1, name="Laura Mendez")
+        supervisor.full_address_google_maps = "Supervisor profile address 123"
+        supervisor.city = "Cordoba"
+        supervisor.province = "Cordoba"
+        first_session = self.create_planning_ready_session("Meeting point blank bundle", date(2026, 8, 20))
+        bundle = self.create_shipment_bundle_record(
+            status="Preparing bundle",
+            dispatch_due_at=date(2026, 8, 10),
+            session_record=first_session,
+        )
+        bundle.delivery_option = "listed_address"
+        bundle.delivery_address = "Supervisor profile address 123"
+        bundle.delivery_city = "Cordoba"
+        bundle.delivery_province = "Cordoba"
+        bundle.shipping_label_url = "https://labels.example.com/old-label"
+        bundle.tracking_number = "TRACK-OLD"
+        db.session.commit()
+        client = self.login_client()
+
+        response = client.post(
+            f"/pre-session-control-tower/shipments/bundles/{bundle.id}",
+            data={
+                "csrf_token": "token",
+                "view": "sessions",
+                "current_session_id": str(first_session.id),
+                "supervisor_staff_id": "1",
+                "delivery_address": "Supervisor profile address 123",
+                "delivery_city": "Cordoba",
+                "delivery_province": "Cordoba",
+                "delivery_option": "meeting_point",
+                "courier": "Correo Argentino",
+                "tracking_number": "TRACK-OLD",
+                "shipping_label_url": "https://labels.example.com/old-label",
+                "dispatch_due_at": "2026-08-10",
+                "included_session_ids": [str(first_session.id)],
+            },
+            follow_redirects=False,
+        )
+
+        self.assertEqual(response.status_code, 302)
+        db.session.refresh(bundle)
+        self.assertEqual(bundle.delivery_option, "meeting_point")
+        self.assertEqual(bundle.delivery_address, "")
+        self.assertIsNone(bundle.delivery_city)
+        self.assertIsNone(bundle.delivery_province)
+        self.assertIsNone(bundle.shipping_label_url)
+        self.assertIsNone(bundle.tracking_number)
+
+        response = client.get("/pre-session-control-tower?session_year=2026&view=sessions")
+        html = response.get_data(as_text=True)
+        modal_start = html.index(f'id="schedule-workflow-{first_session.id}"')
+        next_modal = html.find('<div class="modal"', modal_start + 1)
+        modal = html[modal_start:next_modal if next_modal != -1 else len(html)]
+        shipment_process_index = modal.index("class=\"shipment-process-section\"")
+        sessions_included_index = modal.index("Sessions included in this bundle", shipment_process_index)
+        shipment_process_panel = modal[shipment_process_index:sessions_included_index]
+        self.assertIn("Enter new delivery address", shipment_process_panel)
+        self.assertNotIn("Supervisor profile address 123", shipment_process_panel)
+        self.assertNotIn("Open shipping label", shipment_process_panel)
+        self.assertNotIn("TRACK-OLD", shipment_process_panel)
+
+    def test_delivery_option_change_from_different_address_resets_to_supervisor_address(self):
+        supervisor = self.create_supervisor(staff_id=1, name="Laura Mendez")
+        supervisor.full_address_google_maps = "Supervisor profile address 123"
+        supervisor.city = "Cordoba"
+        supervisor.province = "Cordoba"
+        first_session = self.create_planning_ready_session("Different address reset bundle", date(2026, 8, 20))
+        bundle = self.create_shipment_bundle_record(
+            status="Preparing bundle",
+            dispatch_due_at=date(2026, 8, 10),
+            session_record=first_session,
+        )
+        bundle.delivery_option = "different_address"
+        bundle.delivery_address = "Recipient alternate address 456"
+        bundle.delivery_city = "Rosario"
+        bundle.delivery_province = "Santa Fe"
+        db.session.commit()
+        client = self.login_client()
+
+        response = client.post(
+            f"/pre-session-control-tower/shipments/bundles/{bundle.id}",
+            data={
+                "csrf_token": "token",
+                "view": "sessions",
+                "current_session_id": str(first_session.id),
+                "supervisor_staff_id": "1",
+                "delivery_address": "Recipient alternate address 456",
+                "delivery_city": "Rosario",
+                "delivery_province": "Santa Fe",
+                "delivery_option": "store_pickup",
+                "courier": "Correo Argentino",
+                "dispatch_due_at": "2026-08-10",
+                "included_session_ids": [str(first_session.id)],
+            },
+            follow_redirects=False,
+        )
+
+        self.assertEqual(response.status_code, 302)
+        db.session.refresh(bundle)
+        self.assertEqual(bundle.delivery_option, "store_pickup")
+        self.assertEqual(bundle.delivery_address, "Supervisor profile address 123")
+        self.assertEqual(bundle.delivery_city, "Cordoba")
+        self.assertEqual(bundle.delivery_province, "Cordoba")
+
+    def test_delivery_option_change_resets_shipping_label_and_tracking_number(self):
+        self.create_supervisor(staff_id=1, name="Laura Mendez")
+        first_session = self.create_planning_ready_session("Shipping label reset bundle", date(2026, 8, 20))
+        bundle = self.create_shipment_bundle_record(
+            status="Preparing bundle",
+            dispatch_due_at=date(2026, 8, 10),
+            session_record=first_session,
+        )
+        bundle.delivery_option = "listed_address"
+        bundle.delivery_address = "Av. Siempre Viva 123"
+        bundle.delivery_city = "Cordoba"
+        bundle.delivery_province = "Cordoba"
+        bundle.shipping_label_url = "https://labels.example.com/old-label"
+        bundle.tracking_number = "TRACK-OLD"
+        db.session.commit()
+        client = self.login_client()
+
+        response = client.post(
+            f"/pre-session-control-tower/shipments/bundles/{bundle.id}",
+            data={
+                "csrf_token": "token",
+                "view": "sessions",
+                "current_session_id": str(first_session.id),
+                "supervisor_staff_id": "1",
+                "delivery_address": "Av. Siempre Viva 123",
+                "delivery_city": "Cordoba",
+                "delivery_province": "Cordoba",
+                "delivery_option": "store_pickup",
+                "courier": "Correo Argentino",
+                "tracking_number": "TRACK-OLD",
+                "shipping_label_url": "https://labels.example.com/old-label",
+                "dispatch_due_at": "2026-08-10",
+                "included_session_ids": [str(first_session.id)],
+            },
+            follow_redirects=False,
+        )
+
+        self.assertEqual(response.status_code, 302)
+        db.session.refresh(bundle)
+        self.assertEqual(bundle.delivery_option, "store_pickup")
+        self.assertIsNone(bundle.shipping_label_url)
+        self.assertIsNone(bundle.tracking_number)
 
     def test_blocked_shipment_bundle_disables_delivery_option_checkboxes(self):
         self.create_supervisor()
@@ -14090,7 +14348,7 @@ class ScheduleWorkflowTest(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(ExamSessionSinapsisControl.query.count(), 0)
         html = response.data.decode()
-        self.assertIn("<th>Final actions</th>", html)
+        self.assertIn("<th>Final checks</th>", html)
         self.assertNotIn("<th>Sinapsis</th>", html)
         self.assertNotIn("<th>Sinapsis readiness</th>", html)
         self.assertIn("Sinapsis readiness", html)
@@ -15817,13 +16075,13 @@ class ScheduleWorkflowTest(unittest.TestCase):
         for target, label in [
             ("logistics", "Review logistics"),
             ("finance", "Review finance"),
-            ("sinapsis", "Check Sinapsis"),
-            ("communications", "Review communications"),
+            ("sinapsis", "Review Final checks"),
         ]:
             self.assertIn(f'data-modal-scroll-target="{target}-{session_id}"', sessions_table)
             self.assertIn(f'data-modal-target-label="{label}"', sessions_table)
             self.assertIn(f'aria-label="{label} for {self.session_record.exam_session_name}"', sessions_table)
         for removed_target, removed_label in [
+            ("communications", "Review communications"),
             ("shipments", "Track shipment"),
             ("readiness", "View readiness"),
             ("incidents", "Open incidents"),
@@ -17165,8 +17423,8 @@ class ScheduleWorkflowTest(unittest.TestCase):
         self.assertLess(sessions_table.index("<th>Session</th>"), sessions_table.index("<th>Department</th>"))
         self.assertLess(sessions_table.index("<th>Department</th>"), sessions_table.index("<th>Action description</th>"))
         self.assertLess(sessions_table.index("<th>Action description</th>"), sessions_table.index("<th>Logistics</th>"))
-        self.assertLess(sessions_table.index("<th>Finance</th>"), sessions_table.index("<th>Final actions</th>"))
-        self.assertLess(sessions_table.index("<th>Final actions</th>"), sessions_table.index("<th>Session readiness</th>"))
+        self.assertLess(sessions_table.index("<th>Finance</th>"), sessions_table.index("<th>Final checks</th>"))
+        self.assertLess(sessions_table.index("<th>Final checks</th>"), sessions_table.index("<th>Session readiness</th>"))
         self.assertNotIn("<th>Communications</th>", sessions_table)
         self.assertIn("control-tower-session-name-cell", sessions_table)
         self.assertNotIn("staffing-gate-blocked", sessions_table)
@@ -18356,8 +18614,8 @@ class ScheduleWorkflowTest(unittest.TestCase):
         self.assertLess(sessions_table.index("<th>Department</th>"), sessions_table.index("<th>Action description</th>"))
         self.assertLess(sessions_table.index("<th>Action description</th>"), sessions_table.index("<th>Logistics</th>"))
         self.assertLess(sessions_table.index("<th>Logistics</th>"), sessions_table.index("<th>Finance</th>"))
-        self.assertLess(sessions_table.index("<th>Finance</th>"), sessions_table.index("<th>Final actions</th>"))
-        self.assertLess(sessions_table.index("<th>Final actions</th>"), sessions_table.index("<th>Session readiness</th>"))
+        self.assertLess(sessions_table.index("<th>Finance</th>"), sessions_table.index("<th>Final checks</th>"))
+        self.assertLess(sessions_table.index("<th>Final checks</th>"), sessions_table.index("<th>Session readiness</th>"))
         self.assertNotIn("<th>Communications</th>", sessions_table)
         no_logistics_row = sessions_table[
             sessions_table.index("No logistics"):
@@ -19055,7 +19313,7 @@ class ScheduleWorkflowTest(unittest.TestCase):
         self.assertLess(sessions_table.index("<th>Session</th>"), sessions_table.index("<th>Department</th>"))
         self.assertLess(sessions_table.index("<th>Department</th>"), sessions_table.index("<th>Action description</th>"))
         self.assertLess(sessions_table.index("<th>Action description</th>"), sessions_table.index("<th>Logistics</th>"))
-        self.assertLess(sessions_table.index("<th>Final actions</th>"), sessions_table.index("<th>Session readiness</th>"))
+        self.assertLess(sessions_table.index("<th>Final checks</th>"), sessions_table.index("<th>Session readiness</th>"))
         self.assertNotIn("<th>Core readiness</th>", sessions_table)
         self.assertNotIn("<th>Operational readiness</th>", sessions_table)
         self.assertNotIn("<th>Next action</th>", html)
@@ -19121,8 +19379,8 @@ class ScheduleWorkflowTest(unittest.TestCase):
         self.assertNotIn("<th>Operational readiness</th>", sessions_table)
         self.assertNotIn("<th>Incidents</th>", sessions_table)
         self.assertNotIn("<th>Priority action</th>", sessions_table)
-        self.assertLess(sessions_table.index("<th>Finance</th>"), sessions_table.index("<th>Final actions</th>"))
-        self.assertLess(sessions_table.index("<th>Final actions</th>"), sessions_table.index("<th>Session readiness</th>"))
+        self.assertLess(sessions_table.index("<th>Finance</th>"), sessions_table.index("<th>Final checks</th>"))
+        self.assertLess(sessions_table.index("<th>Final checks</th>"), sessions_table.index("<th>Session readiness</th>"))
         self.assertNotIn("<th>Sinapsis</th>", sessions_table)
         self.assertNotIn("<th>Communications</th>", sessions_table)
         self.assertIn("Operational readiness", html)

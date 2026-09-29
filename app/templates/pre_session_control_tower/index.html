@@ -1833,11 +1833,13 @@
             <th>Schedule</th>
             <th>Staffing</th>
             <th>Package</th>
+          {% endif %}
+          {% if show_session_shipment_column %}
             <th>Shipment</th>
           {% endif %}
           <th>Logistics</th>
           <th>Finance</th>
-          <th>Final actions</th>
+          <th>Final checks</th>
           <th>Session readiness</th>
         {% endif %}
       </tr>
@@ -1863,14 +1865,6 @@
                 <span class="session-shipment-progress-chip session-shipment-progress-not-assigned">Not bundle-assigned</span>
               {% endif %}
             </span>
-            {% if selected_view != 'bundle' and not show_session_package_column %}
-              <span class="sr-only">
-                {% call contextual_cell_trigger(session, 'logistics', 'Review logistics', logistics_only=true) %}Logistics{% endcall %}
-                {% call contextual_cell_trigger(session, 'finance', 'Review finance', finance_only=true) %}Finance{% endcall %}
-                {% call contextual_cell_trigger(session, 'sinapsis', 'Check Sinapsis', sinapsis_only=true) %}Sinapsis{% endcall %}
-                {% call contextual_cell_trigger(session, 'communications', 'Review communications', communications_only=true) %}Communications{% endcall %}
-              </span>
-            {% endif %}
           </td>
           {% if selected_view == 'bundle' %}
             <td>{{ bundle_detail_departments_cell(view.bundle_detail_actions) }}</td>
@@ -1910,6 +1904,8 @@
                   {{ packages_table_cell(view.packages.contract, view.packages.schedule_ready, view.packages.staffing_ready, false, view.packages.preparation_status, view.packages.deadline_badge) }}
                 {% endcall %}
               </td>
+            {% endif %}
+            {% if show_session_shipment_column %}
               <td>
                 {% call contextual_cell_trigger(session, 'shipments', 'Track shipment', shipments_only=true) %}
                   {{ shipment_table_cell(view.shipments.contract, view.shipments.planning) }}
@@ -1938,7 +1934,7 @@
         </tr>
       {% else %}
         <tr>
-          <td colspan="{{ 6 if selected_view == 'bundle' else (11 if show_session_package_column else 7) }}" class="empty-state">No exam sessions found.</td>
+          <td colspan="{{ 6 if selected_view == 'bundle' else (7 + (3 if show_session_package_column else 0) + (1 if show_session_shipment_column else 0)) }}" class="empty-state">No exam sessions found.</td>
         </tr>
       {% endfor %}
     </tbody>
@@ -3377,7 +3373,7 @@ This stage has already been marked as complete. Reopening it may affect package 
             </div>
             {% if view.shipments.bundle_view %}
               {% set planning_shipment = view.shipments.bundle_view %}
-              <form method="post" action="{{ url_for('staff.update_shipment_bundle', bundle_id=planning_shipment.id) }}" class="staffing-control-form shipment-bundle-form shipment-delivery-option-form"{% if planning_shipment.final_checklist_completed %} data-confirm-password-submit="Changing the delivery option at this stage may affect the entire process. Management password authorisation is required to continue." data-confirm-password-value="EditOK"{% endif %} data-disable-on-submit>
+              <form method="post" action="{{ url_for('staff.update_shipment_bundle', bundle_id=planning_shipment.id) }}" class="staffing-control-form shipment-bundle-form shipment-delivery-option-form" data-supervisor-delivery-address="{{ planning_shipment.supervisor_delivery_address }}" data-supervisor-delivery-city="{{ planning_shipment.supervisor_delivery_city }}" data-supervisor-delivery-province="{{ planning_shipment.supervisor_delivery_province }}"{% if planning_shipment.final_checklist_completed %} data-confirm-password-submit="Changing the delivery option at this stage may affect the entire process. Management password authorisation is required to continue." data-confirm-password-value="EditOK"{% endif %} data-disable-on-submit>
                 <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
                 <input type="hidden" name="schedule_status" value="{{ selected_schedule_status }}">
                 <input type="hidden" name="view" value="{{ selected_view }}">
@@ -3411,7 +3407,7 @@ This stage has already been marked as complete. Reopening it may affect package 
               <div class="shipment-detail-grid">
                 <article><span>Supervisor</span><strong>{{ planning.supervisor.name or 'Not set' }}</strong></article>
                 {% if shipment_process_delivery_option %}
-                  <article>
+                  <article class="shipment-delivery-address-card">
                     <span class="shipment-process-card-title">
                       Delivery address
                       {% if shipment_process_delivery_option == 'store_pickup' %}
@@ -3455,11 +3451,11 @@ This stage has already been marked as complete. Reopening it may affect package 
                         </form>
                       </details>
                     {% else %}
-                      <span class="shipment-delivery-address-row">
+                      <div class="shipment-delivery-address-row">
                         <strong>{{ shipment_process_bundle.delivery_address if shipment_process_bundle else (planning.delivery_address or 'Not set') }}</strong>
                         {% if shipment_process_delivery_option in ['different_address', 'meeting_point'] and shipment_process_bundle and shipment_process_bundle.has_alternate_delivery_address %}
-                          <details class="shipment-address-entry shipment-reset-address-entry">
-                            <summary class="secondary-button compact-action shipment-reset-address-button">Reset</summary>
+                          <details class="shipment-address-entry shipment-reset-address-entry shipment-label-reset-entry">
+                            <summary class="shipment-label-reset-button shipment-reset-address-button">Reset</summary>
                             <form method="post" action="{{ url_for('staff.update_shipment_bundle', bundle_id=shipment_process_bundle.id) }}" class="staffing-control-form shipment-address-entry-form" data-confirm-password-submit="Management password authorisation is required to reset the delivery address." data-confirm-password-value="EditOK" data-disable-on-submit>
                               <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
                               <input type="hidden" name="schedule_status" value="{{ selected_schedule_status }}">
@@ -3495,7 +3491,7 @@ This stage has already been marked as complete. Reopening it may affect package 
                             </form>
                           </details>
                         {% endif %}
-                      </span>
+                      </div>
                     {% endif %}
                   </article>
                 {% endif %}
@@ -3512,19 +3508,21 @@ This stage has already been marked as complete. Reopening it may affect package 
                   {% else %}
                     {% set shipping_weight = 4 %}
                   {% endif %}
-                  <article>
-                    <span>Shipping label information</span>
-                    <strong>Length: 26cm</strong>
-                    <strong>Width: 30cm</strong>
-                    <strong>Height: {{ shipping_height }}cm</strong>
-                    <strong>Weight: {{ shipping_weight }}kg</strong>
+                  <article class="shipment-information-card">
+                    <span>SHIPPING INFORMATION</span>
+                    <div class="shipment-information-grid">
+                      <strong>Length: 26cm</strong>
+                      <strong>Width: 30cm</strong>
+                      <strong>Height: {{ shipping_height }}cm</strong>
+                      <strong>Weight: {{ shipping_weight }}kg</strong>
+                    </div>
                   </article>
                   {% if shipment_process_bundle %}
                     <article class="shipment-label-card">
-                      <span>Shipping label</span>
+                      <span>SHIPPING LABEL AND TRACKING NUMBER</span>
                       {% if shipment_process_bundle.shipping_label_url %}
                         <div class="shipment-label-actions">
-                          <a class="shipment-label-link" href="{{ shipment_process_bundle.shipping_label_url }}" target="_blank" rel="noopener noreferrer">Open shipping label</a>
+                          <a class="secondary-button compact-action link-button shipment-label-link" href="{{ shipment_process_bundle.shipping_label_url }}" target="_blank" rel="noopener noreferrer">Open shipping label</a>
                           {% if shipment_process_bundle.tracking_number %}
                             <span class="shipment-tracking-chip">{{ shipment_process_bundle.tracking_number }}</span>
                             <button class="copy-icon-button shipment-tracking-copy-button" type="button" data-copy-text="{{ shipment_process_bundle.tracking_number }}" aria-label="Copy tracking number" title="Copy tracking number">
@@ -3537,8 +3535,8 @@ This stage has already been marked as complete. Reopening it may affect package 
                           {% endif %}
                         </div>
                       {% endif %}
-                      <details class="shipment-address-entry">
-                        <summary class="secondary-button compact-action">Insert link to shipping label and tracking number</summary>
+                      <details class="shipment-address-entry{% if shipment_process_bundle.shipping_label_url %} shipment-label-reset-entry{% endif %}">
+                        <summary class="{% if shipment_process_bundle.shipping_label_url %}shipment-label-reset-button{% else %}secondary-button compact-action{% endif %}">{% if shipment_process_bundle.shipping_label_url %}Reset{% else %}Insert link to shipping label and tracking number{% endif %}</summary>
                         <form method="post" action="{{ url_for('staff.update_shipment_bundle', bundle_id=shipment_process_bundle.id) }}" class="staffing-control-form shipment-address-entry-form"{% if shipment_process_bundle.shipping_label_url %} data-confirm-password-submit="Adding a new shipping label will replace the previously uploaded file. Management password authorisation is required to continue." data-confirm-password-value="EditOK"{% endif %} data-disable-on-submit>
                           <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
                           <input type="hidden" name="schedule_status" value="{{ selected_schedule_status }}">
@@ -3559,9 +3557,12 @@ This stage has already been marked as complete. Reopening it may affect package 
                           {% for included_session in shipment_process_bundle.included_sessions %}
                             <input type="hidden" name="included_session_ids" value="{{ included_session.id }}">
                           {% endfor %}
-                          <label>
-                            Shipping label link
-                            <input type="url" name="shipping_label_url" maxlength="500" value="{{ shipment_process_bundle.shipping_label_url }}" required>
+                          <label class="shipment-label-link-field">
+                            Shipping label
+                            <span class="shipment-label-link-control">
+                              <input type="url" name="shipping_label_url" maxlength="500" value="{{ shipment_process_bundle.shipping_label_url }}" required>
+                              <a class="finance-access-folder-link shipment-label-folder-link" href="{{ shipment_process_bundle.shipping_label_folder_url }}" target="_blank" rel="noopener noreferrer">Access folder</a>
+                            </span>
                           </label>
                           <label>
                             Tracking number
@@ -3853,21 +3854,14 @@ This stage has already been marked as complete. Reopening it may affect package 
                           <span>{{ option.label }}</span>
                         </label>
                       </form>
-                      {% if option.status == 'Recipient notified' %}
-                        <div class="shipment-dispatch-notify-tools">
-                          {% if is_enabled and shipment.supervisor_whatsapp_phone %}
-                            <a class="shipment-notify-recipient-link" href="https://wa.me/{{ shipment.supervisor_whatsapp_phone }}" target="_blank" rel="noopener noreferrer" aria-label="Notify shipment recipient on WhatsApp">Notify recipient</a>
-                          {% else %}
-                            <span class="shipment-notify-recipient-link is-disabled" aria-disabled="true" title="No phone number available">Notify recipient</span>
-                          {% endif %}
-                          <button class="copy-icon-button shipment-action-copy-button" type="button" data-copy-text="{{ shipment.delivery_address }}" aria-label="Copy delivery address" title="Copy delivery address" {% if not is_enabled or not shipment.delivery_address %}disabled{% endif %}>
-                            <svg viewBox="0 0 24 24" aria-hidden="true">
-                              <rect x="9" y="9" width="10" height="10" rx="2"></rect>
-                              <path d="M5 15V7a2 2 0 0 1 2-2h8"></path>
-                            </svg>
-                            <span class="copy-button-feedback">Copied</span>
-                          </button>
-                        </div>
+	                      {% if option.status == 'Recipient notified' %}
+	                        <div class="shipment-dispatch-notify-tools">
+	                          {% if is_enabled and shipment.recipient_notification_whatsapp_url %}
+	                            <a class="shipment-notify-recipient-link" href="{{ shipment.recipient_notification_whatsapp_url }}" target="_blank" rel="noopener noreferrer" aria-label="Notify shipment recipient on WhatsApp">Notify recipient</a>
+	                          {% else %}
+	                            <span class="shipment-notify-recipient-link is-disabled" aria-disabled="true" title="Recipient phone, tracking number, and bundle sessions are required">Notify recipient</span>
+	                          {% endif %}
+	                        </div>
                       {% endif %}
                     </div>
                   {% endif %}

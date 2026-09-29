@@ -130,6 +130,8 @@ from app.validators import (
 
 staff_bp = Blueprint("staff", __name__)
 LOCAL_TZ = timezone(timedelta(hours=-3))
+SHIPMENT_SHIPPING_LABEL_DRIVE_FOLDER_URL = "https://drive.google.com/drive/folders/1DVzYQDQFFyotWxQH-Z5DTnjRkJ5Z2Thh?usp=drive_link"
+SHIPMENT_DISPATCH_EMOJIS = "\U0001F69A\U0001F4E6"
 
 
 def pre_session_control_tower_today():
@@ -150,6 +152,8 @@ def pre_session_control_tower_now():
         except ValueError:
             pass
     return datetime.now(timezone.utc).astimezone(LOCAL_TZ)
+
+
 CREATE_STATUS_OPTIONS = ["Inactive", "Active"]
 EDIT_STATUS_OPTIONS = ["Archived", "Inactive", "Active"]
 PRE_SESSION_SESSIONS_VIEW_EXCLUDED_FORMATS = {"Online", "Online at exam centre"}
@@ -9814,6 +9818,52 @@ def shipment_bundle_sessions(bundle):
     ]
 
 
+def shipment_recipient_notification_sessions(included_sessions):
+    return [
+        {
+            "name": session_record.exam_session_name or "Session",
+            "date": ordinal_day_label(session_record.session_date),
+            "city": normalize_package_text(session_record.city or ""),
+            "province": normalize_package_text(session_record.province or ""),
+        }
+        for session_record in included_sessions
+    ]
+
+
+def shipment_recipient_notification_text(supervisor_first_name, sessions, tracking_number):
+    tracking_website = "https://www.correoargentino.com.ar/formularios/e-commerce"
+    session_lines = []
+    for session_record in sessions:
+        name = session_record.get("name") or "Session"
+        date_label = session_record.get("date") or ""
+        location = ", ".join([value for value in [session_record.get("city"), session_record.get("province")] if value])
+        session_lines.append(f"- *{name}{f' ({date_label})' if date_label else ''}{f' – {location}' if location else ''}*")
+    return "\n".join([
+        f"Dear {supervisor_first_name},",
+        "",
+        f"We are pleased to confirm that we have dispatched {SHIPMENT_DISPATCH_EMOJIS} the exam materials for the following exam session(s), for which you will be acting as *Supervisor*:",
+        "",
+        "\n".join(session_lines),
+        "",
+        "You can track the shipment using the following details:",
+        "",
+        f"- *Tracking number:* {tracking_number}",
+        f"- *Tracking website:* {tracking_website}",
+        "",
+        "We would be very grateful if you could let us know once the package has arrived.",
+        "",
+        "Thank you very much,",
+        "*Path Examinations*",
+    ])
+
+
+def shipment_recipient_notification_whatsapp_url(phone, message):
+    clean_phone = normalize_whatsapp_phone(phone)
+    if not clean_phone or not message:
+        return ""
+    return f"https://api.whatsapp.com/send?{urlencode({'phone': clean_phone, 'text': message})}"
+
+
 def shipment_pre_dispatch_cards(bundle, max_examiner_count=0):
     checklist_by_key = {item.item_key: item for item in bundle.checklist_items}
     definitions = [
@@ -12101,6 +12151,17 @@ def shipment_bundle_view(bundle):
     has_alternate_delivery_address = shipment_bundle_has_alternate_delivery_address(bundle)
     operational_status = shipment_bundle_operational_status(bundle, gate)
     modal_summary = shipment_bundle_modal_summary_override(bundle, gate, included_sessions)
+    supervisor_first_name = (bundle.supervisor.full_name or "").strip().split()[0] if bundle.supervisor and (bundle.supervisor.full_name or "").strip() else ""
+    recipient_notification_sessions = shipment_recipient_notification_sessions(included_sessions)
+    recipient_notification_text = (
+        shipment_recipient_notification_text(supervisor_first_name, recipient_notification_sessions, bundle.tracking_number or "")
+        if supervisor_first_name and recipient_notification_sessions and (bundle.tracking_number or "").strip()
+        else ""
+    )
+    recipient_notification_whatsapp_url = shipment_recipient_notification_whatsapp_url(
+        bundle.supervisor.phone if bundle.supervisor else "",
+        recipient_notification_text,
+    )
     return {
         "record": bundle,
         "id": bundle.id,
@@ -12117,7 +12178,11 @@ def shipment_bundle_view(bundle):
         "action_items": shipment_bundle_action_items(bundle, gate),
         "modal_summary": modal_summary,
         "supervisor_name": bundle.supervisor.full_name if bundle.supervisor else "Supervisor not set",
+        "supervisor_first_name": supervisor_first_name,
         "supervisor_whatsapp_phone": normalize_whatsapp_phone(bundle.supervisor.phone) if bundle.supervisor else "",
+        "supervisor_delivery_address": supervisor_delivery_address(bundle.supervisor),
+        "supervisor_delivery_city": normalize_package_text(bundle.supervisor.city or "") if bundle.supervisor else "",
+        "supervisor_delivery_province": normalize_package_text(bundle.supervisor.province or "") if bundle.supervisor else "",
         "delivery_address": bundle.delivery_address,
         "delivery_city": bundle.delivery_city or "",
         "delivery_province": bundle.delivery_province or "",
@@ -12127,12 +12192,16 @@ def shipment_bundle_view(bundle):
         "delivery_options": SHIPMENT_DELIVERY_OPTION_CHOICES,
         "tracking_number": bundle.tracking_number or "",
         "shipping_label_url": bundle.shipping_label_url or "",
+        "shipping_label_folder_url": SHIPMENT_SHIPPING_LABEL_DRIVE_FOLDER_URL,
         "dispatch_due_at": bundle.dispatch_due_at,
         "base_dispatch_due_at": shipment_bundle_deadline_for_sessions(included_sessions) or bundle.dispatch_due_at,
         "deadline_badge": shipment_bundle_display_deadline_badge_contract(bundle, gate, included_sessions),
         "responsible_department": bundle.responsible_department or "LOGISTICS",
         "note": bundle.note or "",
         "included_sessions": included_sessions,
+        "recipient_notification_sessions": recipient_notification_sessions,
+        "recipient_notification_text": recipient_notification_text,
+        "recipient_notification_whatsapp_url": recipient_notification_whatsapp_url,
         "included_session_ids": included_session_ids,
         "max_examiner_count": max_examiner_count,
         "pre_dispatch_cards": shipment_pre_dispatch_cards(bundle, max_examiner_count),
@@ -18068,37 +18137,15 @@ def pre_session_control_tower():
     ensure_default_finance_concepts()
     finance_contacts = FinanceContact.query.order_by(FinanceContact.is_active.desc(), FinanceContact.display_name.asc()).all()
     finance_concepts = FinanceConcept.query.order_by(FinanceConcept.name.asc()).all()
-    package_stage_fields = (
-        "package_label_verification_status",
-        "package_label_printing_status",
-        "room_package_sealing_status",
-        "return_packages_status",
-        "inclusion_final_items_status",
-        "session_box_sealing_status",
-    )
-    show_session_package_column = bool(
-        any(schedule_workflow_current_deadline(workflow) for workflow in workflow_records)
-        or staffing_control_records
-        or any(getattr(assignment, "staffing_status_due_at", None) for assignment in supervisor_assignment_records)
-        or any(getattr(assignment, "staffing_status_due_at", None) for assignment in examiner_assignment_records)
-        or any(getattr(assignment, "staffing_status_due_at", None) for assignment in intern_assignment_records)
-        or any(getattr(session_record, "emergency_contact_status_due_at", None) for session_record in sessions)
-        or staffing_event_records
-        or package_unit_records
-        or package_checklist_records
-        or shipment_link_records
-        or any(
-        (getattr(session_record, field, "not_started") or "not_started") != "not_started"
-        for session_record in sessions
-        for field in package_stage_fields
-        )
-    )
+    show_session_package_column = False
+    show_session_shipment_column = False
 
     return render_template(
         "pre_session_control_tower/index.html",
         schedule_views=schedule_views,
         modal_views=modal_views,
         show_session_package_column=show_session_package_column,
+        show_session_shipment_column=show_session_shipment_column,
         bundle_views=bundle_views,
         pending_shipment_bundle=pending_shipment_bundle if pending_shipment_bundle_visible else None,
         selected_bundle=selected_bundle_view,
@@ -20260,6 +20307,7 @@ def update_shipment_bundle(bundle_id):
     delivery_city = normalize_package_text(request.form.get("delivery_city", ""))
     delivery_province = normalize_package_text(request.form.get("delivery_province", ""))
     delivery_option = request.form.get("delivery_option", "").strip()
+    delivery_option_changed = (bundle.delivery_option or "") != delivery_option
     courier = normalize_package_text(request.form.get("courier", "")) or SHIPMENT_DEFAULT_COURIER
     tracking_number = normalize_package_text(request.form.get("tracking_number", ""))
     shipping_label_url = request.form.get("shipping_label_url", "").strip()
@@ -20291,7 +20339,18 @@ def update_shipment_bundle(bundle_id):
         delivery_address = supervisor_delivery_address(supervisor)
         delivery_city = normalize_package_text(supervisor.city or "")
         delivery_province = normalize_package_text(supervisor.province or "")
-    if not delivery_address:
+    if delivery_option_changed:
+        if delivery_option in {"meeting_point", "different_address"}:
+            delivery_address = ""
+            delivery_city = ""
+            delivery_province = ""
+        else:
+            delivery_address = supervisor_delivery_address(supervisor)
+            delivery_city = normalize_package_text(supervisor.city or "")
+            delivery_province = normalize_package_text(supervisor.province or "")
+        shipping_label_url = ""
+        tracking_number = ""
+    if not delivery_address and not (delivery_option_changed and delivery_option in {"meeting_point", "different_address"}):
         flash("Delivery address is required.", "error")
         return shipment_control_redirect(session_record, status_filter, bundle.id)
     if len(delivery_address) > 500 or len(delivery_city) > 120 or len(delivery_province) > 120 or len(courier) > 120 or len(tracking_number) > 160 or len(shipping_label_url) > 500:
@@ -20333,7 +20392,6 @@ def update_shipment_bundle(bundle_id):
         return shipment_control_redirect(session_record, status_filter, bundle.id)
     selected_ids = {session_record.id for session_record in selected_sessions}
     existing_ids = {link.exam_session_id for link in bundle.session_links}
-    delivery_option_changed = (bundle.delivery_option or "") != delivery_option
     bundle_gate = shipment_bundle_gate_contract(shipment_bundle_sessions(bundle))
     if delivery_option_changed and bundle_gate.get("blocked"):
         flash("Shipment delivery option can only be selected once bundle preparation is unblocked.", "error")
@@ -20408,6 +20466,11 @@ def update_shipment_bundle(bundle_id):
         try:
             shipment_event(bundle, "DELIVERY_OPTION_CHANGED", bundle.status, bundle.status, note)
             bundle.delivery_option = delivery_option
+            bundle.delivery_address = delivery_address
+            bundle.delivery_city = delivery_city or None
+            bundle.delivery_province = delivery_province or None
+            bundle.tracking_number = tracking_number or None
+            bundle.shipping_label_url = shipping_label_url or None
             bundle.updated_by = session.get("user")
             db.session.commit()
             flash("Shipment delivery option updated successfully.", "success")
