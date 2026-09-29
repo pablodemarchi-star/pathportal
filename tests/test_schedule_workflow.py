@@ -1,4 +1,5 @@
 import json
+import html as html_lib
 import os
 import re
 import subprocess
@@ -59,6 +60,7 @@ from app.models import (
     ExamSessionSupervisorAssignment,
     ExamSessionYear,
     FinanceConcept,
+    Fee,
     PaymentRequest,
     PotentialEntry,
     StaffPaymentSettings,
@@ -73,6 +75,7 @@ from app.models import (
     SupervisorCertificationFutSelection,
     SupervisorCertificationRemoteTrainingSelection,
     SupervisorCertificationYear,
+    Role,
     User,
     UserMenuPermission,
 )
@@ -109,6 +112,8 @@ from app.routes import (
     path_session_journey_contract,
     promote_potential_entry_exam_session_assignments,
     reconcile_auto_shipment_bundles,
+    return_package_count_for_session,
+    return_package_requirements_for_session,
     shipment_bundle_action_items,
     shipment_bundle_readiness_contract,
     shipment_bundle_view,
@@ -560,7 +565,7 @@ class ScheduleWorkflowTest(unittest.TestCase):
             session_date=session_date,
             shifts="Morning",
             modules="Speaking",
-            format="Online",
+            format="Onsite",
         )
         db.session.add(session_record)
         db.session.flush()
@@ -5073,6 +5078,7 @@ class ScheduleWorkflowTest(unittest.TestCase):
 
     def test_package_label_printing_status_actions_are_independent(self):
         self.session_record.package_label_verification_status = "completed"
+        self.session_record.package_label_printing_status = "in_progress"
         db.session.commit()
         client = self.login_client()
 
@@ -5088,6 +5094,22 @@ class ScheduleWorkflowTest(unittest.TestCase):
         db.session.refresh(self.session_record)
         self.assertEqual(self.session_record.package_label_printing_status, "completed")
         self.assertEqual(self.session_record.package_label_verification_status, "completed")
+
+    def test_package_stage_cannot_be_completed_before_marked_in_progress(self):
+        client = self.login_client()
+
+        response = client.post(
+            f"/pre-session-control-tower/sessions/{self.session_record.id}/packages/label-verification",
+            data={"csrf_token": "token", "action": "mark_complete"},
+            follow_redirects=True,
+        )
+
+        self.assertIn(
+            b"Candidate label verification must be marked as in progress before it can be completed.",
+            response.data,
+        )
+        db.session.refresh(self.session_record)
+        self.assertEqual(self.session_record.package_label_verification_status, "not_started")
 
     def test_room_package_sealing_status_actions_are_independent(self):
         self.session_record.package_label_verification_status = "completed"
@@ -5156,7 +5178,7 @@ class ScheduleWorkflowTest(unittest.TestCase):
             packages_section.index("Room package sealing") : packages_section.index("Return packages")
         ]
         self.assertNotIn("disabled>Mark as in progress", printing_guidance)
-        self.assertNotIn("disabled>Mark as complete", printing_guidance)
+        self.assertIn("disabled>Mark as complete", printing_guidance)
         self.assertNotIn("disabled>Mark incident", printing_guidance)
         self.assertIn("disabled>Mark as in progress", room_guidance)
         self.assertIn("disabled>Mark as complete", room_guidance)
@@ -5175,6 +5197,8 @@ class ScheduleWorkflowTest(unittest.TestCase):
         self.assertEqual(self.session_record.room_package_sealing_status, "not_started")
 
     def test_return_packages_status_actions_are_independent(self):
+        self.session_record.return_packages_status = "in_progress"
+        db.session.commit()
         client = self.login_client()
 
         response = client.post(
@@ -5201,6 +5225,15 @@ class ScheduleWorkflowTest(unittest.TestCase):
         self.assertIn("open_modal_target=package-label-verification", response.headers["Location"])
         db.session.refresh(self.session_record)
         self.assertEqual(self.session_record.package_label_verification_status, "incident")
+
+        response = client.post(
+            f"/pre-session-control-tower/sessions/{self.session_record.id}/packages/label-verification",
+            data={"csrf_token": "token", "action": "mark_in_progress"},
+            follow_redirects=False,
+        )
+        self.assertEqual(response.status_code, 302)
+        db.session.refresh(self.session_record)
+        self.assertEqual(self.session_record.package_label_verification_status, "in_progress")
 
         response = client.post(
             f"/pre-session-control-tower/sessions/{self.session_record.id}/packages/label-verification",
@@ -5357,6 +5390,7 @@ class ScheduleWorkflowTest(unittest.TestCase):
         self.assertNotIn("Include a lanyard, rigid ID card, and card holder for each of the following staff members:", packages_section)
 
     def test_staff_member_ids_status_actions_are_independent(self):
+        self.confirm_staffing()
         client = self.login_client()
         pending_id_member = AcademicStaff(
             id=201,
@@ -5374,6 +5408,7 @@ class ScheduleWorkflowTest(unittest.TestCase):
                 participation_status="Confirmed",
             ),
         ])
+        self.session_record.staff_member_ids_status = "in_progress"
         db.session.commit()
 
         response = client.post(
@@ -5782,6 +5817,34 @@ class ScheduleWorkflowTest(unittest.TestCase):
         self.assertEqual(self.session_record.updated_on, updated_on)
         self.assertEqual(ExamSessionShipmentEvent.query.count(), event_count)
 
+    def test_return_package_label_pdf_repeats_labels_for_required_quantities(self):
+        self.session_record.exam_session_name = "Sonia Session"
+        self.session_record.session_date = date(2026, 12, 10)
+        db.session.add_all([
+            ExamSessionMonthlyRegistration(exam_session_id=self.session_record.id, month=12, module="Reading and writing", registration_number=121),
+            ExamSessionMonthlyRegistration(exam_session_id=self.session_record.id, month=12, module="Listening and speaking", registration_number=2000),
+            ExamSessionMonthlyRegistration(exam_session_id=self.session_record.id, month=12, module="Speaking", registration_number=10),
+        ])
+        viewer = User(full_name="Return Label Quantity Viewer", email="return-label-quantity-viewer@example.com", department="Finance", is_active=True)
+        viewer.set_password("secret123")
+        db.session.add_all([
+            viewer,
+            UserMenuPermission(user=viewer, menu_key="pre_session_control_tower", can_view=True, can_edit=False),
+        ])
+        db.session.commit()
+        url = f"/pre-session-control-tower/sessions/{self.session_record.id}/return-package-label.pdf"
+
+        response = self.login_client_for_user(viewer).get(url)
+        text = response.data.decode("latin-1", "ignore")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(return_package_count_for_session(self.session_record), 8)
+        self.assertEqual(len(re.findall(rb"/Type /Page\b", response.data)), 8)
+        self.assertEqual(text.count("Submitted Reading and Writing modules"), 2)
+        self.assertEqual(text.count("Absent Reading and Writing modules"), 1)
+        self.assertEqual(text.count("Submitted Listening and Speaking modules"), 3)
+        self.assertEqual(text.count("Absent Listening and Speaking modules"), 2)
+
     def test_return_package_numbering_does_not_reset_when_year_changes(self):
         previous_session = self.create_planning_ready_session("Previous return session", date(2026, 12, 10))
         future_session = self.create_planning_ready_session("Future return session", date(2027, 1, 15))
@@ -5977,6 +6040,9 @@ class ScheduleWorkflowTest(unittest.TestCase):
         )
 
     def test_inclusion_final_items_status_actions_are_independent(self):
+        self.confirm_staffing()
+        self.session_record.inclusion_final_items_status = "in_progress"
+        db.session.commit()
         client = self.login_client()
 
         response = client.post(
@@ -6002,6 +6068,7 @@ class ScheduleWorkflowTest(unittest.TestCase):
         self.session_record.room_package_sealing_status = "completed"
         self.session_record.return_packages_status = "completed"
         self.session_record.inclusion_final_items_status = "completed"
+        self.session_record.session_box_sealing_status = "in_progress"
         db.session.commit()
         client = self.login_client()
 
@@ -6052,7 +6119,7 @@ class ScheduleWorkflowTest(unittest.TestCase):
         session_box_section = packages_section[packages_section.index("Session box sealing"):]
 
         self.assertNotIn("disabled>Mark as in progress", session_box_section)
-        self.assertNotIn("disabled>Mark as complete", session_box_section)
+        self.assertIn("disabled>Mark as complete", session_box_section)
         self.assertNotIn("disabled>Mark incident", session_box_section)
 
         response = client.post(
@@ -6480,6 +6547,10 @@ class ScheduleWorkflowTest(unittest.TestCase):
         self.assertIn("Enter the exam session in Sinapsis and download the candidate labels for each exam room.", packages_section)
         self.assertIn("Verify that the label count matches the number of candidates in each room on the", packages_section)
         self.assertIn(
+            '<a href="https://example.com/schedule-folder" target="_blank" rel="noopener noreferrer" aria-label="Open approved schedule folder">approved schedule in this folder</a>.',
+            packages_section,
+        )
+        self.assertNotIn(
             '<a href="https://example.com/sinapsis" target="_blank" rel="noopener noreferrer" aria-label="Open approved schedule folder">approved schedule in this folder</a>.',
             packages_section,
         )
@@ -6549,6 +6620,25 @@ class ScheduleWorkflowTest(unittest.TestCase):
         self.assertIn("Resolve package discrepancy", html[table_start:table_end])
         self.assertIn("LOGISTICS", html[table_start:table_end])
         self.assertNotIn("Room 1", html[table_start:table_end])
+
+    def test_return_package_requirements_scale_by_latest_month_candidate_counts(self):
+        db.session.add_all([
+            ExamSessionMonthlyRegistration(exam_session_id=self.session_record.id, month=5, module="Reading and writing", registration_number=500),
+            ExamSessionMonthlyRegistration(exam_session_id=self.session_record.id, month=5, module="Listening and speaking", registration_number=900),
+            ExamSessionMonthlyRegistration(exam_session_id=self.session_record.id, month=6, module="Reading and writing", registration_number=365),
+            ExamSessionMonthlyRegistration(exam_session_id=self.session_record.id, month=6, module="Listening and speaking", registration_number=1400),
+            ExamSessionMonthlyRegistration(exam_session_id=self.session_record.id, month=6, module="Speaking", registration_number=400),
+        ])
+        db.session.commit()
+
+        requirements = return_package_requirements_for_session(self.session_record)
+
+        self.assertEqual(requirements, [
+            "3 submitted Reading and writing modules.",
+            "2 absent Reading and writing modules.",
+            "2 submitted Listening and speaking modules.",
+            "2 absent Listening and speaking modules.",
+        ])
 
     def test_packages_column_summarizes_modal_stage_counts_with_tooltips(self):
         self.session_record.package_label_verification_status = "completed"
@@ -7029,11 +7119,11 @@ class ScheduleWorkflowTest(unittest.TestCase):
         self.assertIn("Non-available staff members", html)
         self.assertIn("data-session-non-available-picker", html)
         self.assertIn("data-row-non-available-fields", html)
-        format_column_index = html.index("<th>Format</th>")
-        supervisors_column_index = html.index("<th>Supervisors</th>", format_column_index)
-        examiners_column_index = html.index("<th>Examiners</th>", supervisors_column_index)
-        interns_column_index = html.index("<th>Interns</th>", examiners_column_index)
-        logistics_column_index = html.index("<th>Logistics</th>", interns_column_index)
+        format_column_index = html.index("sort=format")
+        supervisors_column_index = html.index("sort=supervisors", format_column_index)
+        examiners_column_index = html.index("sort=examiners", supervisors_column_index)
+        interns_column_index = html.index("sort=interns", examiners_column_index)
+        logistics_column_index = html.index("sort=logistics", interns_column_index)
         self.assertLess(format_column_index, supervisors_column_index)
         self.assertLess(supervisors_column_index, examiners_column_index)
         self.assertLess(examiners_column_index, interns_column_index)
@@ -7048,8 +7138,17 @@ class ScheduleWorkflowTest(unittest.TestCase):
         self.assertIn("Examiners cost", html)
         self.assertIn("Interns cost", html)
 
+    def test_fees_form_includes_emergency_contact_role_option(self):
+        response = self.login_client().get("/fees")
+        html = response.get_data(as_text=True)
+        create_modal = html[html.index('id="create-fee"'):]
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn(">Emergency contact</option>", create_modal)
+
     def test_exam_session_planner_hides_shipment_recipient_control_for_online_sessions(self):
         supervisor = self.create_supervisor(staff_id=1, name="Laura Mendez")
+        self.session_record.format = "Online"
         db.session.add(ExamSessionSupervisorAssignment(
             exam_session_id=self.session_record.id,
             team_member_id=supervisor.id,
@@ -7463,6 +7562,11 @@ class ScheduleWorkflowTest(unittest.TestCase):
             "time_ranges": ["10.50 to 12.30 h"],
             "format": "Onsite",
             "address": "Pilar, Buenos Aires",
+            "schedule_folder_url": "https://example.com/schedule-folder",
+            "examiner_guideline_url": "https://example.com/examiner-guidelines",
+            "material_for_examiners_url": "https://example.com/material-for-examiners",
+            "supervisor_guideline_url": "https://example.com/supervisor-guidelines",
+            "backup_material_for_examiners_url": "https://example.com/backup-material-for-examiners",
             "fee_lines": [
                 {"label": "Role fee", "value": "ARS 22.000"},
                 {"label": "Device depreciation", "value": "ARS 6.000"},
@@ -7505,6 +7609,13 @@ class ScheduleWorkflowTest(unittest.TestCase):
                     "emptyMessage": "This intern has not been assigned yet",
                 },
             ],
+            "emergency_contacts": [
+                {
+                    "name": "Eva Emergency",
+                    "title": "Lic.",
+                    "phone": "+5491112345678",
+                },
+            ],
         }
         payload.update(overrides)
         return payload
@@ -7543,22 +7654,36 @@ class ScheduleWorkflowTest(unittest.TestCase):
         self.assertIn("<strong>at 5:00 pm (GMT-3)</strong>", result["html"])
         self.assertIn("Bellis Ignis Group SRL", result["text"])
         self.assertIn("SESSION MATERIALS", result["html"])
+        self.assertIn('href="https://example.com/schedule-folder"', result["html"])
+        self.assertIn("Exam session schedule\nView material: https://example.com/schedule-folder", result["text"])
+        self.assertIn('href="https://example.com/backup-material-for-examiners"', result["html"])
+        self.assertIn("Back-up material for examiners\nView material: https://example.com/backup-material-for-examiners", result["text"])
+        self.assertIn('href="https://example.com/supervisor-guidelines"', result["html"])
+        self.assertIn("Supervisor guidelines\nView material: https://example.com/supervisor-guidelines", result["text"])
         self.assertLess(
             result["html"].index("Exam session schedule"),
-            result["html"].index("Exam box shipment"),
+            result["html"].index("Back-up material for examiners"),
         )
         self.assertLess(
-            result["html"].index("Exam box shipment"),
-            result["html"].index("Material for examiners"),
+            result["html"].index("Back-up material for examiners"),
+            result["html"].index("Supervisor guidelines"),
         )
+        self.assertLess(
+            result["html"].index("Supervisor guidelines"),
+            result["html"].index("Exam box shipment"),
+        )
+        self.assertIn("This folder contains the materials for Examiners, including the Examiner guidelines, Listening and speaking module exams, and Listening audio files.", result["html"])
+        self.assertIn("provided solely as a contingency resource", result["text"])
         self.assertIn("Once you confirm your participation as a Supervisor, our Logistics team will contact you in due course to arrange the delivery of the materials for your assigned exam session(s).", result["html"])
-        self.assertIn("Exam box shipment\nView material:", result["text"])
+        self.assertIn("Supervisor guidelines\nView material:", result["text"])
+        self.assertIn("Exam box shipment\nOnce you confirm", result["text"])
+        self.assertNotIn("Exam box shipment\nView material:", result["text"])
         self.assertIn("Supervisor guidelines", result["html"])
         self.assertIn("View material", result["html"])
-        self.assertIn("STAFF MEMBERS AND EMERGENCY LINES", result["html"])
-        self.assertIn("Path emergency lines for any urgent matters", result["html"])
-        self.assertIn("Path emergency lines for any urgent matters", result["text"])
-        self.assertNotIn("this exam session, as well as the Path emergency line for any urgent matters", result["html"])
+        self.assertIn("STAFF MEMBERS AND EMERGENCY LINE", result["html"])
+        self.assertIn("Path emergency line for any urgent matters", result["html"])
+        self.assertIn("Path emergency line for any urgent matters", result["text"])
+        self.assertNotIn("Path emergency lines for any urgent matters", result["html"])
         self.assertIn("Lic. Laura Mendez", result["html"])
         self.assertIn("Mr Noah Rivers", result["html"])
         self.assertLess(
@@ -7574,13 +7699,15 @@ class ScheduleWorkflowTest(unittest.TestCase):
         self.assertIn("Phone number not available", result["text"])
         self.assertIn('href="https://wa.me/5491128508482"', result["html"])
         self.assertIn("+5491128508482 (https://wa.me/5491128508482)", result["text"])
-        self.assertIn("Emergency lines", result["text"])
+        self.assertIn("Emergency line", result["text"])
+        self.assertIn("Please contact:", result["text"])
+        self.assertIn("Lic. Eva Emergency at +5491112345678", result["text"])
+        self.assertIn('href="https://wa.me/5491112345678"', result["html"])
+        self.assertNotIn("Emergency lines", result["text"])
         self.assertNotIn("Please contact your Supervisor first before using these emergency lines.", result["text"])
-        self.assertIn("https://wa.me/5491150954847", result["html"])
-        self.assertIn("https://wa.me/5491133945761", result["html"])
-        self.assertIn("https://wa.me/5491155692629", result["html"])
-        self.assertIn("https://wa.me/5491128508482", result["html"])
-        self.assertIn("- Path Examinations office at +5491150954847", result["text"])
+        self.assertNotIn("On business days from 9am to 3pm", result["text"])
+        self.assertNotIn("Outside of business time", result["text"])
+        self.assertNotIn("- Path Examinations office at +5491150954847", result["text"])
         self.assertNotIn("EXAM SESSION MATERIAL", result["html"])
         self.assertIn("TRAVEL AND COMMUTING", result["html"])
         self.assertIn('href="https://example.com/logistics"', result["html"])
@@ -7604,13 +7731,41 @@ class ScheduleWorkflowTest(unittest.TestCase):
         self.assertNotIn("error", result)
         self.assertIn("selected as an <strong>Examiner</strong>", result["html"])
         self.assertIn("30 minutes", result["text"])
+        self.assertIn('href="https://example.com/schedule-folder"', result["html"])
+        self.assertIn("Exam session schedule\nView material: https://example.com/schedule-folder", result["text"])
         self.assertIn("Examiner guidelines", result["html"])
-        self.assertIn("This section contains the materials needed to conduct the Listening and speaking module.", result["html"])
-        self.assertNotIn("Listening and Speaking Module", result["html"])
+        self.assertIn("Material for examiners", result["html"])
+        self.assertIn('href="https://example.com/examiner-guidelines"', result["html"])
+        self.assertIn("Examiner guidelines\nView material: https://example.com/examiner-guidelines", result["text"])
+        self.assertIn('href="https://example.com/material-for-examiners"', result["html"])
+        self.assertIn("Material for examiners\nView material: https://example.com/material-for-examiners", result["text"])
+        self.assertNotIn("🎧🗣️ Listening and speaking module", result["html"])
+        self.assertNotIn("This section contains the materials needed to conduct the Listening and speaking module.", result["html"])
+        self.assertIn("This folder contains the", result["text"])
+        self.assertIn("<strong>Listening and speaking module</strong>", result["html"])
+        self.assertIn("materials for all levels", result["text"])
+        self.assertIn('href="https://sinapsis.pathexaminations.com/login"', result["html"])
+        self.assertIn("color:#00506b;font-weight:700;text-decoration:underline", result["html"])
+        self.assertIn("Listening audio files will only become available in Sinapsis once you have confirmed your participation", result["text"])
         self.assertIn("ATTENDANCE, MARKS AND RECORDINGS", result["html"])
-        self.assertIn("Please contact your Supervisor first before using these emergency lines.", result["text"])
+        self.assertIn("Please contact your Supervisor first before using this emergency line.", result["text"])
         self.assertNotIn("EXAM SESSION MATERIAL", result["html"])
         self.assertNotIn("Supervisor guidelines", result["html"])
+
+    def test_staff_official_confirmation_email_complex_logistics_expense_copy_for_examiner_and_supervisor(self):
+        for role in ("Examiner", "Supervisor"):
+            result = self.build_staff_official_confirmation_email(self.official_confirmation_base_payload(
+                role=role,
+                logistics_status="Complex logistics",
+                logistics_url="https://example.com/complex-logistics",
+            ))
+
+            self.assertNotIn("error", result)
+            self.assertIn("<strong>IMPORTANT:</strong> after the exam session", result["html"])
+            self.assertIn("Do not include these expenses in your final invoice.<br><br>Please note that expenses not previously agreed", result["html"])
+            self.assertIn("IMPORTANT: after the exam session", result["text"])
+            self.assertIn("Do not include these expenses in your final invoice.\n\nPlease note that expenses not previously agreed", result["text"])
+            self.assertNotIn("Please note that expenses not previously agreed with Path Examinations, or without a corresponding receipt issued under the company’s name, cannot be reimbursed. Do not include these expenses in your final invoice.", result["text"])
 
     def test_staff_official_confirmation_email_for_intern_omits_material_and_final_instruction_sections(self):
         result = self.build_staff_official_confirmation_email(self.official_confirmation_base_payload(
@@ -7626,22 +7781,89 @@ class ScheduleWorkflowTest(unittest.TestCase):
         self.assertIn("selected as an <strong>Intern</strong>", result["html"])
         self.assertIn("30 minutes", result["text"])
         self.assertIn("All relevant information and documents for your trip or commute can be found", result["text"])
-        self.assertIn("Please contact your Supervisor first before using these emergency lines.", result["text"])
+        self.assertIn("Please note that expenses not previously agreed with Path Examinations, or without a corresponding receipt issued under the company’s name, cannot be reimbursed. Do not include these expenses in your final invoice.", result["text"])
+        self.assertNotIn("IMPORTANT: after the exam session", result["text"])
+        self.assertIn("Please contact your Supervisor first before using this emergency line.", result["text"])
         self.assertNotIn("SESSION MATERIALS", result["html"])
         self.assertNotIn("ATTENDANCE, MARKS AND RECORDINGS", result["html"])
         self.assertNotIn("EXAM SESSION FINAL CHECKS", result["html"])
         self.assertNotIn("EXAM SESSION MATERIAL", result["html"])
 
+    def test_staff_official_confirmation_email_without_emergency_contact_omits_emergency_line(self):
+        result = self.build_staff_official_confirmation_email(self.official_confirmation_base_payload(
+            emergency_contacts=[],
+        ))
+
+        self.assertNotIn("error", result)
+        self.assertIn("STAFF MEMBERS", result["html"])
+        self.assertIn("Below are the contact details of the staff members assigned to this exam session:", result["text"])
+        self.assertNotIn("STAFF MEMBERS AND EMERGENCY LINE", result["html"])
+        self.assertNotIn("Emergency line", result["text"])
+        self.assertNotIn("Please contact:", result["text"])
+
+    def test_staff_official_confirmation_email_for_emergency_contact_uses_emergency_template(self):
+        result = self.build_staff_official_confirmation_email(self.official_confirmation_base_payload(
+            full_name="Camila Cardozo",
+            role="Emergency contact",
+            time_ranges=["12.00 to 16.00 h"],
+            fee_lines=[],
+            total_fee="ARS 20.000",
+            logistics_status="Does not apply",
+            logistics_url="",
+            next_payment_date="10/12/2026",
+        ))
+
+        self.assertNotIn("error", result)
+        self.assertIn("OFFICIAL CONFIRMATION", result["html"])
+        self.assertIn("Path exam session official confirmation", result["html"])
+        self.assertIn("Dear Camila Cardozo,", result["text"])
+        self.assertIn("selected as <strong>the Emergency contact</strong>", result["html"])
+        self.assertIn("Participation awaiting your confirmation", result["html"])
+        self.assertIn("12.00 to 16.00 h GMT-3", result["html"])
+        self.assertIn("you will work entirely remotely", result["html"])
+        self.assertIn("Supervisor will arrive at the venue 50 minutes before", result["text"])
+        self.assertIn("TOTAL FEE:", result["html"])
+        self.assertIn("ARS 20.000", result["html"])
+        self.assertIn("STAFF MEMBERS", result["html"])
+        self.assertIn("Below are the contact details of the staff members assigned to this exam session:", result["text"])
+        self.assertIn("EMERGENCY CONTACT'S RESPONSIBILITIES", result["html"])
+        self.assertIn("<strong>Emergency contact</strong>", result["html"])
+        self.assertIn("<strong>Emergency contact manual</strong>", result["html"])
+        self.assertIn("Access the Emergency contact manual", result["html"])
+        self.assertIn("Please confirm whether you accept this assignment as Emergency contact", result["text"])
+        self.assertLess(
+            result["html"].index("fully prepared to respond appropriately and confidently"),
+            result["html"].index("</div>\n        <p style=\"margin:0 0 14px;color:#111115;font:400 15px/1.55 Arial, Helvetica, sans-serif;\">Please <strong>confirm whether you accept this assignment as Emergency contact for the exam session</strong>"),
+        )
+        self.assertIn("Thank you very much for your collaboration and commitment!", result["html"])
+        self.assertNotIn("SESSION MATERIALS", result["html"])
+        self.assertNotIn("TRAVEL AND COMMUTING", result["html"])
+        self.assertNotIn("STAFF MEMBERS AND EMERGENCY LINES", result["html"])
+        self.assertNotIn("Emergency lines", result["text"])
+        self.assertNotIn("Click here to confirm participation and material reception", result["html"])
+
     def test_staff_official_confirmation_email_validations(self):
         online = self.build_staff_official_confirmation_email(self.official_confirmation_base_payload(format="Online"))
         missing_time = self.build_staff_official_confirmation_email(self.official_confirmation_base_payload(time_ranges=[]))
         missing_total = self.build_staff_official_confirmation_email(self.official_confirmation_base_payload(total_fee="-"))
+        missing_schedule = self.build_staff_official_confirmation_email(self.official_confirmation_base_payload(schedule_folder_url=""))
+        examiner_missing_schedule = self.build_staff_official_confirmation_email(self.official_confirmation_base_payload(role="Examiner", schedule_folder_url=""))
+        examiner_missing_guidelines = self.build_staff_official_confirmation_email(self.official_confirmation_base_payload(role="Examiner", examiner_guideline_url=""))
+        examiner_missing_material = self.build_staff_official_confirmation_email(self.official_confirmation_base_payload(role="Examiner", material_for_examiners_url=""))
+        missing_backup_material = self.build_staff_official_confirmation_email(self.official_confirmation_base_payload(backup_material_for_examiners_url=""))
+        missing_supervisor_guidelines = self.build_staff_official_confirmation_email(self.official_confirmation_base_payload(supervisor_guideline_url=""))
         missing_logistics_url = self.build_staff_official_confirmation_email(self.official_confirmation_base_payload(logistics_url=""))
         missing_next_payment_date = self.build_staff_official_confirmation_email(self.official_confirmation_base_payload(next_payment_date=""))
 
         self.assertEqual(online["error"], "Official confirmation email is only available for onsite sessions.")
         self.assertEqual(missing_time["error"], "Staff member time range is required for official confirmation emails.")
         self.assertEqual(missing_total["error"], "Total fee is required for official confirmation emails.")
+        self.assertEqual(missing_schedule["error"], "Exam session schedule link is required for official confirmation emails.")
+        self.assertEqual(examiner_missing_schedule["error"], "Exam session schedule link is required for official confirmation emails.")
+        self.assertEqual(examiner_missing_guidelines["error"], "Examiner guidelines link is required for official confirmation emails.")
+        self.assertEqual(examiner_missing_material["error"], "Material for examiners link is required for official confirmation emails.")
+        self.assertEqual(missing_backup_material["error"], "Back-up material for examiners link is required for official confirmation emails.")
+        self.assertEqual(missing_supervisor_guidelines["error"], "Supervisor guidelines link is required for official confirmation emails.")
         self.assertEqual(missing_logistics_url["error"], "Logistics folder link is required for Uber.")
         self.assertEqual(missing_next_payment_date["error"], "Next payment date is required for official confirmation emails.")
 
@@ -8245,6 +8467,17 @@ class ScheduleWorkflowTest(unittest.TestCase):
         self.assertLess(examiner_html.index("Remote training period"), examiner_html.index("Annual meeting date & time"))
         self.assertIn('placeholder="hh:mm"', examiner_html)
         self.assertIn("/annual-certification-programme/year-settings", examiner_html)
+        self.assertIn("/annual-certification-programme/material-settings", examiner_html)
+        self.assertEqual(examiner_html.count("Save settings"), 2)
+        self.assertIn("Examiner guidelines", examiner_html)
+        self.assertIn('name="examiner_guideline_url"', examiner_html)
+        self.assertIn("Material for examiners", examiner_html)
+        self.assertIn('name="material_for_examiners_url"', examiner_html)
+        self.assertIn('aria-label="Examiner certification materials"', examiner_html)
+        self.assertNotIn("Supervisor guidelines", examiner_html)
+        self.assertNotIn('name="supervisor_guideline_url"', examiner_html)
+        self.assertNotIn("Back-up material for examiners", examiner_html)
+        self.assertNotIn('name="backup_material_for_examiners_url"', examiner_html)
 
         intern_response = client.get("/intern-stages?certification_year=2026")
         intern_html = intern_response.get_data(as_text=True)
@@ -8252,6 +8485,8 @@ class ScheduleWorkflowTest(unittest.TestCase):
         self.assertIn("Internship stages", intern_html)
         self.assertNotIn("Remote training period", intern_html)
         self.assertNotIn("Annual meeting date & time", intern_html)
+        self.assertNotIn("Supervisor guidelines", intern_html)
+        self.assertNotIn("Back-up material for examiners", intern_html)
         self.assertNotIn('name="remote_training_period"', intern_html)
         self.assertNotIn('name="annual_meeting_date"', intern_html)
 
@@ -8260,9 +8495,9 @@ class ScheduleWorkflowTest(unittest.TestCase):
             data={
                 "csrf_token": "token",
                 "certification_year": "2026",
-                "annual_meeting_date": "10/08/2026",
+                "annual_meeting_date": "10/10/2026",
                 "annual_meeting_time": "14:30",
-                "remote_training_period": "11/08/2026 to 20/08/2026",
+                "remote_training_period": "11/10/2026 to 20/10/2026",
             },
             follow_redirects=False,
         )
@@ -8272,26 +8507,56 @@ class ScheduleWorkflowTest(unittest.TestCase):
             module_key="examiner_certification",
             year=2026,
         ).one()
-        self.assertEqual(examiner_config.annual_meeting_date, date(2026, 8, 10))
+        self.assertEqual(examiner_config.annual_meeting_date, date(2026, 10, 10))
         self.assertEqual(examiner_config.annual_meeting_time, time(14, 30))
-        self.assertEqual(examiner_config.remote_training_start_date, date(2026, 8, 11))
-        self.assertEqual(examiner_config.remote_training_end_date, date(2026, 8, 20))
+        self.assertEqual(examiner_config.remote_training_start_date, date(2026, 10, 11))
+        self.assertEqual(examiner_config.remote_training_end_date, date(2026, 10, 20))
+
+        response = client.post(
+            "/annual-certification-programme/material-settings",
+            data={
+                "csrf_token": "token",
+                "certification_year": "2026",
+                "examiner_guideline_url": "https://example.com/examiner-guidelines",
+                "material_for_examiners_url": "https://example.com/material-for-examiners",
+            },
+            follow_redirects=True,
+        )
+        self.assertEqual(response.status_code, 200)
+        response_html = response.get_data(as_text=True)
+        self.assertIn('value="https://example.com/examiner-guidelines"', response_html)
+        self.assertIn('value="https://example.com/material-for-examiners"', response_html)
+        db.session.refresh(examiner_config)
+        self.assertEqual(examiner_config.examiner_guideline_url, "https://example.com/examiner-guidelines")
+        self.assertEqual(examiner_config.material_for_examiners_url, "https://example.com/material-for-examiners")
 
         supervisor_response = client.get("/supervisor-certification?certification_year=2026")
         supervisor_html = supervisor_response.get_data(as_text=True)
 
         self.assertEqual(supervisor_response.status_code, 200)
         self.assertIn("/supervisor-certification/year-settings", supervisor_html)
+        self.assertIn("/supervisor-certification/material-settings", supervisor_html)
         self.assertIn('placeholder="DD/MM/YYYY to DD/MM/YYYY"', supervisor_html)
+        self.assertEqual(supervisor_html.count("Save settings"), 2)
+        self.assertIn("Supervisor guidelines", supervisor_html)
+        self.assertIn('name="supervisor_guideline_url"', supervisor_html)
+        self.assertIn("Back-up material for examiners", supervisor_html)
+        self.assertIn('name="backup_material_for_examiners_url"', supervisor_html)
+        self.assertIn('aria-label="Supervisor certification materials"', supervisor_html)
+        self.assertIn('placeholder="https://..."', supervisor_html)
+        self.assertLess(supervisor_html.index("Save settings"), supervisor_html.index("Supervisor guidelines"))
+        self.assertLess(supervisor_html.index("Back-up material for examiners"), supervisor_html.rindex("Save settings"))
 
         response = client.post(
             "/supervisor-certification/year-settings",
             data={
                 "csrf_token": "token",
                 "certification_year": "2026",
-                "annual_meeting_date": "12/09/2026",
+                "annual_meeting_date": "12/11/2026",
                 "annual_meeting_time": "09:05",
-                "remote_training_period": "13/09/2026 to 18/09/2026",
+                "remote_training_period": "13/11/2026 to 18/11/2026",
+                "supervisor_guideline_url": "https://example.com/supervisor-guideline",
+                "backup_material_for_examiners_url": "https://example.com/backup-examiner-material",
             },
             follow_redirects=False,
         )
@@ -8301,10 +8566,49 @@ class ScheduleWorkflowTest(unittest.TestCase):
             module_key="supervisor_certification",
             year=2026,
         ).one()
-        self.assertEqual(supervisor_config.annual_meeting_date, date(2026, 9, 12))
+        self.assertEqual(supervisor_config.annual_meeting_date, date(2026, 11, 12))
         self.assertEqual(supervisor_config.annual_meeting_time, time(9, 5))
-        self.assertEqual(supervisor_config.remote_training_start_date, date(2026, 9, 13))
-        self.assertEqual(supervisor_config.remote_training_end_date, date(2026, 9, 18))
+        self.assertEqual(supervisor_config.remote_training_start_date, date(2026, 11, 13))
+        self.assertEqual(supervisor_config.remote_training_end_date, date(2026, 11, 18))
+        self.assertEqual(supervisor_config.supervisor_guideline_url, "https://example.com/supervisor-guideline")
+        self.assertEqual(supervisor_config.backup_material_for_examiners_url, "https://example.com/backup-examiner-material")
+
+        response = client.post(
+            "/supervisor-certification/year-settings",
+            data={
+                "csrf_token": "token",
+                "certification_year": "2026",
+                "annual_meeting_date": "19/11/2026",
+                "annual_meeting_time": "10:15",
+                "remote_training_period": "20/11/2026 to 25/11/2026",
+            },
+            follow_redirects=False,
+        )
+        self.assertEqual(response.status_code, 302)
+        db.session.refresh(supervisor_config)
+        self.assertEqual(supervisor_config.annual_meeting_date, date(2026, 11, 19))
+        self.assertEqual(supervisor_config.supervisor_guideline_url, "https://example.com/supervisor-guideline")
+        self.assertEqual(supervisor_config.backup_material_for_examiners_url, "https://example.com/backup-examiner-material")
+
+        response = client.post(
+            "/supervisor-certification/material-settings",
+            data={
+                "csrf_token": "token",
+                "certification_year": "2026",
+                "supervisor_guideline_url": "https://example.com/revised-supervisor-guidelines",
+                "backup_material_for_examiners_url": "https://example.com/revised-backup-material",
+            },
+            follow_redirects=True,
+        )
+        self.assertEqual(response.status_code, 200)
+        response_html = response.get_data(as_text=True)
+        self.assertIn('value="https://example.com/revised-supervisor-guidelines"', response_html)
+        self.assertIn('value="https://example.com/revised-backup-material"', response_html)
+        db.session.refresh(supervisor_config)
+        self.assertEqual(supervisor_config.annual_meeting_date, date(2026, 11, 19))
+        self.assertEqual(supervisor_config.remote_training_start_date, date(2026, 11, 20))
+        self.assertEqual(supervisor_config.supervisor_guideline_url, "https://example.com/revised-supervisor-guidelines")
+        self.assertEqual(supervisor_config.backup_material_for_examiners_url, "https://example.com/revised-backup-material")
 
     def test_certification_sections_default_to_latest_active_year(self):
         client = self.login_client()
@@ -9419,14 +9723,39 @@ class ScheduleWorkflowTest(unittest.TestCase):
 
     def test_session_emergency_contact_time_range_can_be_saved_from_modal(self):
         active_contact = AcademicStaff(id=8, status="Active", full_name="Mara Ruiz", roles="")
-        db.session.add(active_contact)
+        emergency_role = Role.query.filter_by(name="Emergency contact").first() or Role(name="Emergency contact")
+        db.session.add_all([active_contact, emergency_role])
+        db.session.flush()
+        db.session.add(Fee(
+            fee_description="Emergency contact fee",
+            currency="ARS",
+            fee_value="12000",
+            unit_of_measure="per unit",
+            role_id=emergency_role.id,
+        ))
+        self.session_record.emergency_contact_required = True
+        self.session_record.emergency_contact_member_id = active_contact.id
+        self.session_record.emergency_contact_start_time = "08:30"
+        self.session_record.emergency_contact_end_time = "12:45"
         db.session.commit()
         client = self.login_client()
 
         html = client.get(f"/exam-session-planner?session_year=2026&open_session_modal={self.session_record.id}").get_data(as_text=True)
         self.assertIn("Time range", html)
+        self.assertIn("Fee", html)
         self.assertIn('name="emergency_contact_start_time"', html)
         self.assertIn('name="emergency_contact_end_time"', html)
+        self.assertIn('data-emergency-contact-fee-currency="ARS"', html)
+        self.assertIn('data-emergency-contact-fee-value="12000"', html)
+        self.assertIn('data-emergency-contact-fee-unit="per unit"', html)
+        contact_index = html.index('name="emergency_contact_member_id"')
+        contact_row = html[html.rfind('data-emergency-contact-row', 0, contact_index):html.index("</div>", html.index('data-emergency-contact-fee-display', contact_index))]
+        self.assertIn("modal-emergency-contact-card-header", contact_row)
+        self.assertIn("data-emergency-contact-status-tag", contact_row)
+        self.assertIn("Declined", contact_row)
+        self.assertIn("Delete", contact_row)
+        self.assertIn('data-emergency-contact-fee-field', contact_row)
+        self.assertIn('data-emergency-contact-fee-display', contact_row)
 
         response = client.post(
             f"/exam-session-planner/sessions/{self.session_record.id}/members",
@@ -10966,6 +11295,11 @@ class ScheduleWorkflowTest(unittest.TestCase):
         self.assertIn(".schedule-workflow-actions {\n  order: 15;", css)
 
     def test_staffing_column_opens_staffing_only_modal_context(self):
+        db.session.add(ExamSessionStaffingControl(
+            exam_session_id=self.session_record.id,
+            staffing_due_at=date(2026, 6, 30),
+        ))
+        db.session.commit()
         client = self.login_client()
 
         response = client.get("/pre-session-control-tower?session_year=2026&view=sessions")
@@ -16933,7 +17267,7 @@ class ScheduleWorkflowTest(unittest.TestCase):
         self.assertIn("data-role-check-dependent", staffing)
         self.assertIn("Schedule approval is required before proceeding with the official staffing stage.", staffing)
         self.assertIn("staffing-action-chip-grey is-disabled", staffing)
-        remote_index = staffing.index("Rita Remote")
+        remote_index = staffing.index('<span class="staffing-member-name">Rita Remote</span>')
         remote_row = staffing[staffing.rfind("<tr", 0, remote_index):staffing.index("</tr>", remote_index)]
         self.assertIn("data-role-check", remote_row)
         self.assertIn("disabled>", remote_row)
@@ -16949,7 +17283,7 @@ class ScheduleWorkflowTest(unittest.TestCase):
         self.assertIn("Mark as sent", staffing)
         self.assertIn("Mark as confirmed", staffing)
         self.assertIn("Mark as declined", staffing)
-        examiner_index = staffing.index("Eli Examiner")
+        examiner_index = staffing.index('<span class="staffing-member-name">Eli Examiner</span>')
         examiner_row = staffing[staffing.rfind("<tr", 0, examiner_index):staffing.index("</tr>", examiner_index)]
         self.assertIn("participation-official-confirmation-sent", examiner_row)
         self.assertIn("Mark as confirmed", examiner_row)
@@ -16957,13 +17291,15 @@ class ScheduleWorkflowTest(unittest.TestCase):
         self.assertIn("data-role-check", examiner_row)
         self.assertIn("disabled>", examiner_row)
         self.assertIn("Force Pending", staffing)
-        intern_index = staffing.index("Ian Intern")
+        intern_index = staffing.index('<span class="staffing-member-name">Ian Intern</span>')
         intern_row = staffing[staffing.rfind("<tr", 0, intern_index):staffing.index("</tr>", intern_index)]
         self.assertIn("participation-confirmed", intern_row)
         self.assertIn("data-role-check checked disabled", " ".join(intern_row.split()))
         self.assertIn("Send email</a>", intern_row)
         self.assertIn("staffing-action-chip-grey is-disabled", intern_row)
-        self.assertIn("data-copy-text=\"ian@example.com\"", intern_row)
+        self.assertIn("data-staff-confirmation-email", intern_row)
+        self.assertIn("data-staff-official-confirmation-email-payload", intern_row)
+        self.assertNotIn("data-copy-text=\"ian@example.com\"", intern_row)
         self.assertIn("disabled>", intern_row)
         with open("app/static/css/styles.css", encoding="utf-8") as css_file:
             css = css_file.read()
@@ -16981,6 +17317,155 @@ class ScheduleWorkflowTest(unittest.TestCase):
         self.assertIn(".staffing-status-confirmations-to-be-sent", css)
         self.assertIn(".staffing-status-confirmations-to-be-updated", css)
         self.assertIn(".staffing-status-confirmed-staff", css)
+
+    def test_staffing_send_email_opens_gmail_with_official_confirmation_subject(self):
+        self.session_record.exam_session_name = "Pauu"
+        self.session_record.session_date = date(2026, 8, 7)
+        self.session_record.format = "Online"
+        self.session_record.emergency_contact_required = True
+        self.session_record.emergency_contact_role_check_verified = True
+        self.session_record.full_address_google_maps = "Online room"
+        emergency_contact = AcademicStaff(id=10, status="Active", full_name="Eva Emergency", roles="Supervisor", email="eva@example.com", phone="+5491111111111")
+        examiner = AcademicStaff(id=11, status="Active", full_name="Eli Examiner", roles="Examiner", email="eli@example.com")
+        supervisor = AcademicStaff(id=12, status="Active", full_name="Sue Supervisor", roles="Supervisor", email="sue@example.com")
+        backup_emergency_contact = AcademicStaff(id=13, status="Active", full_name="Ben Backup", roles="Supervisor", email="ben@example.com", phone="+5491122222222")
+        emergency_role = Role.query.filter_by(name="Emergency contact").first() or Role(name="Emergency contact")
+        onsite_session = ExamSession(
+            exam_session_name="Pauu",
+            category="Path School",
+            status="Pending",
+            session_date=date(2026, 8, 7),
+            shifts="Morning",
+            modules="Speaking",
+            format="Onsite",
+            details_url="https://example.com/sinapsis-onsite",
+            schedule_folder_url="https://example.com/schedule-folder-onsite",
+            exam_entry_slips_url="https://example.com/entry-slips-folder-onsite",
+            full_address_google_maps="Pilar, Buenos Aires",
+        )
+        db.session.add_all([emergency_contact, examiner, supervisor, backup_emergency_contact, emergency_role, onsite_session])
+        db.session.flush()
+        self.session_record.emergency_contact_member_id = emergency_contact.id
+        self.session_record.emergency_contact_start_time = "10:00"
+        self.session_record.emergency_contact_end_time = "14:00"
+        self.session_record.emergency_contact_additional_contacts = json.dumps([{
+            "member_id": backup_emergency_contact.id,
+            "status": "Pending",
+            "start_time": "14:00",
+            "end_time": "16:00",
+        }])
+        db.session.add_all([
+            Fee(
+                fee_description="Emergency contact fee",
+                currency="ARS",
+                fee_value="15000",
+                unit_of_measure="per unit",
+                role_id=emergency_role.id,
+            ),
+            ExamSessionExaminerAssignment(
+                exam_session_id=self.session_record.id,
+                team_member_id=examiner.id,
+                participation_status="Pending",
+                staffing_role_check_verified=True,
+                time_ranges=json.dumps([{"start": "09:00", "end": "10:30"}]),
+                role_fee="ARS 22.000",
+                role_fee_currency="ARS",
+                logistics_type="Does not apply",
+            ),
+            ExamSessionSupervisorAssignment(
+                exam_session_id=onsite_session.id,
+                team_member_id=supervisor.id,
+                participation_status="Pending",
+                staffing_role_check_verified=True,
+                time_ranges=json.dumps([{"start": "09:00", "end": "12:30"}]),
+                role_fee="ARS 54.200",
+                role_fee_currency="ARS",
+                logistics_type="Does not apply",
+            ),
+            ExamSessionScheduleWorkflow(exam_session_id=self.session_record.id, status="Approved"),
+            ExamSessionScheduleWorkflow(exam_session_id=onsite_session.id, status="Approved"),
+            StaffPaymentSettings(next_payment_date=date(2026, 12, 27)),
+            CertificationYearConfiguration(
+                module_key="examiner_certification",
+                year=2026,
+                examiner_guideline_url="https://example.com/examiner-guidelines-2026",
+                material_for_examiners_url="https://example.com/material-for-examiners-2026",
+            ),
+            CertificationYearConfiguration(
+                module_key="examiner_certification",
+                year=2027,
+                examiner_guideline_url="https://example.com/examiner-guidelines-2027",
+                material_for_examiners_url="https://example.com/material-for-examiners-2027",
+            ),
+            CertificationYearConfiguration(
+                module_key="supervisor_certification",
+                year=2026,
+                supervisor_guideline_url="https://example.com/supervisor-guidelines-2026",
+                backup_material_for_examiners_url="https://example.com/backup-material-2026",
+            ),
+            CertificationYearConfiguration(
+                module_key="supervisor_certification",
+                year=2027,
+                supervisor_guideline_url="https://example.com/supervisor-guidelines-2027",
+                backup_material_for_examiners_url="https://example.com/backup-material-2027",
+            ),
+        ])
+        db.session.commit()
+        bundle = self.create_shipment_bundle_record(session_record=self.session_record)
+        db.session.add(ExamSessionShipmentBundleSession(bundle_id=bundle.id, exam_session_id=onsite_session.id))
+        db.session.commit()
+
+        html = self.login_client().get(
+            f"/pre-session-control-tower?session_year=2026&view=bundle&bundle_id={bundle.id}"
+        ).get_data(as_text=True)
+
+        def gmail_params_for_staff(session_id, staff_name):
+            modal_start = html.index(f'id="staffing-{session_id}"')
+            modal_end = html.index(f'id="logistics-{session_id}"')
+            staffing = html[modal_start:modal_end]
+            staff_index = staffing.index(f'<span class="staffing-member-name">{staff_name}</span>')
+            row = staffing[staffing.rfind("<tr", 0, staff_index):staffing.index("</tr>", staff_index)]
+            href = re.search(r'<a class="staffing-action-chip [^"]*staffing-action-chip-blue[^"]*" href="([^"]+)"', row).group(1)
+            return parse_qs(urlparse(href.replace("&amp;", "&")).query)
+
+        def copy_payload_for_staff(session_id, staff_name):
+            modal_start = html.index(f'id="staffing-{session_id}"')
+            modal_end = html.index(f'id="logistics-{session_id}"')
+            staffing = html[modal_start:modal_end]
+            staff_index = staffing.index(f'<span class="staffing-member-name">{staff_name}</span>')
+            row = staffing[staffing.rfind("<tr", 0, staff_index):staffing.index("</tr>", staff_index)]
+            payload = re.search(r"data-staff-official-confirmation-email-payload='([^']+)'", row).group(1)
+            return json.loads(html_lib.unescape(payload))
+
+        emergency_params = gmail_params_for_staff(self.session_record.id, "Eva Emergency")
+        self.assertEqual(emergency_params["to"], ["eva@example.com"])
+        self.assertEqual(emergency_params["su"], ["EMERGENCY CONTACT – On demand (7th August) - Pauu"])
+        emergency_payload = copy_payload_for_staff(self.session_record.id, "Eva Emergency")
+        self.assertEqual(emergency_payload["role"], "Emergency contact")
+        self.assertEqual(emergency_payload["time_ranges"], ["10.00 to 14.00 h"])
+        self.assertEqual(emergency_payload["total_fee"], "ARS 15.000")
+        self.assertEqual([contact["name"] for contact in emergency_payload["emergency_contacts"]], ["Eva Emergency", "Ben Backup"])
+        self.assertEqual([contact["phone"] for contact in emergency_payload["emergency_contacts"]], ["+5491111111111", "+5491122222222"])
+        examiner_params = gmail_params_for_staff(self.session_record.id, "Eli Examiner")
+        self.assertEqual(examiner_params["to"], ["eli@example.com"])
+        self.assertEqual(examiner_params["su"], ["EXAMINER – Online (7th August) - Pauu"])
+        examiner_payload = copy_payload_for_staff(self.session_record.id, "Eli Examiner")
+        self.assertEqual(examiner_payload["schedule_folder_url"], "https://example.com/schedule-folder")
+        self.assertEqual(examiner_payload["examiner_guideline_url"], "https://example.com/examiner-guidelines-2026")
+        self.assertEqual(examiner_payload["material_for_examiners_url"], "https://example.com/material-for-examiners-2026")
+        supervisor_params = gmail_params_for_staff(onsite_session.id, "Sue Supervisor")
+        self.assertEqual(supervisor_params["to"], ["sue@example.com"])
+        self.assertEqual(supervisor_params["su"], ["SUPERVISOR – Onsite (7th August) - Pauu"])
+        supervisor_payload = copy_payload_for_staff(onsite_session.id, "Sue Supervisor")
+        self.assertEqual(supervisor_payload["full_name"], "Sue Supervisor")
+        self.assertEqual(supervisor_payload["role"], "Supervisor")
+        self.assertEqual(supervisor_payload["session_name"], "Pauu")
+        self.assertEqual(supervisor_payload["schedule_folder_url"], "https://example.com/schedule-folder-onsite")
+        self.assertEqual(supervisor_payload["supervisor_guideline_url"], "https://example.com/supervisor-guidelines-2026")
+        self.assertEqual(supervisor_payload["backup_material_for_examiners_url"], "https://example.com/backup-material-2026")
+        self.assertEqual(supervisor_payload["time_ranges"], ["09.00 to 12.30 h"])
+        self.assertEqual(supervisor_payload["total_fee"], "ARS 54.200")
+        self.assertEqual(supervisor_payload["next_payment_date"], "27/12/2026")
 
     def test_emergency_contact_staffing_row_can_update_status(self):
         self.session_record.format = "Onsite"

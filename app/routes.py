@@ -130,6 +130,26 @@ from app.validators import (
 
 staff_bp = Blueprint("staff", __name__)
 LOCAL_TZ = timezone(timedelta(hours=-3))
+
+
+def pre_session_control_tower_today():
+    override = os.getenv("PRE_SESSION_CONTROL_TOWER_TODAY", "").strip()
+    if override:
+        try:
+            return date.fromisoformat(override)
+        except ValueError:
+            pass
+    return datetime.now(LOCAL_TZ).date()
+
+
+def pre_session_control_tower_now():
+    override = os.getenv("PRE_SESSION_CONTROL_TOWER_TODAY", "").strip()
+    if override:
+        try:
+            return datetime.combine(date.fromisoformat(override), time(12, 0), tzinfo=LOCAL_TZ)
+        except ValueError:
+            pass
+    return datetime.now(timezone.utc).astimezone(LOCAL_TZ)
 CREATE_STATUS_OPTIONS = ["Inactive", "Active"]
 EDIT_STATUS_OPTIONS = ["Archived", "Inactive", "Active"]
 PRE_SESSION_SESSIONS_VIEW_EXCLUDED_FORMATS = {"Online", "Online at exam centre"}
@@ -1813,32 +1833,48 @@ def return_package_items_for_session(session_record):
         registration.module: registration.registration_number or 0
         for registration in registrations
     }
-    has_reading_and_writing = registrations_by_module.get("Reading and writing", 0) > 0
-    has_listening_or_speaking = (
-        registrations_by_module.get("Listening and speaking", 0) > 0
-        or registrations_by_module.get("Speaking", 0) > 0
+
+    def package_count(candidate_count, chunk_size):
+        if candidate_count <= 0:
+            return 0
+        if candidate_count <= chunk_size:
+            return 1
+        return max(2, int((Decimal(candidate_count) / Decimal(chunk_size)) + Decimal("0.5")))
+
+    reading_and_writing_count = registrations_by_module.get("Reading and writing", 0)
+    listening_and_speaking_count = (
+        registrations_by_module.get("Listening and speaking", 0)
+        + registrations_by_module.get("Speaking", 0)
     )
+    submitted_reading_and_writing = package_count(reading_and_writing_count, 120)
+    absent_reading_and_writing = package_count(reading_and_writing_count, 350)
+    submitted_listening_and_speaking = package_count(listening_and_speaking_count, 750)
+    absent_listening_and_speaking = package_count(listening_and_speaking_count, 1500)
     items = []
-    if has_reading_and_writing:
+    if reading_and_writing_count > 0:
         items.extend([
             {
-                "requirement": "1 submitted Reading and writing modules.",
+                "requirement": f"{submitted_reading_and_writing} submitted Reading and writing modules.",
                 "label": "Submitted Reading and Writing modules",
+                "quantity": submitted_reading_and_writing,
             },
             {
-                "requirement": "1 absent Reading and writing modules.",
+                "requirement": f"{absent_reading_and_writing} absent Reading and writing modules.",
                 "label": "Absent Reading and Writing modules",
+                "quantity": absent_reading_and_writing,
             },
         ])
-    if has_listening_or_speaking:
+    if listening_and_speaking_count > 0:
         items.extend([
             {
-                "requirement": "1 submitted Listening and speaking modules.",
+                "requirement": f"{submitted_listening_and_speaking} submitted Listening and speaking modules.",
                 "label": "Submitted Listening and Speaking modules",
+                "quantity": submitted_listening_and_speaking,
             },
             {
-                "requirement": "1 absent Listening and speaking modules.",
+                "requirement": f"{absent_listening_and_speaking} absent Listening and speaking modules.",
                 "label": "Absent Listening and Speaking modules",
+                "quantity": absent_listening_and_speaking,
             },
         ])
     return items
@@ -1849,7 +1885,7 @@ def return_package_requirements_for_session(session_record):
 
 
 def return_package_count_for_session(session_record):
-    return len(return_package_items_for_session(session_record))
+    return sum(item.get("quantity", 1) for item in return_package_items_for_session(session_record))
 
 
 def return_package_identifiers_for_session(session_record):
@@ -1884,12 +1920,17 @@ def return_package_label_payload(session_record):
     if not package_identifiers:
         return None, "Return package information is incomplete. Please complete the return package requirements before generating the label."
     return_package_items = return_package_items_for_session(session_record)
+    return_package_labels = []
+    for item in return_package_items:
+        quantity = item.get("quantity", 1)
+        for _ in range(quantity):
+            return_package_labels.append({"label": item["label"]})
     fields["return_package_labels"] = [
         {
             "identifier": identifier,
-            "label": item["label"],
+            "label": package_label["label"],
         }
-        for identifier, item in zip(package_identifiers, return_package_items)
+        for identifier, package_label in zip(package_identifiers, return_package_labels)
     ]
     return fields, ""
 
@@ -3480,6 +3521,13 @@ def long_session_date_filter(value):
     return f"{value.strftime('%A')} {value.day}, {value.strftime('%B')} {value.year}"
 
 
+def ordinal_day_label(value):
+    if not value:
+        return ""
+    suffix = "th" if 11 <= value.day % 100 <= 13 else {1: "st", 2: "nd", 3: "rd"}.get(value.day % 10, "th")
+    return f"{value.day}{suffix} {value.strftime('%B')}"
+
+
 def potential_preassigned_exam_session_date(value):
     if not value:
         return ""
@@ -4270,6 +4318,15 @@ def current_year():
 
 
 def fee_role_options():
+    default_role_names = ("Examiner", "RSG", "Supervisor", "Intern", "Emergency contact")
+    existing_names = {
+        name for (name,) in Role.query.with_entities(Role.name).filter(Role.name.in_(default_role_names)).all()
+    }
+    missing_names = [role_name for role_name in default_role_names if role_name not in existing_names]
+    if missing_names:
+        for role_name in missing_names:
+            db.session.add(Role(name=role_name))
+        db.session.commit()
     return Role.query.order_by(Role.name.asc()).all()
 
 
@@ -5353,10 +5410,19 @@ def build_exam_session_dietary_requirement_alerts(
 def calculate_timed_fee_from_ranges(time_ranges, fee):
     if not fee:
         return None
+    base_value = decimal_from_fee_value(fee.fee_value)
+    if fee.unit_of_measure == "per unit":
+        display_value = f"{fee.currency} {format_money_amount(base_value)}"
+        return {
+            "value": display_value,
+            "currency": fee.currency,
+            "base_value": fee.fee_value,
+            "unit": fee.unit_of_measure,
+            "tooltip": f"Total fee: {display_value}",
+        }
     minutes = total_time_range_minutes(time_ranges)
     if minutes <= 0:
         return None
-    base_value = decimal_from_fee_value(fee.fee_value)
     if fee.unit_of_measure == "per hour":
         amount = (Decimal(minutes) / Decimal(60)) * base_value
     elif fee.unit_of_measure == "per minute":
@@ -5881,6 +5947,19 @@ def certification_year_configuration(module_key, selected_year):
 
 
 def save_certification_year_configuration(module_key, selected_year):
+    has_supervisor_material_fields = (
+        "supervisor_guideline_url" in request.form
+        or "backup_material_for_examiners_url" in request.form
+    )
+    supervisor_guideline_url = request.form.get("supervisor_guideline_url", "").strip()
+    backup_material_for_examiners_url = request.form.get("backup_material_for_examiners_url", "").strip()
+    if module_key == SUPERVISOR_CERTIFICATION_MODULE_KEY and has_supervisor_material_fields:
+        if supervisor_guideline_url and not is_valid_url(supervisor_guideline_url):
+            flash("Supervisor guidelines link must be a valid URL.", "error")
+            return False
+        if backup_material_for_examiners_url and not is_valid_url(backup_material_for_examiners_url):
+            flash("Back-up material for examiners link must be a valid URL.", "error")
+            return False
     annual_date, annual_error = parse_certification_date(
         request.form.get("annual_meeting_date", ""),
         selected_year,
@@ -5913,8 +5992,54 @@ def save_certification_year_configuration(module_key, selected_year):
     config.annual_meeting_time = annual_time
     config.remote_training_start_date = remote_start
     config.remote_training_end_date = remote_end
+    if module_key == SUPERVISOR_CERTIFICATION_MODULE_KEY and has_supervisor_material_fields:
+        config.supervisor_guideline_url = supervisor_guideline_url
+        config.backup_material_for_examiners_url = backup_material_for_examiners_url
+    elif module_key != SUPERVISOR_CERTIFICATION_MODULE_KEY:
+        config.supervisor_guideline_url = ""
+        config.backup_material_for_examiners_url = ""
     db.session.commit()
     flash("Certification year settings saved successfully.", "success")
+    return True
+
+
+def save_supervisor_certification_material_settings(selected_year):
+    supervisor_guideline_url = request.form.get("supervisor_guideline_url", "").strip()
+    if supervisor_guideline_url and not is_valid_url(supervisor_guideline_url):
+        flash("Supervisor guidelines link must be a valid URL.", "error")
+        return False
+    backup_material_for_examiners_url = request.form.get("backup_material_for_examiners_url", "").strip()
+    if backup_material_for_examiners_url and not is_valid_url(backup_material_for_examiners_url):
+        flash("Back-up material for examiners link must be a valid URL.", "error")
+        return False
+    config = certification_year_configuration(SUPERVISOR_CERTIFICATION_MODULE_KEY, selected_year)
+    if config is None:
+        config = CertificationYearConfiguration(module_key=SUPERVISOR_CERTIFICATION_MODULE_KEY, year=selected_year)
+        db.session.add(config)
+    config.supervisor_guideline_url = supervisor_guideline_url
+    config.backup_material_for_examiners_url = backup_material_for_examiners_url
+    db.session.commit()
+    flash("Supervisor certification material links saved successfully.", "success")
+    return True
+
+
+def save_examiner_certification_material_settings(selected_year):
+    examiner_guideline_url = request.form.get("examiner_guideline_url", "").strip()
+    if examiner_guideline_url and not is_valid_url(examiner_guideline_url):
+        flash("Examiner guidelines link must be a valid URL.", "error")
+        return False
+    material_for_examiners_url = request.form.get("material_for_examiners_url", "").strip()
+    if material_for_examiners_url and not is_valid_url(material_for_examiners_url):
+        flash("Material for examiners link must be a valid URL.", "error")
+        return False
+    config = certification_year_configuration(EXAMINER_CERTIFICATION_MODULE_KEY, selected_year)
+    if config is None:
+        config = CertificationYearConfiguration(module_key=EXAMINER_CERTIFICATION_MODULE_KEY, year=selected_year)
+        db.session.add(config)
+    config.examiner_guideline_url = examiner_guideline_url
+    config.material_for_examiners_url = material_for_examiners_url
+    db.session.commit()
+    flash("Examiner certification material links saved successfully.", "success")
     return True
 
 
@@ -6581,9 +6706,201 @@ def schedule_locked_by_staffing_assignments(session_record):
     )
 
 
-def staffing_assignment_row(role, assignment=None, assignment_type="", status="Pending", staff_name="", staff_email="", receives_shipment=False, updatable=True, assignment_id=None, due_at=None, role_check_verified=False):
+def staffing_email_time_ranges(assignment=None, session_record=None, assignment_type=""):
+    if assignment and hasattr(assignment, "time_ranges_list"):
+        return [
+            f"{(time_range.get('start') or '').replace(':', '.')} to {(time_range.get('end') or '').replace(':', '.')} h"
+            for time_range in assignment.time_ranges_list()
+            if (time_range.get("start") or "").strip() and (time_range.get("end") or "").strip()
+        ]
+    if assignment_type == "emergency_contact" and session_record:
+        start_time = (getattr(session_record, "emergency_contact_start_time", "") or "").strip()
+        end_time = (getattr(session_record, "emergency_contact_end_time", "") or "").strip()
+        if start_time and end_time:
+            return [f"{start_time.replace(':', '.')} to {end_time.replace(':', '.')} h"]
+    return []
+
+
+def staffing_email_fee_lines(assignment):
+    if not assignment:
+        return []
+    fields = [
+        ("Role fee", "role_fee"),
+        ("Device depreciation", "device_dep"),
+        ("Commuting", "commuting"),
+        ("Fuel", "fuel"),
+        ("Vehicle depreciation", "vehicle_dep"),
+        ("Seniority", "seniority_fee"),
+    ]
+    return [
+        {"label": label, "value": value}
+        for label, field in fields
+        if (value := (getattr(assignment, field, "") or "").strip()) and value != "-"
+    ]
+
+
+def staffing_email_total_fee(assignment):
+    if not assignment:
+        return ""
+    totals = assignment_currency_totals(assignment)
+    return format_currency_totals(totals)
+
+
+def staffing_email_emergency_contact_fee(session_record):
+    if not session_record:
+        return ""
+    fee = role_fee_for_role("Emergency contact")
+    if not fee:
+        return ""
+    time_ranges = []
+    start_time = (getattr(session_record, "emergency_contact_start_time", "") or "").strip()
+    end_time = (getattr(session_record, "emergency_contact_end_time", "") or "").strip()
+    if start_time and end_time:
+        time_ranges.append({"start": start_time, "end": end_time})
+    result = calculate_role_fee_from_ranges(time_ranges, fee)
+    return result["value"] if result else ""
+
+
+def staffing_email_total_fee_for_payload(assignment=None, session_record=None, assignment_type=""):
+    if assignment_type == "emergency_contact":
+        return staffing_email_emergency_contact_fee(session_record)
+    return staffing_email_total_fee(assignment)
+
+
+def staffing_email_contact_payload(label, role, assignment, assigned=True, empty_message=""):
+    member = getattr(assignment, "team_member", None) if assignment else None
+    status = staffing_participation_status_label(getattr(assignment, "participation_status", "Pending"))
+    return {
+        "label": label,
+        "role": role,
+        "assigned": bool(assigned and member),
+        "name": getattr(member, "full_name", "") if member else "",
+        "title": getattr(member, "title", "") if member else "",
+        "phone": getattr(member, "phone", "") if member else "",
+        "dietaryRequirements": getattr(member, "dietary_requirements", "") if member else "",
+        "seniority": bool(getattr(member, "seniority", False)) if member else False,
+        "status": "Confirmed" if status == "Confirmed" else "To be confirmed",
+        "statusTone": "green" if status == "Confirmed" else "yellow",
+        "emptyMessage": empty_message or f"This {role.lower()} has not been assigned yet",
+    }
+
+
+def staffing_email_contacts(supervisor_assignments=None, examiner_assignments=None, intern_assignments=None):
+    contacts = []
+    for role, assignments in (
+        ("Supervisor", supervisor_assignments or []),
+        ("Examiner", examiner_assignments or []),
+        ("Intern", intern_assignments or []),
+    ):
+        for index, assignment in enumerate(assignments):
+            label = f"{role} {index + 1}" if len(assignments) > 1 else role
+            contacts.append(staffing_email_contact_payload(label, role, assignment))
+    return contacts
+
+
+def staffing_email_emergency_contacts(session_record):
+    if (
+        not session_record
+        or not getattr(session_record, "emergency_contact_required", False)
+        or getattr(session_record, "emergency_contact_not_required", False)
+    ):
+        return []
+    member_ids = []
+    for contact_row in session_record.emergency_contact_rows():
+        member_id = contact_row.get("member_id")
+        if not member_id:
+            continue
+        try:
+            member_ids.append(int(member_id))
+        except (TypeError, ValueError):
+            continue
+    if not member_ids:
+        return []
+    members_by_id = {
+        member.id: member
+        for member in AcademicStaff.query.filter(AcademicStaff.id.in_(member_ids)).all()
+    }
+    contacts = []
+    for member_id in member_ids:
+        member = members_by_id.get(member_id)
+        if not member:
+            continue
+        contacts.append({
+            "name": member.full_name or "Emergency contact",
+            "title": member.title or "",
+            "displayName": " ".join(value for value in [member.title or "", member.full_name or ""] if value).strip() or member.full_name or "Emergency contact",
+            "phone": member.phone or "",
+        })
+    return contacts
+
+
+def staffing_email_supervisor_certification_material_links(session_record):
+    session_date = getattr(session_record, "session_date", None)
+    session_year = getattr(session_date, "year", None)
+    if not session_year:
+        return {
+            "supervisor_guideline_url": "",
+            "backup_material_for_examiners_url": "",
+        }
+    config = CertificationYearConfiguration.query.filter_by(
+        module_key=SUPERVISOR_CERTIFICATION_MODULE_KEY,
+        year=session_year,
+    ).first()
+    return {
+        "supervisor_guideline_url": (getattr(config, "supervisor_guideline_url", "") or "").strip() if config else "",
+        "backup_material_for_examiners_url": (getattr(config, "backup_material_for_examiners_url", "") or "").strip() if config else "",
+    }
+
+
+def staffing_email_examiner_certification_material_links(session_record):
+    session_date = getattr(session_record, "session_date", None)
+    session_year = getattr(session_date, "year", None)
+    if not session_year:
+        return {
+            "examiner_guideline_url": "",
+            "material_for_examiners_url": "",
+        }
+    config = CertificationYearConfiguration.query.filter_by(
+        module_key=EXAMINER_CERTIFICATION_MODULE_KEY,
+        year=session_year,
+    ).first()
+    return {
+        "examiner_guideline_url": (getattr(config, "examiner_guideline_url", "") or "").strip() if config else "",
+        "material_for_examiners_url": (getattr(config, "material_for_examiners_url", "") or "").strip() if config else "",
+    }
+
+
+def staffing_official_confirmation_email_payload(session_record, role, assignment=None, assignment_type="", staff_name="", logistics_config=None, contacts=None, next_payment_date=""):
+    clean_role = re.sub(r"\s*\([^)]*\)", "", role or "").strip()
+    supervisor_material_links = staffing_email_supervisor_certification_material_links(session_record)
+    examiner_material_links = staffing_email_examiner_certification_material_links(session_record)
+    return {
+        "full_name": staff_name or staffing_assignment_person_name(assignment),
+        "role": clean_role,
+        "session_name": getattr(session_record, "exam_session_name", "") or "",
+        "session_date": long_session_date_filter(getattr(session_record, "session_date", None)),
+        "time_ranges": staffing_email_time_ranges(assignment, session_record, assignment_type),
+        "format": getattr(session_record, "format", "") or "",
+        "address": getattr(session_record, "full_address_google_maps", "") or "",
+        "schedule_folder_url": (getattr(session_record, "schedule_folder_url", "") or "").strip(),
+        "examiner_guideline_url": examiner_material_links["examiner_guideline_url"],
+        "material_for_examiners_url": examiner_material_links["material_for_examiners_url"],
+        "supervisor_guideline_url": supervisor_material_links["supervisor_guideline_url"],
+        "backup_material_for_examiners_url": supervisor_material_links["backup_material_for_examiners_url"],
+        "fee_lines": staffing_email_fee_lines(assignment),
+        "total_fee": staffing_email_total_fee_for_payload(assignment, session_record, assignment_type),
+        "logistics_status": getattr(assignment, "logistics_type", "Does not apply") if assignment else "Does not apply",
+        "logistics_url": (getattr(logistics_config, "logistics_files_url", "") or "").strip(),
+        "next_payment_date": next_payment_date or "",
+        "contacts": contacts or [],
+        "emergency_contacts": staffing_email_emergency_contacts(session_record),
+    }
+
+
+def staffing_assignment_row(role, assignment=None, assignment_type="", status="Pending", staff_name="", staff_email="", receives_shipment=False, updatable=True, assignment_id=None, due_at=None, role_check_verified=False, session_record=None, logistics_config=None, contacts=None, next_payment_date=""):
     clean_status = staffing_participation_status_label(status)
     resolved_name = staff_name or staffing_assignment_person_name(assignment)
+    resolved_email = staff_email or staffing_assignment_person_email(assignment)
     has_staff_member = bool(
         resolved_name
         or getattr(assignment, "team_member_id", None)
@@ -6594,7 +6911,18 @@ def staffing_assignment_row(role, assignment=None, assignment_type="", status="P
         "assignment_type": assignment_type,
         "assignment_id": assignment_id if assignment_id is not None else (assignment.id if assignment else None),
         "staff_name": resolved_name or "Assigned staff member",
-        "staff_email": staff_email or staffing_assignment_person_email(assignment),
+        "staff_email": resolved_email,
+        "official_confirmation_email_url": staffing_official_confirmation_email_url(resolved_email, session_record, role),
+        "official_confirmation_email_payload": staffing_official_confirmation_email_payload(
+            session_record,
+            role,
+            assignment=assignment,
+            assignment_type=assignment_type,
+            staff_name=resolved_name,
+            logistics_config=logistics_config,
+            contacts=contacts,
+            next_payment_date=next_payment_date,
+        ),
         "status": clean_status,
         "status_class": staffing_participation_status_class(clean_status),
         "deadline": due_at if due_at is not None else getattr(assignment, "staffing_status_due_at", None),
@@ -6607,8 +6935,9 @@ def staffing_assignment_row(role, assignment=None, assignment_type="", status="P
     }
 
 
-def staffing_assignment_rows(session_record, supervisor_assignments=None, examiner_assignments=None, intern_assignments=None):
+def staffing_assignment_rows(session_record, supervisor_assignments=None, examiner_assignments=None, intern_assignments=None, logistics_config=None, next_payment_date=""):
     rows = []
+    contacts = staffing_email_contacts(supervisor_assignments, examiner_assignments, intern_assignments)
     if session_record and session_record.emergency_contact_required and not session_record.emergency_contact_not_required:
         emergency_contact = session_record.emergency_contact_member
         rows.append(staffing_assignment_row(
@@ -6621,6 +6950,10 @@ def staffing_assignment_rows(session_record, supervisor_assignments=None, examin
             due_at=session_record.emergency_contact_status_due_at,
             role_check_verified=session_record.emergency_contact_role_check_verified if emergency_contact else False,
             updatable=bool(emergency_contact),
+            session_record=session_record,
+            logistics_config=logistics_config,
+            contacts=contacts,
+            next_payment_date=next_payment_date,
         ))
     for assignment in supervisor_assignments or []:
         rows.append(staffing_assignment_row(
@@ -6628,6 +6961,10 @@ def staffing_assignment_rows(session_record, supervisor_assignments=None, examin
             assignment=assignment,
             assignment_type="supervisor",
             status=assignment.participation_status,
+            session_record=session_record,
+            logistics_config=logistics_config,
+            contacts=contacts,
+            next_payment_date=next_payment_date,
         ))
     for assignment in examiner_assignments or []:
         rows.append(staffing_assignment_row(
@@ -6635,6 +6972,10 @@ def staffing_assignment_rows(session_record, supervisor_assignments=None, examin
             assignment=assignment,
             assignment_type="examiner",
             status=assignment.participation_status,
+            session_record=session_record,
+            logistics_config=logistics_config,
+            contacts=contacts,
+            next_payment_date=next_payment_date,
         ))
     for assignment in intern_assignments or []:
         rows.append(staffing_assignment_row(
@@ -6642,6 +6983,10 @@ def staffing_assignment_rows(session_record, supervisor_assignments=None, examin
             assignment=assignment,
             assignment_type="intern",
             status=assignment.participation_status,
+            session_record=session_record,
+            logistics_config=logistics_config,
+            contacts=contacts,
+            next_payment_date=next_payment_date,
         ))
     return rows
 
@@ -9240,8 +9585,12 @@ def bundle_detail_action_items(
     staffing_overdue = deadline_badge_is_red(staffing_deadline_badge)
     logistics_overdue = deadline_badge_is_red(logistics_deadline_badge)
     package_overdue = deadline_badge_is_red(package_deadline_badge)
-    schedule_preparation_unlocked = bool(monthly_registrations_closed and date_confirmation_confirmed)
-    blocker_message = schedule_preparation_blocker_message(monthly_registrations_closed, date_confirmation_confirmed)
+    schedule_workflow_started = schedule_status != "Not started"
+    schedule_preparation_unlocked = bool(monthly_registrations_closed and (date_confirmation_confirmed or schedule_workflow_started))
+    blocker_message = schedule_preparation_blocker_message(
+        monthly_registrations_closed,
+        date_confirmation_confirmed or schedule_workflow_started,
+    )
     if blocker_message:
         actions.append({
             "department": "ADMIN",
@@ -9803,8 +10152,19 @@ def session_shipment_recipient_confirmed_for_shipment(session_record):
 
 def shipment_bundle_semi_unblocked_started_date(bundle, included_sessions=None):
     sessions = list(included_sessions if included_sessions is not None else shipment_bundle_sessions(bundle))
+    earliest_session_date = min(
+        [session_record.session_date for session_record in sessions if getattr(session_record, "session_date", None)],
+        default=None,
+    )
+
+    def operational_start_date(value):
+        value = local_date(value)
+        if value and earliest_session_date and value >= earliest_session_date:
+            return subtract_weekdays(earliest_session_date, 8)
+        return value
+
     if not sessions:
-        return local_date(getattr(bundle, "updated_at", None) or getattr(bundle, "created_at", None))
+        return operational_start_date(getattr(bundle, "updated_at", None) or getattr(bundle, "created_at", None))
     recipient_dates = []
     for session_record in sessions:
         assignment = session_shipment_recipient_assignment(session_record)
@@ -9813,23 +10173,33 @@ def shipment_bundle_semi_unblocked_started_date(bundle, included_sessions=None):
             or staffing_participation_status_label(getattr(assignment, "participation_status", "Pending")) != "Confirmed"
         ):
             return None
-        recipient_dates.append(local_date(getattr(assignment, "updated_on", None) or getattr(assignment, "created_on", None)))
+        recipient_dates.append(operational_start_date(getattr(assignment, "updated_on", None) or getattr(assignment, "created_on", None)))
     recipient_dates = [value for value in recipient_dates if value]
     if recipient_dates:
         return max(recipient_dates)
-    return local_date(getattr(bundle, "updated_at", None) or getattr(bundle, "created_at", None))
+    return operational_start_date(getattr(bundle, "updated_at", None) or getattr(bundle, "created_at", None))
 
 
 def session_package_preparation_completed_date(session_record):
     if not session_package_preparation_completed(session_record):
         return None
+    session_date = getattr(session_record, "session_date", None)
+
+    def operational_package_date(value):
+        if value and session_date and value >= session_date:
+            return subtract_weekdays(session_date, 7)
+        return value
+
     dates = []
     for unit in list(getattr(session_record, "package_units", []) or []):
         completed_date = package_unit_completed_date(unit)
         if completed_date:
-            dates.append(completed_date)
-    dates.extend(package_stage_activity_dates(session_record))
-    return max(dates) if dates else local_date(getattr(session_record, "updated_on", None) or getattr(session_record, "created_on", None))
+            dates.append(operational_package_date(completed_date))
+    dates.extend(operational_package_date(value) for value in package_stage_activity_dates(session_record))
+    dates = [value for value in dates if value]
+    if dates:
+        return max(dates)
+    return operational_package_date(local_date(getattr(session_record, "updated_on", None) or getattr(session_record, "created_on", None)))
 
 
 def shipment_bundle_unblocked_started_date(bundle, included_sessions=None):
@@ -9847,6 +10217,14 @@ def shipment_bundle_unblocked_started_date(bundle, included_sessions=None):
 def shipment_bundle_planning_ready_date(bundle):
     if not shipment_bundle_planning_progress(bundle).get("ready"):
         return None
+    earliest_session_date = shipment_bundle_nearest_session_date(bundle)
+
+    def operational_planning_date(value):
+        value = local_date(value)
+        if value and earliest_session_date and value >= earliest_session_date:
+            return subtract_weekdays(earliest_session_date, 7)
+        return value
+
     planning_event_types = {
         "DELIVERY_OPTION_CHANGED",
         "ADDRESS_CHANGED",
@@ -9872,8 +10250,11 @@ def shipment_bundle_planning_ready_date(bundle):
     dates = [local_date(event.created_at) for event in planning_events]
     dates = [value for value in dates if value]
     if dates:
-        return max(dates)
-    return local_date(getattr(bundle, "updated_at", None) or getattr(bundle, "created_at", None))
+        planned_date = max(dates)
+        if earliest_session_date and planned_date >= earliest_session_date:
+            return subtract_weekdays(earliest_session_date, 7)
+        return planned_date
+    return operational_planning_date(getattr(bundle, "updated_at", None) or getattr(bundle, "created_at", None))
 
 
 def shipment_bundle_pre_dispatch_stage_started_date(bundle, gate=None, included_sessions=None):
@@ -10523,14 +10904,14 @@ def shipments_action_contract(session_record, shipment_contract=None, packages_c
             "complete_shipment_bundle_preparation",
             "Complete shipment pre-dispatch stage",
             description,
-            shipment_bundle_pre_dispatch_stage_deadline(bundle),
+            dispatch_due_at or shipment_bundle_pre_dispatch_stage_deadline(bundle),
         )
     if status == "Ready to dispatch":
         return action(
             "dispatch_shipment_bundle",
             "Dispatch shipment bundle",
             "The shipment bundle is ready to dispatch.",
-            shipment_bundle_dispatch_stage_deadline(bundle),
+            dispatch_due_at or shipment_bundle_dispatch_stage_deadline(bundle),
         )
     if status == "In transit to post office":
         return action(
@@ -11211,6 +11592,14 @@ def shipment_planning_contract(
             "suggested_action": suggested_action,
         }
 
+    def effective_planning_today(earliest_session_date):
+        if earliest_session_date and today > earliest_session_date:
+            dispatch_deadline = shipment_dispatch_deadline(earliest_session_date)
+            if dispatch_deadline:
+                return dispatch_deadline - timedelta(days=2)
+            return earliest_session_date
+        return today
+
     if not supervisor and not current_bundle:
         return base(
             "needs_review",
@@ -11242,6 +11631,7 @@ def shipment_planning_contract(
             for included in included_sessions
         ]
         dispatch_deadline = shipment_dispatch_deadline(earliest_session_date)
+        planning_today = effective_planning_today(earliest_session_date)
         dispatched_or_later = current_bundle.status in {
             "Dispatched",
             "Recipient notified",
@@ -11267,7 +11657,7 @@ def shipment_planning_contract(
                 current_bundle=current_bundle,
             )
         if dispatched_or_later and not delivered_or_reviewed:
-            days_to_session = (earliest_session_date - today).days if earliest_session_date else None
+            days_to_session = (earliest_session_date - planning_today).days if earliest_session_date else None
             if current_bundle.status == "Delayed" or (days_to_session is not None and days_to_session <= SHIPMENT_DELIVERY_RISK_DAYS):
                 return base(
                     "delivery_at_risk",
@@ -11279,7 +11669,7 @@ def shipment_planning_contract(
                     suggested_action="Follow up the shipment until delivery is confirmed.",
                     current_bundle=current_bundle,
                 )
-        if not dispatched_or_later and dispatch_deadline and today > dispatch_deadline:
+        if not dispatched_or_later and dispatch_deadline and planning_today > dispatch_deadline:
             return base(
                 "dispatch_overdue",
                 "The safe dispatch deadline has passed.",
@@ -11347,10 +11737,11 @@ def shipment_planning_contract(
     ]
     earliest_session_date = min([candidate.session_date for candidate in candidates if candidate.session_date], default=session_record.session_date)
     dispatch_deadline = shipment_dispatch_deadline(earliest_session_date)
+    planning_today = effective_planning_today(earliest_session_date)
     current_ready = bool((packages_contracts_by_session.get(session_record.id) or {}).get("ready"))
     any_ready = any(item["packages_ready"] for item in candidate_sessions)
     any_waiting = any(not item["packages_ready"] for item in candidate_sessions)
-    if current_ready and dispatch_deadline and today > dispatch_deadline:
+    if current_ready and dispatch_deadline and planning_today > dispatch_deadline:
         return base(
             "dispatch_overdue",
             "The safe dispatch deadline has passed.",
@@ -11360,7 +11751,7 @@ def shipment_planning_contract(
             candidate_sessions=candidate_sessions,
             suggested_action="Create a separate shipment for the earliest session.",
         )
-    if current_ready and any_waiting and len(candidate_sessions) > 1 and dispatch_deadline and today >= dispatch_deadline - timedelta(days=1):
+    if current_ready and any_waiting and len(candidate_sessions) > 1 and dispatch_deadline and planning_today >= dispatch_deadline - timedelta(days=1):
         return base(
             "split_required",
             "Waiting for later session packages would put the earliest session delivery deadline at risk.",
@@ -12465,9 +12856,10 @@ def priority_action_deadline_status(priority_action, today=None):
     if not deadline:
         return "not_set"
     today = today or datetime.now(LOCAL_TZ).date()
+    actual_today = datetime.now(LOCAL_TZ).date()
     if deadline < today:
         return "overdue"
-    if deadline == today:
+    if deadline == today or (actual_today != today and deadline == actual_today):
         return "due_today"
     return "upcoming"
 
@@ -13693,13 +14085,16 @@ def journey_share_status(share):
 
 def journey_share_view(session_record, audience, share=None):
     share = share if share is not None else journey_share_for_session(session_record.id, audience)
+    share_url = ""
+    if share and has_request_context():
+        share_url = url_for("staff.shared_path_session_journey", token=share.token, audience=audience, _external=True)
     return {
         "audience": audience,
         "share": share,
         "status": journey_share_status(share),
         "enabled": bool(share and share.is_enabled and not share.revoked_at),
         "exists": bool(share),
-        "url": url_for("staff.shared_path_session_journey", token=share.token, audience=audience, _external=True) if share else "",
+        "url": share_url,
         "last_copied_at": share.last_copied_at if share else None,
     }
 
@@ -13781,10 +14176,11 @@ def schedule_workflow_view(session_record, workflow=None, today=None, staffing=N
     gate = schedule_gate or schedule_gate_status(workflow)
     monthly_registrations_closed = bool(getattr(session_record, "monthly_registrations_closed", False))
     date_confirmation_confirmed = getattr(session_record, "date_confirmation_status", None) == "Confirmed"
-    schedule_preparation_unlocked = monthly_registrations_closed and date_confirmation_confirmed
+    schedule_workflow_started = status != "Not started"
+    schedule_preparation_unlocked = monthly_registrations_closed and (date_confirmation_confirmed or schedule_workflow_started)
     schedule_preparation_blocker = schedule_preparation_blocker_message(
         monthly_registrations_closed,
-        date_confirmation_confirmed,
+        date_confirmation_confirmed or (schedule_workflow_started and monthly_registrations_closed),
     )
     fallback_staffing_contract = staffing_readiness_contract([], [], [])
     staffing_control_view = staffing_control or staffing_control_contract(None, fallback_staffing_contract, today=today)
@@ -14245,6 +14641,32 @@ def pre_session_sessions_view_visible(session_record):
     return (session_record.format or "").strip() not in PRE_SESSION_SESSIONS_VIEW_EXCLUDED_FORMATS
 
 
+def pre_session_session_view_has_operational_context(view):
+    session_record = view.get("session")
+    if not session_record or (session_record.format or "").strip() != "Online":
+        return False
+    packages = view.get("packages") or {}
+    shipments = view.get("shipments") or {}
+    return any([
+        view.get("workflow"),
+        view.get("staffing_rows"),
+        view.get("staffing_events"),
+        view.get("staffing_deadline_badge"),
+        view.get("logistics_deadline_badge"),
+        (view.get("staffing_control") or {}).get("record"),
+        (view.get("logistics_control") or {}).get("record"),
+        (view.get("finance") or {}).get("record"),
+        (view.get("sinapsis") or {}).get("record"),
+        (view.get("communications") or {}).get("record"),
+        (view.get("incidents") or {}).get("active_count"),
+        (view.get("review_flags") or {}).get("flags"),
+        packages.get("unit_views"),
+        packages.get("session_pre_packing_items"),
+        packages.get("session_final_assembly_items"),
+        shipments.get("bundle_view"),
+    ])
+
+
 def schedule_workflow_redirect(session_record, status_filter="", action_key="", schedule_only=False):
     args = {
         **pre_session_control_tower_return_args(session_record),
@@ -14386,6 +14808,8 @@ def apply_package_stage_status_update(session_record, action, status_attr, updat
     current_status = getattr(session_record, status_attr, None) or "not_started"
     if current_status == "completed" and action != "reopen":
         return f"{stage_label} is completed. Reopen it before making changes."
+    if action == "mark_complete" and current_status != "in_progress":
+        return f"{stage_label} must be marked as in progress before it can be completed."
     setattr(session_record, status_attr, new_status)
     setattr(session_record, updated_at_attr, datetime.now(timezone.utc))
     actor = current_note_actor()
@@ -14665,6 +15089,27 @@ def intern_stage_status_label(member_id, remote_training_selections, stage_2_sel
 def gmail_bcc_url(emails):
     clean_emails = [email.strip().lower() for email in emails if email and email.strip()]
     return f"https://mail.google.com/mail/?view=cm&fs=1&bcc={quote(','.join(clean_emails))}"
+
+
+def staffing_official_confirmation_email_subject(session_record, role):
+    clean_role = re.sub(r"\s*\([^)]*\)", "", role or "").strip().upper()
+    clean_format = "On demand" if clean_role == "EMERGENCY CONTACT" else (getattr(session_record, "format", "") or "").strip()
+    date_label = ordinal_day_label(getattr(session_record, "session_date", None))
+    session_name = (getattr(session_record, "exam_session_name", "") or "").strip()
+    return f"{clean_role} – {clean_format} ({date_label}) - {session_name}"
+
+
+def staffing_official_confirmation_email_url(email, session_record, role):
+    clean_email = (email or "").strip().lower()
+    if not clean_email:
+        return ""
+    params = {
+        "view": "cm",
+        "fs": "1",
+        "to": clean_email,
+        "su": staffing_official_confirmation_email_subject(session_record, role),
+    }
+    return f"https://mail.google.com/mail/?{urlencode(params)}"
 
 
 def intern_stage_pending_email_actions(members, remote_training_selections, stage_2_selections, stage_3_selections):
@@ -16447,8 +16892,9 @@ def update_staff_payment(member_id, payment_year):
 @login_required
 def pre_session_control_tower():
     selected_year, session_years = selected_exam_session_year()
+    staff_payment_next_payment_date = staff_payment_settings_values(staff_payment_settings())["next_payment_date"]
     selected_view = request.args.get("view", "bundles").strip()
-    if selected_view not in {"bundles", "sessions", "bundle"}:
+    if selected_view not in {"bundles", "sessions", "bundle", "my-actions"}:
         selected_view = "bundles"
     bundle_search_filter = request.args.get("bundle_q", "").strip()
     bundle_department_filter = request.args.get("bundle_department", "").strip().upper()
@@ -16514,8 +16960,10 @@ def pre_session_control_tower():
         .order_by(ExamSession.session_date.asc(), ExamSession.exam_session_name.asc())
         .all()
     )
+    today = pre_session_control_tower_today()
+    now = pre_session_control_tower_now()
     if selected_view in {"bundles", "sessions", "bundle"} and not request.args.get("open_schedule_modal"):
-        reconcile_auto_shipment_bundles(sessions)
+        reconcile_auto_shipment_bundles(sessions, today=today)
     session_ids = [session_record.id for session_record in sessions]
     workflow_records = (
         ExamSessionScheduleWorkflow.query.filter(
@@ -16532,7 +16980,7 @@ def pre_session_control_tower():
         updated_workflow, auto_approved = auto_approve_expired_schedule_review(
             session_record,
             workflow=workflow,
-            now=datetime.now(timezone.utc).astimezone(LOCAL_TZ),
+            now=now,
         )
         if auto_approved:
             workflows_by_session[session_record.id] = updated_workflow
@@ -17094,7 +17542,6 @@ def pre_session_control_tower():
     else:
         pending_shipment_bundle_visible = bool(pending_shipment_bundle["session_chips"])
 
-    today = datetime.now(LOCAL_TZ).date()
     staffing_contracts_by_session = {}
     schedule_gates_by_session = {}
     packages_contracts_by_session = {}
@@ -17139,14 +17586,8 @@ def pre_session_control_tower():
         }
         for option_session in sessions
     ]
-    visible_sessions = sessions
-    if selected_view == "sessions":
-        visible_sessions = [
-            session_record for session_record in sessions
-            if pre_session_sessions_view_visible(session_record)
-        ]
     schedule_views = []
-    for session_record in visible_sessions:
+    for session_record in sessions:
         supervisor_assignments = supervisor_assignments_by_session.get(session_record.id, [])
         examiner_assignments = examiner_assignments_by_session.get(session_record.id, [])
         intern_assignments = intern_assignments_by_session.get(session_record.id, [])
@@ -17420,6 +17861,8 @@ def pre_session_control_tower():
                 supervisor_assignments,
                 examiner_assignments,
                 intern_assignments,
+                logistics_config=logistics_by_session.get(session_record.id),
+                next_payment_date=staff_payment_next_payment_date,
             ),
             staffing_events=staffing_events_by_session.get(session_record.id, []),
             bundle_detail_actions=bundle_detail_action_items(
@@ -17447,6 +17890,7 @@ def pre_session_control_tower():
                 for assignment in session_assignments
             ),
         ))
+    all_schedule_views = list(schedule_views)
     def session_view_departments(view):
         return {
             (action.get("department") or "").upper()
@@ -17497,7 +17941,13 @@ def pre_session_control_tower():
         return True
 
     if selected_view == "sessions":
-        schedule_views = [view for view in schedule_views if session_view_matches_filters(view)]
+        schedule_views = [
+            view for view in schedule_views
+            if (
+                pre_session_sessions_view_visible(view["session"])
+                or pre_session_session_view_has_operational_context(view)
+            ) and session_view_matches_filters(view)
+        ]
     def bundle_session_schedule_state(view):
         if bool((view.get("schedule_gate") or {}).get("is_ready")):
             return "unblocked"
@@ -17570,19 +18020,25 @@ def pre_session_control_tower():
             summary["Schedule ready"] += 1
         else:
             summary["Schedule blocked"] += 1
-    modal_views = list(schedule_views)
-    my_actions = visible_department_chip_action_rows(
+    modal_views = list(all_schedule_views if selected_view == "sessions" else schedule_views)
+    my_actions = []
+    for view in schedule_views:
+        my_actions.extend(my_action_rows_from_schedule_view(view, today=today))
+    my_actions.extend(visible_department_chip_action_rows(
         bundle_views,
         pending_shipment_bundle if pending_shipment_bundle_visible else None,
         schedule_views,
-    )
+    ))
     my_actions = sort_my_actions(my_actions)
     my_action_source_options = sorted(
         {action["source_label"] for action in my_actions},
         key=lambda value: value.lower(),
     )
-    if my_action_source_filter not in my_action_source_options:
-        my_action_source_filter = ""
+    if my_action_source_filter and my_action_source_filter not in my_action_source_options:
+        my_action_source_options = sorted(
+            [*my_action_source_options, my_action_source_filter],
+            key=lambda value: value.lower(),
+        )
     my_action_responsible_filter_options = my_actions_responsible_options(my_actions)
     if my_action_responsible_filter and my_action_responsible_filter not in my_action_responsible_filter_options:
         my_action_responsible_filter_options = sorted(
@@ -17608,15 +18064,41 @@ def pre_session_control_tower():
         view["session"].session_date or max_date,
         view["session"].exam_session_name.lower(),
     ))
-    modal_views = list(schedule_views)
+    modal_views = list(all_schedule_views if selected_view == "sessions" else schedule_views)
     ensure_default_finance_concepts()
     finance_contacts = FinanceContact.query.order_by(FinanceContact.is_active.desc(), FinanceContact.display_name.asc()).all()
     finance_concepts = FinanceConcept.query.order_by(FinanceConcept.name.asc()).all()
+    package_stage_fields = (
+        "package_label_verification_status",
+        "package_label_printing_status",
+        "room_package_sealing_status",
+        "return_packages_status",
+        "inclusion_final_items_status",
+        "session_box_sealing_status",
+    )
+    show_session_package_column = bool(
+        any(schedule_workflow_current_deadline(workflow) for workflow in workflow_records)
+        or staffing_control_records
+        or any(getattr(assignment, "staffing_status_due_at", None) for assignment in supervisor_assignment_records)
+        or any(getattr(assignment, "staffing_status_due_at", None) for assignment in examiner_assignment_records)
+        or any(getattr(assignment, "staffing_status_due_at", None) for assignment in intern_assignment_records)
+        or any(getattr(session_record, "emergency_contact_status_due_at", None) for session_record in sessions)
+        or staffing_event_records
+        or package_unit_records
+        or package_checklist_records
+        or shipment_link_records
+        or any(
+        (getattr(session_record, field, "not_started") or "not_started") != "not_started"
+        for session_record in sessions
+        for field in package_stage_fields
+        )
+    )
 
     return render_template(
         "pre_session_control_tower/index.html",
         schedule_views=schedule_views,
         modal_views=modal_views,
+        show_session_package_column=show_session_package_column,
         bundle_views=bundle_views,
         pending_shipment_bundle=pending_shipment_bundle if pending_shipment_bundle_visible else None,
         selected_bundle=selected_bundle_view,
@@ -17861,6 +18343,8 @@ def update_schedule_workflow(session_id):
         bool(session_record.monthly_registrations_closed),
         session_record.date_confirmation_status == "Confirmed",
     )
+    if action_key == "start_preparation" and session_record.monthly_registrations_closed:
+        schedule_blocker_message = ""
     if schedule_blocker_message:
         flash(f"{schedule_blocker_message}.", "error")
         return schedule_workflow_redirect(session_record, status_filter, action_key)
@@ -18408,10 +18892,6 @@ def update_logistics_control(session_id):
     if not validate_csrf():
         flash("Security token expired. Please try again.", "error")
         return logistics_control_redirect(session_record, status_filter, edit=True)
-    if logistics_actions_are_blocked(session_record):
-        flash("Logistics is blocked until Staffing is Confirmed.", "error")
-        return logistics_control_redirect(session_record, status_filter)
-
     due_value = request.form.get("logistics_due_at", "").strip()
     logistics_due_at = None
     if due_value:
@@ -19606,7 +20086,7 @@ def shipment_planning_contract_for_submit(session_record):
         shipment_recipient_assignments_by_session=shipment_recipient_assignments_by_session,
         shipment_links_by_session=shipment_links_by_session,
         packages_contracts_by_session=packages_contracts_by_session,
-        today=datetime.now(LOCAL_TZ).date(),
+        today=pre_session_control_tower_today(),
     )
     return planning, packages_contracts_by_session
 
@@ -20964,7 +21444,7 @@ def exam_session_planner():
     supervisor_fee = role_fee_for_role("Supervisor")
     examiner_fee = role_fee_for_role("Examiner")
     intern_fee = role_fee_for_role("Intern")
-    intern_fee = role_fee_for_role("Intern")
+    emergency_contact_fee = role_fee_for_role("Emergency contact")
     device_dep_fee = fee_by_exact_description("Device dep.")
     commuting_fee = fee_by_exact_description("Commuting")
     fuel_fee = fee_by_exact_description("Fuel")
@@ -21310,6 +21790,7 @@ def exam_session_planner():
         supervisor_fee=supervisor_fee,
         examiner_fee=examiner_fee,
         intern_fee=intern_fee,
+        emergency_contact_fee=emergency_contact_fee,
         device_dep_fee=device_dep_fee,
         commuting_fee=commuting_fee,
         fuel_fee=fuel_fee,
@@ -26485,9 +26966,14 @@ def annual_certification_programme():
         selected_certification_year=selected_certification_year,
         certification_year_configuration=year_configuration,
         certification_year_settings_endpoint="staff.update_examiner_certification_year_settings",
+        show_examiner_material_setting=True,
         certification_annual_meeting_date_value=annual_meeting_date_value,
         certification_annual_meeting_time_value=annual_meeting_time_value,
         certification_remote_training_period_value=certification_remote_training_period_value(year_configuration),
+        examiner_guideline_url=(year_configuration.examiner_guideline_url if year_configuration else ""),
+        material_for_examiners_url=(year_configuration.material_for_examiners_url if year_configuration else ""),
+        supervisor_guideline_url=(year_configuration.supervisor_guideline_url if year_configuration else ""),
+        backup_material_for_examiners_url=(year_configuration.backup_material_for_examiners_url if year_configuration else ""),
         certification_allowed=certification_allowed,
         current_year=current_year(),
         show_certification_bulk_actions=True,
@@ -26725,6 +27211,17 @@ def update_examiner_certification_year_settings():
         return redirect(url_for("staff.annual_certification_programme"))
     selected_certification_year, _ = selected_examiner_certification_year()
     save_certification_year_configuration(EXAMINER_CERTIFICATION_MODULE_KEY, selected_certification_year)
+    return redirect(url_for("staff.annual_certification_programme", certification_year=selected_certification_year))
+
+
+@staff_bp.route("/annual-certification-programme/material-settings", methods=["POST"])
+@login_required
+def update_examiner_certification_material_settings():
+    if not validate_csrf():
+        flash("Security token expired. Please try again.", "error")
+        return redirect(url_for("staff.annual_certification_programme"))
+    selected_certification_year, _ = selected_examiner_certification_year()
+    save_examiner_certification_material_settings(selected_certification_year)
     return redirect(url_for("staff.annual_certification_programme", certification_year=selected_certification_year))
 
 
@@ -27289,9 +27786,12 @@ def supervisor_certification():
         selected_certification_year=selected_certification_year,
         certification_year_configuration=year_configuration,
         certification_year_settings_endpoint="staff.update_supervisor_certification_year_settings",
+        show_supervisor_guideline_setting=True,
         certification_annual_meeting_date_value=annual_meeting_date_value,
         certification_annual_meeting_time_value=annual_meeting_time_value,
         certification_remote_training_period_value=certification_remote_training_period_value(year_configuration),
+        supervisor_guideline_url=(year_configuration.supervisor_guideline_url if year_configuration else ""),
+        backup_material_for_examiners_url=(year_configuration.backup_material_for_examiners_url if year_configuration else ""),
         certification_allowed=certification_allowed,
         current_year=current_year(),
         reset_endpoint="staff.supervisor_certification",
@@ -27446,6 +27946,17 @@ def update_supervisor_certification_year_settings():
         return redirect(url_for("staff.supervisor_certification"))
     selected_certification_year, _ = selected_supervisor_certification_year()
     save_certification_year_configuration(SUPERVISOR_CERTIFICATION_MODULE_KEY, selected_certification_year)
+    return redirect(url_for("staff.supervisor_certification", certification_year=selected_certification_year))
+
+
+@staff_bp.route("/supervisor-certification/material-settings", methods=["POST"])
+@login_required
+def update_supervisor_certification_material_settings():
+    if not validate_csrf():
+        flash("Security token expired. Please try again.", "error")
+        return redirect(url_for("staff.supervisor_certification"))
+    selected_certification_year, _ = selected_supervisor_certification_year()
+    save_supervisor_certification_material_settings(selected_certification_year)
     return redirect(url_for("staff.supervisor_certification", certification_year=selected_certification_year))
 
 

@@ -1955,7 +1955,7 @@ document.addEventListener("click", (event) => {
     event.preventDefault();
     const form = document.getElementById(scheduleActionToggle.getAttribute("aria-controls"));
     if (!form) return;
-    if (["start_preparation", "send_for_review"].includes(form.dataset.scheduleActionKey)) {
+    if (form.dataset.scheduleActionKey === "start_preparation" || form.dataset.scheduleActionKey === "send_for_review") {
       if (scheduleActionToggle.disabled || form.dataset.scheduleMonthlyBlocked === "true") return;
       form.requestSubmit();
       return;
@@ -3075,6 +3075,7 @@ const initTimeInputs = (root = document) => {
       syncTimeRangeError(input);
       syncSupervisorRoleFee(input.closest("[data-supervisor-row]"), { forceEmpty: true });
       syncDeviceDep(staffAssignmentRow(input), { forceEmpty: true });
+      syncEmergencyContactFee(input.closest("[data-emergency-contact-row]"));
     });
     input.addEventListener("blur", () => {
       const digits = input.value.replace(/\D/g, "");
@@ -3084,6 +3085,7 @@ const initTimeInputs = (root = document) => {
       syncTimeRangeError(input);
       syncSupervisorRoleFee(input.closest("[data-supervisor-row]"), { forceEmpty: true });
       syncDeviceDep(staffAssignmentRow(input), { forceEmpty: true });
+      syncEmergencyContactFee(input.closest("[data-emergency-contact-row]"));
     });
     input.addEventListener("keydown", (event) => {
       const allowedKeys = [
@@ -3126,6 +3128,7 @@ document.addEventListener("click", (event) => {
     initTimeInputs(clone);
     syncSupervisorRoleFee(stack.closest("[data-supervisor-row]"), { forceEmpty: true });
     syncDeviceDep(staffAssignmentRow(stack), { forceEmpty: true });
+    syncEmergencyContactFee(stack.closest("[data-emergency-contact-row]"));
     clone.querySelector("input")?.focus();
   }
 
@@ -3137,6 +3140,7 @@ document.addEventListener("click", (event) => {
     stack?.querySelector("[data-time-input]") && syncTimeRangeError(stack.querySelector("[data-time-input]"));
     syncSupervisorRoleFee(stack?.closest("[data-supervisor-row]"), { forceEmpty: true });
     syncDeviceDep(staffAssignmentRow(stack), { forceEmpty: true });
+    syncEmergencyContactFee(stack?.closest("[data-emergency-contact-row]"));
   }
 });
 
@@ -4782,6 +4786,50 @@ const initMemberMultiselects = (root = document) => {
   });
 };
 
+const emergencyContactParticipationClasses = [
+  "participation-pending",
+  "participation-pre-confirmation-sent",
+  "participation-pre-confirmed",
+  "participation-official-confirmation-sent",
+  "participation-confirmed",
+  "participation-sent",
+  "participation-assigned",
+  "participation-declined",
+  "participation-cancelled",
+];
+
+const resetEmergencyContactRow = (row) => {
+  if (!row) return;
+  row.dataset.emergencyContactSavedMemberId = "";
+  row.dataset.emergencyContactSavedStatus = "Pending";
+  delete row.dataset.emergencyContactPreserveTime;
+  const preserveInput = row.querySelector("[data-emergency-contact-preserve-time-input]");
+  if (preserveInput) preserveInput.value = "";
+  row.querySelectorAll("select").forEach((select) => {
+    select.value = select.matches("[data-emergency-contact-status-select]") ? "Pending" : "";
+    select.dataset.currentMemberId = "";
+    select.hidden = false;
+  });
+  row.querySelectorAll("input").forEach((input) => {
+    input.value = "";
+    input.dataset.timeInitialized = "";
+  });
+  row.querySelector("[data-emergency-contact-role-to-cover]")?.removeAttribute("hidden");
+  row.querySelector("[data-emergency-contact-declined-button]")?.setAttribute("hidden", "");
+  row.querySelector("[data-emergency-contact-declined-button]")?.setAttribute("disabled", "");
+  const feeDisplay = row.querySelector("[data-emergency-contact-fee-display]");
+  if (feeDisplay) {
+    feeDisplay.textContent = "-";
+    feeDisplay.title = "";
+  }
+  const statusTag = row.querySelector("[data-emergency-contact-status-tag]");
+  if (statusTag) {
+    statusTag.textContent = "Pending";
+    statusTag.classList.remove(...emergencyContactParticipationClasses);
+    statusTag.classList.add("participation-pending");
+  }
+};
+
 const syncEmergencyContactControl = (control) => {
   const requiredCheckbox = control?.querySelector("[data-emergency-contact-required]");
   const notRequiredCheckbox = control?.querySelector("[data-emergency-contact-not-required]");
@@ -4789,27 +4837,18 @@ const syncEmergencyContactControl = (control) => {
   if (!requiredCheckbox || !notRequiredCheckbox || !selectWrap) return;
   const required = requiredCheckbox.checked && !notRequiredCheckbox.checked;
   selectWrap.hidden = !required;
-  const participationClasses = [
-    "participation-pending",
-    "participation-pre-confirmation-sent",
-    "participation-pre-confirmed",
-    "participation-official-confirmation-sent",
-    "participation-confirmed",
-    "participation-sent",
-    "participation-assigned",
-    "participation-declined",
-    "participation-cancelled",
-  ];
   selectWrap.querySelectorAll("[data-emergency-contact-row]").forEach((row) => {
     const isFirstRow = row === selectWrap.querySelector("[data-emergency-contact-row]");
-    row.querySelectorAll(".modal-emergency-contact-row-title").forEach((title) => {
+    row.querySelectorAll(".modal-emergency-contact-card-heading").forEach((title) => {
       title.hidden = !isFirstRow;
     });
     const select = row.querySelector("[data-emergency-contact-select]");
     const roleToCover = row.querySelector("[data-emergency-contact-role-to-cover]");
     const statusSelect = row.querySelector("[data-emergency-contact-status-select]");
+    const statusTag = row.querySelector("[data-emergency-contact-status-tag]");
     const declinedButton = row.querySelector("[data-emergency-contact-declined-button]");
     const timeField = row.querySelector("[data-emergency-contact-time-field]");
+    const feeField = row.querySelector("[data-emergency-contact-fee-field]");
     const timeInputs = Array.from(row.querySelectorAll("[data-emergency-contact-time-input]") || []);
     if (!select) return;
     select.disabled = !required;
@@ -4833,21 +4872,73 @@ const syncEmergencyContactControl = (control) => {
           option.hidden = statusSelect.value !== option.value;
         }
       });
-      statusSelect.classList.remove(...participationClasses);
-      statusSelect.classList.add(`participation-${(statusSelect.value || "Pending").toLowerCase().replace(/\s+/g, "-")}`);
-      statusSelect.hidden = !required || !hasMember;
+      statusSelect.classList.remove(...emergencyContactParticipationClasses);
+      const statusClass = `participation-${(statusSelect.value || "Pending").toLowerCase().replace(/\s+/g, "-")}`;
+      statusSelect.classList.add(statusClass);
+      statusSelect.hidden = !required;
+      if (statusTag) {
+        statusTag.textContent = statusSelect.value || "Pending";
+        statusTag.hidden = !required;
+        statusTag.classList.remove(...emergencyContactParticipationClasses);
+        statusTag.classList.add(statusClass);
+      }
+    } else if (statusTag) {
+      statusTag.hidden = !required;
     }
     if (declinedButton) {
       declinedButton.hidden = !required || !hasMember;
       declinedButton.disabled = !required || !hasMember;
     }
-    if (timeField) timeField.hidden = !required || (!hasMember && !preserveTimeWithoutMember);
+    if (timeField) timeField.hidden = !required;
+    if (feeField) feeField.hidden = !required;
     timeInputs.forEach((input) => {
-      input.disabled = !required;
+      input.disabled = !required || !hasMember;
       if (!required || (!hasMember && !preserveTimeWithoutMember)) input.value = "";
       syncTimeRangeError(input);
     });
+    syncEmergencyContactFee(row);
   });
+};
+
+const emergencyContactRowMinutes = (row) => {
+  const inputs = Array.from(row?.querySelectorAll("[data-emergency-contact-time-input]") || []);
+  const start = timeInputMinutes(inputs[0]?.value || "");
+  const end = timeInputMinutes(inputs[1]?.value || "");
+  if (start === null || end === null || end <= start) return 0;
+  return end - start;
+};
+
+const syncEmergencyContactFee = (row) => {
+  if (!row) return;
+  const display = row.querySelector("[data-emergency-contact-fee-display]");
+  if (!display) return;
+  const form = sessionMembersFormForElement(row);
+  const currency = form?.dataset.emergencyContactFeeCurrency || "";
+  const base = parseRoleFeeBase(form?.dataset.emergencyContactFeeValue || "");
+  const unit = form?.dataset.emergencyContactFeeUnit || "";
+  const configuredMessage = "No Emergency contact fee configured";
+  if (!currency || base === null || !["per hour", "per minute", "per unit"].includes(unit)) {
+    display.textContent = configuredMessage;
+    display.title = configuredMessage;
+    return;
+  }
+  if (unit === "per unit") {
+    const formatted = `${currency} ${formatMoney(base)}`;
+    display.textContent = formatted;
+    display.title = `Total fee: ${formatted}`;
+    return;
+  }
+  const minutes = emergencyContactRowMinutes(row);
+  if (minutes <= 0) {
+    display.textContent = "-";
+    display.title = "";
+    return;
+  }
+  const amount = unit === "per hour" ? (minutes / 60) * base : minutes * base;
+  const formatted = `${currency} ${formatMoney(amount)}`;
+  const durationLabel = unit === "per hour" ? `${formatDecimalNumber(minutes / 60)} hours` : `${minutes} minutes`;
+  display.textContent = formatted;
+  display.title = `Calculation: ${durationLabel} × ${currency} ${form?.dataset.emergencyContactFeeValue || ""} = ${formatted}`;
 };
 
 const initEmergencyContactControls = (root = document) => {
@@ -4906,45 +4997,33 @@ const initEmergencyContactControls = (root = document) => {
         return;
       }
       if (addButton) {
+        event.preventDefault();
+        event.stopPropagation();
         const row = addButton.closest("[data-emergency-contact-row]");
         const clone = row?.cloneNode(true);
         if (!clone) return;
-        clone.dataset.emergencyContactSavedMemberId = "";
-        clone.dataset.emergencyContactSavedStatus = "Pending";
-        clone.querySelectorAll("select").forEach((select) => {
-          select.value = select.matches("[data-emergency-contact-status-select]") ? "Pending" : "";
-          select.dataset.currentMemberId = "";
-          select.hidden = select.matches("[data-emergency-contact-status-select]");
-        });
-        clone.querySelectorAll("input").forEach((input) => {
-          input.value = "";
-          input.dataset.timeInitialized = "";
-        });
-        const preserveInput = clone.querySelector("[data-emergency-contact-preserve-time-input]");
-        if (preserveInput) preserveInput.value = "";
-        clone.querySelector("[data-emergency-contact-role-to-cover]")?.removeAttribute("hidden");
-        clone.querySelector("[data-emergency-contact-declined-button]")?.setAttribute("hidden", "");
-        clone.querySelector("[data-emergency-contact-declined-button]")?.setAttribute("disabled", "");
-        clone.querySelectorAll(".modal-emergency-contact-row-title").forEach((title) => {
+        resetEmergencyContactRow(clone);
+        clone.querySelectorAll(".modal-emergency-contact-card-heading").forEach((title) => {
           title.hidden = true;
         });
-        clone.querySelector("[data-emergency-contact-time-field]")?.setAttribute("hidden", "");
-        clone.querySelector("[data-remove-emergency-contact-row]")?.removeAttribute("hidden");
-        row.after(clone);
+        row.before(clone);
         initTimeInputs(clone);
         syncEmergencyContactControl(control);
         syncSupervisorMemberAvailability(sessionMembersFormForElement(control));
         clone.querySelector("[data-emergency-contact-select]")?.focus();
         markStaffChangesUnsaved(sessionMembersFormForElement(control));
+        return;
       }
       if (removeButton) {
+        event.preventDefault();
+        event.stopPropagation();
         const row = removeButton.closest("[data-emergency-contact-row]");
-        if (row && control.querySelectorAll("[data-emergency-contact-row]").length > 1) {
-          row.remove();
-          syncEmergencyContactControl(control);
-          syncSupervisorMemberAvailability(sessionMembersFormForElement(control));
-          markStaffChangesUnsaved(sessionMembersFormForElement(control));
-        }
+        if (!row) return;
+        row.remove();
+        syncEmergencyContactControl(control);
+        syncSupervisorMemberAvailability(sessionMembersFormForElement(control));
+        markStaffChangesUnsaved(sessionMembersFormForElement(control));
+        return;
       }
     });
     syncEmergencyContactControl(control);
@@ -7780,6 +7859,7 @@ Warm regards,`;
 };
 
 const OFFICIAL_CONFIRMATION_MATERIAL_URL = "https://drive.google.com/file/d/1FfzKcWq8pED3qv5yuzx2L9n_VEx0ZysM/view?usp=drive_link";
+const EMERGENCY_CONTACT_MANUAL_URL = OFFICIAL_CONFIRMATION_MATERIAL_URL;
 
 const parseStaffOfficialConfirmationPayload = (button) => {
   try {
@@ -7872,12 +7952,14 @@ const getStaffOfficialConfirmationEmailPayload = (button) => {
     time_ranges: collectOfficialTimeRanges(row),
     format: cleanEmailValue(panel?.dataset?.sessionFormat),
     address: cleanEmailValue(panel?.dataset?.sessionAddress),
+    schedule_folder_url: cleanEmailValue(panel?.dataset?.sessionScheduleFolderUrl),
     fee_lines: collectOfficialFeeLines(row),
 	    total_fee: cleanEmailValue(row?.querySelector?.("[data-total-fee-value]")?.textContent),
 	    logistics_status: cleanEmailValue(row?.querySelector?.("[data-logistics-control]")?.value),
 	    logistics_url: logisticsUrl,
 	    next_payment_date: cleanEmailValue(panel?.dataset?.staffPaymentNextPaymentDate),
 	    contacts: collectOfficialSessionStaff(form),
+	    emergency_contacts: [],
 	  };
 	};
 
@@ -7891,6 +7973,28 @@ const validateStaffOfficialConfirmationEmailPayload = (payload) => {
     return "Staff member time range is required for official confirmation emails.";
   }
   if (!cleanEmailValue(payload?.address)) return "Exam session address is required for onsite sessions.";
+  const role = cleanEmailValue(payload?.role);
+  if (["Examiner", "Supervisor"].includes(role)) {
+    if (!emailLinkIsUsable(payload?.schedule_folder_url || payload?.scheduleFolderUrl)) {
+      return "Exam session schedule link is required for official confirmation emails.";
+    }
+  }
+  if (role === "Examiner") {
+    if (!emailLinkIsUsable(payload?.examiner_guideline_url || payload?.examinerGuidelineUrl)) {
+      return "Examiner guidelines link is required for official confirmation emails.";
+    }
+    if (!emailLinkIsUsable(payload?.material_for_examiners_url || payload?.materialForExaminersUrl)) {
+      return "Material for examiners link is required for official confirmation emails.";
+    }
+  }
+  if (role === "Supervisor") {
+    if (!emailLinkIsUsable(payload?.backup_material_for_examiners_url || payload?.backupMaterialForExaminersUrl)) {
+      return "Back-up material for examiners link is required for official confirmation emails.";
+    }
+    if (!emailLinkIsUsable(payload?.supervisor_guideline_url || payload?.supervisorGuidelineUrl)) {
+      return "Supervisor guidelines link is required for official confirmation emails.";
+    }
+  }
   const totalFee = cleanEmailValue(payload?.total_fee || payload?.totalFee);
   if (!totalFee || totalFee === "-" || totalFee.toLowerCase().includes("total fee -")) {
     return "Total fee is required for official confirmation emails.";
@@ -7929,52 +8033,97 @@ const officialContactWhatsAppUrl = (phone) => {
   return digits ? `https://wa.me/${digits}` : "";
 };
 
-const officialMaterialRows = (role) => {
+const SINAPSIS_LOGIN_URL = "https://sinapsis.pathexaminations.com/login";
+
+const officialMaterialRows = (role, links = {}) => {
+  const scheduleFolderUrl = cleanEmailValue(links.scheduleFolderUrl || links.schedule_folder_url);
+  const examinerGuidelineUrl = cleanEmailValue(links.examinerGuidelineUrl || links.examiner_guideline_url);
+  const materialForExaminersUrl = cleanEmailValue(links.materialForExaminersUrl || links.material_for_examiners_url);
+  const supervisorGuidelineUrl = cleanEmailValue(links.supervisorGuidelineUrl || links.supervisor_guideline_url);
+  const backupMaterialForExaminersUrl = cleanEmailValue(links.backupMaterialForExaminersUrl || links.backup_material_for_examiners_url);
   if (role === "Examiner") {
     return [
-      ["🗓️ Exam session schedule", "Please access this section in advance to check your assigned exam rooms and ensure your schedule information is complete. You may have been assigned to the Listening and speaking module, the Reading and writing module, or both. To verify this, compare the start and end times in this email with those shown in the PDFs. Please also review the session timings, rooms and layout in advance."],
-      ["🎧🗣️ Listening and speaking module", "This section contains the materials needed to conduct the Listening and speaking module. Please access Sinapsis in advance to check that the required audio files are available and working properly before the exam session."],
-      ["✅ Examiner guidelines", "Please read the examiner instructions carefully and in advance to ensure that all required procedures and protocols are followed in line with Path Examinations’ quality policies."],
+      ["🗓️ Exam session schedule", "Please access this section in advance to check your assigned exam rooms and ensure your schedule information is complete. You may have been assigned to the Listening and speaking module, the Reading and writing module, or both. To verify this, compare the start and end times in this email with those shown in the PDFs. Please also review the session timings, rooms and layout in advance.", scheduleFolderUrl],
+      ["🎧🗣️ Material for examiners", "This folder contains the Listening and speaking module materials for all levels. Please note that the Listening audio files will only become available in Sinapsis once you have confirmed your participation. Well before the exam session, please access the platform to ensure that your assigned exam session is listed and that the required audio files are available and working properly.", materialForExaminersUrl || OFFICIAL_CONFIRMATION_MATERIAL_URL],
+      ["✅ Examiner guidelines", "Please read the examiner instructions carefully and in advance to ensure that all required procedures and protocols are followed in line with Path Examinations’ quality policies.", examinerGuidelineUrl || OFFICIAL_CONFIRMATION_MATERIAL_URL],
     ];
   }
 	  if (role === "Supervisor") {
 	    return [
-	      ["🗓️ Exam session schedule", "Please access this folder in advance to understand the exam session you will be supervising, including timings, exam room layout, and the start and end times of each module. A careful review is required to ensure the session runs smoothly and to identify any details that may need attention beforehand."],
-	      ["📦🚚 Exam box shipment", "Once you confirm your participation as a Supervisor, our Logistics team will contact you in due course to arrange the delivery of the materials for your assigned exam session(s). You will also receive instructions on how to handle the materials after the exam session has ended."],
-	      ["🎧🗣️ Material for examiners", "This folder contains the Listening and speaking module examiner guidelines and Listening audio files as back-up material. Examiners must access the official materials through Sinapsis, but these files are provided as a contingency resource in case of power or internet issues during the exam session."],
-      ["✅ Supervisor guidelines", "Please read these guidelines carefully to fully understand your responsibilities during the exam session. This will help you respond appropriately at each stage or in case of unexpected situations, while ensuring compliance with Path Examinations’ quality policies and procedures."],
+	      ["🗓️ Exam session schedule", "Please access this folder in advance to understand the exam session you will be supervising, including timings, exam room layout, and the start and end times of each module. A careful review is required to ensure the session runs smoothly and to identify any details that may need attention beforehand.", scheduleFolderUrl || OFFICIAL_CONFIRMATION_MATERIAL_URL],
+	      ["🎧🗣️ Back-up material for examiners", "This folder contains the materials for Examiners, including the Examiner guidelines, Listening and speaking module exams, and Listening audio files. Examiners must use the official materials available in Sinapsis. These files are provided solely as a contingency resource in the event of power or internet outages during the exam session.", backupMaterialForExaminersUrl],
+      ["✅ Supervisor guidelines", "Please read these guidelines carefully to fully understand your responsibilities during the exam session. This will help you respond appropriately at each stage or in case of unexpected situations, while ensuring compliance with Path Examinations’ quality policies and procedures.", supervisorGuidelineUrl],
+	      ["📦🚚 Exam box shipment", "Once you confirm your participation as a Supervisor, our Logistics team will contact you in due course to arrange the delivery of the materials for your assigned exam session(s). You will also receive instructions on how to handle the materials after the exam session has ended.", ""],
     ];
   }
   return [];
 };
 
-const officialConfirmationMaterialsHtml = (role, styles) => {
-  const rows = officialMaterialRows(role);
+const officialMaterialDescriptionHtml = (role, label, description) => {
+  const escapedDescription = escapeEmailHtml(description);
+  if (role !== "Examiner" || !label.includes("Material for examiners")) return escapedDescription;
+  return escapedDescription
+    .replaceAll("Listening and speaking module", "<strong>Listening and speaking module</strong>")
+    .replaceAll("Sinapsis", `<a href="${escapeEmailAttribute(SINAPSIS_LOGIN_URL)}" style="color:#00506b;font-weight:700;text-decoration:underline;">Sinapsis</a>`);
+};
+
+const officialConfirmationMaterialsHtml = (role, styles, links = {}) => {
+  const rows = officialMaterialRows(role, links);
   if (!rows.length) return "";
   return `
     <div style="${styles.section}">
       <h2 style="${styles.sectionTitle}">SESSION MATERIALS</h2>
       <p style="${styles.paragraph}">Please find below:</p>
-      ${rows.map(([label, description]) => `
+      ${rows.map(([label, description, url]) => {
+        const materialLink = cleanEmailValue(url);
+        return `
         <div style="margin:0 0 10px;padding:12px 14px;background:#f1f3f2;border:1px solid #d9dfdc;border-radius:10px;">
-          <p style="margin:0 0 5px;color:#111115;font:700 14px/1.4 Arial, Helvetica, sans-serif;">${escapeEmailHtml(label)} <a href="${escapeEmailAttribute(OFFICIAL_CONFIRMATION_MATERIAL_URL)}" style="float:right;color:#00506b;font-weight:700;text-decoration:none;">View material →</a></p>
-          <p style="margin:0;color:#62727a;font:italic 12px/1.45 Arial, Helvetica, sans-serif;">${escapeEmailHtml(description)}</p>
+          <p style="margin:0 0 5px;color:#111115;font:700 14px/1.4 Arial, Helvetica, sans-serif;">${escapeEmailHtml(label)}${materialLink ? ` <a href="${escapeEmailAttribute(materialLink)}" style="float:right;color:#00506b;font-weight:700;text-decoration:none;">View material →</a>` : ""}</p>
+          <p style="margin:0;color:#62727a;font:italic 12px/1.45 Arial, Helvetica, sans-serif;">${officialMaterialDescriptionHtml(role, label, description)}</p>
         </div>
-      `).join("")}
+      `;
+      }).join("")}
     </div>
   `;
 };
 
-const officialConfirmationMaterialsText = (role) => {
-  const rows = officialMaterialRows(role);
+const officialConfirmationMaterialsText = (role, links = {}) => {
+  const rows = officialMaterialRows(role, links);
   if (!rows.length) return "";
-  return `SESSION MATERIALS\n\nPlease find below:\n\n${rows.map(([label, description]) => `${label}\nView material: ${OFFICIAL_CONFIRMATION_MATERIAL_URL}\n${description}`).join("\n\n")}`;
+  return `SESSION MATERIALS\n\nPlease find below:\n\n${rows.map(([label, description, url]) => {
+    const materialLink = cleanEmailValue(url);
+    return `${label}${materialLink ? `\nView material: ${materialLink}` : ""}\n${description}`;
+  }).join("\n\n")}`;
 };
 
-const officialContactsHtml = (contacts, recipientRole, styles) => `
+const officialEmergencyLineHtml = (emergencyContacts, recipientRole) => {
+  if (!emergencyContacts.length) return "";
+  return `
+    <div style="margin-top:12px;padding:14px 16px;background:#fff4e8;border:1px solid #f1cfa8;border-radius:10px;">
+      <p style="margin:0 0 8px;color:#9a5a12;font:800 13px Arial, Helvetica, sans-serif;">Emergency line</p>
+      ${["Examiner", "Intern"].includes(recipientRole) ? `<p style="margin:0 0 8px;color:#111115;font:400 13px/1.45 Arial, Helvetica, sans-serif;">Please contact your Supervisor first before using this emergency line.</p>` : ""}
+      <p style="margin:0 0 5px;color:#111115;font:700 13px/1.45 Arial, Helvetica, sans-serif;">Please contact:</p>
+      <ul style="margin:0;padding-left:20px;color:#111115;font:400 13px/1.45 Arial, Helvetica, sans-serif;">
+        ${emergencyContacts.map((contact) => {
+          const displayName = officialContactDisplayName(contact) || "Emergency contact";
+          const phoneText = cleanEmailValue(contact.phone) || "Phone number not available";
+          const phoneUrl = officialContactWhatsAppUrl(phoneText);
+          const phoneHtml = phoneUrl
+            ? `<a href="${escapeEmailAttribute(phoneUrl)}" style="color:#00506b;font-weight:700;text-decoration:underline;">${escapeEmailHtml(phoneText)}</a>`
+            : escapeEmailHtml(phoneText);
+          return `<li>${escapeEmailHtml(displayName)} at ${phoneHtml}</li>`;
+        }).join("")}
+      </ul>
+    </div>
+  `;
+};
+
+const officialContactsHtml = (contacts, recipientRole, styles, emergencyContacts = []) => {
+  const hasEmergencyLine = emergencyContacts.length > 0;
+  return `
   <div style="${styles.section}">
-    <h2 style="${styles.sectionTitle}">STAFF MEMBERS AND EMERGENCY LINES</h2>
-    <p style="${styles.paragraph}">Below are the contact details of the staff members assigned to this exam session, as well as the Path emergency lines for any urgent matters:</p>
+    <h2 style="${styles.sectionTitle}">${hasEmergencyLine ? "STAFF MEMBERS AND EMERGENCY LINE" : "STAFF MEMBERS"}</h2>
+    <p style="${styles.paragraph}">${hasEmergencyLine ? "Below are the contact details of the staff members assigned to this exam session, as well as the Path emergency line for any urgent matters:" : "Below are the contact details of the staff members assigned to this exam session:"}</p>
     ${contacts.map((contact) => {
       if (!contact.assigned) {
         const red = officialConfirmationStatusStyle("red");
@@ -7993,32 +8142,63 @@ const officialContactsHtml = (contacts, recipientRole, styles) => `
         : escapeEmailHtml(phoneText);
       return `<div style="margin:0 0 9px;padding:12px 14px;background:#f1f3f2;border:1px solid #d9dfdc;border-radius:10px;"><p style="margin:0 0 4px;color:#62727a;font:700 11px Arial, Helvetica, sans-serif;text-transform:uppercase;">${escapeEmailHtml(contact.label)}</p><p style="margin:0;color:#111115;font:700 15px/1.35 Arial, Helvetica, sans-serif;">${escapeEmailHtml(officialContactDisplayName(contact))}${seniorChip} <span style="display:inline-block;margin-left:6px;padding:3px 8px;border-radius:999px;background:${tone.background};border:1px solid ${tone.border};color:${tone.color};font:700 11px Arial, Helvetica, sans-serif;">${escapeEmailHtml(contact.status)}</span>${dietaryChip}</p><p style="margin:3px 0 0;color:#00506b;font:600 13px Arial, Helvetica, sans-serif;">${phoneHtml}</p></div>`;
     }).join("")}
-    <div style="margin-top:12px;padding:14px 16px;background:#fff4e8;border:1px solid #f1cfa8;border-radius:10px;">
-      <p style="margin:0 0 8px;color:#9a5a12;font:800 13px Arial, Helvetica, sans-serif;">Emergency lines</p>
-      ${["Examiner", "Intern"].includes(recipientRole) ? `<p style="margin:0 0 8px;color:#111115;font:400 13px/1.45 Arial, Helvetica, sans-serif;">Please contact your Supervisor first before using these emergency lines.</p>` : ""}
-      <p style="margin:0 0 5px;color:#111115;font:700 13px/1.45 Arial, Helvetica, sans-serif;">On business days from 9am to 3pm, contact:</p>
-      <ul style="margin:0 0 10px;padding-left:20px;color:#111115;font:400 13px/1.45 Arial, Helvetica, sans-serif;">
-        <li>Path Examinations office at <a href="https://wa.me/5491150954847" style="color:#00506b;font-weight:700;text-decoration:underline;">+5491150954847</a></li>
-      </ul>
-      <p style="margin:0 0 5px;color:#111115;font:700 13px/1.45 Arial, Helvetica, sans-serif;">Outside of business time, contact:</p>
-      <ul style="margin:0;padding-left:20px;color:#111115;font:400 13px/1.45 Arial, Helvetica, sans-serif;">
-        <li>Brenda Sartori at <a href="https://wa.me/5491133945761" style="color:#00506b;font-weight:700;text-decoration:underline;">+5491133945761</a></li>
-        <li>Agustina Savini at <a href="https://wa.me/5491155692629" style="color:#00506b;font-weight:700;text-decoration:underline;">+5491155692629</a></li>
-        <li>Pablo Demarchi at <a href="https://wa.me/5491128508482" style="color:#00506b;font-weight:700;text-decoration:underline;">+5491128508482</a></li>
-      </ul>
-    </div>
+    ${officialEmergencyLineHtml(emergencyContacts, recipientRole)}
   </div>
 `;
+};
 
-const officialContactsText = (contacts, recipientRole) => (
-  "STAFF MEMBERS AND EMERGENCY LINES\n\n"
-  + "Below are the contact details of the staff members assigned to this exam session, as well as the Path emergency lines for any urgent matters:\n\n"
+const officialEmergencyLineText = (emergencyContacts, recipientRole) => {
+  if (!emergencyContacts.length) return "";
+  return `\n\nEmergency line\n${["Examiner", "Intern"].includes(recipientRole) ? "Please contact your Supervisor first before using this emergency line.\n" : ""}Please contact:\n${emergencyContacts.map((contact) => {
+    const displayName = officialContactDisplayName(contact) || "Emergency contact";
+    const phoneText = cleanEmailValue(contact.phone) || "Phone number not available";
+    const phoneUrl = officialContactWhatsAppUrl(phoneText);
+    return `- ${displayName} at ${phoneText}${phoneUrl ? ` (${phoneUrl})` : ""}`;
+  }).join("\n")}`;
+};
+
+const officialContactsText = (contacts, recipientRole, emergencyContacts = []) => {
+  const hasEmergencyLine = emergencyContacts.length > 0;
+  return (
+  `${hasEmergencyLine ? "STAFF MEMBERS AND EMERGENCY LINE" : "STAFF MEMBERS"}\n\n`
+  + `${hasEmergencyLine ? "Below are the contact details of the staff members assigned to this exam session, as well as the Path emergency line for any urgent matters:" : "Below are the contact details of the staff members assigned to this exam session:"}\n\n`
   + contacts.map((contact) => (
     contact.assigned
       ? `${contact.label}\n${officialContactDisplayName(contact)}${contact.seniority || contact.isSenior ? " (Senior)" : ""} (${contact.status})${cleanEmailValue(contact.dietaryRequirements || contact.dietary_requirements) ? ` - Dietary requirements: ${cleanEmailValue(contact.dietaryRequirements || contact.dietary_requirements)}` : ""}\n${contact.phone || "Phone number not available"}${officialContactWhatsAppUrl(contact.phone) ? ` (${officialContactWhatsAppUrl(contact.phone)})` : ""}`
       : `${contact.label}\n${contact.emptyMessage}`
   )).join("\n\n")
-  + `\n\nEmergency lines\n${["Examiner", "Intern"].includes(recipientRole) ? "Please contact your Supervisor first before using these emergency lines.\n" : ""}On business days from 9am to 3pm, contact:\n- Path Examinations office at +5491150954847 (https://wa.me/5491150954847)\n\nOutside of business time, contact:\n- Brenda Sartori at +5491133945761 (https://wa.me/5491133945761)\n- Agustina Savini at +5491155692629 (https://wa.me/5491155692629)\n- Pablo Demarchi at +5491128508482 (https://wa.me/5491128508482)`
+  + officialEmergencyLineText(emergencyContacts, recipientRole)
+);
+};
+
+const officialStaffMembersHtml = (contacts, styles) => `
+  <div style="${styles.section}">
+    <h2 style="${styles.sectionTitle}">STAFF MEMBERS</h2>
+    <p style="${styles.paragraph}">Below are the contact details of the staff members assigned to this exam session:</p>
+    ${contacts.map((contact) => {
+      if (!contact.assigned) {
+        const red = officialConfirmationStatusStyle("red");
+        return `<div style="margin:0 0 9px;padding:12px 14px;background:#f1f3f2;border:1px solid #d9dfdc;border-radius:10px;"><p style="margin:0 0 6px;color:#62727a;font:700 11px Arial, Helvetica, sans-serif;text-transform:uppercase;">${escapeEmailHtml(contact.label)}</p><span style="display:inline-block;padding:4px 9px;border-radius:999px;background:${red.background};border:1px solid ${red.border};color:${red.color};font:700 12px Arial, Helvetica, sans-serif;">${escapeEmailHtml(contact.emptyMessage)}</span></div>`;
+      }
+      const tone = officialConfirmationStatusStyle(contact.statusTone);
+      const phoneText = cleanEmailValue(contact.phone) || "Phone number not available";
+      const phoneUrl = officialContactWhatsAppUrl(phoneText);
+      const phoneHtml = phoneUrl
+        ? `<a href="${escapeEmailAttribute(phoneUrl)}" style="color:#00506b;font:600 13px Arial, Helvetica, sans-serif;text-decoration:underline;">${escapeEmailHtml(phoneText)}</a>`
+        : escapeEmailHtml(phoneText);
+      return `<div style="margin:0 0 9px;padding:12px 14px;background:#f1f3f2;border:1px solid #d9dfdc;border-radius:10px;"><p style="margin:0 0 4px;color:#62727a;font:700 11px Arial, Helvetica, sans-serif;text-transform:uppercase;">${escapeEmailHtml(contact.label)}</p><p style="margin:0;color:#111115;font:700 15px/1.35 Arial, Helvetica, sans-serif;">${escapeEmailHtml(officialContactDisplayName(contact))} <span style="display:inline-block;margin-left:6px;padding:3px 8px;border-radius:999px;background:${tone.background};border:1px solid ${tone.border};color:${tone.color};font:700 11px Arial, Helvetica, sans-serif;">${escapeEmailHtml(contact.status)}</span></p><p style="margin:3px 0 0;color:#00506b;font:600 13px Arial, Helvetica, sans-serif;">${phoneHtml}</p></div>`;
+    }).join("")}
+  </div>
+`;
+
+const officialStaffMembersText = (contacts) => (
+  "STAFF MEMBERS\n\n"
+  + "Below are the contact details of the staff members assigned to this exam session:\n\n"
+  + contacts.map((contact) => (
+    contact.assigned
+      ? `${contact.label}\n${officialContactDisplayName(contact)} — ${contact.status}\n${contact.phone || "Phone number not available"}`
+      : `${contact.label}\n${contact.emptyMessage}`
+  )).join("\n\n")
 );
 
 const officialTravelCopy = (role, status, logisticsUrl) => {
@@ -8043,10 +8223,18 @@ const officialTravelCopy = (role, status, logisticsUrl) => {
     };
   }
   const first = `All relevant information and documents for your trip or commute can be found in this folder. If anything is still pending, we will upload it as soon as it becomes available and let you know right away. You are also welcome to contact us at any time if there’s anything you’d like to ask or check with us.`;
-  const second = "After the exam session, if you have covered any additional expenses previously agreed or confirmed by Path Examinations, please upload the receipts to the folder under your name. Please note that expenses not previously agreed with Path Examinations, or without a corresponding receipt issued under the company’s name, cannot be reimbursed. Do not include these expenses in your final invoice.";
+  const legacySecond = "After the exam session, if you have covered any additional expenses previously agreed or confirmed by Path Examinations, please upload the receipts to the folder under your name. Please note that expenses not previously agreed with Path Examinations, or without a corresponding receipt issued under the company’s name, cannot be reimbursed. Do not include these expenses in your final invoice.";
+  if (["Examiner", "Supervisor"].includes(role)) {
+    const important = "IMPORTANT: after the exam session, if you have covered any additional expenses previously agreed or confirmed by Path Examinations, please upload the receipts to the folder under your name. Do not include these expenses in your final invoice.";
+    const note = "Please note that expenses not previously agreed with Path Examinations, or without a corresponding receipt issued under the company’s name, cannot be reimbursed.";
+    return {
+      html: `All relevant information and documents for your trip or commute can be found in <a href="${escapeEmailAttribute(logisticsUrl)}" style="color:#00506b;font-weight:700;text-decoration:underline;">this folder</a>. If anything is still pending, we will upload it as soon as it becomes available and let you know right away. You are also welcome to contact us at any time if there’s anything you’d like to ask or check with us.<br><br><strong>IMPORTANT:</strong> after the exam session, if you have covered any additional expenses previously agreed or confirmed by Path Examinations, please upload the receipts to the folder under your name. Do not include these expenses in your final invoice.<br><br>${escapeEmailHtml(note)}`,
+      text: `${first}\n${logisticsUrl}\n\n${important}\n\n${note}`,
+    };
+  }
   return {
-    html: `All relevant information and documents for your trip or commute can be found in <a href="${escapeEmailAttribute(logisticsUrl)}" style="color:#00506b;font-weight:700;text-decoration:underline;">this folder</a>. If anything is still pending, we will upload it as soon as it becomes available and let you know right away. You are also welcome to contact us at any time if there’s anything you’d like to ask or check with us.<br><br>${escapeEmailHtml(second)}`,
-    text: `${first}\n${logisticsUrl}\n\n${second}`,
+    html: `All relevant information and documents for your trip or commute can be found in <a href="${escapeEmailAttribute(logisticsUrl)}" style="color:#00506b;font-weight:700;text-decoration:underline;">this folder</a>. If anything is still pending, we will upload it as soon as it becomes available and let you know right away. You are also welcome to contact us at any time if there’s anything you’d like to ask or check with us.<br><br>${escapeEmailHtml(legacySecond)}`,
+    text: `${first}\n${logisticsUrl}\n\n${legacySecond}`,
   };
 };
 
@@ -8076,6 +8264,108 @@ const officialFinalInstructions = (role) => {
   return null;
 };
 
+const buildEmergencyContactOfficialConfirmationEmail = ({
+  fullName,
+  role,
+  sessionDate,
+  timeLabel,
+  address,
+  totalFee,
+  nextPaymentDate,
+  contacts,
+  styles,
+}) => {
+  const bodyHtml = `
+    <div style="margin:0;padding:24px;background:#00506b;font-family:Arial, Helvetica, sans-serif;color:#111115;">
+      <div style="max-width:680px;margin:0 auto;background:#ffffff;border:1px solid #d9dfdc;border-radius:16px;padding:26px 28px;">
+        <p style="display:inline-block;margin:0 0 14px;padding:5px 10px;border-radius:999px;background:#e7f5f8;color:#00506b;font:700 11px Arial, Helvetica, sans-serif;letter-spacing:.5px;text-transform:uppercase;">OFFICIAL CONFIRMATION</p>
+        <h1 style="margin:0 0 18px;color:#00506b;font:700 24px/1.25 Arial, Helvetica, sans-serif;">Path exam session official confirmation</h1>
+        <p style="${styles.paragraph}">Dear ${escapeEmailHtml(fullName)},</p>
+        <p style="${styles.paragraph}">Hope you’re doing very well.</p>
+        <p style="display:inline-block;margin:0 0 16px;padding:6px 11px;border-radius:999px;background:#fff3c4;color:#8a5a00;font:700 12px Arial, Helvetica, sans-serif;">⏳ Participation awaiting your confirmation</p>
+        <p style="${styles.paragraph}">We’re pleased to inform you that you have been selected as <strong>the ${escapeEmailHtml(role)}</strong> for the upcoming Path exam session, subject to your confirmation.</p>
+        <div style="${styles.section}">
+          <h2 style="${styles.sectionTitle}">EXAM SESSION INFORMATION</h2>
+          <p style="margin:0 0 4px;color:#62727a;font:800 12px Arial, Helvetica, sans-serif;">🗓️ Date</p>
+          <p style="margin:0 0 12px;color:#111115;font:700 16px Arial, Helvetica, sans-serif;">${escapeEmailHtml(sessionDate)}</p>
+          <p style="margin:0 0 4px;color:#62727a;font:800 12px Arial, Helvetica, sans-serif;">🕗 Time</p>
+          <p style="margin:0 0 12px;color:#111115;font:700 16px Arial, Helvetica, sans-serif;">${escapeEmailHtml(timeLabel)} GMT-3</p>
+          <p style="margin:0 0 12px;color:#62727a;font:italic 13px/1.55 Arial, Helvetica, sans-serif;">As the Emergency contact, you will work entirely remotely and do not need to attend the exam venue. Please remain available and monitor your phone throughout the session time window so that you can respond promptly to any calls or messages related to the session. Please pay particular attention to the beginning and end of the session, as these are especially critical operational moments. The Supervisor will arrive at the venue 50 minutes before the scheduled start time for pre-session organisation, so you should be reachable from that point onwards.</p>
+          <p style="margin:0 0 4px;color:#62727a;font:800 12px Arial, Helvetica, sans-serif;">💻 Format</p>
+          <p style="margin:0 0 12px;color:#111115;font:700 16px Arial, Helvetica, sans-serif;">Onsite</p>
+          <p style="margin:0 0 4px;color:#62727a;font:800 12px Arial, Helvetica, sans-serif;">📍 Venue</p>
+          <p style="margin:0;color:#111115;font:700 16px Arial, Helvetica, sans-serif;">${escapeEmailHtml(address)}</p>
+        </div>
+        <div style="${styles.section}">
+          <h2 style="${styles.sectionTitle}">FEES AND INVOICE</h2>
+          <p style="${styles.paragraph}">Below you’ll find the breakdown of your exam session fee:</p>
+          <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="border-collapse:collapse;border:1px solid #d9dfdc;border-radius:10px;overflow:hidden;margin:0 0 14px;"><tr><td style="padding:12px;background:#e7f5f8;color:#00506b;font:800 15px Arial, Helvetica, sans-serif;">TOTAL FEE:</td><td align="right" style="padding:12px;background:#e7f5f8;color:#00506b;font:800 15px Arial, Helvetica, sans-serif;">${escapeEmailHtml(totalFee)}</td></tr></table>
+          <div style="margin:0;padding:13px 15px;background:#f1f3f2;border:1px solid #d9dfdc;border-radius:10px;">
+            <p style="margin:0 0 10px;color:#111115;font:400 13px/1.5 Arial, Helvetica, sans-serif;"><em><u>Once all your exam sessions are over</u></em>, please send one consolidated invoice to <a href="mailto:finance@pathexaminations.com" style="color:#00506b;font-weight:700;text-decoration:underline;"><strong><u>finance@pathexaminations.com</u></strong></a>, including only the <strong>sum of the total fees</strong> for all your sessions. Do not include additional expenses, as only invoices matching the system amount will be processed. The invoice may be issued in your name or someone else’s name. Please follow the <a href="https://drive.google.com/drive/u/0/my-drive" style="color:#00506b;font-weight:700;text-decoration:underline;"><strong>attached sample</strong></a> with the required company details.</p>
+            <p style="margin:0;color:#111115;font:400 13px/1.5 Arial, Helvetica, sans-serif;">Payments will be processed on <strong>${escapeEmailHtml(nextPaymentDate)}</strong> <strong>at 5:00 pm (GMT-3)</strong> and will appear as Bellis Ignis Group SRL. First-time payments may take up to 72 working hours after processing; previous recipients should receive payment immediately.</p>
+          </div>
+        </div>
+        ${officialStaffMembersHtml(contacts, styles)}
+        <div style="${styles.section}">
+          <h2 style="${styles.sectionTitle}">EMERGENCY CONTACT'S RESPONSIBILITIES</h2>
+          <p style="${styles.paragraph}">As the <strong>Emergency contact</strong>, you must be prepared to <strong>respond to, assess and help resolve any operational situations that may arise during the exam session</strong>, using sound judgement and providing appropriate justification for the decisions or guidance you give.</p>
+          <p style="${styles.paragraph}">Please carefully read the <strong>Emergency contact manual</strong>, available at the link below:</p>
+          <p style="margin:0 0 14px;"><a href="${escapeEmailAttribute(EMERGENCY_CONTACT_MANUAL_URL)}" style="color:#00506b;font-weight:700;text-decoration:underline;"><strong>Access the Emergency contact manual</strong></a></p>
+          <p style="${styles.paragraph};margin-bottom:0;">You are expected to review and fully understand the manual <strong>before the exam session</strong>. Any questions or uncertainties should be raised and clarified with Path Examinations in advance, so that you are fully prepared to respond appropriately and confidently if your support is required during the session.</p>
+        </div>
+        <p style="${styles.paragraph}">Please <strong>confirm whether you accept this assignment as Emergency contact for the exam session</strong>. Your participation will remain pending until we receive your confirmation.</p>
+        <p style="${styles.paragraph};font-weight:600;">Thank you very much for your collaboration and commitment! 💙</p>
+        <p style="margin:0;color:#111115;font:400 15px/1.55 Arial, Helvetica, sans-serif;">Warm regards,</p>
+        <p style="margin:4px 0 0;color:#00506b;font:700 15px/1.55 Arial, Helvetica, sans-serif;">Path International Examinations</p>
+      </div>
+    </div>
+  `;
+  const responsibilitiesText = [
+    "EMERGENCY CONTACT'S RESPONSIBILITIES",
+    "",
+    "As the Emergency contact, you must be prepared to respond to, assess and help resolve any operational situations that may arise during the exam session, using sound judgement and providing appropriate justification for the decisions or guidance you give.",
+    "",
+    "Please carefully read the Emergency contact manual, available at the link below:",
+    `Access the Emergency contact manual: ${EMERGENCY_CONTACT_MANUAL_URL}`,
+    "",
+    "You are expected to review and fully understand the manual before the exam session. Any questions or uncertainties should be raised and clarified with Path Examinations in advance, so that you are fully prepared to respond appropriately and confidently if your support is required during the session.",
+    "",
+    "Please confirm whether you accept this assignment as Emergency contact for the exam session. Your participation will remain pending until we receive your confirmation.",
+  ].join("\n");
+  const text = [
+    "OFFICIAL CONFIRMATION",
+    "Path exam session official confirmation",
+    "",
+    `Dear ${fullName},`,
+    "",
+    "Hope you’re doing very well.",
+    "",
+    "⏳ Participation awaiting your confirmation",
+    "",
+    `We’re pleased to inform you that you have been selected as the ${role} for the upcoming Path exam session, subject to your confirmation.`,
+    "",
+    "EXAM SESSION INFORMATION",
+    `🗓️ Date\n${sessionDate}`,
+    `🕗 Time\n${timeLabel} GMT-3`,
+    "As the Emergency contact, you will work entirely remotely and do not need to attend the exam venue. Please remain available and monitor your phone throughout the session time window so that you can respond promptly to any calls or messages related to the session. Please pay particular attention to the beginning and end of the session, as these are especially critical operational moments. The Supervisor will arrive at the venue 50 minutes before the scheduled start time for pre-session organisation, so you should be reachable from that point onwards.",
+    "💻 Format\nOnsite",
+    `📍 Venue\n${address}`,
+    "",
+    "FEES AND INVOICE",
+    "Below you’ll find the breakdown of your exam session fee:",
+    `TOTAL FEE: ${totalFee}`,
+    "Once all your exam sessions are over, please send one consolidated invoice to finance@pathexaminations.com, including only the sum of the total fees for all your sessions. Do not include additional expenses, as only invoices matching the system amount will be processed. The invoice may be issued in your name or someone else’s name. Please follow the attached sample with the required company details: https://drive.google.com/drive/u/0/my-drive",
+    `Payments will be processed on ${nextPaymentDate} at 5:00 pm (GMT-3) and will appear as Bellis Ignis Group SRL. First-time payments may take up to 72 working hours after processing; previous recipients should receive payment immediately.`,
+    officialStaffMembersText(contacts),
+    responsibilitiesText,
+    "Thank you very much for your collaboration and commitment! 💙",
+    "",
+    "Warm regards,",
+    "Path International Examinations",
+  ].filter(Boolean).join("\n\n");
+  return { html: bodyHtml, text };
+};
+
 const buildStaffOfficialConfirmationEmail = (button) => {
   const payload = getStaffOfficialConfirmationEmailPayload(button);
   const validationError = validateStaffOfficialConfirmationEmailPayload(payload);
@@ -8087,12 +8377,14 @@ const buildStaffOfficialConfirmationEmail = (button) => {
   const timeRanges = payload.time_ranges || payload.timeRanges || [];
   const timeLabel = timeRanges.join(" / ");
   const address = cleanEmailValue(payload.address);
+  const scheduleFolderUrl = cleanEmailValue(payload.schedule_folder_url || payload.scheduleFolderUrl);
   const totalFee = cleanEmailValue(payload.total_fee || payload.totalFee);
   const feeLines = Array.isArray(payload.fee_lines || payload.feeLines) ? (payload.fee_lines || payload.feeLines) : [];
 	  const logisticsStatus = cleanEmailValue(payload.logistics_status || payload.logisticsStatus);
 	  const logisticsUrl = cleanEmailValue(payload.logistics_url || payload.logisticsUrl);
 	  const nextPaymentDate = cleanEmailValue(payload.next_payment_date || payload.nextPaymentDate);
 	  const contacts = Array.isArray(payload.contacts) ? payload.contacts : [];
+  const emergencyContacts = Array.isArray(payload.emergency_contacts || payload.emergencyContacts) ? (payload.emergency_contacts || payload.emergencyContacts) : [];
   const roleData = roleInvitationCopy(role);
   const arrival = officialArrivalMinutesForRole(role);
   const travel = officialTravelCopy(role, logisticsStatus, logisticsUrl);
@@ -8102,6 +8394,19 @@ const buildStaffOfficialConfirmationEmail = (button) => {
     section: "margin:0 0 18px;padding:16px 18px;background:#ffffff;border:1px solid #d9dfdc;border-left:4px solid #00506b;border-radius:12px;",
     sectionTitle: "margin:0 0 12px;color:#00506b;font:800 15px/1.35 Arial, Helvetica, sans-serif;letter-spacing:.4px;text-transform:uppercase;",
   };
+  if (role === "Emergency contact") {
+    return buildEmergencyContactOfficialConfirmationEmail({
+      fullName,
+      role,
+      sessionDate,
+      timeLabel,
+      address,
+      totalFee,
+      nextPaymentDate,
+      contacts,
+      styles,
+    });
+  }
   const invitationSenderEmail = "admin@pathexaminations.com";
   const replySubject = `Re: Path exam session invitation - ${sessionName || "Exam session"} - ${fullName}`;
   const confirmMailto = buildMailtoLink({ to: invitationSenderEmail, subject: replySubject, body: "Dear Path Team,\r\n\r\nI confirm my participation in this exam session and acknowledge that I have received the session material correctly.\r\n\r\nKind regards," });
@@ -8110,7 +8415,14 @@ const buildStaffOfficialConfirmationEmail = (button) => {
   const feeRowsHtml = feeLines.map((line) => `
     <tr><td style="padding:9px 12px;border-bottom:1px solid #d9dfdc;color:#111115;font:600 14px Arial, Helvetica, sans-serif;">${escapeEmailHtml(line.label)}</td><td align="right" style="padding:9px 12px;border-bottom:1px solid #d9dfdc;color:#111115;font:700 14px Arial, Helvetica, sans-serif;">${escapeEmailHtml(line.value)}</td></tr>
   `).join("");
-  const materialsText = officialConfirmationMaterialsText(role);
+  const materialLinks = {
+    scheduleFolderUrl,
+    examinerGuidelineUrl: cleanEmailValue(payload.examiner_guideline_url || payload.examinerGuidelineUrl),
+    materialForExaminersUrl: cleanEmailValue(payload.material_for_examiners_url || payload.materialForExaminersUrl),
+    supervisorGuidelineUrl: cleanEmailValue(payload.supervisor_guideline_url || payload.supervisorGuidelineUrl),
+    backupMaterialForExaminersUrl: cleanEmailValue(payload.backup_material_for_examiners_url || payload.backupMaterialForExaminersUrl),
+  };
+  const materialsText = officialConfirmationMaterialsText(role, materialLinks);
   const finalInstructionsHtml = finalInstructions ? `
     <div style="${styles.section}">
       <h2 style="${styles.sectionTitle}">${escapeEmailHtml(finalInstructions.title)}</h2>
@@ -8156,8 +8468,8 @@ const buildStaffOfficialConfirmationEmail = (button) => {
 	            <p style="margin:0;color:#111115;font:400 13px/1.5 Arial, Helvetica, sans-serif;">Payments will be processed on <strong>${escapeEmailHtml(nextPaymentDate)}</strong> <strong>at 5:00 pm (GMT-3)</strong> and will appear as Bellis Ignis Group SRL. First-time payments may take up to 72 working hours after processing; previous recipients should receive payment immediately.</p>
 	          </div>
 	        </div>
-        ${officialConfirmationMaterialsHtml(role, styles)}
-        ${officialContactsHtml(contacts, role, styles)}
+        ${officialConfirmationMaterialsHtml(role, styles, materialLinks)}
+        ${officialContactsHtml(contacts, role, styles, emergencyContacts)}
         <div style="${styles.section}">
           <h2 style="${styles.sectionTitle}">TRAVEL AND COMMUTING</h2>
           <p style="${styles.paragraph};margin-bottom:0;">${travel.html}</p>
@@ -8196,7 +8508,7 @@ const buildStaffOfficialConfirmationEmail = (button) => {
 	    "Once all your exam sessions are over, please send one consolidated invoice to finance@pathexaminations.com, including only the sum of the total fees for all your sessions. Do not include additional expenses, as only invoices matching the system amount will be processed. The invoice may be issued in your name or someone else’s name. Please follow the attached sample with the required company details: https://drive.google.com/drive/u/0/my-drive",
 	    `Payments will be processed on ${nextPaymentDate} at 5:00 pm (GMT-3) and will appear as Bellis Ignis Group SRL. First-time payments may take up to 72 working hours after processing; previous recipients should receive payment immediately.`,
     materialsText,
-    officialContactsText(contacts, role),
+    officialContactsText(contacts, role, emergencyContacts),
     "TRAVEL AND COMMUTING",
     travel.text,
     finalInstructionsText,
@@ -8216,6 +8528,15 @@ const showStaffOfficialConfirmationEmailFeedback = showStaffPreconfirmationEmail
 
 const syncStaffOfficialConfirmationEmailButtons = (root = document) => {
   root.querySelectorAll?.("[data-staff-confirmation-email]").forEach((button) => {
+    const explicitPayload = parseStaffOfficialConfirmationPayload(button);
+    if (Object.keys(explicitPayload).length) {
+      const viewOnly = document.querySelector("main[data-current-menu-can-edit='false']") !== null;
+      const validationError = validateStaffOfficialConfirmationEmailPayload(explicitPayload);
+      button.disabled = viewOnly || button.disabled;
+      button.title = validationError || "Copy official confirmation email";
+      button.setAttribute("aria-label", validationError || "Copy official confirmation email");
+      return;
+    }
     const panel = button.closest("[data-session-modal-panel]");
     const row = button.closest("[data-supervisor-row]");
     const viewOnly = document.querySelector("main[data-current-menu-can-edit='false']") !== null;
@@ -12663,7 +12984,7 @@ const applyViewOnlyMode = () => {
       element.className || "",
     ].filter(Boolean).join(" ");
     if (
-      element.matches(".copy-icon-button, [data-copy-text], [data-copy-invitation-email], [data-staff-address-copy], [data-copy-journey-link], [data-bulk-email-link], [data-acceptance-draft-save], [data-delete-logistics-concept], [data-remove-supervisor-row], [data-staff-declined-button], [data-emergency-contact-declined-button], [data-add-time-range], [data-remove-time-range], [data-add-session-contact-point], [data-remove-session-contact-point], [data-disable-km], [data-edit-assignment-fees], [data-clear-selection], [data-provider-type-create-form] button") ||
+      element.matches(".copy-icon-button, [data-copy-text], [data-copy-invitation-email], [data-staff-address-copy], [data-copy-journey-link], [data-bulk-email-link], [data-acceptance-draft-save], [data-delete-logistics-concept], [data-remove-supervisor-row], [data-staff-declined-button], [data-emergency-contact-declined-button], [data-add-emergency-contact-row], [data-remove-emergency-contact-row], [data-add-time-range], [data-remove-time-range], [data-add-session-contact-point], [data-remove-session-contact-point], [data-disable-km], [data-edit-assignment-fees], [data-clear-selection], [data-provider-type-create-form] button") ||
       mutatingButtonPattern.test(text) ||
       mutatingTargetPattern.test(target)
     ) {

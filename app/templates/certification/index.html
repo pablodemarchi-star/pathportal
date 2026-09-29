@@ -54,6 +54,8 @@
 {% set show_stage_filters = show_stage_filters|default(false) %}
 {% set fut_requires_stage_certification = fut_requires_stage_certification|default(false) %}
 {% set show_certification_year_settings = show_certification_year_settings|default(true) %}
+{% set show_examiner_material_setting = show_examiner_material_setting|default(false) %}
+{% set show_supervisor_guideline_setting = show_supervisor_guideline_setting|default(false) %}
 {% set intern_stage_email_actions = intern_stage_email_actions|default([]) %}
 {% set show_certification_table_sort = show_certification_table_sort|default(false) %}
 
@@ -233,53 +235,116 @@
 
 {% if selected_certification_year and module_key == 'certification' and show_certification_year_settings %}
 <section class="certification-year-settings" aria-label="{{ page_title }} annual settings">
-  <form method="post" action="{{ url_for(certification_year_settings_endpoint) }}" class="certification-year-settings-form">
+  <form method="post" action="{{ url_for(certification_year_settings_endpoint) }}" class="certification-year-settings-form certification-year-settings-block-form">
     <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
     <input type="hidden" name="certification_year" value="{{ selected_certification_year }}">
-    <label>
-      Remote training period
-      <input
-        name="remote_training_period"
-        value="{{ certification_remote_training_period_value }}"
-        placeholder="DD/MM/YYYY to DD/MM/YYYY"
-        inputmode="numeric"
-        maxlength="24"
-        pattern="\d{2}/\d{2}/\d{4} to \d{2}/\d{2}/\d{4}"
-        data-remote-training-period
-        data-date-future-or-today
-        data-certification-year="{{ selected_certification_year }}"
-      >
-    </label>
-    <label>
-      Annual meeting date & time
-      <span class="certification-date-time-fields">
+    <div class="certification-year-settings-grid">
+      <label>
+        Remote training period
         <input
-          name="annual_meeting_date"
-          value="{{ certification_annual_meeting_date_value }}"
-          placeholder="DD/MM/YYYY"
+          name="remote_training_period"
+          value="{{ certification_remote_training_period_value }}"
+          placeholder="DD/MM/YYYY to DD/MM/YYYY"
           inputmode="numeric"
-          maxlength="10"
-          pattern="\d{2}/\d{2}/\d{4}"
-          data-date-mask
+          maxlength="24"
+          pattern="\d{2}/\d{2}/\d{4} to \d{2}/\d{2}/\d{4}"
+          data-remote-training-period
           data-date-future-or-today
-          aria-label="Annual meeting date"
+          data-certification-year="{{ selected_certification_year }}"
         >
-        <input
-          name="annual_meeting_time"
-          value="{{ certification_annual_meeting_time_value }}"
-          placeholder="hh:mm"
-          inputmode="numeric"
-          maxlength="5"
-          pattern="([01]\d|2[0-3]):[0-5]\d"
-          data-time-mask
-          data-annual-meeting-time
-          aria-label="Annual meeting time"
-        >
-      </span>
-    </label>
-    <button class="secondary-button compact-action" type="submit">Save settings</button>
+      </label>
+      <label>
+        Annual meeting date & time
+        <span class="certification-date-time-fields">
+          <input
+            name="annual_meeting_date"
+            value="{{ certification_annual_meeting_date_value }}"
+            placeholder="DD/MM/YYYY"
+            inputmode="numeric"
+            maxlength="10"
+            pattern="\d{2}/\d{2}/\d{4}"
+            data-date-mask
+            data-date-future-or-today
+            aria-label="Annual meeting date"
+          >
+          <input
+            name="annual_meeting_time"
+            value="{{ certification_annual_meeting_time_value }}"
+            placeholder="hh:mm"
+            inputmode="numeric"
+            maxlength="5"
+            pattern="([01]\d|2[0-3]):[0-5]\d"
+            data-time-mask
+            data-annual-meeting-time
+            aria-label="Annual meeting time"
+          >
+        </span>
+      </label>
+      <button class="secondary-button compact-action" type="submit">Save settings</button>
+    </div>
   </form>
 </section>
+{% if show_examiner_material_setting %}
+  <section class="certification-year-settings certification-guideline-settings" aria-label="Examiner certification materials">
+    <form method="post" action="{{ url_for('staff.update_examiner_certification_material_settings') }}" class="certification-year-settings-form certification-year-settings-block-form">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+      <input type="hidden" name="certification_year" value="{{ selected_certification_year }}">
+      <div class="certification-guideline-fields">
+        <label>
+          Examiner guidelines
+          <input
+            type="url"
+            name="examiner_guideline_url"
+            value="{{ examiner_guideline_url|default('') }}"
+            placeholder="https://..."
+            aria-label="Examiner guidelines link"
+          >
+        </label>
+        <label>
+          Material for examiners
+          <input
+            type="url"
+            name="material_for_examiners_url"
+            value="{{ material_for_examiners_url|default('') }}"
+            placeholder="https://..."
+            aria-label="Material for examiners link"
+          >
+        </label>
+        <button class="secondary-button compact-action" type="submit">Save settings</button>
+      </div>
+    </form>
+  </section>
+{% elif show_supervisor_guideline_setting %}
+  <section class="certification-year-settings certification-guideline-settings" aria-label="Supervisor certification materials">
+    <form method="post" action="{{ url_for('staff.update_supervisor_certification_material_settings') }}" class="certification-year-settings-form certification-year-settings-block-form">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+      <input type="hidden" name="certification_year" value="{{ selected_certification_year }}">
+      <div class="certification-guideline-fields">
+        <label>
+          Supervisor guidelines
+          <input
+            type="url"
+            name="supervisor_guideline_url"
+            value="{{ supervisor_guideline_url|default('') }}"
+            placeholder="https://..."
+            aria-label="Supervisor guidelines link"
+          >
+        </label>
+        <label>
+          Back-up material for examiners
+          <input
+            type="url"
+            name="backup_material_for_examiners_url"
+            value="{{ backup_material_for_examiners_url|default('') }}"
+            placeholder="https://..."
+            aria-label="Back-up material for examiners link"
+          >
+        </label>
+        <button class="secondary-button compact-action" type="submit">Save settings</button>
+      </div>
+    </form>
+  </section>
+{% endif %}
 {% endif %}
 
 <form id="{{ bulk_form_id }}" method="post" action="{{ url_for(export_endpoint) }}" data-bulk-form data-bulk-scope="[data-annual-records-table]" data-bulk-empty-message="Please select at least one member to export." data-bulk-success-message="{{ bulk_success_message }}">

@@ -346,6 +346,18 @@ def create_app():
         if certification_year_configuration_columns and "annual_meeting_time" not in certification_year_configuration_columns:
             db.session.execute(text("ALTER TABLE certification_year_configuration ADD COLUMN annual_meeting_time TIME"))
             db.session.commit()
+        if certification_year_configuration_columns and "supervisor_guideline_url" not in certification_year_configuration_columns:
+            db.session.execute(text("ALTER TABLE certification_year_configuration ADD COLUMN supervisor_guideline_url VARCHAR(500) DEFAULT '' NOT NULL"))
+            db.session.commit()
+        if certification_year_configuration_columns and "backup_material_for_examiners_url" not in certification_year_configuration_columns:
+            db.session.execute(text("ALTER TABLE certification_year_configuration ADD COLUMN backup_material_for_examiners_url VARCHAR(500) DEFAULT '' NOT NULL"))
+            db.session.commit()
+        if certification_year_configuration_columns and "examiner_guideline_url" not in certification_year_configuration_columns:
+            db.session.execute(text("ALTER TABLE certification_year_configuration ADD COLUMN examiner_guideline_url VARCHAR(500) DEFAULT '' NOT NULL"))
+            db.session.commit()
+        if certification_year_configuration_columns and "material_for_examiners_url" not in certification_year_configuration_columns:
+            db.session.execute(text("ALTER TABLE certification_year_configuration ADD COLUMN material_for_examiners_url VARCHAR(500) DEFAULT '' NOT NULL"))
+            db.session.commit()
         potential_entry_columns = {
             row[1] for row in db.session.execute(text("PRAGMA table_info(potential_entry)"))
         }
@@ -1124,7 +1136,7 @@ def create_app():
         if not ExamSessionYear.query.filter_by(year=2026).first():
             db.session.add(ExamSessionYear(year=2026, is_archived=False))
             db.session.commit()
-        for role_name in ("Examiner", "RSG", "Supervisor", "Intern"):
+        for role_name in ("Examiner", "RSG", "Supervisor", "Intern", "Emergency contact"):
             if not Role.query.filter_by(name=role_name).first():
                 db.session.add(Role(name=role_name))
         db.session.commit()

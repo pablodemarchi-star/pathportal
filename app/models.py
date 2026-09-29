@@ -351,6 +351,10 @@ class CertificationYearConfiguration(db.Model):
     annual_meeting_time = db.Column(db.Time)
     remote_training_start_date = db.Column(db.Date)
     remote_training_end_date = db.Column(db.Date)
+    supervisor_guideline_url = db.Column(db.String(500), nullable=False, default="")
+    backup_material_for_examiners_url = db.Column(db.String(500), nullable=False, default="")
+    examiner_guideline_url = db.Column(db.String(500), nullable=False, default="")
+    material_for_examiners_url = db.Column(db.String(500), nullable=False, default="")
     created_on = db.Column(db.DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))
     updated_on = db.Column(
         db.DateTime(timezone=True),

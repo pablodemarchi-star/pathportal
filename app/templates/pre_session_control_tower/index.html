@@ -140,6 +140,7 @@
       {{ workflow_deadline_chip(deadline_badge, 'staffing-column-deadline-chip') }}
     {% else %}
       <small>No staff roles configured</small>
+      {{ workflow_deadline_chip(deadline_badge, 'staffing-column-deadline-chip') }}
     {% endif %}
   </span>
 {%- endmacro %}
@@ -442,7 +443,7 @@
         <span class="badge session-readiness-final-not-ready" title="{{ session_readiness.tooltip }}" aria-label="Session readiness Not ready: {{ session_readiness.tooltip }}">Not ready</span>
       {% endif %}
     </span>
-    <button class="secondary-button compact-action session-readiness-incidents-button {{ 'session-readiness-incidents-button-ready' if is_session_ready else 'session-readiness-incidents-button-disabled' }}" type="button" data-open-modal="schedule-workflow-{{ session.id }}" data-modal-scroll-target="incidents-{{ session.id }}" data-modal-target-label="Register incidents" aria-label="Register incidents for {{ session.exam_session_name }}"{% if not is_session_ready %} disabled aria-disabled="true"{% endif %}>Register incidents</button>
+    <button class="secondary-button compact-action session-readiness-incidents-button {{ 'session-readiness-incidents-button-ready' if is_session_ready else 'session-readiness-incidents-button-disabled' }}" type="button"{% if is_session_ready %} data-open-modal="schedule-workflow-{{ session.id }}" data-modal-scroll-target="incidents-{{ session.id }}" data-modal-target-label="Register incidents"{% endif %} aria-label="Register incidents for {{ session.exam_session_name }}"{% if not is_session_ready %} disabled aria-disabled="true"{% endif %}>Register incidents</button>
   </span>
 {%- endmacro %}
 
@@ -1471,6 +1472,37 @@
     </details>
   </div>
 </section>
+{% elif selected_view == 'my-actions' %}
+<section class="toolbar pre-session-my-actions-filters-toolbar">
+  <form method="get" class="filters pre-session-my-actions-filters" data-auto-filter>
+    <input type="hidden" name="session_year" value="{{ selected_session_year }}">
+    <input type="hidden" name="view" value="my-actions">
+    <select name="action_source" aria-label="Filter by action source">
+      <option value="">Source</option>
+      {% for source_option in my_action_source_options %}
+        <option value="{{ source_option }}" {% if selected_my_action_source == source_option %}selected{% endif %}>{{ source_option }}</option>
+      {% endfor %}
+    </select>
+    <select name="action_responsible" aria-label="Filter by responsible">
+      <option value="">Responsible</option>
+      {% for responsible_option in my_action_responsible_options %}
+        <option value="{{ responsible_option }}" {% if selected_my_action_responsible == responsible_option %}selected{% endif %}>{{ responsible_option }}</option>
+      {% endfor %}
+    </select>
+    <select name="action_status" aria-label="Filter by action status">
+      <option value="">Status</option>
+      {% for status_option in my_action_status_options %}
+        <option value="{{ status_option }}" {% if selected_my_action_status == status_option %}selected{% endif %}>{{ status_option }}</option>
+      {% endfor %}
+    </select>
+  </form>
+  <div class="pre-session-my-actions-summary" aria-label="My actions summary">
+    {% for status_label, count in my_actions_summary.items() %}
+      <span><strong>{{ count }}</strong> {{ status_label }}</span>
+    {% endfor %}
+    <a class="text-link" href="{{ url_for('staff.pre_session_control_tower', session_year=selected_session_year, view='my-actions') }}">Reset</a>
+  </div>
+</section>
 {% elif selected_view == 'bundle' %}
 <section class="toolbar pre-session-bundle-detail-filters-toolbar">
   <form method="get" class="filters pre-session-bundle-detail-filters" data-auto-filter>
@@ -1702,6 +1734,64 @@
     </tbody>
   </table>
 </section>
+{% elif selected_view == 'my-actions' %}
+<section class="table-wrap control-tower-table-wrap" aria-label="My actions">
+  <table class="control-tower-table my-actions-table">
+    <thead>
+      <tr>
+        <th>Manage</th>
+        <th>Priority action</th>
+        <th>Source</th>
+        <th>Responsible</th>
+        <th>Deadline</th>
+        <th>Session</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for action in my_actions %}
+        {% set session = action.session %}
+        {% set target = action.manage_target or (action.priority_action.target if action.priority_action and action.priority_action.target is defined else 'priority-action') %}
+        {% if target == 'schedule' %}
+          {% set target = 'schedule-actions' %}
+        {% elif target in ['core_readiness', 'core-readiness', 'operational_readiness', 'operational-readiness', 'session_readiness', 'session-readiness'] %}
+          {% set target = 'readiness' %}
+        {% elif target == 'incident-review' %}
+          {% set target = 'incidents' %}
+        {% endif %}
+        <tr>
+          <td>
+            <button class="secondary-button compact-action contextual-cell-trigger" type="button" data-open-modal="schedule-workflow-{{ session.id }}" data-modal-scroll-target="{{ target }}-{{ session.id }}" data-modal-target-label="Manage action">Manage</button>
+          </td>
+          <td>
+            <span class="priority-action-summary-cell">
+              <strong>{{ action.action_label }}</strong>
+              {% if action.reason %}
+                <small>{{ action.reason }}</small>
+              {% endif %}
+              {% if action.severity %}
+                <small>{{ action.severity }}</small>
+              {% endif %}
+            </span>
+          </td>
+          <td>{{ my_action_source_tag(action) }}</td>
+          <td><span class="responsible-chip users-department-chip">{{ action.responsible }}</span></td>
+          <td>{{ my_action_status_badge(action) }} <span>{{ action.deadline_display }}</span></td>
+          <td>
+            <strong>{{ action.display_label or session.exam_session_name }}</strong>
+            <small>{{ action.display_date|session_date if action.display_date else session.session_date|session_date }}</small>
+          </td>
+        </tr>
+      {% else %}
+        <tr>
+          <td colspan="6" class="empty-state">
+            No pending actions for the selected year.
+            <small>Sessions that are ready for the next stage are not shown in My actions.</small>
+          </td>
+        </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</section>
 {% elif selected_view in ['sessions', 'bundle'] %}
 {% if selected_view == 'bundle' and selected_bundle %}
   <section class="bundle-detail-header" aria-label="Selected shipment bundle">
@@ -1739,9 +1829,15 @@
         {% if selected_view != 'bundle' %}
           <th>Department</th>
           <th>Action description</th>
+          {% if show_session_package_column %}
+            <th>Schedule</th>
+            <th>Staffing</th>
+            <th>Package</th>
+            <th>Shipment</th>
+          {% endif %}
           <th>Logistics</th>
           <th>Finance</th>
-          <th>Final checks</th>
+          <th>Final actions</th>
           <th>Session readiness</th>
         {% endif %}
       </tr>
@@ -1767,6 +1863,14 @@
                 <span class="session-shipment-progress-chip session-shipment-progress-not-assigned">Not bundle-assigned</span>
               {% endif %}
             </span>
+            {% if selected_view != 'bundle' and not show_session_package_column %}
+              <span class="sr-only">
+                {% call contextual_cell_trigger(session, 'logistics', 'Review logistics', logistics_only=true) %}Logistics{% endcall %}
+                {% call contextual_cell_trigger(session, 'finance', 'Review finance', finance_only=true) %}Finance{% endcall %}
+                {% call contextual_cell_trigger(session, 'sinapsis', 'Check Sinapsis', sinapsis_only=true) %}Sinapsis{% endcall %}
+                {% call contextual_cell_trigger(session, 'communications', 'Review communications', communications_only=true) %}Communications{% endcall %}
+              </span>
+            {% endif %}
           </td>
           {% if selected_view == 'bundle' %}
             <td>{{ bundle_detail_departments_cell(view.bundle_detail_actions) }}</td>
@@ -1790,6 +1894,28 @@
           {% if selected_view != 'bundle' %}
             <td>{{ bundle_detail_departments_cell(view.bundle_detail_actions) }}</td>
             <td>{{ bundle_detail_action_descriptions_cell(view.bundle_detail_actions) }}</td>
+            {% if show_session_package_column %}
+              <td>
+                {% call contextual_cell_trigger(session, 'schedule-actions', 'Review schedule', true) %}
+                  {{ schedule_table_cell(view.status, view.schedule_gate, view.review_round, view.schedule_preparation_unlocked, view.deadline_badge, view.schedule_auto_confirmed) }}
+                {% endcall %}
+              </td>
+              <td>
+                {% call contextual_cell_trigger(session, 'staffing', 'Manage staffing', staffing_only=true) %}
+                  {{ staffing_table_cell(view.staffing, view.schedule_gate, false, view.staffing_deadline_badge) }}
+                {% endcall %}
+              </td>
+              <td>
+                {% call contextual_cell_trigger(session, 'packages', 'Manage packages', packages_only=true) %}
+                  {{ packages_table_cell(view.packages.contract, view.packages.schedule_ready, view.packages.staffing_ready, false, view.packages.preparation_status, view.packages.deadline_badge) }}
+                {% endcall %}
+              </td>
+              <td>
+                {% call contextual_cell_trigger(session, 'shipments', 'Track shipment', shipments_only=true) %}
+                  {{ shipment_table_cell(view.shipments.contract, view.shipments.planning) }}
+                {% endcall %}
+              </td>
+            {% endif %}
             <td>
               {% call contextual_cell_trigger(session, 'logistics', 'Review logistics', logistics_only=true) %}
                 {{ logistics_table_cell(view.logistics, view.logistics_gate, false, view.logistics_deadline_badge) }}
@@ -1812,7 +1938,7 @@
         </tr>
       {% else %}
         <tr>
-          <td colspan="{{ 6 if selected_view == 'bundle' else 7 }}" class="empty-state">No exam sessions found.</td>
+          <td colspan="{{ 6 if selected_view == 'bundle' else (11 if show_session_package_column else 7) }}" class="empty-state">No exam sessions found.</td>
         </tr>
       {% endfor %}
     </tbody>
@@ -2040,6 +2166,10 @@
             <strong>{{ view.staffing_control.department }}</strong>
           </div>
           <div>
+            <span>Responsible person</span>
+            <strong>{{ view.staffing_control.responsible_person_label }}</strong>
+          </div>
+          <div>
             <span>Nearest deadline</span>
             <strong>
               {% if view.staffing.ready %}
@@ -2132,8 +2262,8 @@
                     </td>
                     <td>
                       <div class="staffing-inline-actions">
-                        <a class="staffing-action-chip {% if role_check_actions_disabled or not row.staff_email %}staffing-action-chip-grey is-disabled{% else %}staffing-action-chip-blue{% endif %}" href="{% if role_check_actions_disabled or not row.staff_email %}#{% else %}mailto:{{ row.staff_email }}{% endif %}" data-role-check-dependent data-role-check-href="mailto:{{ row.staff_email }}" data-role-check-kind="link"{% if role_check_actions_disabled or not row.staff_email %} aria-disabled="true" tabindex="-1"{% endif %}>Send email</a>
-                        <button class="copy-icon-button email-invitation-copy-button" type="button" data-copy-text="{{ row.staff_email }}" data-role-check-dependent data-role-check-kind="button" aria-label="Copy staff email" title="Copy staff email"{% if role_check_actions_disabled or not row.staff_email %} disabled{% endif %}>
+                        <a class="staffing-action-chip {% if role_check_actions_disabled or not row.staff_email %}staffing-action-chip-grey is-disabled{% else %}staffing-action-chip-blue{% endif %}" href="{% if role_check_actions_disabled or not row.staff_email %}#{% else %}{{ row.official_confirmation_email_url }}{% endif %}" data-role-check-dependent data-role-check-href="{{ row.official_confirmation_email_url }}" data-role-check-kind="link" target="_blank" rel="noopener noreferrer"{% if role_check_actions_disabled or not row.staff_email %} aria-disabled="true" tabindex="-1"{% endif %}>Send email</a>
+                        <button class="copy-icon-button email-invitation-copy-button" type="button" data-staff-confirmation-email data-staff-official-confirmation-email-payload='{{ row.official_confirmation_email_payload|tojson }}' data-role-check-dependent data-role-check-kind="button" aria-label="Copy official confirmation email" title="Copy official confirmation email"{% if role_check_actions_disabled or not row.staff_email %} disabled{% endif %}>
                           <svg class="copy-icon" viewBox="0 0 24 24" aria-hidden="true">
                             <rect x="9" y="9" width="10" height="10" rx="2"></rect>
                             <path d="M5 15V7a2 2 0 0 1 2-2h8"></path>
@@ -2726,7 +2856,7 @@
               </div>
               <ol>
                 <li>Enter the exam session in Sinapsis and download the candidate labels for each exam room.</li>
-                <li>Verify that the label count matches the number of candidates in each room on the {% if session.schedule_folder_url or session.details_url %}<a href="{{ session.schedule_folder_url or session.details_url }}" target="_blank" rel="noopener noreferrer" aria-label="Open approved schedule folder">approved schedule in this folder</a>{% else %}approved schedule in this folder{% endif %}.</li>
+                <li>Verify that the label count matches the number of candidates in each room on the {% if session.schedule_folder_url %}<a href="{{ session.schedule_folder_url }}" target="_blank" rel="noopener noreferrer" aria-label="Open approved schedule folder">approved schedule in this folder</a>{% else %}approved schedule in this folder{% endif %}.</li>
               </ol>
             </div>
             <div class="package-preparation-actions" aria-label="Candidate label verification actions">
@@ -2742,7 +2872,7 @@
                 <input type="hidden" name="schedule_status" value="{{ selected_schedule_status }}">
                 {{ pre_session_return_fields(selected_view, selected_bundle) }}
                 <input type="hidden" name="action" value="mark_complete">
-                <button class="package-preparation-chip package-preparation-chip-complete" type="submit" {% if label_verification_status == "completed" %}disabled{% endif %}>Mark as complete</button>
+                <button class="package-preparation-chip package-preparation-chip-complete" type="submit" {% if label_verification_status != "in_progress" %}disabled{% endif %}>Mark as complete</button>
               </form>
               <form method="post" action="{{ url_for('staff.update_package_label_verification', session_id=session.id) }}" data-disable-on-submit>
                 <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
@@ -2801,7 +2931,7 @@ This stage has already been marked as complete. Reopening it may affect package 
                 <input type="hidden" name="schedule_status" value="{{ selected_schedule_status }}">
                 {{ pre_session_return_fields(selected_view, selected_bundle) }}
                 <input type="hidden" name="action" value="mark_complete">
-	                <button class="package-preparation-chip package-preparation-chip-complete" type="submit" {% if not label_printing_unlocked or label_printing_status == "completed" %}disabled{% endif %}>Mark as complete</button>
+	                <button class="package-preparation-chip package-preparation-chip-complete" type="submit" {% if not label_printing_unlocked or label_printing_status != "in_progress" %}disabled{% endif %}>Mark as complete</button>
               </form>
               <form method="post" action="{{ url_for('staff.update_package_label_printing', session_id=session.id) }}" data-disable-on-submit>
                 <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
@@ -2876,7 +3006,7 @@ This stage has already been marked as complete. Reopening it may affect package 
                 <input type="hidden" name="schedule_status" value="{{ selected_schedule_status }}">
                 {{ pre_session_return_fields(selected_view, selected_bundle) }}
                 <input type="hidden" name="action" value="mark_complete">
-	                <button class="package-preparation-chip package-preparation-chip-complete" type="submit" {% if not room_package_sealing_unlocked or room_package_sealing_status == "completed" or not view.packages.staffing_ready %}disabled{% endif %}>Mark as complete</button>
+	                <button class="package-preparation-chip package-preparation-chip-complete" type="submit" {% if not room_package_sealing_unlocked or room_package_sealing_status != "in_progress" or not view.packages.staffing_ready %}disabled{% endif %}>Mark as complete</button>
               </form>
               <form method="post" action="{{ url_for('staff.update_room_package_sealing', session_id=session.id) }}" data-disable-on-submit>
                 <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
@@ -2939,7 +3069,7 @@ This stage has already been marked as complete. Reopening it may affect package 
                 <input type="hidden" name="schedule_status" value="{{ selected_schedule_status }}">
                 {{ pre_session_return_fields(selected_view, selected_bundle) }}
                 <input type="hidden" name="action" value="mark_complete">
-                <button class="package-preparation-chip package-preparation-chip-complete" type="submit" {% if return_packages_status == "completed" %}disabled{% endif %}>Mark as complete</button>
+                <button class="package-preparation-chip package-preparation-chip-complete" type="submit" {% if return_packages_status != "in_progress" %}disabled{% endif %}>Mark as complete</button>
               </form>
               <form method="post" action="{{ url_for('staff.update_return_packages', session_id=session.id) }}" data-disable-on-submit>
                 <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
@@ -3016,7 +3146,7 @@ This stage has already been marked as complete. Reopening it may affect package 
                   <input type="hidden" name="schedule_status" value="{{ selected_schedule_status }}">
                   {{ pre_session_return_fields(selected_view, selected_bundle) }}
                   <input type="hidden" name="action" value="mark_complete">
-                  <button class="package-preparation-chip package-preparation-chip-complete" type="submit" {% if staff_member_ids_status == "completed" or not view.packages.staffing_ready %}disabled{% endif %}>Mark as complete</button>
+                  <button class="package-preparation-chip package-preparation-chip-complete" type="submit" {% if staff_member_ids_status != "in_progress" or not view.packages.staffing_ready %}disabled{% endif %}>Mark as complete</button>
                 </form>
                 <form method="post" action="{{ url_for('staff.update_staff_member_ids', session_id=session.id) }}" data-disable-on-submit>
                   <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
@@ -3083,7 +3213,7 @@ This stage has already been marked as complete. Reopening it may affect package 
                 <input type="hidden" name="schedule_status" value="{{ selected_schedule_status }}">
                 {{ pre_session_return_fields(selected_view, selected_bundle) }}
                 <input type="hidden" name="action" value="mark_complete">
-                <button class="package-preparation-chip package-preparation-chip-complete" type="submit" {% if inclusion_final_items_status == "completed" or not view.packages.staffing_ready %}disabled{% endif %}>Mark as complete</button>
+                <button class="package-preparation-chip package-preparation-chip-complete" type="submit" {% if inclusion_final_items_status != "in_progress" or not view.packages.staffing_ready %}disabled{% endif %}>Mark as complete</button>
               </form>
               <form method="post" action="{{ url_for('staff.update_inclusion_final_items', session_id=session.id) }}" data-disable-on-submit>
                 <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
@@ -3142,7 +3272,7 @@ This stage has already been marked as complete. Reopening it may affect package 
                 <input type="hidden" name="schedule_status" value="{{ selected_schedule_status }}">
                 {{ pre_session_return_fields(selected_view, selected_bundle) }}
                 <input type="hidden" name="action" value="mark_complete">
-                <button class="package-preparation-chip package-preparation-chip-complete" type="submit" {% if not session_box_sealing_prerequisites_complete or session_box_sealing_status == "completed" %}disabled{% endif %}>Mark as complete</button>
+                <button class="package-preparation-chip package-preparation-chip-complete" type="submit" {% if not session_box_sealing_prerequisites_complete or session_box_sealing_status != "in_progress" %}disabled{% endif %}>Mark as complete</button>
               </form>
               <form method="post" action="{{ url_for('staff.update_session_box_sealing', session_id=session.id) }}" data-disable-on-submit>
                 <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
@@ -3205,6 +3335,9 @@ This stage has already been marked as complete. Reopening it may affect package 
           <div>
             <span>Recommended next action</span>
             <strong>{{ shipment_modal_summary.recommended_next_action if shipment_modal_summary.override else shipment_next.label }}</strong>
+            {% if shipment_modal_summary.override and shipment_next.label and shipment_next.label != shipment_modal_summary.recommended_next_action %}
+              <small>{{ shipment_next.label }}</small>
+            {% endif %}
           </div>
           <div>
             <span>Responsible</span>
@@ -3213,6 +3346,9 @@ This stage has already been marked as complete. Reopening it may affect package 
           <div>
             <span>Current deadline</span>
             <strong>{% if shipment_modal_summary.override %}{{ shipment_modal_summary.current_deadline|session_date if shipment_modal_summary.current_deadline else '-' }}{% else %}{{ view.shipments.bundle_view.dispatch_due_at|session_date if view.shipments.bundle_view and view.shipments.bundle_view.dispatch_due_at else '-' }}{% endif %}</strong>
+            {% if shipment_modal_summary.override and view.shipments.action and view.shipments.action.deadline and view.shipments.action.deadline != shipment_modal_summary.current_deadline %}
+              <small>{{ view.shipments.action.deadline|session_date }}</small>
+            {% endif %}
             {% if view.shipments.bundle_view and view.shipments.bundle_view.deadline_badge and view.shipments.bundle_view.deadline_badge.risky and ((shipment_modal_summary.override and shipment_modal_summary.current_deadline) or (not shipment_modal_summary.override and view.shipments.bundle_view.dispatch_due_at)) %}
               <span class="shipment-deadline-risk-chip">Risky</span>
             {% endif %}
@@ -3978,6 +4114,42 @@ This stage has already been marked as complete. Reopening it may affect package 
           </div>
         </section>
         {{ final_checks_status_track_panel(session, view.sinapsis_events) }}
+        <details class="sinapsis-control-edit-panel">
+          <summary class="secondary-button compact-action">Edit Sinapsis status</summary>
+          <form method="post" action="{{ url_for('staff.update_sinapsis_control', session_id=session.id) }}" class="staffing-control-form sinapsis-control-form" data-disable-on-submit>
+            <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+            <input type="hidden" name="schedule_status" value="{{ selected_schedule_status }}">
+            {{ pre_session_return_fields(selected_view, selected_bundle) }}
+            <label>
+              Sinapsis readiness
+              <select name="sinapsis_status" required>
+                {% for status_option in sinapsis_status_options %}
+                  <option value="{{ status_option }}" {% if view.sinapsis.label == status_option %}selected{% endif %}>{{ status_option }}</option>
+                {% endfor %}
+              </select>
+            </label>
+            <label>
+              Sinapsis deadline
+              <input type="date" name="sinapsis_due_at" value="{{ view.sinapsis.deadline.isoformat() if view.sinapsis.deadline else '' }}">
+            </label>
+            <label>
+              Evidence URL
+              <input type="url" name="evidence_url" value="{{ view.sinapsis.evidence_url }}" placeholder="https://...">
+            </label>
+            <label>
+              Note
+              <textarea name="note" rows="3" maxlength="2000" placeholder="Required when Sinapsis needs correction">{{ view.sinapsis.note }}</textarea>
+            </label>
+            <div class="form-actions">
+              {% if view.sinapsis.details_url_available %}
+                <a class="secondary-button compact-action link-button" href="{{ view.sinapsis.details_url }}" target="_blank" rel="noopener noreferrer">Open link</a>
+              {% else %}
+                <a class="secondary-button compact-action link-button is-disabled" href="#" aria-disabled="true" tabindex="-1">Open link</a>
+              {% endif %}
+              <button class="primary-button compact-action" type="submit">Save Sinapsis status</button>
+            </div>
+          </form>
+        </details>
         {% if view.sinapsis.blockers %}
           <div class="staffing-blockers">
             <h4>Blockers</h4>

@@ -2363,6 +2363,29 @@ textarea {
   align-items: end;
 }
 
+.certification-year-settings-stack {
+  display: block;
+}
+
+.certification-year-settings-block-form {
+  display: block;
+}
+
+.certification-year-settings-grid {
+  display: grid;
+  grid-template-columns: minmax(320px, 420px) minmax(280px, 360px) auto;
+  gap: 12px;
+  align-items: end;
+}
+
+.certification-guideline-fields {
+  grid-column: 1 / 3;
+  display: grid;
+  grid-template-columns: minmax(320px, 420px) minmax(280px, 360px) auto;
+  gap: 12px;
+  align-items: end;
+}
+
 .certification-year-settings-form label {
   display: grid;
   gap: 6px;
@@ -2393,6 +2416,10 @@ textarea {
 }
 
 .staff-settings-panel .certification-year-settings-form {
+  grid-template-columns: minmax(420px, 1fr) minmax(180px, 260px);
+}
+
+.staff-settings-panel .certification-year-settings-grid {
   grid-template-columns: minmax(420px, 1fr) minmax(180px, 260px);
 }
 
@@ -5645,7 +5672,7 @@ span.session-marker-chip {
 .modal-emergency-contact-control {
   display: grid;
   gap: 7px;
-  width: min(943px, 100%);
+  width: min(760px, 100%);
   margin-top: 10px;
 }
 
@@ -5692,20 +5719,61 @@ span.session-marker-chip {
 
 .modal-emergency-contact-select-row {
   display: grid;
-  grid-template-columns: minmax(0, 433px) 190px minmax(0, 300px);
-  align-items: start;
-  gap: 10px;
-  width: min(943px, 100%);
+  gap: 8px;
+  width: min(760px, 100%);
+  padding: 9px;
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  background: #fff;
+  box-shadow: 0 6px 18px rgba(35, 48, 70, 0.05);
 }
 
 .modal-emergency-contact-rows {
   display: grid;
-  gap: 0;
-  width: min(943px, 100%);
+  gap: 8px;
+  width: min(760px, 100%);
 }
 
 .modal-emergency-contact-select-row + .modal-emergency-contact-select-row {
-  margin-top: -8px;
+  margin-top: 0;
+}
+
+.modal-emergency-contact-card-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-width: 0;
+}
+
+.modal-emergency-contact-card-title {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  min-width: 0;
+}
+
+.modal-emergency-contact-card-heading {
+  color: var(--color-primary-dark);
+  font-size: 12px;
+  font-weight: 900;
+  line-height: 1.2;
+}
+
+.modal-emergency-contact-card-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.modal-emergency-contact-card-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1.45fr) minmax(130px, 0.7fr) minmax(0, 1fr) minmax(110px, 0.55fr);
+  align-items: start;
+  gap: 8px;
 }
 
 .modal-emergency-contact-select select {
@@ -5743,6 +5811,12 @@ span.session-marker-chip {
   min-width: 0;
 }
 
+.modal-emergency-contact-fee-field {
+  display: grid;
+  gap: 5px;
+  min-width: 0;
+}
+
 .modal-emergency-contact-status-label {
   color: var(--color-muted);
   font-size: 10px;
@@ -5753,7 +5827,7 @@ span.session-marker-chip {
 }
 
 .modal-emergency-contact-status {
-  width: 190px;
+  width: 100%;
   min-height: 28px;
   min-width: 0;
   margin-bottom: 0;
@@ -5764,6 +5838,10 @@ span.session-marker-chip {
 
 .modal-emergency-contact-time-stack {
   gap: 3px;
+}
+
+.modal-emergency-contact-time-stack .time-range-fields {
+  gap: 5px;
 }
 
 .modal-emergency-contact-time-stack .time-range-control {
@@ -5779,15 +5857,41 @@ span.session-marker-chip {
   min-height: 12px;
 }
 
+.modal-emergency-contact-fee-value {
+  min-height: 28px;
+  display: inline-flex;
+  align-items: center;
+  width: 100%;
+  padding: 4px 8px;
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  background: var(--color-background);
+  color: var(--color-primary-dark);
+  font-size: 12px;
+  font-weight: 800;
+  line-height: 1.2;
+  white-space: nowrap;
+}
+
 .modal-emergency-contact-row-add,
 .modal-emergency-contact-row-remove {
   flex: 0 0 auto;
 }
 
+.modal-emergency-contact-row-remove {
+  min-height: 28px;
+  padding: 4px 8px;
+  font-size: 11px;
+  line-height: 1;
+}
+
 @media (max-width: 900px) {
   .modal-emergency-contact-select-row {
-    grid-template-columns: 1fr;
     width: 100%;
+  }
+
+  .modal-emergency-contact-card-grid {
+    grid-template-columns: 1fr;
   }
 
   .modal-emergency-contact-status,
@@ -6932,7 +7036,7 @@ span.session-marker-chip {
 }
 
 .modal-emergency-contact-select-row .modal-emergency-contact-status {
-  width: 190px;
+  width: 100%;
   min-height: 28px;
   min-width: 0;
   height: 28px;
@@ -15730,7 +15834,13 @@ span.session-marker-chip {
 }
 
 @media (max-width: 980px) {
-  .certification-year-settings-form {
+  .certification-year-settings-form,
+  .certification-year-settings-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .certification-guideline-fields {
+    grid-column: 1;
     grid-template-columns: 1fr;
   }
 
