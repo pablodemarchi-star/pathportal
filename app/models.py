@@ -674,6 +674,7 @@ class ExamSession(db.Model):
     minimum_candidates_required = db.Column(db.Integer, nullable=False, default=30)
     exam_session_organised_by = db.Column(db.String(40), nullable=False, default="the exam centre", index=True)
     contact_points = db.Column(db.Text, nullable=False, default="[]")
+    considerations = db.Column(db.Text, nullable=False, default="")
     shifts = db.Column(db.String(80), nullable=False, default="")
     modules = db.Column(db.String(120), nullable=False, default="")
     full_address_google_maps = db.Column(db.String(500), nullable=True)
@@ -761,6 +762,52 @@ class ExamSession(db.Model):
                 "email": email,
             })
         return contacts[:10]
+
+    def considerations_thread(self):
+        raw_value = (self.considerations or "").strip()
+        if not raw_value:
+            return []
+        try:
+            payload = json.loads(raw_value)
+        except (TypeError, ValueError, json.JSONDecodeError):
+            return [{
+                "id": "legacy",
+                "text": raw_value,
+                "author": "",
+                "created_at": "",
+                "replies": [],
+            }]
+        values = payload.get("comments", []) if isinstance(payload, dict) else payload
+        if not isinstance(values, list):
+            return []
+        comments = []
+        for value in values:
+            if not isinstance(value, dict):
+                continue
+            text = (value.get("text") or "").strip()
+            replies = []
+            for reply in value.get("replies", []) if isinstance(value.get("replies", []), list) else []:
+                if not isinstance(reply, dict):
+                    continue
+                reply_text = (reply.get("text") or "").strip()
+                if not reply_text:
+                    continue
+                replies.append({
+                    "id": (reply.get("id") or "").strip(),
+                    "text": reply_text,
+                    "author": (reply.get("author") or "").strip(),
+                    "created_at": (reply.get("created_at") or "").strip(),
+                })
+            if not text and not replies:
+                continue
+            comments.append({
+                "id": (value.get("id") or "").strip(),
+                "text": text,
+                "author": (value.get("author") or "").strip(),
+                "created_at": (value.get("created_at") or "").strip(),
+                "replies": replies,
+            })
+        return comments
 
     def non_available_ids(self):
         try:

@@ -21228,6 +21228,7 @@ def exam_session_planner():
     format_filter = request.args.get("format", "").strip()
     roles_required_filter = request.args.get("roles_required", "").strip()
     logistics_filter = request.args.get("logistics", "").strip()
+    considerations_filter = request.args.get("considerations", "").strip()
     member_duplication_filter = request.args.get("member_duplication", "").strip()
     session_minimum_filter = request.args.get("session_minimum", "").strip()
     sort_by = request.args.get("sort", "").strip()
@@ -21278,6 +21279,8 @@ def exam_session_planner():
         roles_required_filter = ""
     if logistics_filter not in {"yes", "no"}:
         logistics_filter = ""
+    if considerations_filter not in {"with", "without"}:
+        considerations_filter = ""
     if member_duplication_filter not in {"yes", "no"}:
         member_duplication_filter = ""
     if session_minimum_filter not in {"reached", "not_reached"}:
@@ -21352,6 +21355,9 @@ def exam_session_planner():
             )
             logistics_exists = db.or_(*logistics_conditions)
             query = query.filter(logistics_exists if logistics_filter == "yes" else ~logistics_exists)
+        if considerations_filter:
+            has_considerations = db.func.length(db.func.trim(db.func.coalesce(ExamSession.considerations, ""))) > 0
+            query = query.filter(has_considerations if considerations_filter == "with" else ~has_considerations)
         if member_duplication_filter:
             duplicate_session_ids = exam_session_ids_with_same_date_member_duplication()
             if member_duplication_filter == "yes":
@@ -21922,6 +21928,7 @@ def exam_session_planner():
             "format": format_filter,
             "roles_required": roles_required_filter,
             "logistics": logistics_filter,
+            "considerations": considerations_filter,
             "member_duplication": member_duplication_filter,
             "session_minimum": session_minimum_filter,
             "role_status": selected_role_status_filter,
@@ -22335,6 +22342,97 @@ def update_exam_session(session_id):
     db.session.commit()
     flash("Exam session updated successfully.", "success")
     return redirect(url_for("staff.exam_session_planner", session_year=data["session_date"].year))
+
+
+def build_exam_session_consideration(text):
+    current_user = getattr(g, "current_user", None)
+    author = (
+        getattr(current_user, "full_name", "")
+        or session.get("user_full_name")
+        or session.get("user")
+        or "Path team"
+    ).strip()
+    return {
+        "id": uuid.uuid4().hex,
+        "text": text,
+        "author": author,
+        "created_at": datetime.now(timezone.utc).isoformat(),
+        "replies": [],
+    }
+
+
+def serialize_exam_session_considerations(comments):
+    normalized = []
+    for comment in comments:
+        text = (comment.get("text") or "").strip()
+        replies = []
+        for reply in comment.get("replies", []) if isinstance(comment.get("replies", []), list) else []:
+            reply_text = (reply.get("text") or "").strip()
+            if not reply_text:
+                continue
+            replies.append({
+                "id": (reply.get("id") or uuid.uuid4().hex).strip(),
+                "text": reply_text,
+                "author": (reply.get("author") or "").strip(),
+                "created_at": (reply.get("created_at") or "").strip(),
+            })
+        if not text and not replies:
+            continue
+        normalized.append({
+            "id": (comment.get("id") or uuid.uuid4().hex).strip(),
+            "text": text,
+            "author": (comment.get("author") or "").strip(),
+            "created_at": (comment.get("created_at") or "").strip(),
+            "replies": replies,
+        })
+    return json.dumps({"comments": normalized}, ensure_ascii=False) if normalized else ""
+
+
+@staff_bp.route("/exam-session-planner/sessions/<int:session_id>/considerations", methods=["POST"])
+@login_required
+def update_exam_session_considerations(session_id):
+    selected_year = request.form.get("session_year", "").strip()
+    if not validate_csrf():
+        flash("Security token expired. Please try again.", "error")
+        return redirect(url_for("staff.exam_session_planner", session_year=selected_year))
+
+    session_record = ExamSession.query.get_or_404(session_id)
+    comments = session_record.considerations_thread()
+    action = request.form.get("action", "add_comment").strip()
+    comment_id = request.form.get("comment_id", "").strip()
+    reply_id = request.form.get("reply_id", "").strip()
+
+    if action == "add_comment":
+        text = (request.form.get("comment_text") or request.form.get("considerations") or "").strip()
+        if text:
+            comments.append(build_exam_session_consideration(text))
+    elif action == "add_reply":
+        text = (request.form.get("reply_text") or "").strip()
+        if text and comment_id:
+            for comment in comments:
+                if comment.get("id") == comment_id:
+                    reply = build_exam_session_consideration(text)
+                    reply.pop("replies", None)
+                    comment.setdefault("replies", []).append(reply)
+                    break
+    elif action == "delete_comment" and comment_id:
+        comments = [comment for comment in comments if comment.get("id") != comment_id]
+    elif action == "delete_reply" and comment_id and reply_id:
+        for comment in comments:
+            if comment.get("id") == comment_id:
+                comment["replies"] = [
+                    reply for reply in comment.get("replies", [])
+                    if reply.get("id") != reply_id
+                ]
+                break
+    else:
+        flash("Invalid considerations action.", "error")
+        return redirect(url_for("staff.exam_session_planner", session_year=selected_year or session_record.session_date.year))
+
+    session_record.considerations = serialize_exam_session_considerations(comments)
+    db.session.commit()
+    flash("Session considerations updated successfully.", "success")
+    return redirect(url_for("staff.exam_session_planner", session_year=selected_year or session_record.session_date.year))
 
 
 @staff_bp.route("/exam-session-planner/sessions/<int:session_id>/date-confirmation-status", methods=["POST"])
@@ -23387,6 +23485,7 @@ def duplicate_exam_session_year():
             schedule_folder_url=source_session.schedule_folder_url,
             exam_entry_slips_url=source_session.exam_entry_slips_url,
             contact_points=source_session.contact_points,
+            considerations=source_session.considerations,
         )
         db.session.add(new_session)
         db.session.flush()

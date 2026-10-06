@@ -202,6 +202,13 @@ class ScheduleWorkflowTest(unittest.TestCase):
             modules="Reading and writing",
             format="Online",
             pen_enabled=True,
+            considerations=json.dumps({"comments": [{
+                "id": "consideration-1",
+                "text": "Needs an extra room check.",
+                "author": "admin",
+                "created_at": "",
+                "replies": [],
+            }]}),
         )
         confirmed_session = ExamSession(
             exam_session_name="Gamma listening session",
@@ -259,6 +266,9 @@ class ScheduleWorkflowTest(unittest.TestCase):
         self.assertIn("Member duplication", html)
         self.assertIn("Role status", html)
         self.assertIn("Session minimum", html)
+        self.assertIn("Considerations", html)
+        self.assertIn("With", html)
+        self.assertIn("Without", html)
         self.assertIn("Archived years", html)
         self.assertNotIn("Session years", html)
         for sort_key in [
@@ -335,6 +345,20 @@ class ScheduleWorkflowTest(unittest.TestCase):
         self.assertIn("Beta reading session", format_roles_logistics_html)
         self.assertNotIn("Alpha speaking session", format_roles_logistics_html)
         self.assertNotIn("Gamma listening session", format_roles_logistics_html)
+
+        considerations_with_html = client.get(
+            "/exam-session-planner",
+            query_string={"session_year": "2026", "considerations": "with"},
+        ).get_data(as_text=True)
+        self.assertIn("Beta reading session", considerations_with_html)
+        self.assertNotIn("Alpha speaking session", considerations_with_html)
+
+        considerations_without_html = client.get(
+            "/exam-session-planner",
+            query_string={"session_year": "2026", "considerations": "without"},
+        ).get_data(as_text=True)
+        self.assertIn("Alpha speaking session", considerations_without_html)
+        self.assertNotIn("Beta reading session", considerations_without_html)
 
         role_status_html = client.get(
             "/exam-session-planner",
@@ -604,6 +628,90 @@ class ScheduleWorkflowTest(unittest.TestCase):
         self.assertLess(html.index('name="format" value="Onsite"'), html.index('name="format" value="Online"'))
         self.assertLess(html.index('name="format" value="Online"'), html.index('name="format" value="Online at exam centre"'))
         self.assertNotIn("Minimum number of candidates required", table_head)
+
+    def test_exam_session_considerations_support_conversation_replies_and_delete(self):
+        client = self.login_client()
+        response = client.get("/exam-session-planner?session_year=2026")
+        html = response.get_data(as_text=True)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn('class="session-considerations-alert"', html)
+        self.assertNotIn('class="session-considerations-chip"', html)
+
+        response = client.post(
+            f"/exam-session-planner/sessions/{self.session_record.id}/considerations",
+            data={
+                "csrf_token": "token",
+                "session_year": "2026",
+                "action": "add_comment",
+                "comment_text": "Bring extra printed speaking slips.",
+            },
+            follow_redirects=True,
+        )
+        html = response.get_data(as_text=True)
+        payload = json.loads(db.session.get(ExamSession, self.session_record.id).considerations)
+        comment_id = payload["comments"][0]["id"]
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(payload["comments"][0]["text"], "Bring extra printed speaking slips.")
+        self.assertEqual(payload["comments"][0]["author"], "admin")
+        self.assertIn('class="session-considerations-chip"', html)
+        self.assertIn("Considerations (1)", html)
+        self.assertIn("Bring extra printed speaking slips.", html)
+        self.assertNotIn('class="session-considerations-alert"', html)
+
+        response = client.post(
+            f"/exam-session-planner/sessions/{self.session_record.id}/considerations",
+            data={
+                "csrf_token": "token",
+                "session_year": "2026",
+                "action": "add_reply",
+                "comment_id": comment_id,
+                "reply_text": "Confirmed with the supervisor.",
+            },
+            follow_redirects=True,
+        )
+        payload = json.loads(db.session.get(ExamSession, self.session_record.id).considerations)
+        reply_id = payload["comments"][0]["replies"][0]["id"]
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(payload["comments"][0]["replies"][0]["text"], "Confirmed with the supervisor.")
+        html = response.get_data(as_text=True)
+        self.assertIn("Confirmed with the supervisor.", html)
+        self.assertIn("Considerations (1)", html)
+
+        response = client.post(
+            f"/exam-session-planner/sessions/{self.session_record.id}/considerations",
+            data={
+                "csrf_token": "token",
+                "session_year": "2026",
+                "action": "delete_reply",
+                "comment_id": comment_id,
+                "reply_id": reply_id,
+            },
+            follow_redirects=True,
+        )
+        payload = json.loads(db.session.get(ExamSession, self.session_record.id).considerations)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(payload["comments"][0]["replies"], [])
+
+        response = client.post(
+            f"/exam-session-planner/sessions/{self.session_record.id}/considerations",
+            data={
+                "csrf_token": "token",
+                "session_year": "2026",
+                "action": "delete_comment",
+                "comment_id": comment_id,
+            },
+            follow_redirects=True,
+        )
+        html = response.get_data(as_text=True)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(db.session.get(ExamSession, self.session_record.id).considerations, "")
+        self.assertIn('class="session-considerations-alert"', html)
+        self.assertNotIn('class="session-considerations-chip"', html)
 
     def test_exam_session_table_shows_emergency_contact_column(self):
         emergency_member = AcademicStaff(

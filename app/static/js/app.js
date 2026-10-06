@@ -142,6 +142,14 @@ const modalOpeners = new WeakMap();
   });
 })();
 
+document.addEventListener("click", (event) => {
+  const considerationsCancel = event.target.closest("[data-session-considerations-cancel]");
+  if (!considerationsCancel) return;
+
+  const entry = considerationsCancel.closest(".session-considerations-entry");
+  if (entry) entry.open = false;
+});
+
 (() => {
   const statuses = ["Pending", "Waiting for confirmation", "Confirmed"];
   const classPrefix = "date-confirmation-";
