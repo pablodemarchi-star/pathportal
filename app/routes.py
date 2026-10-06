@@ -2027,18 +2027,36 @@ def inclusion_final_items_for_session(session_record, supervisor_assignments=Non
             "supervisor_count": 0,
             "schedule_copy_label": "copies",
         }
-    latest_total_month = (
-        db.session.query(db.func.max(ExamSessionMonthlyCandidateTotal.month))
-        .filter_by(exam_session_id=session_record.id)
-        .scalar()
-    )
     total_candidates = 0
-    if latest_total_month is not None:
-        total_record = ExamSessionMonthlyCandidateTotal.query.filter_by(
-            exam_session_id=session_record.id,
-            month=latest_total_month,
-        ).first()
-        total_candidates = total_record.total_candidates if total_record else 0
+    component_ids = exam_session_concat_component_map().get(session_record.id, {session_record.id})
+    if len(component_ids) > 1:
+        component_sessions = ExamSession.query.filter(ExamSession.id.in_(component_ids)).all()
+        first_session = min(
+            component_sessions,
+            key=lambda item: (item.session_date or date.max, (item.exam_session_name or "").lower(), item.id),
+            default=None,
+        )
+        if first_session and first_session.id == session_record.id:
+            total_candidates = next(
+                (
+                    component_session.unified_candidate_total
+                    for component_session in component_sessions
+                    if component_session.unified_candidate_total is not None
+                ),
+                0,
+            )
+    else:
+        latest_total_month = (
+            db.session.query(db.func.max(ExamSessionMonthlyCandidateTotal.month))
+            .filter_by(exam_session_id=session_record.id)
+            .scalar()
+        )
+        if latest_total_month is not None:
+            total_record = ExamSessionMonthlyCandidateTotal.query.filter_by(
+                exam_session_id=session_record.id,
+                month=latest_total_month,
+            ).first()
+            total_candidates = total_record.total_candidates if total_record else 0
     assigned_supervisors = [
         assignment
         for assignment in supervisor_assignments or []

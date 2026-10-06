@@ -5852,6 +5852,66 @@ class ScheduleWorkflowTest(unittest.TestCase):
 
         self.assertIn("Add 1 stapled copy of the full session schedule for each room for the Supervisor.", final_items_section)
 
+    def test_packages_modal_inclusion_final_items_uses_unified_total_for_first_concat_session_only(self):
+        second_session = ExamSession(
+            exam_session_name="Second concat package session",
+            category="Path School",
+            status="Pending",
+            session_date=date(2026, 7, 25),
+            shifts="Morning",
+            modules="Speaking",
+            format="Onsite",
+            unified_candidate_total=42,
+        )
+        third_session = ExamSession(
+            exam_session_name="Third concat package session",
+            category="Path School",
+            status="Pending",
+            session_date=date(2026, 8, 25),
+            shifts="Morning",
+            modules="Speaking",
+            format="Onsite",
+            unified_candidate_total=42,
+        )
+        self.session_record.unified_candidate_total = 42
+        db.session.add_all([second_session, third_session])
+        db.session.flush()
+        self.session_record.concat_session_ids = json.dumps([second_session.id])
+        second_session.concat_session_ids = json.dumps([self.session_record.id, third_session.id])
+        third_session.concat_session_ids = json.dumps([second_session.id])
+        db.session.add_all([
+            ExamSessionMonthlyCandidateTotal(
+                exam_session_id=self.session_record.id,
+                month=6,
+                total_candidates=10,
+            ),
+            ExamSessionMonthlyCandidateTotal(
+                exam_session_id=second_session.id,
+                month=7,
+                total_candidates=20,
+            ),
+            ExamSessionMonthlyCandidateTotal(
+                exam_session_id=third_session.id,
+                month=8,
+                total_candidates=30,
+            ),
+        ])
+        db.session.commit()
+        client = self.login_client()
+
+        html = client.get("/pre-session-control-tower?session_year=2026&view=sessions").get_data(as_text=True)
+
+        first_packages_section_start = html.index(f'id="packages-{self.session_record.id}"')
+        first_packages_section = html[first_packages_section_start:first_packages_section_start + 26000]
+        second_packages_section_start = html.index(f'id="packages-{second_session.id}"')
+        second_packages_section = html[second_packages_section_start:second_packages_section_start + 26000]
+        third_packages_section_start = html.index(f'id="packages-{third_session.id}"')
+        third_packages_section = html[third_packages_section_start:third_packages_section_start + 26000]
+
+        self.assertIn("Add 42 Path Examinations wristbands. Do not include any extras.", first_packages_section)
+        self.assertIn("Add 0 Path Examinations wristbands. Do not include any extras.", second_packages_section)
+        self.assertIn("Add 0 Path Examinations wristbands. Do not include any extras.", third_packages_section)
+
     def test_packages_modal_session_box_sealing_renders_after_inclusion_with_pdf_link(self):
         client = self.login_client()
 
