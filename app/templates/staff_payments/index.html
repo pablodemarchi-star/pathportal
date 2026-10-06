@@ -12,29 +12,34 @@
   </div>
 </header>
 
-<section class="toolbar {% if archived_session_years %}toolbar-with-archive{% endif %}">
-  <div>
-    <p class="archived-year-copy">Use the active year selector to review staff payments by exam session year.</p>
-  </div>
-  {% if archived_session_years %}
-    <section class="archived-year-panel" aria-label="Archived Staff payments years">
-      <h2>Archived years</h2>
-      <div class="archived-year-list">
-        {% for year_item in archived_session_years %}
-          <span class="archived-year-pill">{{ year_item.year }}</span>
-        {% endfor %}
-      </div>
-    </section>
-  {% endif %}
-</section>
-
 {% if session_years %}
+{% set year_picker = namespace(selected_is_archived=false) %}
+{% for year_item in archived_session_years %}
+  {% if year_item.year == selected_session_year %}
+    {% set year_picker.selected_is_archived = true %}
+  {% endif %}
+{% endfor %}
 <section class="year-toolbar" aria-label="Staff payments years">
   <div class="year-tabs">
     {% for year_item in session_years %}
       <a class="year-tab {% if year_item.year == selected_session_year %}active{% endif %}" href="{{ url_for('staff.staff_payments', session_year=year_item.year) }}">{{ year_item.year }}</a>
     {% endfor %}
   </div>
+  <span class="year-filter-status">Viewing {{ selected_session_year }}{% if year_picker.selected_is_archived %} (archived){% endif %}</span>
+  <details class="exam-archived-years-dropdown">
+    <summary class="secondary-button compact-action">Archived years</summary>
+    <div class="exam-archived-years-panel">
+      {% if archived_session_years %}
+        {% for year_item in archived_session_years %}
+          <article class="archived-year-item">
+            <a class="archived-year-link {% if year_item.year == selected_session_year %}active{% endif %}" href="{{ url_for('staff.staff_payments', session_year=year_item.year) }}">{{ year_item.year }}</a>
+          </article>
+        {% endfor %}
+      {% else %}
+        <p class="archived-year-copy">No archived years.</p>
+      {% endif %}
+    </div>
+  </details>
 </section>
 {% endif %}
 

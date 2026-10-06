@@ -4100,6 +4100,29 @@ console.log(JSON.stringify({ enabledState, missingState }));
         self.assertEqual(settings.next_payment_date, next_payment_date)
         self.assertIn(next_payment_date.strftime("%d/%m/%Y"), html)
 
+    def test_staff_payments_uses_archived_years_dropdown(self):
+        self.add_session(session_date=date(2026, 7, 20))
+        db.session.add(ExamSessionYear(year=2025, is_archived=True))
+        db.session.commit()
+
+        response = self.client().get("/staff-payments?session_year=2026")
+        html = response.get_data(as_text=True)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn('aria-label="Staff payments years"', html)
+        self.assertIn('<span class="year-filter-status">Viewing 2026</span>', html)
+        self.assertIn('<summary class="secondary-button compact-action">Archived years</summary>', html)
+        self.assertIn('class="archived-year-link " href="/staff-payments?session_year=2025">2025</a>', html)
+        self.assertNotIn('aria-label="Archived Staff payments years"', html)
+
+        archived_response = self.client().get("/staff-payments?session_year=2025")
+        archived_html = archived_response.get_data(as_text=True)
+
+        self.assertEqual(archived_response.status_code, 200)
+        self.assertIn('class="archived-year-link active" href="/staff-payments?session_year=2025">2025</a>', archived_html)
+        self.assertIn('<span class="year-filter-status">Viewing 2025 (archived)</span>', archived_html)
+        self.assertIn('name="session_year" value="2025"', archived_html)
+
     def test_staff_payments_next_payment_date_rejects_past_date_and_cleans_expired_value(self):
         self.add_session(session_date=today_local() + timedelta(days=30))
         past_date = today_local() - timedelta(days=1)

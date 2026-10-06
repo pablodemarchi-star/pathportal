@@ -6218,7 +6218,7 @@ def active_exam_session_years():
     return years
 
 
-def selected_exam_session_year():
+def selected_exam_session_year(include_archived=False):
     active_years = active_exam_session_years()
     requested_year = request.args.get("session_year", "").strip()
     if not requested_year:
@@ -6226,6 +6226,8 @@ def selected_exam_session_year():
     if requested_year.isdigit():
         year_number = int(requested_year)
         if any(item.year == year_number for item in active_years):
+            return year_number, active_years
+        if include_archived and ExamSessionYear.query.filter_by(year=year_number).first():
             return year_number, active_years
     if any(item.year == 2026 for item in active_years):
         return 2026, active_years
@@ -16431,12 +16433,20 @@ def year_color_filter(value):
 @staff_bp.route("/fees")
 @login_required
 def fees():
+    selected_year, session_years = selected_exam_session_year(include_archived=True)
     query = Fee.query.order_by(Fee.created_on.desc(), Fee.id.desc())
     fee_records, pagination = paginate_query(query)
     return render_template(
         "fees/index.html",
         fees=fee_records,
         pagination=pagination,
+        session_years=session_years,
+        archived_session_years=(
+            ExamSessionYear.query.filter_by(is_archived=True)
+            .order_by(ExamSessionYear.year.desc())
+            .all()
+        ),
+        selected_session_year=selected_year,
         roles=fee_role_options(),
         currency_options=FEE_CURRENCY_OPTIONS,
         unit_options=FEE_UNIT_OPTIONS,
@@ -16448,34 +16458,38 @@ def fees():
 @staff_bp.route("/fees", methods=["POST"])
 @login_required
 def create_fee():
+    selected_year = request.form.get("session_year", request.args.get("session_year", "")).strip()
+    redirect_args = {"session_year": selected_year} if selected_year.isdigit() else {}
     if not validate_csrf():
         flash("Security token expired. Please try again.", "error")
-        return redirect(url_for("staff.fees"))
+        return redirect(url_for("staff.fees", **redirect_args))
     errors, data = validate_fee_form(request.form)
     if errors:
         for error in errors:
             flash(error, "error")
-        return redirect(url_for("staff.fees"))
+        return redirect(url_for("staff.fees", **redirect_args))
     db.session.add(Fee(**data))
     if fee_data_is_for_role(data, "Intern"):
         recalculate_pending_intern_role_fees()
     db.session.commit()
     flash("Fee created successfully.", "success")
-    return redirect(url_for("staff.fees"))
+    return redirect(url_for("staff.fees", **redirect_args))
 
 
 @staff_bp.route("/fees/<int:fee_id>", methods=["POST"])
 @login_required
 def update_fee(fee_id):
+    selected_year = request.form.get("session_year", request.args.get("session_year", "")).strip()
+    redirect_args = {"session_year": selected_year} if selected_year.isdigit() else {}
     if not validate_csrf():
         flash("Security token expired. Please try again.", "error")
-        return redirect(url_for("staff.fees"))
+        return redirect(url_for("staff.fees", **redirect_args))
     fee = Fee.query.get_or_404(fee_id)
     errors, data = validate_fee_form(request.form, fee_id=fee.id)
     if errors:
         for error in errors:
             flash(error, "error")
-        return redirect(url_for("staff.fees"))
+        return redirect(url_for("staff.fees", **redirect_args))
     recalculates_interns = (fee.role and fee.role.name == "Intern") or fee_data_is_for_role(data, "Intern")
     fee.fee_description = data["fee_description"]
     fee.currency = data["currency"]
@@ -16487,15 +16501,17 @@ def update_fee(fee_id):
         recalculate_pending_intern_role_fees()
     db.session.commit()
     flash("Fee updated successfully.", "success")
-    return redirect(url_for("staff.fees"))
+    return redirect(url_for("staff.fees", **redirect_args))
 
 
 @staff_bp.route("/fees/<int:fee_id>/delete", methods=["POST"])
 @login_required
 def delete_fee(fee_id):
+    selected_year = request.form.get("session_year", request.args.get("session_year", "")).strip()
+    redirect_args = {"session_year": selected_year} if selected_year.isdigit() else {}
     if not validate_csrf():
         flash("Security token expired. Please try again.", "error")
-        return redirect(url_for("staff.fees"))
+        return redirect(url_for("staff.fees", **redirect_args))
     fee = Fee.query.get_or_404(fee_id)
     recalculates_interns = fee.role and fee.role.name == "Intern"
     db.session.delete(fee)
@@ -16503,7 +16519,7 @@ def delete_fee(fee_id):
         recalculate_pending_intern_role_fees()
     db.session.commit()
     flash("Fee deleted successfully.", "success")
-    return redirect(url_for("staff.fees"))
+    return redirect(url_for("staff.fees", **redirect_args))
 
 
 @staff_bp.route("/providers")
@@ -17038,7 +17054,7 @@ def update_user(user_id):
 @staff_bp.route("/staff-payments")
 @login_required
 def staff_payments():
-    selected_year, session_years = selected_exam_session_year()
+    selected_year, session_years = selected_exam_session_year(include_archived=True)
     payment_rows = build_staff_payment_rows(selected_year)
     payment_rows, pagination = paginate_items(payment_rows)
     payment_settings = staff_payment_settings()

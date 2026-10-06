@@ -1860,6 +1860,20 @@ textarea {
   margin-left: -6px;
 }
 
+.year-filter-status {
+  display: inline-flex;
+  align-items: center;
+  min-height: 32px;
+  border: 1px solid var(--color-border);
+  border-radius: 999px;
+  padding: 6px 11px;
+  background: white;
+  color: var(--color-primary-dark);
+  font-size: 12px;
+  font-weight: 900;
+  white-space: nowrap;
+}
+
 .intern-stage-email-actions {
   display: flex;
   flex-wrap: wrap;
@@ -1951,6 +1965,25 @@ textarea {
   color: var(--color-primary-dark);
   font-size: 14px;
   font-weight: 900;
+}
+
+.archived-year-link {
+  display: inline-flex;
+  align-items: center;
+  min-height: 28px;
+  margin-right: auto;
+  border-radius: 999px;
+  padding: 5px 10px;
+  color: var(--color-primary-dark);
+  font-size: 14px;
+  font-weight: 900;
+  text-decoration: none;
+}
+
+.archived-year-link:hover,
+.archived-year-link.active {
+  background: var(--path-blue-50);
+  color: var(--color-primary);
 }
 
 .toolbar-actions {

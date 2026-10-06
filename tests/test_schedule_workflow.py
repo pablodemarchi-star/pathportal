@@ -7470,6 +7470,32 @@ class ScheduleWorkflowTest(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertIn(">Emergency contact</option>", create_modal)
 
+    def test_fees_page_includes_session_year_filter(self):
+        db.session.add(ExamSessionYear(year=2026))
+        db.session.add(ExamSessionYear(year=2027))
+        db.session.add(ExamSessionYear(year=2025, is_archived=True))
+        db.session.commit()
+
+        response = self.login_client().get("/fees?session_year=2027")
+        html = response.get_data(as_text=True)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn('aria-label="Fees years"', html)
+        self.assertIn('href="/fees?session_year=2026"', html)
+        self.assertIn('class="year-tab active" href="/fees?session_year=2027"', html)
+        self.assertIn('<span class="year-filter-status">Viewing 2027</span>', html)
+        self.assertIn('<summary class="secondary-button compact-action">Archived years</summary>', html)
+        self.assertIn('class="archived-year-link " href="/fees?session_year=2025">2025</a>', html)
+        self.assertIn('name="session_year" value="2027"', html)
+
+        archived_response = self.login_client().get("/fees?session_year=2025")
+        archived_html = archived_response.get_data(as_text=True)
+
+        self.assertEqual(archived_response.status_code, 200)
+        self.assertIn('class="archived-year-link active" href="/fees?session_year=2025">2025</a>', archived_html)
+        self.assertIn('<span class="year-filter-status">Viewing 2025 (archived)</span>', archived_html)
+        self.assertIn('name="session_year" value="2025"', archived_html)
+
     def test_fees_form_combines_examiner_and_rsg_role_option(self):
         response = self.login_client().get("/fees")
         html = response.get_data(as_text=True)
