@@ -39,8 +39,18 @@
       Role
       <select name="role_id">
         <option value="">General fee</option>
+        {% set role_picker = namespace(examiner_id=none) %}
         {% for role in roles %}
-          <option value="{{ role.id }}" {% if fee and fee.role_id == role.id %}selected{% endif %}>{{ role.name }}</option>
+          {% if role.name == 'Examiner' %}
+            {% set role_picker.examiner_id = role.id %}
+          {% endif %}
+        {% endfor %}
+        {% for role in roles %}
+          {% if role.name != 'RSG' or not role_picker.examiner_id %}
+            {% set role_label = 'Examiner | RSG' if role.name == 'Examiner' else role.name %}
+            {% set selected_role = fee and (fee.role_id == role.id or (role.name == 'Examiner' and fee.role and fee.role.name == 'RSG')) %}
+            <option value="{{ role.id }}" {% if selected_role %}selected{% endif %}>{{ role_label }}</option>
+          {% endif %}
         {% endfor %}
       </select>
     </label>
@@ -110,7 +120,13 @@
           <td>{{ fee_chip(fee.unit_of_measure, 'unit-chip') }}</td>
           <td>
             {% if fee.role %}
-              {{ role_badge(fee.role.name) }}
+              {% if fee.role.name in ['Examiner', 'RSG'] %}
+                <span class="badge role-examiner">Examiner | RSG</span>
+              {% elif fee.role.name == 'Emergency contact' %}
+                <span class="badge fee-role-emergency-contact">{{ fee.role.name }}</span>
+              {% else %}
+                {{ role_badge(fee.role.name) }}
+              {% endif %}
             {% else %}
               <span class="muted">-</span>
             {% endif %}

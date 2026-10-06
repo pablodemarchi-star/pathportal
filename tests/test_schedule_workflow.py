@@ -7470,6 +7470,58 @@ class ScheduleWorkflowTest(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertIn(">Emergency contact</option>", create_modal)
 
+    def test_fees_form_combines_examiner_and_rsg_role_option(self):
+        response = self.login_client().get("/fees")
+        html = response.get_data(as_text=True)
+        create_modal = html[html.index('id="create-fee"'):]
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn(">Examiner | RSG</option>", create_modal)
+        self.assertNotIn(">Examiner</option>", create_modal)
+        self.assertNotIn(">RSG</option>", create_modal)
+
+    def test_fees_role_column_highlights_emergency_contact(self):
+        emergency_role = Role.query.filter_by(name="Emergency contact").first()
+        if emergency_role is None:
+            emergency_role = Role(name="Emergency contact")
+            db.session.add(emergency_role)
+            db.session.flush()
+        db.session.add(Fee(
+            fee_description="Emergency contact fee",
+            currency="ARS",
+            fee_value="22000",
+            unit_of_measure="Role fee",
+            role_id=emergency_role.id,
+        ))
+        db.session.commit()
+
+        response = self.login_client().get("/fees")
+        html = response.get_data(as_text=True)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn('<span class="badge fee-role-emergency-contact">Emergency contact</span>', html)
+
+    def test_fees_role_column_combines_examiner_and_rsg_chip(self):
+        examiner_role = Role.query.filter_by(name="Examiner").first()
+        if examiner_role is None:
+            examiner_role = Role(name="Examiner")
+            db.session.add(examiner_role)
+            db.session.flush()
+        db.session.add(Fee(
+            fee_description="Examiner fee",
+            currency="ARS",
+            fee_value="30000",
+            unit_of_measure="Role fee",
+            role_id=examiner_role.id,
+        ))
+        db.session.commit()
+
+        response = self.login_client().get("/fees")
+        html = response.get_data(as_text=True)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn('<span class="badge role-examiner">Examiner | RSG</span>', html)
+
     def test_exam_session_planner_hides_shipment_recipient_control_for_online_sessions(self):
         supervisor = self.create_supervisor(staff_id=1, name="Laura Mendez")
         self.session_record.format = "Online"

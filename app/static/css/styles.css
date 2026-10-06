@@ -15045,6 +15045,11 @@ span.session-marker-chip {
   color: var(--badge-blue-text);
 }
 
+.fee-role-emergency-contact {
+  background: var(--badge-yellow-bg);
+  color: var(--badge-yellow-text);
+}
+
 .fee-month-field {
   display: grid;
   gap: 6px;
