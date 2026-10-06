@@ -2804,6 +2804,11 @@ def validate_exam_session_form(form):
     full_address_google_maps = form.get("full_address_google_maps", "").strip()
     city = form.get("city", "").strip()
     province = form.get("province", "").strip()
+    concat_session_ids = {
+        int(value)
+        for value in form.getlist("concat_session_ids")
+        if str(value).isdigit()
+    }
 
     if not exam_session_name:
         errors.append("Exam session name is required.")
@@ -2859,6 +2864,7 @@ def validate_exam_session_form(form):
         "details_url": details_url,
         "schedule_folder_url": schedule_folder_url,
         "exam_entry_slips_url": exam_entry_slips_url,
+        "concat_session_ids": concat_session_ids,
     }
 
 
@@ -2883,6 +2889,44 @@ def apply_exam_session_form(session_record, data):
     session_record.details_url = data["details_url"]
     session_record.schedule_folder_url = data["schedule_folder_url"]
     session_record.exam_entry_slips_url = data["exam_entry_slips_url"]
+
+
+def serialize_concat_session_ids(session_ids, current_session_id=None):
+    normalized_ids = sorted({
+        int(session_id)
+        for session_id in session_ids
+        if str(session_id).isdigit() and int(session_id) != current_session_id
+    })
+    return json.dumps(normalized_ids)
+
+
+def sync_exam_session_concat_sessions(session_record, selected_session_ids):
+    selected_ids = {
+        int(session_id)
+        for session_id in selected_session_ids
+        if str(session_id).isdigit() and int(session_id) != session_record.id
+    }
+    previous_ids = session_record.concat_session_id_set()
+    related_ids = previous_ids | selected_ids
+    related_sessions = ExamSession.query.filter(ExamSession.id.in_(related_ids)).all() if related_ids else []
+    related_by_id = {related_session.id: related_session for related_session in related_sessions}
+    selected_ids = selected_ids & set(related_by_id)
+
+    session_record.concat_session_ids = serialize_concat_session_ids(selected_ids, session_record.id)
+    for related_id in previous_ids - selected_ids:
+        related_session = related_by_id.get(related_id)
+        if not related_session:
+            continue
+        related_values = related_session.concat_session_id_set()
+        related_values.discard(session_record.id)
+        related_session.concat_session_ids = serialize_concat_session_ids(related_values, related_session.id)
+    for related_id in selected_ids:
+        related_session = related_by_id.get(related_id)
+        if not related_session:
+            continue
+        related_values = related_session.concat_session_id_set()
+        related_values.add(session_record.id)
+        related_session.concat_session_ids = serialize_concat_session_ids(related_values, related_session.id)
 
 
 ACADEMIC_STAFF_EXPORT_HEADERS = [
@@ -21503,6 +21547,24 @@ def exam_session_planner():
         query = apply_exam_session_sort(query)
         sessions, pagination = paginate_query(query)
     sync_exam_session_overall_statuses(sessions)
+    has_active_filters = any([
+        session_name_filter,
+        date_status_filter,
+        selected_shifts_filter,
+        selected_modules_filter,
+        format_filter,
+        roles_required_filter,
+        logistics_filter,
+        considerations_filter,
+        member_duplication_filter,
+        session_minimum_filter,
+        selected_role_status_filter,
+    ])
+    concat_session_options = list(sessions) if has_active_filters or session_fullscreen else (
+        ExamSession.query.filter(db.extract("year", ExamSession.session_date) == selected_year)
+        .order_by(ExamSession.session_date.asc(), ExamSession.exam_session_name.asc())
+        .all()
+    )
     supervisor_members = supervisor_member_options()
     examiner_members = examiner_session_member_options()
     intern_members = intern_session_member_options()
@@ -21520,6 +21582,36 @@ def exam_session_planner():
     vehicle_dep_fee = fee_by_exact_description("Vehicle dep.")
     session_ids = [session_record.id for session_record in sessions]
     sessions_by_id = {session_record.id: session_record for session_record in sessions}
+    concat_related_ids = set()
+    for session_record in sessions:
+        concat_related_ids.update(session_record.concat_session_id_set())
+    concat_related_sessions = (
+        ExamSession.query.filter(ExamSession.id.in_(concat_related_ids)).all()
+        if concat_related_ids else []
+    )
+    concat_session_names_by_id = {
+        session_record.id: session_record.exam_session_name
+        for session_record in concat_related_sessions
+    }
+    concat_session_names_by_session = {
+        session_record.id: [
+            concat_session_names_by_id[concat_id]
+            for concat_id in sorted(session_record.concat_session_id_set())
+            if concat_id in concat_session_names_by_id
+        ]
+        for session_record in sessions
+    }
+    concat_session_links_by_session = {
+        session_record.id: [
+            {
+                "id": concat_id,
+                "name": concat_session_names_by_id[concat_id],
+            }
+            for concat_id in sorted(session_record.concat_session_id_set())
+            if concat_id in concat_session_names_by_id
+        ]
+        for session_record in sessions
+    }
     module_registration_counts = latest_monthly_registration_counts(session_ids)
     year_session_ids = [
         item.id
@@ -21866,6 +21958,9 @@ def exam_session_planner():
         vehicle_dep_fee=vehicle_dep_fee,
         examiner_members=examiner_members,
         intern_members=intern_members,
+        concat_session_options=concat_session_options,
+        concat_session_names_by_session=concat_session_names_by_session,
+        concat_session_links_by_session=concat_session_links_by_session,
         session_supervisor_members=session_supervisor_members,
         session_examiner_members=session_examiner_members,
         session_intern_members=session_intern_members,
@@ -22317,6 +22412,8 @@ def create_exam_session():
     apply_exam_session_form(session_record, data)
     ensure_exam_session_year(data["session_date"].year)
     db.session.add(session_record)
+    db.session.flush()
+    sync_exam_session_concat_sessions(session_record, data["concat_session_ids"])
     db.session.commit()
     flash("Exam session created successfully.", "success")
     return redirect(url_for("staff.exam_session_planner", session_year=data["session_date"].year))
@@ -22339,6 +22436,7 @@ def update_exam_session(session_id):
 
     apply_exam_session_form(session_record, data)
     ensure_exam_session_year(data["session_date"].year)
+    sync_exam_session_concat_sessions(session_record, data["concat_session_ids"])
     db.session.commit()
     flash("Exam session updated successfully.", "success")
     return redirect(url_for("staff.exam_session_planner", session_year=data["session_date"].year))
@@ -23492,6 +23590,19 @@ def duplicate_exam_session_year():
         session_map[source_session.id] = new_session.id
 
     if session_map:
+        duplicated_sessions = ExamSession.query.filter(ExamSession.id.in_(session_map.values())).all()
+        duplicated_by_id = {session_record.id: session_record for session_record in duplicated_sessions}
+        for source_session in source_sessions:
+            new_session = duplicated_by_id.get(session_map.get(source_session.id))
+            if not new_session:
+                continue
+            new_concat_ids = {
+                session_map[concat_id]
+                for concat_id in source_session.concat_session_id_set()
+                if concat_id in session_map
+            }
+            new_session.concat_session_ids = serialize_concat_session_ids(new_concat_ids, new_session.id)
+
         source_assignments = ExamSessionSupervisorAssignment.query.filter(
             ExamSessionSupervisorAssignment.exam_session_id.in_(session_map.keys())
         ).all()

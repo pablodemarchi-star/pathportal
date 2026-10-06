@@ -675,6 +675,7 @@ class ExamSession(db.Model):
     exam_session_organised_by = db.Column(db.String(40), nullable=False, default="the exam centre", index=True)
     contact_points = db.Column(db.Text, nullable=False, default="[]")
     considerations = db.Column(db.Text, nullable=False, default="")
+    concat_session_ids = db.Column(db.Text, nullable=False, default="[]")
     shifts = db.Column(db.String(80), nullable=False, default="")
     modules = db.Column(db.String(120), nullable=False, default="")
     full_address_google_maps = db.Column(db.String(500), nullable=True)
@@ -808,6 +809,15 @@ class ExamSession(db.Model):
                 "replies": replies,
             })
         return comments
+
+    def concat_session_id_set(self):
+        try:
+            values = json.loads(self.concat_session_ids or "[]")
+        except (TypeError, ValueError, json.JSONDecodeError):
+            return set()
+        if not isinstance(values, list):
+            return set()
+        return {int(value) for value in values if str(value).isdigit() and int(value) != self.id}
 
     def non_available_ids(self):
         try:

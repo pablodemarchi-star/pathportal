@@ -577,12 +577,14 @@
   </article>
 {%- endmacro %}
 
-{% macro session_form(session, action, submit_label, status_options, module_options, shift_options, format_options, category_options, exam_session_organised_by_options, csrf_token, selected_session_year) -%}
+{% macro session_form(session, action, submit_label, status_options, module_options, shift_options, format_options, category_options, exam_session_organised_by_options, concat_session_options, csrf_token, selected_session_year) -%}
   {% set selected_modules = session.modules_list() if session else [] %}
   {% set selected_shifts = session.shifts_list() if session else [] %}
   {% set selected_format = session.format if session else '' %}
   {% set selected_exam_session_organised_by = session.exam_session_organised_by if session else 'the exam centre' %}
   {% set session_contact_points = session.contact_points_list() if session and session.contact_points_list() else [{'full_name': '', 'phone': '', 'email': ''}] %}
+  {% set selected_concat_session_ids = session.concat_session_id_set() if session else [] %}
+  {% set concat_session_option_ids = concat_session_options|map(attribute='id')|list %}
   {% set selected_has_exam_centre_fields = selected_format in ['Onsite', 'Online at exam centre'] %}
   <form method="post" action="{{ action }}" class="form-grid exam-session-form" data-exam-session-form {% if session %}data-original-session-year="{{ session.session_date.year }}"{% endif %}>
     <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
@@ -710,6 +712,30 @@
         </li>
       </ul>
     </fieldset>
+    <div class="full-span exam-session-concat-field field-label">
+      Concat
+      <details class="exam-filter-dropdown exam-session-concat-dropdown">
+        <summary>Select sessions{% if selected_concat_session_ids %} ({{ selected_concat_session_ids|length }}){% endif %}</summary>
+        <div class="exam-filter-dropdown-panel exam-session-concat-dropdown-panel">
+          {% for concat_session in concat_session_options %}
+            {% if not session or concat_session.id != session.id %}
+              <label>
+                <input type="checkbox" name="concat_session_ids" value="{{ concat_session.id }}" {% if concat_session.id in selected_concat_session_ids %}checked{% endif %}>
+                <span>{{ concat_session.exam_session_name }} ({{ concat_session.session_date|session_date }})</span>
+              </label>
+            {% endif %}
+          {% endfor %}
+          {% if concat_session_options|length <= (1 if session else 0) %}
+            <span class="exam-session-concat-empty">No other sessions available.</span>
+          {% endif %}
+        </div>
+      </details>
+      {% for concat_session_id in selected_concat_session_ids %}
+        {% if concat_session_id not in concat_session_option_ids %}
+          <input type="hidden" name="concat_session_ids" value="{{ concat_session_id }}">
+        {% endif %}
+      {% endfor %}
+    </div>
     <div class="form-actions full-span">
       <button class="secondary-button" type="button" data-close-modal>Cancel</button>
       <button class="primary-button" type="submit" data-exam-session-submit disabled>{{ submit_label }}</button>
@@ -1013,7 +1039,13 @@
               {% if session.exam_session_organised_by == 'Path Examinations' %}
                 <em class="session-organiser-note">Organised by Path Examinations</em>
               {% endif %}
-              {{ centre_type_badge(session.category) }}
+              <span class="session-category-row">
+                {{ centre_type_badge(session.category) }}
+                {% set concat_session_names = concat_session_names_by_session.get(session.id, []) %}
+                {% if concat_session_names %}
+                  <span class="session-concat-indicator" title="Concatenated with: {{ concat_session_names|join(', ') }}">&lt; concat &gt;</span>
+                {% endif %}
+              </span>
               {% set date_dietary_requirements = session_dietary_requirement_alerts.get(session.id, []) %}
               {% if date_dietary_requirements %}
                 <span class="session-dietary-requirements-tag" title="{% for dietary_requirement in date_dietary_requirements %}Dietary requirements for {{ dietary_requirement.name }}: {{ dietary_requirement.description }}{% if not loop.last %}&#10;{% endif %}{% endfor %}">Dietary requirements</span>
@@ -1167,7 +1199,7 @@
       <h2>New exam session</h2>
       <button class="icon-button" type="button" data-close-modal>&times;</button>
     </div>
-    {{ session_form(None, url_for('staff.create_exam_session'), 'Create exam session', status_options, module_options, shift_options, format_options, category_options, exam_session_organised_by_options, csrf_token, selected_session_year) }}
+    {{ session_form(None, url_for('staff.create_exam_session'), 'Create exam session', status_options, module_options, shift_options, format_options, category_options, exam_session_organised_by_options, concat_session_options, csrf_token, selected_session_year) }}
   </div>
 </div>
 
@@ -1213,12 +1245,18 @@
     <div class="modal-panel extra-large" data-session-modal-panel data-session-id="{{ session.id }}" data-session-name="{{ session.exam_session_name }}" data-session-date="{{ session.session_date.isoformat() }}" data-session-date-label="{{ session.session_date|long_session_date }}" data-session-date-email="{{ session.session_date.strftime('%A') }} {{ session.session_date.day }} {{ session.session_date.strftime('%B') }} {{ session.session_date.year }}" data-session-shift="{{ session.shifts_list()|join(', ') }}" data-session-format="{{ session.format }}" data-session-address="{{ session.full_address_google_maps or '' }}" data-session-city="{{ session.city or '' }}" data-session-province="{{ session.province or '' }}" data-session-details-url="{{ session.details_url or '' }}" data-session-schedule-folder-url="{{ session.schedule_folder_url or '' }}" data-staff-payment-next-payment-date="{{ staff_payment_next_payment_date }}" data-preconfirmation-certifications='{{ staff_preconfirmation_certifications|tojson }}'>
       <div class="modal-header">
         <div>
+          {% set modal_session_considerations = session.considerations_thread() %}
           <h2>
             Exam session staff members for
             {% if session.details_url %}
               <a class="exam-session-title-link" href="{{ session.details_url }}" target="_blank" rel="noopener noreferrer">{{ session.exam_session_name }}</a>
             {% else %}
               {{ session.exam_session_name }}
+            {% endif %}
+            {% if modal_session_considerations %}
+              <button class="session-considerations-chip session-title-considerations-chip" type="button" data-open-modal="session-considerations-modal-{{ session.id }}">Considerations ({{ modal_session_considerations|length }})</button>
+            {% else %}
+              <button class="session-considerations-alert session-title-considerations-chip" type="button" data-open-modal="session-considerations-modal-{{ session.id }}" aria-label="Add session considerations" title="Add session considerations">!</button>
             {% endif %}
           </h2>
           <p class="modal-subtitle">{{ session.session_date|long_session_date }}</p>
@@ -1245,8 +1283,16 @@
             </div>
           {% endif %}
         </div>
-        {% if not session_fullscreen %}
-          <button class="icon-button" type="button" data-close-modal>&times;</button>
+        {% set concat_session_links = concat_session_links_by_session.get(session.id, []) %}
+        {% if concat_session_links or not session_fullscreen %}
+          <div class="session-modal-header-actions">
+            {% for concat_session in concat_session_links %}
+              <a class="session-modal-concat-link" href="{{ url_for('staff.exam_session_planner', session_year=selected_session_year, open_session_modal=concat_session.id, session_fullscreen=1) }}" target="_blank" rel="noopener noreferrer">Open {{ concat_session.name }}</a>
+            {% endfor %}
+            {% if not session_fullscreen %}
+              <button class="icon-button" type="button" data-close-modal>&times;</button>
+            {% endif %}
+          </div>
         {% endif %}
       </div>
       <div class="session-modal-scroll-controls">
@@ -1565,6 +1611,85 @@
     </div>
   </div>
 
+  {% set modal_session_considerations = session.considerations_thread() %}
+    <div class="modal nested-modal" id="session-considerations-modal-{{ session.id }}" aria-hidden="true">
+      <div class="modal-panel session-considerations-modal-panel">
+        <div class="modal-header">
+          <h2>Considerations</h2>
+          <button class="icon-button" type="button" data-close-modal>&times;</button>
+        </div>
+        <div class="session-considerations-popover session-considerations-submodal-card">
+          <div class="session-considerations-thread" aria-label="Session considerations conversation">
+            {% if modal_session_considerations %}
+              {% for consideration in modal_session_considerations %}
+                <article class="session-consideration-message">
+                  <div class="session-consideration-message-header">
+                    <span>{{ consideration.author or 'Path team' }}</span>
+                    <form method="post" action="{{ url_for('staff.update_exam_session_considerations', session_id=session.id) }}" data-disable-on-submit>
+                      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                      <input type="hidden" name="session_year" value="{{ selected_session_year }}">
+                      <input type="hidden" name="action" value="delete_comment">
+                      <input type="hidden" name="comment_id" value="{{ consideration.id }}">
+                      <button class="session-consideration-delete" type="submit">Delete</button>
+                    </form>
+                  </div>
+                  <p>{{ consideration.text }}</p>
+                  {% if consideration.replies %}
+                    <div class="session-consideration-replies">
+                      {% for reply in consideration.replies %}
+                        <article class="session-consideration-reply">
+                          <div class="session-consideration-message-header">
+                            <span>{{ reply.author or 'Path team' }}</span>
+                            <form method="post" action="{{ url_for('staff.update_exam_session_considerations', session_id=session.id) }}" data-disable-on-submit>
+                              <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                              <input type="hidden" name="session_year" value="{{ selected_session_year }}">
+                              <input type="hidden" name="action" value="delete_reply">
+                              <input type="hidden" name="comment_id" value="{{ consideration.id }}">
+                              <input type="hidden" name="reply_id" value="{{ reply.id }}">
+                              <button class="session-consideration-delete" type="submit">Delete</button>
+                            </form>
+                          </div>
+                          <p>{{ reply.text }}</p>
+                        </article>
+                      {% endfor %}
+                    </div>
+                  {% endif %}
+                  <details class="session-consideration-reply-entry">
+                    <summary>Reply</summary>
+                    <form class="session-considerations-form session-consideration-reply-form" method="post" action="{{ url_for('staff.update_exam_session_considerations', session_id=session.id) }}" data-disable-on-submit>
+                      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                      <input type="hidden" name="session_year" value="{{ selected_session_year }}">
+                      <input type="hidden" name="action" value="add_reply">
+                      <input type="hidden" name="comment_id" value="{{ consideration.id }}">
+                      <textarea name="reply_text" rows="2" maxlength="4000" placeholder="Reply" required></textarea>
+                      <div class="session-considerations-actions">
+                        <button class="primary-button compact-action" type="submit">Reply</button>
+                      </div>
+                    </form>
+                  </details>
+                </article>
+              {% endfor %}
+            {% else %}
+              <p class="session-considerations-empty">No considerations yet.</p>
+            {% endif %}
+          </div>
+          <form class="session-considerations-form" method="post" action="{{ url_for('staff.update_exam_session_considerations', session_id=session.id) }}" data-disable-on-submit>
+            <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+            <input type="hidden" name="session_year" value="{{ selected_session_year }}">
+            <input type="hidden" name="action" value="add_comment">
+            <label>
+              <span>New consideration</span>
+              <textarea name="comment_text" rows="3" maxlength="4000" required></textarea>
+            </label>
+            <div class="session-considerations-actions">
+              <button class="secondary-button compact-action" type="button" data-close-modal>Cancel</button>
+              <button class="primary-button compact-action" type="submit">Save and close</button>
+            </div>
+          </form>
+        </div>
+      </div>
+    </div>
+
   {% for concept in session_logistics_concepts %}
     <div class="modal nested-modal" id="logistics-history-{{ concept.id }}" aria-hidden="true">
       <div class="modal-panel">
@@ -1627,7 +1752,7 @@
           <h2>Edit exam session</h2>
           <button class="icon-button" type="button" data-close-modal>&times;</button>
         </div>
-        {{ session_form(session, url_for('staff.update_exam_session', session_id=session.id), 'Save changes', status_options, module_options, shift_options, format_options, category_options, exam_session_organised_by_options, csrf_token, selected_session_year) }}
+        {{ session_form(session, url_for('staff.update_exam_session', session_id=session.id), 'Save changes', status_options, module_options, shift_options, format_options, category_options, exam_session_organised_by_options, concat_session_options, csrf_token, selected_session_year) }}
       </div>
     </div>
   {% endif %}

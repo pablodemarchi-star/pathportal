@@ -637,6 +637,8 @@ class ScheduleWorkflowTest(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertIn('class="session-considerations-alert"', html)
         self.assertNotIn('class="session-considerations-chip"', html)
+        self.assertIn(f'data-open-modal="session-considerations-modal-{self.session_record.id}"', html)
+        self.assertIn(f'id="session-considerations-modal-{self.session_record.id}"', html)
 
         response = client.post(
             f"/exam-session-planner/sessions/{self.session_record.id}/considerations",
@@ -658,6 +660,8 @@ class ScheduleWorkflowTest(unittest.TestCase):
         self.assertIn('class="session-considerations-chip"', html)
         self.assertIn("Considerations (1)", html)
         self.assertIn("Bring extra printed speaking slips.", html)
+        self.assertIn(f'data-open-modal="session-considerations-modal-{self.session_record.id}"', html)
+        self.assertIn(f'id="session-considerations-modal-{self.session_record.id}"', html)
         self.assertNotIn('class="session-considerations-alert"', html)
 
         response = client.post(
@@ -712,6 +716,91 @@ class ScheduleWorkflowTest(unittest.TestCase):
         self.assertEqual(db.session.get(ExamSession, self.session_record.id).considerations, "")
         self.assertIn('class="session-considerations-alert"', html)
         self.assertNotIn('class="session-considerations-chip"', html)
+
+    def test_exam_session_concat_selection_syncs_both_sessions(self):
+        other_session = ExamSession(
+            exam_session_name="July concat session",
+            category="Path School",
+            status="Pending",
+            session_date=date(2026, 7, 25),
+            shifts="Afternoon",
+            modules="Speaking",
+            format="Onsite",
+        )
+        db.session.add(other_session)
+        db.session.commit()
+        client = self.login_client()
+
+        html = client.get("/exam-session-planner?session_year=2026").get_data(as_text=True)
+        self.assertIn("Concat", html)
+        self.assertIn("exam-session-concat-dropdown", html)
+        self.assertNotIn('name="concat_session_ids" multiple', html)
+        self.assertIn("July concat session (25/07/2026)", html)
+
+        response = client.post(
+            f"/exam-session-planner/sessions/{self.session_record.id}",
+            data={
+                "csrf_token": "token",
+                "session_year": "2026",
+                "exam_session_name": "June exam session",
+                "category": "Path School",
+                "status": "Pending",
+                "session_date": "25/06/2026",
+                "minimum_candidates_required": "30",
+                "exam_session_organised_by": "the exam centre",
+                "shifts": "Morning",
+                "modules": "Speaking",
+                "format": "Onsite",
+                "details_url": "https://example.com/sinapsis",
+                "schedule_folder_url": "https://example.com/schedule-folder",
+                "exam_entry_slips_url": "https://example.com/entry-slips-folder",
+                "concat_session_ids": str(other_session.id),
+            },
+            follow_redirects=True,
+        )
+        html = response.get_data(as_text=True)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(db.session.get(ExamSession, self.session_record.id).concat_session_id_set(), {other_session.id})
+        self.assertEqual(db.session.get(ExamSession, other_session.id).concat_session_id_set(), {self.session_record.id})
+        self.assertIn("&lt; concat &gt;", html)
+        self.assertIn("Concatenated with: July concat session", html)
+        self.assertIn("Concatenated with: June exam session", html)
+        self.assertIn("Open July concat session", html)
+        self.assertIn("Open June exam session", html)
+        self.assertIn(
+            f"/exam-session-planner?session_year=2026&amp;open_session_modal={other_session.id}&amp;session_fullscreen=1",
+            html,
+        )
+        self.assertIn(
+            f"/exam-session-planner?session_year=2026&amp;open_session_modal={self.session_record.id}&amp;session_fullscreen=1",
+            html,
+        )
+
+        response = client.post(
+            f"/exam-session-planner/sessions/{self.session_record.id}",
+            data={
+                "csrf_token": "token",
+                "session_year": "2026",
+                "exam_session_name": "June exam session",
+                "category": "Path School",
+                "status": "Pending",
+                "session_date": "25/06/2026",
+                "minimum_candidates_required": "30",
+                "exam_session_organised_by": "the exam centre",
+                "shifts": "Morning",
+                "modules": "Speaking",
+                "format": "Onsite",
+                "details_url": "https://example.com/sinapsis",
+                "schedule_folder_url": "https://example.com/schedule-folder",
+                "exam_entry_slips_url": "https://example.com/entry-slips-folder",
+            },
+            follow_redirects=True,
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(db.session.get(ExamSession, self.session_record.id).concat_session_id_set(), set())
+        self.assertEqual(db.session.get(ExamSession, other_session.id).concat_session_id_set(), set())
 
     def test_exam_session_table_shows_emergency_contact_column(self):
         emergency_member = AcademicStaff(
