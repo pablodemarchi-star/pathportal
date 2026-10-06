@@ -170,6 +170,28 @@
                   </form>
                 {% endif %}
               </div>
+              {% if (monthly_unified_total_session_ids_by_session.get(session.id, [])|length) > 1 %}
+                <form method="post" action="{{ url_for('staff.update_monthly_exam_session_unified_total', session_id=session.id) }}" class="monthly-unified-total-form">
+                  <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                  <label class="monthly-unified-total-field">
+                    <span>Unified total</span>
+                    <input
+                      type="number"
+                      name="unified_candidate_total"
+                      value="{{ session.unified_candidate_total if session.unified_candidate_total is not none else '' }}"
+                      min="1"
+                      step="1"
+                      inputmode="numeric"
+                      pattern="[0-9]*"
+                      placeholder="Unified total"
+                      data-integer-input
+                      data-unified-total-input
+                      data-session-id="{{ session.id }}"
+                      {% if monthly_closed %}readonly{% endif %}
+                    >
+                  </label>
+                </form>
+              {% endif %}
             </div>
           </td>
           {% for month_number, month_name in months %}

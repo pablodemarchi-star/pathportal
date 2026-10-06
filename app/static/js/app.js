@@ -4119,6 +4119,8 @@ const initIntegerInputs = (root = document) => {
       }
       const monthlyForm = input.closest(".monthly-registration-form");
       if (monthlyForm) queueMonthlyRegistrationSave(monthlyForm);
+      const unifiedForm = input.closest(".monthly-unified-total-form");
+      if (unifiedForm) queueMonthlyUnifiedTotalSave(unifiedForm);
     });
     input.addEventListener("keydown", (event) => {
       if (["-", "+", ".", ",", "e", "E"].includes(event.key)) event.preventDefault();
@@ -4218,6 +4220,41 @@ const queueMonthlyRegistrationSave = (form) => {
   if (form?.closest("[data-monthly-session-row]")?.classList.contains("is-monthly-closed")) return;
   window.clearTimeout(Number(form.dataset.saveTimer || 0));
   const timer = window.setTimeout(() => saveMonthlyRegistrationForm(form), 450);
+  form.dataset.saveTimer = String(timer);
+};
+
+const saveMonthlyUnifiedTotalForm = async (form) => {
+  if (!form) return;
+  form.classList.add("is-saving");
+  form.classList.remove("is-error");
+  try {
+    const response = await fetch(form.action, {
+      method: "POST",
+      body: new FormData(form),
+      credentials: "same-origin",
+      headers: {
+        "X-Requested-With": "XMLHttpRequest",
+      },
+    });
+    if (!response.ok) throw new Error("Unable to save unified total.");
+    const data = await response.json();
+    const value = data.unified_candidate_total ?? "";
+    (data.session_ids || []).forEach((sessionId) => {
+      document.querySelectorAll(`[data-unified-total-input][data-session-id="${sessionId}"]`).forEach((input) => {
+        input.value = value;
+      });
+    });
+    form.classList.remove("is-saving");
+  } catch (error) {
+    form.classList.remove("is-saving");
+    form.classList.add("is-error");
+  }
+};
+
+const queueMonthlyUnifiedTotalSave = (form) => {
+  if (form?.closest("[data-monthly-session-row]")?.classList.contains("is-monthly-closed")) return;
+  window.clearTimeout(Number(form.dataset.saveTimer || 0));
+  const timer = window.setTimeout(() => saveMonthlyUnifiedTotalForm(form), 450);
   form.dataset.saveTimer = String(timer);
 };
 

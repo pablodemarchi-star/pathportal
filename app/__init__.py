@@ -778,6 +778,9 @@ def create_app():
         if exam_session_columns and "concat_session_ids" not in exam_session_columns:
             db.session.execute(text("ALTER TABLE exam_session ADD COLUMN concat_session_ids TEXT NOT NULL DEFAULT '[]'"))
             db.session.commit()
+        if exam_session_columns and "unified_candidate_total" not in exam_session_columns:
+            db.session.execute(text("ALTER TABLE exam_session ADD COLUMN unified_candidate_total INTEGER"))
+            db.session.commit()
         if exam_session_columns and "rsg_enabled" in exam_session_columns:
             db.session.execute(text("UPDATE exam_session SET rsg_enabled = 0 WHERE format = 'Online' AND rsg_enabled = 1"))
             db.session.commit()

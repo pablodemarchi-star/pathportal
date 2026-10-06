@@ -2929,6 +2929,54 @@ def sync_exam_session_concat_sessions(session_record, selected_session_ids):
         related_session.concat_session_ids = serialize_concat_session_ids(related_values, related_session.id)
 
 
+def exam_session_concat_component_map():
+    session_rows = ExamSession.query.with_entities(ExamSession.id, ExamSession.concat_session_ids).all()
+    adjacency = {session_id: set() for session_id, _concat_ids in session_rows}
+    for session_id, concat_ids in session_rows:
+        try:
+            values = json.loads(concat_ids or "[]")
+        except (TypeError, ValueError, json.JSONDecodeError):
+            values = []
+        for value in values if isinstance(values, list) else []:
+            if not str(value).isdigit():
+                continue
+            related_id = int(value)
+            if related_id == session_id or related_id not in adjacency:
+                continue
+            adjacency[session_id].add(related_id)
+            adjacency[related_id].add(session_id)
+
+    components = {}
+    visited = set()
+    for session_id in adjacency:
+        if session_id in visited:
+            continue
+        stack = [session_id]
+        component = set()
+        while stack:
+            current_id = stack.pop()
+            if current_id in component:
+                continue
+            component.add(current_id)
+            stack.extend(adjacency.get(current_id, set()) - component)
+        visited.update(component)
+        for component_session_id in component:
+            components[component_session_id] = component
+    return components
+
+
+def monthly_unified_total_session_ids(session_record):
+    return exam_session_concat_component_map().get(session_record.id, {session_record.id})
+
+
+def sync_monthly_unified_total(session_record, unified_total):
+    session_ids = monthly_unified_total_session_ids(session_record)
+    sessions_to_update = ExamSession.query.filter(ExamSession.id.in_(session_ids)).all()
+    for related_session in sessions_to_update:
+        related_session.unified_candidate_total = unified_total
+    return sorted(session_ids)
+
+
 ACADEMIC_STAFF_EXPORT_HEADERS = [
     "Status",
     "Title",
@@ -15091,22 +15139,71 @@ def monthly_candidate_total_sums(session_ids):
     }
     if not session_ids:
         return totals
-    rows = (
-        db.session.query(
-            ExamSessionMonthlyCandidateTotal.month,
-            db.func.sum(ExamSessionMonthlyCandidateTotal.total_candidates),
+    session_id_set = set(session_ids)
+    component_map = exam_session_concat_component_map()
+    sessions_by_id = {
+        session_record.id: session_record
+        for session_record in ExamSession.query.filter(ExamSession.id.in_(session_id_set)).all()
+    }
+    grouped_session_ids = set()
+    concat_groups = []
+    for session_id in session_id_set:
+        if session_id in grouped_session_ids:
+            continue
+        component_ids = component_map.get(session_id, {session_id})
+        visible_component_ids = set(component_ids) & session_id_set
+        if len(component_ids) > 1 and visible_component_ids:
+            concat_groups.append(visible_component_ids)
+            grouped_session_ids.update(visible_component_ids)
+
+    normal_session_ids = session_id_set - grouped_session_ids
+    if normal_session_ids:
+        rows = (
+            db.session.query(
+                ExamSessionMonthlyCandidateTotal.month,
+                db.func.sum(ExamSessionMonthlyCandidateTotal.total_candidates),
+            )
+            .filter(ExamSessionMonthlyCandidateTotal.exam_session_id.in_(normal_session_ids))
+            .group_by(ExamSessionMonthlyCandidateTotal.month)
+            .all()
         )
-        .filter(ExamSessionMonthlyCandidateTotal.exam_session_id.in_(session_ids))
-        .group_by(ExamSessionMonthlyCandidateTotal.month)
-        .all()
-    )
-    for month, total in rows:
-        totals[month] = {
-            "value": total or 0,
-            "has_data": True,
-            "trend": "neutral",
-            "tooltip": "First recorded month",
+        for month, total in rows:
+            totals[month]["value"] += total or 0
+            totals[month]["has_data"] = True
+
+    for group_ids in concat_groups:
+        unified_total = next(
+            (
+                sessions_by_id[session_id].unified_candidate_total
+                for session_id in sorted(group_ids)
+                if session_id in sessions_by_id and sessions_by_id[session_id].unified_candidate_total is not None
+            ),
+            None,
+        )
+        if unified_total is None:
+            continue
+        active_months = {
+            month
+            for (month,) in db.session.query(ExamSessionMonthlyCandidateTotal.month)
+            .filter(ExamSessionMonthlyCandidateTotal.exam_session_id.in_(group_ids))
+            .all()
         }
+        active_months.update({
+            month
+            for (month,) in db.session.query(ExamSessionMonthlyRegistration.month)
+            .filter(ExamSessionMonthlyRegistration.exam_session_id.in_(group_ids))
+            .all()
+        })
+        if not active_months:
+            continue
+        latest_month = max(active_months)
+        totals[latest_month]["value"] += unified_total
+        totals[latest_month]["has_data"] = True
+
+    for total_data in totals.values():
+        if total_data["has_data"]:
+            total_data["trend"] = "neutral"
+            total_data["tooltip"] = "First recorded month"
     previous_value = None
     for month_number, _ in MONTHLY_REGISTRATION_MONTHS:
         total_data = totals[month_number]
@@ -22173,6 +22270,11 @@ def monthly_exam_session_registrations():
         session_record.id: monthly_registration_reopen_affects_schedule(session_record)
         for session_record in sessions
     }
+    concat_component_map = exam_session_concat_component_map()
+    monthly_unified_total_session_ids_by_session = {
+        session_record.id: concat_component_map.get(session_record.id, {session_record.id})
+        for session_record in sessions
+    }
     return render_template(
         "monthly_registrations/index.html",
         sessions=sessions,
@@ -22183,6 +22285,7 @@ def monthly_exam_session_registrations():
         candidate_total_trends=monthly_candidate_total_trends(candidate_totals),
         monthly_statuses=monthly_statuses,
         monthly_reopen_affects_schedule=monthly_reopen_affects_schedule,
+        monthly_unified_total_session_ids_by_session=monthly_unified_total_session_ids_by_session,
         monthly_totals=monthly_totals,
         session_years=session_years,
         archived_session_years=(
@@ -22302,6 +22405,47 @@ def update_monthly_exam_session_registration(session_id, month):
         else:
             flash("Monthly registrations cleared.", "success")
     return redirect(url_for("staff.monthly_exam_session_registrations"))
+
+
+@staff_bp.route("/monthly-exam-session-registrations/<int:session_id>/unified-total", methods=["POST"])
+@login_required
+def update_monthly_exam_session_unified_total(session_id):
+    is_async = request.headers.get("X-Requested-With") == "XMLHttpRequest"
+    if not validate_csrf():
+        if is_async:
+            return Response("Security token expired. Please try again.", status=400)
+        flash("Security token expired. Please try again.", "error")
+        return redirect(url_for("staff.monthly_exam_session_registrations"))
+
+    session_record = ExamSession.query.get_or_404(session_id)
+    total_value = request.form.get("unified_candidate_total", "").strip()
+    if total_value == "":
+        unified_total = None
+    elif not total_value.isdigit() or int(total_value) <= 0:
+        if is_async:
+            return Response("Unified total must be a positive whole number.", status=400)
+        flash("Unified total must be a positive whole number.", "error")
+        return redirect(url_for("staff.monthly_exam_session_registrations", session_year=session_record.session_date.year))
+    else:
+        unified_total = int(total_value)
+
+    synced_session_ids = sync_monthly_unified_total(session_record, unified_total)
+    db.session.commit()
+    if is_async:
+        target_year = session_record.session_date.year
+        filtered_session_ids = [
+            year_session_id
+            for (year_session_id,) in ExamSession.query.with_entities(ExamSession.id)
+            .filter(db.extract("year", ExamSession.session_date) == target_year)
+            .all()
+        ]
+        return jsonify({
+            "unified_candidate_total": unified_total if unified_total is not None else "",
+            "session_ids": synced_session_ids,
+            "monthly_totals": monthly_candidate_total_sums(filtered_session_ids),
+        })
+    flash("Unified total updated successfully.", "success")
+    return redirect(url_for("staff.monthly_exam_session_registrations", session_year=session_record.session_date.year))
 
 
 @staff_bp.route("/monthly-exam-session-registrations/<int:session_id>/reset", methods=["POST"])
@@ -23584,6 +23728,7 @@ def duplicate_exam_session_year():
             exam_entry_slips_url=source_session.exam_entry_slips_url,
             contact_points=source_session.contact_points,
             considerations=source_session.considerations,
+            unified_candidate_total=source_session.unified_candidate_total,
         )
         db.session.add(new_session)
         db.session.flush()

@@ -700,6 +700,7 @@ class ExamSession(db.Model):
     emergency_contact_role_check_verified = db.Column(db.Boolean, nullable=False, default=False)
     monthly_registrations_closed = db.Column(db.Boolean, nullable=False, default=False)
     monthly_registrations_closed_at = db.Column(db.DateTime(timezone=True), nullable=True)
+    unified_candidate_total = db.Column(db.Integer, nullable=True)
     package_label_verification_status = db.Column(db.String(30), nullable=False, default="not_started", index=True)
     package_label_verification_updated_at = db.Column(db.DateTime(timezone=True), nullable=True)
     package_label_verification_updated_by = db.Column(db.String(120), nullable=True)

@@ -2938,6 +2938,95 @@ class ScheduleWorkflowTest(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json["monthly_status"], "Achieved")
 
+    def test_monthly_registration_unified_total_syncs_concat_sessions(self):
+        other_session = ExamSession(
+            exam_session_name="Linked monthly session",
+            category="Path School",
+            status="Pending",
+            session_date=date(2026, 7, 25),
+            shifts="Morning",
+            modules="Speaking",
+            format="Onsite",
+        )
+        chained_session = ExamSession(
+            exam_session_name="Chained monthly session",
+            category="Path School",
+            status="Pending",
+            session_date=date(2026, 7, 26),
+            shifts="Morning",
+            modules="Speaking",
+            format="Onsite",
+        )
+        standalone_session = ExamSession(
+            exam_session_name="Standalone monthly session",
+            category="Path School",
+            status="Pending",
+            session_date=date(2026, 8, 25),
+            shifts="Morning",
+            modules="Speaking",
+            format="Onsite",
+        )
+        db.session.add_all([other_session, chained_session, standalone_session])
+        db.session.flush()
+        self.session_record.concat_session_ids = json.dumps([other_session.id])
+        other_session.concat_session_ids = json.dumps([self.session_record.id, chained_session.id])
+        chained_session.concat_session_ids = json.dumps([other_session.id])
+        db.session.add_all([
+            ExamSessionMonthlyCandidateTotal(
+                exam_session_id=self.session_record.id,
+                month=6,
+                total_candidates=10,
+            ),
+            ExamSessionMonthlyCandidateTotal(
+                exam_session_id=other_session.id,
+                month=7,
+                total_candidates=20,
+            ),
+            ExamSessionMonthlyCandidateTotal(
+                exam_session_id=chained_session.id,
+                month=8,
+                total_candidates=30,
+            ),
+        ])
+        db.session.commit()
+        client = self.login_client()
+
+        html = client.get("/monthly-exam-session-registrations?session_year=2026").get_data(as_text=True)
+        self.assertIn("Unified total", html)
+        self.assertEqual(html.count('name="unified_candidate_total"'), 3)
+        self.assertIn(f'data-session-id="{self.session_record.id}"', html)
+        self.assertIn(f'data-session-id="{other_session.id}"', html)
+        self.assertIn(f'data-session-id="{chained_session.id}"', html)
+
+        response = client.post(
+            f"/monthly-exam-session-registrations/{self.session_record.id}/unified-total",
+            data={"csrf_token": "token", "unified_candidate_total": "42"},
+            headers={"X-Requested-With": "XMLHttpRequest"},
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json["unified_candidate_total"], 42)
+        self.assertEqual(set(response.json["session_ids"]), {self.session_record.id, other_session.id, chained_session.id})
+        self.assertFalse(response.json["monthly_totals"]["6"]["has_data"])
+        self.assertFalse(response.json["monthly_totals"]["7"]["has_data"])
+        self.assertTrue(response.json["monthly_totals"]["8"]["has_data"])
+        self.assertEqual(response.json["monthly_totals"]["8"]["value"], 42)
+        self.assertEqual(db.session.get(ExamSession, self.session_record.id).unified_candidate_total, 42)
+        self.assertEqual(db.session.get(ExamSession, other_session.id).unified_candidate_total, 42)
+        self.assertEqual(db.session.get(ExamSession, chained_session.id).unified_candidate_total, 42)
+
+        response = client.post(
+            f"/monthly-exam-session-registrations/{chained_session.id}/unified-total",
+            data={"csrf_token": "token", "unified_candidate_total": "51"},
+            headers={"X-Requested-With": "XMLHttpRequest"},
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json["monthly_totals"]["8"]["value"], 51)
+        self.assertEqual(db.session.get(ExamSession, self.session_record.id).unified_candidate_total, 51)
+        self.assertEqual(db.session.get(ExamSession, other_session.id).unified_candidate_total, 51)
+        self.assertEqual(db.session.get(ExamSession, chained_session.id).unified_candidate_total, 51)
+
     def test_monthly_registration_close_locks_rendered_inputs_and_inactive_months(self):
         db.session.add(ExamSessionMonthlyCandidateTotal(
             exam_session_id=self.session_record.id,
