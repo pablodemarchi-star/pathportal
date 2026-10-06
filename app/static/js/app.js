@@ -144,6 +144,13 @@ const modalOpeners = new WeakMap();
 
 document.addEventListener("click", (event) => {
   const considerationsCancel = event.target.closest("[data-session-considerations-cancel]");
+  if (!event.target.closest(".session-considerations-entry")) {
+    document.querySelectorAll(".session-considerations-entry[open]").forEach((entry) => {
+      entry.open = false;
+    });
+    return;
+  }
+
   if (!considerationsCancel) return;
 
   const entry = considerationsCancel.closest(".session-considerations-entry");
