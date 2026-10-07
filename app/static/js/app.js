@@ -1062,6 +1062,16 @@ const focusModalHeading = (modal) => {
 const openModal = (id, { opener = null, focus = true } = {}) => {
   const modal = document.getElementById(id);
   if (!modal) return;
+  if (id.startsWith("exam-session-members-") && opener) {
+    const form = modal.querySelector("[data-session-members-form]");
+    const table = document.querySelector("[data-exam-session-list]");
+    if (form) form.dataset.plannerScrollState = JSON.stringify({
+      windowX: window.scrollX,
+      windowY: window.scrollY,
+      tableX: table?.scrollLeft || 0,
+      tableY: table?.scrollTop || 0,
+    });
+  }
   if (opener) modalOpeners.set(modal, opener);
   modal.classList.add("is-open");
   modal.setAttribute("aria-hidden", "false");
@@ -1332,6 +1342,10 @@ const focusModalTarget = (targetId, { scroll = true } = {}) => {
 };
 
 const closeModal = (modal) => {
+  modal.querySelectorAll("[data-session-save-feedback]").forEach((feedback) => {
+    window.clearTimeout(feedback.dismissTimer);
+    feedback.remove();
+  });
   modal.querySelectorAll("form").forEach((form) => {
     form.reset();
   });
@@ -1344,7 +1358,7 @@ const closeModal = (modal) => {
   modal.querySelectorAll("[data-onboarding-follow-up]").forEach((root) => syncOnboardingFollowUpControls(root.closest("form")));
   modal.querySelectorAll("[data-interview-no-show]").forEach((checkbox) => syncPotentialInterviewNoShow(checkbox.closest("form")));
   const opener = modalOpeners.get(modal);
-  if (opener && document.contains(opener)) opener.focus();
+  if (opener && document.contains(opener)) opener.focus({ preventScroll: true });
   const closeRedirectUrl = modal.dataset.closeRedirectUrl;
   if (closeRedirectUrl) {
     delete modal.dataset.closeRedirectUrl;
@@ -2341,6 +2355,45 @@ const restoreAnnualTableScrollState = () => {
 
 restoreAnnualTableScrollState();
 restoreTableSortScrollState();
+
+const plannerReturnStateUrl = (value) => {
+  const url = new URL(value, window.location.origin);
+  url.searchParams.delete("open_session_modal");
+  url.searchParams.delete("session_fullscreen");
+  url.searchParams.sort();
+  return `${url.pathname}?${url.searchParams.toString()}${url.hash}`;
+};
+
+const savePlannerReturnState = (form) => {
+  const returnUrl = form.elements.namedItem("planner_return_url")?.value;
+  if (!returnUrl || !form.dataset.plannerScrollState) return;
+  sessionStorage.setItem("path-planner-return-state", JSON.stringify({
+    url: plannerReturnStateUrl(returnUrl),
+    scroll: JSON.parse(form.dataset.plannerScrollState),
+  }));
+};
+
+const restorePlannerReturnState = () => {
+  const saved = sessionStorage.getItem("path-planner-return-state");
+  if (!saved) return;
+  sessionStorage.removeItem("path-planner-return-state");
+  try {
+    const state = JSON.parse(saved);
+    if (state.url !== plannerReturnStateUrl(window.location.href)) return;
+    window.requestAnimationFrame(() => {
+      const table = document.querySelector("[data-exam-session-list]");
+      if (table) {
+        table.scrollLeft = Number(state.scroll.tableX) || 0;
+        table.scrollTop = Number(state.scroll.tableY) || 0;
+      }
+      window.scrollTo(Number(state.scroll.windowX) || 0, Number(state.scroll.windowY) || 0);
+    });
+  } catch {
+    sessionStorage.removeItem("path-planner-return-state");
+  }
+};
+
+restorePlannerReturnState();
 
 const normalizeFeeInputValue = (value) => {
   let output = "";
@@ -10848,10 +10901,25 @@ document.addEventListener("click", (event) => {
   textarea.value = "";
 });
 
+const refreshPlannerSessionRow = async (form) => {
+  const row = document.querySelector(`[data-session-row][data-session-id="${form.dataset.sessionId}"]`);
+  if (!row) return;
+  const response = await fetch(window.location.href);
+  if (!response.ok) return;
+  const page = new DOMParser().parseFromString(await response.text(), "text/html");
+  const updated = page.querySelector(`[data-session-row][data-session-id="${form.dataset.sessionId}"]`);
+  if (!updated) return;
+  Array.from(row.cells).forEach((cell, index) => {
+    const newCell = updated.cells[index];
+    if (!newCell || cell.querySelector("form, input, select, textarea, button")) return;
+    cell.innerHTML = newCell.innerHTML;
+  });
+};
+
 document.querySelectorAll("[data-session-members-form]").forEach((form) => {
   if (form.dataset.logisticsSubmitInitialized === "true") return;
   form.dataset.logisticsSubmitInitialized = "true";
-  form.addEventListener("submit", (event) => {
+  form.addEventListener("submit", async (event) => {
     syncSessionNonAvailableFields(form);
     const logisticsSection = form.querySelector("[data-logistics-section]");
     if (logisticsSection && !syncLogisticsFilesLink(logisticsSection)) {
@@ -10871,24 +10939,76 @@ document.querySelectorAll("[data-session-members-form]").forEach((form) => {
     form.querySelectorAll("[data-logistics-fee]").forEach(roundLogisticsFeeInput);
     if (event.defaultPrevented) return;
     const submitter = event.submitter?.matches?.("[data-session-members-save]") ? event.submitter : null;
-    if (submitter) {
-      let actionInput = form.querySelector("input[data-session-members-modal-action]");
-      if (!actionInput) {
-        actionInput = document.createElement("input");
-        actionInput.type = "hidden";
-        actionInput.name = "modal_action";
-        actionInput.dataset.sessionMembersModalAction = "";
-        form.appendChild(actionInput);
-      }
-      actionInput.value = submitter.value || "save_close";
+    let actionInput = form.querySelector("input[data-session-members-modal-action]");
+    if (!actionInput) {
+      actionInput = document.createElement("input");
+      actionInput.type = "hidden";
+      actionInput.name = "modal_action";
+      actionInput.dataset.sessionMembersModalAction = "";
+      form.appendChild(actionInput);
     }
+    actionInput.value = submitter?.value || "save";
     const modal = form.closest(".modal");
+    const closeAfterSave = actionInput.value === "save_close";
+    const fullscreen = form.elements.namedItem("session_fullscreen")?.value === "1";
+    const saveInPlace = !closeAfterSave || !fullscreen;
+    const formData = saveInPlace ? new FormData(form) : null;
+    if (saveInPlace) event.preventDefault();
     modal?.querySelectorAll("[data-session-members-save]").forEach((button) => {
       button.disabled = true;
     });
     if (submitter) {
       submitter.dataset.originalText = submitter.textContent;
       submitter.textContent = "Saving...";
+    }
+    if (!saveInPlace) {
+      savePlannerReturnState(form);
+      return;
+    }
+    const lockedControls = Array.from(form.elements)
+      .filter((control) => !control.disabled);
+    lockedControls.forEach((control) => { control.disabled = true; });
+    try {
+      const response = await fetch(form.action, {
+        method: "POST",
+        body: formData,
+        headers: { Accept: "application/json" },
+      });
+      const payload = await response.json();
+      if (!response.ok || !payload.ok) throw new Error(payload.error || "The session could not be saved.");
+      Object.entries({ ...payload.saved_fields, ...payload.saved_values }).forEach(([name, id]) => {
+        const input = form.elements.namedItem(name);
+        if (input) input.value = String(id);
+      });
+      Object.assign(form.dataset, payload.form_state || {});
+      form.querySelectorAll("[name^='deleted_'], input[name^='logistics_note_']").forEach((input) => input.remove());
+      Array.from(form.elements).forEach((control) => {
+        if (control.tagName === "INPUT") {
+          control.defaultValue = control.value;
+          control.defaultChecked = control.checked;
+        } else if (control.tagName === "TEXTAREA") {
+          control.defaultValue = control.value;
+        } else if (control.tagName === "SELECT") {
+          Array.from(control.options).forEach((option) => { option.defaultSelected = option.selected; });
+        }
+      });
+      form.querySelectorAll("[data-supervisor-row]").forEach((row) => {
+        row.dataset.savedTeamMemberId = row.querySelector("[data-team-member-select]")?.value || "";
+        row.dataset.savedParticipationStatus = row.querySelector("[data-participation-select]")?.value || "Pending";
+      });
+      form.dataset.staffChangesUnsaved = "false";
+      showTransientFlash([payload.message, ...(payload.notices || [])].join(" "), "success");
+      await refreshPlannerSessionRow(form).catch(() => {});
+      if (closeAfterSave) closeModal(modal);
+    } catch (error) {
+      showTransientFlash(error.message || "The session could not be saved. Please try again.", "error");
+    } finally {
+      lockedControls.forEach((control) => { control.disabled = false; });
+      modal?.querySelectorAll("[data-session-members-save]").forEach((button) => {
+        button.disabled = false;
+        if (button.dataset.originalText) button.textContent = button.dataset.originalText;
+      });
+      syncInvitationEmailCopyButtons(form);
     }
   });
 });

@@ -899,7 +899,7 @@
   </th>
 {%- endmacro %}
 
-<section class="table-wrap" aria-label="Exam session list">
+<section class="table-wrap" aria-label="Exam session list" data-exam-session-list>
   <table class="exam-session-table">
     <thead>
       <tr>
@@ -1442,6 +1442,8 @@
         {% if session_fullscreen %}
           <input type="hidden" name="session_fullscreen" value="1">
         {% endif %}
+        <input type="hidden" name="modal_action" value="save" data-session-members-modal-action>
+        <input type="hidden" name="planner_return_url" value="{{ request.full_path }}">
         <input type="hidden" name="session_non_available_member_ids" value="">
         <input type="hidden" name="logistics_confirmation_password" value="" data-logistics-confirmation-password>
         <div data-deleted-assignments></div>

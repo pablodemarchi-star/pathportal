@@ -13,7 +13,7 @@ from email.message import EmailMessage
 from io import BytesIO
 from urllib.parse import parse_qs, parse_qsl, quote, urlencode, urlparse, urlunparse
 
-from flask import Blueprint, Response, abort, current_app, flash, g, has_request_context, jsonify, redirect, render_template, request, send_from_directory, session, url_for
+from flask import Blueprint, Response, abort, current_app, flash, g, get_flashed_messages, has_request_context, jsonify, redirect, render_template, request, send_from_directory, session, url_for
 from openpyxl import load_workbook
 from openpyxl import Workbook
 from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
@@ -22885,6 +22885,7 @@ def save_exam_session_assignment_section(
     member_options,
     section_label,
     selected_shipment_recipient_value="",
+    saved_fields=None,
 ):
     member_map = {member.id: member for member in member_options}
     valid_member_ids = set(member_map)
@@ -23155,6 +23156,7 @@ def save_exam_session_assignment_section(
         prepared_rows.append(
             {
                 "assignment": assignment,
+                "row_key": row_key,
                 "non_available_ids": sorted(set(non_available_ids)),
                 "team_member_id": team_member_id,
                 "potential_entry_id": potential_entry_id,
@@ -23220,6 +23222,8 @@ def save_exam_session_assignment_section(
         if section_key == "supervisor":
             assignment.is_remote = row_data["is_remote"]
         assignment.is_shipment_recipient = row_data["is_shipment_recipient"]
+        if saved_fields is not None:
+            saved_fields[f"{section_key}_assignment_id_{row_data['row_key']}"] = assignment
         assignment.manual_fee_override = row_data["manual_fee_override"]
         if row_data["participation_status"] in EXAM_SESSION_LIVE_CALCULATION_PARTICIPATION_OPTIONS:
             assignment.fee_frozen_on = None
@@ -23314,7 +23318,7 @@ def complex_logistics_staff_members_for_session(session_id):
     return sorted(staff_members_by_id.values(), key=lambda member: (member.full_name or "").lower())
 
 
-def save_exam_session_logistics(session_record):
+def save_exam_session_logistics(session_record, saved_fields=None):
     config = ExamSessionLogistics.query.filter_by(exam_session_id=session_record.id).first()
     if config is None:
         config = ExamSessionLogistics(exam_session_id=session_record.id)
@@ -23450,6 +23454,8 @@ def save_exam_session_logistics(session_record):
             concept = ExamSessionLogisticsConcept(exam_session_id=session_record.id)
             db.session.add(concept)
         concept.status = status
+        if saved_fields is not None:
+            saved_fields[f"logistics_concept_id_{row_key}"] = concept
         concept.provider_type_id = provider_type_id
         concept.provider_id = provider_id
         concept.provider = provider
@@ -23608,16 +23614,37 @@ def sync_exam_session_overall_statuses(session_records):
 @staff_bp.route("/exam-session-planner/sessions/<int:session_id>/members", methods=["POST"])
 @login_required
 def update_exam_session_members(session_id):
+    wants_json = request.headers.get("Accept") == "application/json"
     if not validate_csrf():
+        if wants_json:
+            return jsonify({"ok": False, "error": "Security token expired. Please try again."}), 400
         flash("Security token expired. Please try again.", "error")
         return redirect(url_for("staff.exam_session_planner"))
 
     session_record = ExamSession.query.get_or_404(session_id)
     selected_year = request.form.get("session_year", str(session_record.session_date.year)).strip()
-    modal_action = request.form.get("modal_action", "save_close").strip()
+    modal_actions = request.form.getlist("modal_action")
+    modal_action = (modal_actions[-1] if modal_actions else "save").strip()
     return_to_fullscreen = request.form.get("session_fullscreen") == "1"
+    saved_fields = {}
 
     def session_members_redirect(*, keep_open=False):
+        if wants_json:
+            db.session.rollback()
+            messages = get_flashed_messages(with_categories=True)
+            return jsonify({"ok": False, "error": "\n".join(message for _, message in messages) or "The session could not be saved."}), 400
+        return_url = urlparse(request.form.get("planner_return_url", ""))
+        planner_path = url_for("staff.exam_session_planner")
+        if not return_url.scheme and not return_url.netloc and return_url.path == planner_path:
+            query_pairs = [
+                (key, value) for key, value in parse_qsl(return_url.query, keep_blank_values=True)
+                if key not in {"open_session_modal", "session_fullscreen"}
+            ]
+            if keep_open:
+                query_pairs.append(("open_session_modal", str(session_record.id)))
+                if return_to_fullscreen:
+                    query_pairs.append(("session_fullscreen", "1"))
+            return redirect(urlunparse(("", "", planner_path, "", urlencode(query_pairs), return_url.fragment)))
         args = {"session_year": selected_year}
         if return_to_fullscreen and keep_open:
             args["session_fullscreen"] = 1
@@ -23755,6 +23782,7 @@ def update_exam_session_members(session_id):
         session_record=session_record,
         selected_year=selected_year,
         section_key="supervisor",
+        saved_fields=saved_fields,
         assignment_model=ExamSessionSupervisorAssignment,
         member_options=supervisor_member_options(),
         section_label="supervisor",
@@ -23767,6 +23795,7 @@ def update_exam_session_members(session_id):
         session_record=session_record,
         selected_year=selected_year,
         section_key="examiner",
+        saved_fields=saved_fields,
         assignment_model=ExamSessionExaminerAssignment,
         member_options=examiner_session_member_options(),
         section_label="examiner",
@@ -23779,6 +23808,7 @@ def update_exam_session_members(session_id):
         session_record=session_record,
         selected_year=selected_year,
         section_key="intern",
+        saved_fields=saved_fields,
         assignment_model=ExamSessionInternAssignment,
         member_options=intern_session_member_options(),
         section_label="intern",
@@ -23794,7 +23824,7 @@ def update_exam_session_members(session_id):
         flash("Each staff member can only be selected once within this exam session.", "error")
         return session_members_redirect(keep_open=True)
 
-    if not save_exam_session_logistics(session_record):
+    if not save_exam_session_logistics(session_record, saved_fields=saved_fields):
         db.session.rollback()
         return session_members_redirect(keep_open=True)
 
@@ -23811,6 +23841,44 @@ def update_exam_session_members(session_id):
 
     update_exam_session_overall_status(session_record)
     db.session.commit()
+    if wants_json:
+        supervisor_assignments = ExamSessionSupervisorAssignment.query.filter_by(exam_session_id=session_record.id).all()
+        examiner_assignments = ExamSessionExaminerAssignment.query.filter_by(exam_session_id=session_record.id).all()
+        intern_assignments = ExamSessionInternAssignment.query.filter_by(exam_session_id=session_record.id).all()
+        staffing = staffing_readiness_contract(supervisor_assignments, examiner_assignments, intern_assignments, session_record=session_record)
+        logistics_config = ExamSessionLogistics.query.filter_by(exam_session_id=session_record.id).first()
+        logistics = logistics_readiness_contract(
+            supervisor_assignments + examiner_assignments + intern_assignments,
+            logistics_concepts,
+            logistics_config,
+        )
+        saved_values = {}
+        for name, record in saved_fields.items():
+            if name.startswith("logistics_concept_id_"):
+                saved_values[name.replace("logistics_concept_id_", "logistics_status_", 1)] = record.status
+            else:
+                saved_values[name.replace("_assignment_id_", "_participation_status_", 1)] = record.participation_status
+        messages = get_flashed_messages(with_categories=True)
+        return jsonify({
+            "ok": True,
+            "message": "Session changes saved successfully.",
+            "notices": [message for _, message in messages],
+            "saved_fields": {name: record.id for name, record in saved_fields.items()},
+            "saved_values": saved_values,
+            "form_state": {
+                "staffingStatus": staffing["status"],
+                "staffingFinalEmailReady": str(bool(staffing.get("final_email_ready"))).lower(),
+                "staffingEmailBlockerMessage": staffing_email_blocker_message(staffing),
+                "savedStaffConfirmed": str(persisted_staff_confirmed(supervisor_assignments, examiner_assignments, intern_assignments)).lower(),
+                "logisticsApplies": str(bool(logistics.get("applies"))).lower(),
+                "logisticsStatus": logistics["status"],
+                "logisticsReady": str(bool(logistics.get("ready"))).lower(),
+                "logisticsFinalEmailReady": str(bool(logistics.get("final_email_ready"))).lower(),
+                "logisticsEmailBlockerMessage": logistics_email_blocker_message(logistics),
+                "logisticsFilesUrl": logistics_config.logistics_files_url if logistics_config else "",
+            },
+            "session_status": session_record.status,
+        })
     flash(
         f"Session staff members saved successfully. {supervisor_saved} supervisor {('row' if supervisor_saved == 1 else 'rows')}, {examiner_saved} examiner {('row' if examiner_saved == 1 else 'rows')} and {intern_saved} intern {('row' if intern_saved == 1 else 'rows')} updated.",
         "success",

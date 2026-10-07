@@ -10586,6 +10586,189 @@ class ScheduleWorkflowTest(unittest.TestCase):
         self.assertEqual(self.session_record.emergency_contact_start_time, "08:30")
         self.assertEqual(self.session_record.emergency_contact_end_time, "12:45")
 
+    def test_exam_session_members_save_and_close_have_distinct_redirects(self):
+        client = self.login_client()
+        for fullscreen in (False, True):
+            for actions in (["save"], ["save_close"], ["save", "save_close"], []):
+                with self.subTest(fullscreen=fullscreen, actions=actions):
+                    response = client.post(
+                        f"/exam-session-planner/sessions/{self.session_record.id}/members",
+                        data={
+                            "csrf_token": "token",
+                            "session_year": "2026",
+                            "session_fullscreen": "1" if fullscreen else "0",
+                            "modal_action": actions,
+                            "session_non_available_member_ids": "",
+                            "emergency_contact_not_required": "1",
+                        },
+                    )
+                    self.assertEqual(response.status_code, 302)
+                    query = parse_qs(urlparse(response.headers["Location"]).query)
+                    keep_open = not actions or actions[-1] == "save"
+                    self.assertEqual(query.get("open_session_modal"), [str(self.session_record.id)] if keep_open else None)
+                    self.assertEqual(query.get("session_fullscreen"), ["1"] if keep_open and fullscreen else None)
+                    db.session.refresh(self.session_record)
+                    self.assertTrue(self.session_record.emergency_contact_not_required)
+
+    def test_exam_session_members_async_save_can_update_new_rows_repeatedly(self):
+        client = self.login_client()
+        data = {
+            "csrf_token": "token",
+            "session_year": "2026",
+            "modal_action": "save",
+            "supervisor_row_keys": "new-1",
+            "supervisor_assignment_id_new-1": "",
+            "supervisor_participation_status_new-1": "Pending",
+            "emergency_contact_not_required": "1",
+        }
+        response = client.post(
+            f"/exam-session-planner/sessions/{self.session_record.id}/members",
+            data=data, headers={"Accept": "application/json"},
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(response.json["ok"])
+        self.assertNotIn("Location", response.headers)
+        assignment_id = response.json["saved_fields"]["supervisor_assignment_id_new-1"]
+        data["supervisor_assignment_id_new-1"] = str(assignment_id)
+        data["supervisor_start_time_new-1"] = "09:00"
+        data["supervisor_end_time_new-1"] = "12:00"
+        response = client.post(
+            f"/exam-session-planner/sessions/{self.session_record.id}/members",
+            data=data, headers={"Accept": "application/json"},
+        )
+        self.assertEqual(response.status_code, 200)
+        assignments = ExamSessionSupervisorAssignment.query.filter_by(exam_session_id=self.session_record.id).all()
+        self.assertEqual(len(assignments), 1)
+        self.assertEqual(assignments[0].start_time, "09:00")
+        self.assertEqual(assignments[0].end_time, "12:00")
+
+    def test_exam_session_save_buttons_save_without_navigation_and_close_only_on_success(self):
+        with open("app/static/js/app.js", encoding="utf-8") as handle:
+            source = handle.read()
+        start = source.index('document.querySelectorAll("[data-session-members-form]").forEach((form) => {\n  if (form.dataset.logisticsSubmitInitialized')
+        end = source.index("\nconst memberSectionHasActiveSettings", start)
+        script = r'''
+const assert = require("node:assert/strict");
+const vm = require("node:vm");
+let handler, requests = 0, closes = 0, failSave = false;
+const action = {value: "save"};
+const feedback = {};
+const button = {value: "save", dataset: {}, textContent: "Save", matches: () => true};
+const modal = {
+  querySelector: () => feedback,
+  querySelectorAll: () => [button],
+};
+const form = {
+  dataset: {}, action: "/save",
+  elements: {namedItem: () => null},
+  querySelector: (selector) => selector.includes("modal-action") ? action : null,
+  querySelectorAll: () => [],
+  closest: () => modal,
+  addEventListener: (_, callback) => {handler = callback;},
+};
+const context = {
+  document: {querySelectorAll: () => [form]},
+  syncSessionNonAvailableFields: () => {},
+  complexLogisticsCoverageError: () => "",
+  roundLogisticsFeeInput: () => {},
+  syncInvitationEmailCopyButtons: () => {},
+  savePlannerReturnState: () => {},
+  window: {clearTimeout: () => {}, setTimeout: () => 1},
+  refreshPlannerSessionRow: async () => {},
+  closeModal: () => {closes++;},
+  showTransientFlash: (message, category) => {feedback.textContent = message; feedback.category = category;},
+  FormData: class {},
+  fetch: async () => {requests++; return {ok: !failSave, json: async () => ({ok: !failSave, message: "Saved", error: "Save failed"})};},
+};
+vm.runInNewContext(SOURCE, context);
+(async () => {
+  const event = {submitter: button, defaultPrevented: false, preventDefault() {this.defaultPrevented = true;}};
+  await handler(event);
+  assert.equal(event.defaultPrevented, true);
+  assert.equal(requests, 1);
+  assert.equal(feedback.textContent, "Saved");
+  assert.equal(feedback.category, "success");
+  assert.equal(button.disabled, false);
+  assert.equal(closes, 0);
+  button.value = "save_close";
+  event.defaultPrevented = false;
+  await handler(event);
+  assert.equal(event.defaultPrevented, true);
+  assert.equal(requests, 2);
+  assert.equal(closes, 1);
+  failSave = true;
+  event.defaultPrevented = false;
+  await handler(event);
+  assert.equal(event.defaultPrevented, true);
+  assert.equal(closes, 1);
+  assert.equal(feedback.textContent, "Save failed");
+  assert.equal(feedback.category, "error");
+  assert.equal(button.disabled, false);
+})().catch((error) => {console.error(error); process.exitCode = 1;});
+'''.replace("SOURCE", json.dumps(source[start:end]))
+        subprocess.run(["node", "-e", script], check=True, capture_output=True, text=True)
+
+    def test_exam_session_members_async_save_returns_validation_errors(self):
+        client = self.login_client()
+        response = client.post(
+            f"/exam-session-planner/sessions/{self.session_record.id}/members",
+            data={"csrf_token": "token", "logistics_files_url": "invalid"},
+            headers={"Accept": "application/json"},
+        )
+        self.assertEqual(response.status_code, 400)
+        self.assertFalse(response.json["ok"])
+        self.assertIn("valid link", response.json["error"])
+        response = client.post(
+            f"/exam-session-planner/sessions/{self.session_record.id}/members",
+            data={"csrf_token": "invalid"}, headers={"Accept": "application/json"},
+        )
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("Security token", response.json["error"])
+
+    def test_exam_session_planner_restores_list_scroll_after_save_close(self):
+        with open("app/static/js/app.js", encoding="utf-8") as handle:
+            source = handle.read()
+        start = source.index("const plannerReturnStateUrl =")
+        end = source.index("\nconst normalizeFeeInputValue", start)
+        script = r'''
+const assert = require("node:assert/strict");
+const storage = new Map();
+const sessionStorage = {getItem: key => storage.get(key), setItem: (key, value) => storage.set(key, value), removeItem: key => storage.delete(key)};
+let restored;
+const table = {scrollLeft: 0, scrollTop: 0};
+const document = {querySelector: () => table};
+const window = {location: {origin: "http://localhost", href: "http://localhost/exam-session-planner?page=2&q=June%20exam"}, requestAnimationFrame: fn => fn(), scrollTo: (x, y) => {restored = [x, y];}};
+SOURCE
+savePlannerReturnState({elements: {namedItem: () => ({value: "/exam-session-planner?q=June+exam&page=2&open_session_modal=1"})}, dataset: {plannerScrollState: JSON.stringify({windowX: 0, windowY: 780, tableX: 350, tableY: 20})}});
+restorePlannerReturnState();
+assert.deepEqual(restored, [0, 780]);
+assert.equal(table.scrollLeft, 350);
+assert.equal(table.scrollTop, 20);
+assert.equal(storage.size, 0);
+'''.replace("SOURCE", source[start:end])
+        subprocess.run(["node", "-e", script], check=True, capture_output=True, text=True)
+
+    def test_exam_session_members_save_close_preserves_filters_and_explicit_page(self):
+        client = self.login_client()
+        return_url = "/exam-session-planner?session_year=2026&page=2&page_size=5&q=June+exam&shifts=Morning&shifts=Afternoon&modules=Speaking&sort=status&dir=desc"
+        data = {
+            "csrf_token": "token",
+            "session_year": "2026",
+            "modal_action": "save_close",
+            "planner_return_url": return_url,
+            "emergency_contact_not_required": "1",
+        }
+        response = client.post(f"/exam-session-planner/sessions/{self.session_record.id}/members", data=data)
+        self.assertEqual(response.status_code, 302)
+        self.assertEqual(parse_qs(urlparse(response.headers["Location"]).query), parse_qs(urlparse(return_url).query))
+        data["planner_return_url"] = return_url + f"&open_session_modal={self.session_record.id}&session_fullscreen=1"
+        response = client.post(f"/exam-session-planner/sessions/{self.session_record.id}/members", data=data)
+        self.assertEqual(parse_qs(urlparse(response.headers["Location"]).query), parse_qs(urlparse(return_url).query))
+        data["planner_return_url"] = "https://example.com/exam-session-planner?page=9"
+        response = client.post(f"/exam-session-planner/sessions/{self.session_record.id}/members", data=data)
+        self.assertEqual(urlparse(response.headers["Location"]).path, "/exam-session-planner")
+        self.assertEqual(urlparse(response.headers["Location"]).netloc, "")
+
     def test_exam_session_members_save_preserves_current_pagination(self):
         for index in range(1, 6):
             db.session.add(ExamSession(
