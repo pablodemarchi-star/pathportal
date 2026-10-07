@@ -10984,15 +10984,22 @@ document.querySelectorAll("[data-submit-on-change]").forEach((field) => {
   });
 });
 
-document.addEventListener("click", (event) => {
+let disabledPathOrganiserWarningShownAt = 0;
+const showDisabledPathOrganiserWarning = (event) => {
   const disabledPathOrganiser = event.target.closest?.("[data-disabled-path-organiser-option]");
   if (!disabledPathOrganiser) return;
   event.preventDefault();
+  const now = Date.now();
+  if (event.type === "click" && now - disabledPathOrganiserWarningShownAt < 300) return;
+  disabledPathOrganiserWarningShownAt = now;
   showTransientFlash(
     disabledPathOrganiser.dataset.disabledMessage || "Session managers have not been created in Providers",
-    "warning",
+    "error",
   );
-});
+};
+
+document.addEventListener("pointerdown", showDisabledPathOrganiserWarning);
+document.addEventListener("click", showDisabledPathOrganiserWarning);
 
 document.querySelectorAll(".member-form").forEach((form) => {
   const status = form.querySelector("select[name='status']");

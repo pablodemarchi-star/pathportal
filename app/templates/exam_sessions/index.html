@@ -630,7 +630,7 @@
       {% for organiser in exam_session_organised_by_options %}
         {% set path_organiser_disabled = organiser == 'Path Examinations' and not path_exam_session_organiser_available and selected_exam_session_organised_by != organiser %}
         <label {% if path_organiser_disabled %}data-disabled-path-organiser-option data-disabled-message="Session managers have not been created in Providers"{% endif %}>
-          <input type="radio" name="exam_session_organised_by" value="{{ organiser }}" {% if selected_exam_session_organised_by == organiser %}checked{% endif %} {% if path_organiser_disabled %}disabled{% endif %} required>
+          <input type="radio" name="exam_session_organised_by" value="{{ organiser }}" {% if selected_exam_session_organised_by == organiser %}checked{% endif %} {% if path_organiser_disabled %}disabled data-disabled-path-organiser-option data-disabled-message="Session managers have not been created in Providers"{% endif %} required>
           <span>{{ organiser }}</span>
         </label>
       {% endfor %}

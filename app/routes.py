@@ -2865,8 +2865,8 @@ def validate_exam_session_form(form):
         minimum_candidates_required = int(minimum_candidates_value)
     if exam_session_organised_by not in EXAM_SESSION_ORGANISED_BY_OPTIONS:
         errors.append("Exam session organised by is required.")
-    elif exam_session_organised_by == PATH_EXAM_SESSION_ORGANISER and not session_manager_provider_type():
-        errors.append("Create the Session manager provider type before selecting Path Examinations as organiser.")
+    elif exam_session_organised_by == PATH_EXAM_SESSION_ORGANISER and not session_manager_providers_available():
+        errors.append("Session managers have not been created in Providers")
     errors.extend(contact_point_errors)
     if not modules:
         errors.append("At least one module is required.")
@@ -4505,13 +4505,18 @@ def session_manager_providers(provider_type=None):
     )
 
 
+def session_manager_providers_available():
+    return bool(session_manager_providers())
+
+
 def sync_path_exam_session_logistics(session_record):
     if session_record.exam_session_organised_by != PATH_EXAM_SESSION_ORGANISER:
         return True
 
     provider_type = session_manager_provider_type()
-    if not provider_type:
-        flash("Create the Session manager provider type before selecting Path Examinations as organiser.", "error")
+    providers = session_manager_providers(provider_type)
+    if not provider_type or not providers:
+        flash("Session managers have not been created in Providers", "error")
         return False
 
     config = ExamSessionLogistics.query.filter_by(exam_session_id=session_record.id).first()
@@ -4529,7 +4534,6 @@ def sync_path_exam_session_logistics(session_record):
         concept = ExamSessionLogisticsConcept(exam_session_id=session_record.id)
         db.session.add(concept)
 
-    providers = session_manager_providers(provider_type)
     concept.provider_type_id = provider_type.id
     concept.provider_id = providers[0].id if providers else None
     concept.provider = ", ".join(provider.display_label for provider in providers)
@@ -22285,7 +22289,7 @@ def exam_session_planner():
         format_options=EXAM_SESSION_FORMAT_OPTIONS,
         category_options=EXAM_SESSION_CATEGORY_OPTIONS,
         exam_session_organised_by_options=EXAM_SESSION_ORGANISED_BY_OPTIONS,
-        path_exam_session_organiser_available=session_manager_provider_type() is not None,
+        path_exam_session_organiser_available=session_manager_providers_available(),
         csrf_token=session.get("csrf_token"),
     )
 

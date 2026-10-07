@@ -14947,9 +14947,9 @@ span.session-marker-chip {
 }
 
 .flash.error {
-  border-color: #f2c4c0;
-  background: #fff0ef;
-  color: #9f2f28;
+  border-color: var(--path-red);
+  background: var(--path-red-50);
+  color: var(--path-red);
 }
 
 .flash.warning {

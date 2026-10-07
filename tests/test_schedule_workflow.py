@@ -1286,7 +1286,9 @@ class ScheduleWorkflowTest(unittest.TestCase):
         self.assertEqual(db.session.get(ExamSession, created_session.id).schedule_folder_url, "https://example.com/revised-schedule-folder")
         self.assertEqual(db.session.get(ExamSession, created_session.id).exam_entry_slips_url, "https://example.com/revised-entry-slips-folder")
 
-    def test_path_organiser_requires_session_manager_provider_type(self):
+    def test_path_organiser_requires_session_manager_provider(self):
+        db.session.add(ProviderType(name="Session manager", is_system=False, color_key="provider-type-1"))
+        db.session.commit()
         client = self.login_client()
 
         response = client.get("/exam-session-planner?session_year=2026")
@@ -1294,6 +1296,7 @@ class ScheduleWorkflowTest(unittest.TestCase):
 
         self.assertEqual(response.status_code, 200)
         self.assertIn('name="exam_session_organised_by" value="Path Examinations" disabled', html)
+        self.assertIn('data-disabled-path-organiser-option data-disabled-message="Session managers have not been created in Providers"', html)
 
         response = client.post(
             "/exam-session-planner/sessions",
@@ -1315,10 +1318,21 @@ class ScheduleWorkflowTest(unittest.TestCase):
 
         self.assertEqual(response.status_code, 200)
         self.assertIn(
-            "Create the Session manager provider type before selecting Path Examinations as organiser.",
+            "Session managers have not been created in Providers",
             response.get_data(as_text=True),
         )
         self.assertIsNone(ExamSession.query.filter_by(exam_session_name="Path blocked session").first())
+        with open("app/static/js/app.js", encoding="utf-8") as js_file:
+            js = js_file.read()
+        organiser_warning_js = js[
+            js.index("const showDisabledPathOrganiserWarning"):
+            js.index("document.querySelectorAll(\".member-form\")")
+        ]
+        self.assertIn('document.addEventListener("pointerdown", showDisabledPathOrganiserWarning);', js)
+        self.assertIn('"error"', organiser_warning_js)
+        with open("app/static/css/styles.css", encoding="utf-8") as css_file:
+            css = css_file.read()
+        self.assertIn(".flash.error {\n  border-color: var(--path-red);\n  background: var(--path-red-50);\n  color: var(--path-red);\n}", css)
 
     def test_path_organiser_creates_session_manager_logistics_concept(self):
         provider_type = ProviderType(name="Session manager", is_system=False, color_key="provider-type-1")
