@@ -2118,6 +2118,31 @@ class FinanceRequestsTest(unittest.TestCase):
         self.assertIn("The payment to *Xxxxx Xxxxx* was updated to *Payment Scheduled* on *20/10/2026 at 11:50h.*", body)
         self.assertIn("El pago a *Xxxxx Xxxxx* fue actualizado a *Pago programado* el *20/10/2026 a las 11:50 h.*", body)
 
+    def test_scheduled_payment_copy_includes_calendar_date_in_both_tabs_and_languages(self):
+        user = self.create_user("manager@example.com", is_superadmin=True)
+        payment = self.payment(user, status="Management approved", scheduled_payment_date=date(2026, 10, 30))
+        payment.payee_name_snapshot = "Pedro"
+        db.session.add(PaymentRequestEvent(
+            payment_request_id=payment.id,
+            event_type="Approved by Management",
+            new_status="Management approved",
+            created_on=datetime(2026, 8, 19, 15, 30, tzinfo=timezone.utc),
+        ))
+        db.session.commit()
+        expected = {
+            "sp": "El pago a *Pedro* fue actualizado a *Aprobado por Management* el *19/08/2026 a las 12:30 h.* y ha sido calendarizado para las *19 h. del día 30/10/2026*.",
+            "en": "The payment to *Pedro* was updated to *Management Approved* on *19/08/2026 at 12:30 h.* and has been scheduled for *19 h. on 30/10/2026*.",
+        }
+        for language, sentence in expected.items():
+            contract = payment_whatsapp_copy_contract(payment, language)
+            self.assertEqual(contract["error"], "")
+            self.assertEqual(contract["message"], f"*{payment.request_number}*\n\n{sentence}\n\n*Path International Examinations*")
+        client = self.client_for(user)
+        for tab in ("payment_requests", "finance_payments"):
+            body = client.get(f"/finance-requests?tab={tab}&finance_filter=date:2026-10-30").get_data(as_text=True)
+            for sentence in expected.values():
+                self.assertIn(sentence, body)
+
     def test_payment_whatsapp_message_uses_updated_on_fallback_when_status_event_is_missing(self):
         user = self.create_user("requester@example.com")
         payment = self.payment(user, status="Payment delayed", scheduled_payment_date=date(2026, 10, 30))

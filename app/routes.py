@@ -25413,11 +25413,16 @@ def payment_whatsapp_copy_contract(payment, language="en"):
         return {"message": "", "error": "Payment status change date is required to copy this message."}
     if payment.status == "Payment completed" and not payment.payment_proof_url:
         return {"message": "", "error": "Payment proof link is required to copy a completed payment message."}
+    scheduled_message = payment.status == "Management approved" and payment.scheduled_payment_date
+    if scheduled_message and not is_spanish:
+        changed_at_label = changed_at_label.replace("h", " h")
     if is_spanish:
         message = (
             f"*{request_number}*\n\n"
             f"El pago a *{payee_name}* fue actualizado a *{status_label}* el *{changed_at_label}.*"
         )
+        if scheduled_message:
+            message += f" y ha sido calendarizado para las *19 h. del día {payment.scheduled_payment_date:%d/%m/%Y}*."
         if payment.status == "Payment completed":
             message += f"\n\n*Ver el comprobante del pago aquí:* {payment.payment_proof_url}"
     else:
@@ -25425,6 +25430,8 @@ def payment_whatsapp_copy_contract(payment, language="en"):
             f"*{request_number}*\n\n"
             f"The payment to *{payee_name}* was updated to *{status_label}* on *{changed_at_label}.*"
         )
+        if scheduled_message:
+            message += f" and has been scheduled for *19 h. on {payment.scheduled_payment_date:%d/%m/%Y}*."
         if payment.status == "Payment completed":
             message += f"\n\n*View the payment receipt here:* {payment.payment_proof_url}"
     message += "\n\n*Path International Examinations*"
