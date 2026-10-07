@@ -10489,6 +10489,16 @@ span.session-marker-chip {
   opacity: 0.6;
 }
 
+.staffing-schedule-notification-form {
+  margin: 0 0 10px;
+}
+
+.staffing-schedule-notification-form .staffing-role-check-label {
+  align-items: flex-start;
+  white-space: normal;
+  line-height: 1.35;
+}
+
 .staffing-member-name {
   display: block;
   color: var(--color-primary-dark);

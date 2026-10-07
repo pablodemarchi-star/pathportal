@@ -100,8 +100,10 @@ from app.routes import (
     incident_review_flags_contract,
     incidents_readiness_contract,
     journey_countdown,
+    bundle_detail_action_items,
     logistics_control_contract,
     logistics_deadline_badge_contract,
+    logistics_presentation_from_contract,
     logistics_readiness_contract,
     monthly_candidate_requirement_contracts,
     my_action_row_from_schedule_view,
@@ -474,6 +476,11 @@ class ScheduleWorkflowTest(unittest.TestCase):
             ExamSessionExaminerAssignment(exam_session_id=self.session_record.id, team_member_id=2, participation_status="Confirmed"),
             ExamSessionInternAssignment(exam_session_id=self.session_record.id, team_member_id=3, participation_status="Confirmed"),
         ])
+        staffing_control = ExamSessionStaffingControl.query.filter_by(exam_session_id=self.session_record.id).first()
+        if staffing_control is None:
+            staffing_control = ExamSessionStaffingControl(exam_session_id=self.session_record.id)
+            db.session.add(staffing_control)
+        staffing_control.schedule_notification_confirmed = True
         db.session.commit()
 
     def create_supervisor(self, staff_id=1, name="Dana Montalvo"):
@@ -1210,6 +1217,10 @@ class ScheduleWorkflowTest(unittest.TestCase):
         self.assertIn("Organised by Path Examinations", html)
 
     def test_exam_session_create_and_update_persist_minimum_candidates_required(self):
+        provider_type = ProviderType(name="Session manager", is_system=False, color_key="provider-type-1")
+        db.session.add(provider_type)
+        db.session.commit()
+
         client = self.login_client()
         response = client.post(
             "/exam-session-planner/sessions",
@@ -1274,6 +1285,139 @@ class ScheduleWorkflowTest(unittest.TestCase):
         self.assertEqual(db.session.get(ExamSession, created_session.id).full_address_google_maps, "")
         self.assertEqual(db.session.get(ExamSession, created_session.id).schedule_folder_url, "https://example.com/revised-schedule-folder")
         self.assertEqual(db.session.get(ExamSession, created_session.id).exam_entry_slips_url, "https://example.com/revised-entry-slips-folder")
+
+    def test_path_organiser_requires_session_manager_provider_type(self):
+        client = self.login_client()
+
+        response = client.get("/exam-session-planner?session_year=2026")
+        html = " ".join(response.get_data(as_text=True).split())
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn('name="exam_session_organised_by" value="Path Examinations" disabled', html)
+
+        response = client.post(
+            "/exam-session-planner/sessions",
+            data={
+                "csrf_token": "token",
+                "session_year": "2026",
+                "exam_session_name": "Path blocked session",
+                "category": "Path School",
+                "status": "Pending",
+                "session_date": "20/07/2026",
+                "minimum_candidates_required": "30",
+                "exam_session_organised_by": "Path Examinations",
+                "shifts": "Morning",
+                "modules": "Speaking",
+                "format": "Online",
+            },
+            follow_redirects=True,
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn(
+            "Create the Session manager provider type before selecting Path Examinations as organiser.",
+            response.get_data(as_text=True),
+        )
+        self.assertIsNone(ExamSession.query.filter_by(exam_session_name="Path blocked session").first())
+
+    def test_path_organiser_creates_session_manager_logistics_concept(self):
+        provider_type = ProviderType(name="Session manager", is_system=False, color_key="provider-type-1")
+        transport_type = ProviderType(name="Transport", is_system=False, color_key="provider-type-2")
+        db.session.add_all([provider_type, transport_type])
+        db.session.flush()
+        first_provider = Provider(
+            name="Path Session Desk",
+            provider_type_id=provider_type.id,
+            full_address="Street 1",
+            available_in_logistics=True,
+        )
+        second_provider = Provider(
+            name="Path Session Lead",
+            provider_type_id=provider_type.id,
+            full_address="Street 2",
+            available_in_logistics=True,
+        )
+        db.session.add_all([first_provider, second_provider])
+        db.session.add(
+            ExamSessionLogisticsConcept(
+                exam_session_id=self.session_record.id,
+                status="Pending",
+                provider_type_id=transport_type.id,
+                provider="Legacy transport",
+            )
+        )
+        db.session.commit()
+
+        client = self.login_client()
+        response = client.post(
+            f"/exam-session-planner/sessions/{self.session_record.id}",
+            data={
+                "csrf_token": "token",
+                "session_year": "2026",
+                "exam_session_name": "June exam session",
+                "category": "Path School",
+                "status": "Pending",
+                "session_date": "25/06/2026",
+                "minimum_candidates_required": "30",
+                "exam_session_organised_by": "Path Examinations",
+                "shifts": "Morning",
+                "modules": "Speaking",
+                "format": "Onsite",
+                "details_url": "https://example.com/sinapsis",
+                "schedule_folder_url": "https://example.com/schedule-folder",
+                "exam_entry_slips_url": "https://example.com/entry-slips-folder",
+            },
+            follow_redirects=True,
+        )
+
+        self.assertEqual(response.status_code, 200)
+        concepts = ExamSessionLogisticsConcept.query.filter_by(exam_session_id=self.session_record.id).all()
+        concept = next(item for item in concepts if item.provider_type_id == provider_type.id)
+        self.assertEqual(concept.provider_type_id, provider_type.id)
+        self.assertEqual(concept.provider_id, first_provider.id)
+        self.assertEqual([provider.id for provider in concept.provider_records], [first_provider.id, second_provider.id])
+        self.assertEqual(concept.staff_members, [])
+        self.assertIsNotNone(ExamSessionLogistics.query.filter_by(exam_session_id=self.session_record.id).first())
+
+        html = response.get_data(as_text=True)
+        self.assertIn("Session manager", html)
+        self.assertIn("Path Session Desk", html)
+        self.assertIn("Path Session Lead", html)
+        self.assertLess(html.index("Session manager"), html.index("Transport"))
+        self.assertIn('title="Provider details for 2 providers"', html)
+        self.assertIn("Non-applicable", html)
+
+    def test_pre_session_logistics_marks_session_manager_staff_non_applicable(self):
+        provider_type = ProviderType(name="Session manager", is_system=False, color_key="provider-type-1")
+        db.session.add(provider_type)
+        db.session.flush()
+        provider = Provider(
+            name="Path Session Desk",
+            provider_type_id=provider_type.id,
+            full_address="Street 1",
+            available_in_logistics=True,
+        )
+        concept = ExamSessionLogisticsConcept(
+            exam_session_id=self.session_record.id,
+            status="Pending",
+            provider_type_id=provider_type.id,
+        )
+        concept.provider_records = [provider]
+        db.session.add_all([provider, concept])
+        db.session.commit()
+
+        contract = logistics_readiness_contract([], [concept], None)
+        presentation = logistics_presentation_from_contract(
+            contract,
+            concepts=[concept],
+            session_record=self.session_record,
+        )
+
+        concept_row = presentation["concept_rows"][0]
+        self.assertEqual(concept_row["provider_type"], "Session manager")
+        self.assertEqual(concept_row["staff_members"], [])
+        self.assertTrue(concept_row["staff_non_applicable"])
+        self.assertTrue(concept_row["can_confirm"])
 
     def test_exam_session_rejects_invalid_minimum_candidates_required(self):
         client = self.login_client()
@@ -1706,6 +1850,24 @@ class ScheduleWorkflowTest(unittest.TestCase):
             core_readiness_contract(schedule_ready, None, logistics_ready)["status"],
             "needs_review",
         )
+
+    def test_bundle_detail_action_description_excludes_logistics_actions(self):
+        actions = bundle_detail_action_items(
+            "Approved",
+            {"is_ready": True},
+            "",
+            "MANAGEMENT",
+            staffing_contract={"status": "confirmed"},
+            logistics={
+                "status": "in_progress",
+                "blockers": ["Provider xxx — Session manager is still Pending."],
+            },
+            logistics_deadline_badge={"status": "overdue"},
+            logistics_control={"responsible_label": "ADMIN"},
+        )
+
+        self.assertEqual(actions, [])
+        self.assertNotIn("Session manager is still Pending.", [action["description"] for action in actions])
 
     def test_operational_readiness_contract_precedence_and_shipments(self):
         schedule_ready = {"status": "ready", "label": "Ready", "is_ready": True}
@@ -2530,6 +2692,10 @@ class ScheduleWorkflowTest(unittest.TestCase):
                 month=6,
                 total_candidates=28,
             ),
+            ExamSessionStaffingControl(
+                exam_session_id=session_record.id,
+                schedule_notification_confirmed=True,
+            ),
         ])
         db.session.commit()
 
@@ -2573,6 +2739,10 @@ class ScheduleWorkflowTest(unittest.TestCase):
                 month=6,
                 total_candidates=30,
             ),
+            ExamSessionStaffingControl(
+                exam_session_id=session_record.id,
+                schedule_notification_confirmed=True,
+            ),
         ])
         db.session.commit()
 
@@ -2588,6 +2758,94 @@ class ScheduleWorkflowTest(unittest.TestCase):
         db.session.commit()
         statuses = exam_session_overall_statuses_by_session_ids([session_record.id])
         self.assertEqual(statuses[session_record.id], "Confirmed")
+
+    def test_staffing_readiness_requires_schedule_notification_confirmation(self):
+        assignment = ExamSessionSupervisorAssignment(
+            exam_session_id=self.session_record.id,
+            team_member_id=1,
+            participation_status="Confirmed",
+        )
+        db.session.add(assignment)
+        db.session.commit()
+
+        contract = staffing_readiness_contract(
+            [assignment],
+            [],
+            [],
+            session_record=self.session_record,
+        )
+
+        self.assertFalse(contract["ready"])
+        self.assertEqual(contract["status"], "awaiting_schedule_notification")
+        self.assertIn(
+            "Schedule notification to all listed institutions must be confirmed.",
+            [blocker["message"] for blocker in contract["blockers"]],
+        )
+
+        db.session.add(ExamSessionStaffingControl(
+            exam_session_id=self.session_record.id,
+            schedule_notification_confirmed=True,
+        ))
+        db.session.commit()
+
+        contract = staffing_readiness_contract(
+            [assignment],
+            [],
+            [],
+            session_record=self.session_record,
+        )
+
+        self.assertTrue(contract["ready"])
+        self.assertEqual(contract["status"], "confirmed")
+
+    def test_staffing_summary_uses_confirmation_action_when_only_schedule_notification_missing(self):
+        staff_member = AcademicStaff(
+            id=107,
+            status="Active",
+            full_name="Notification Pending Staff",
+            roles="Examiner",
+            email="notification-pending@example.com",
+        )
+        session_record = ExamSession(
+            exam_session_name="Notification checkbox pending",
+            category="Path School",
+            status="Pending",
+            session_date=date(2026, 12, 23),
+            shifts="Morning",
+            modules="Speaking",
+            format="Online",
+            monthly_registrations_closed=True,
+            monthly_registrations_closed_at=datetime(2026, 8, 1, 12, 0, tzinfo=timezone.utc),
+        )
+        db.session.add_all([staff_member, session_record])
+        db.session.flush()
+        db.session.add_all([
+            ExamSessionScheduleWorkflow(
+                exam_session_id=session_record.id,
+                status="Approved",
+                approved_at=datetime(2026, 8, 1, 12, 0, tzinfo=timezone.utc),
+            ),
+            ExamSessionExaminerAssignment(
+                exam_session_id=session_record.id,
+                team_member_id=staff_member.id,
+                participation_status="Confirmed",
+                staffing_status_due_at=date(2026, 12, 30),
+                staffing_status_due_stage="Pending",
+            ),
+        ])
+        db.session.commit()
+        client = self.login_client()
+
+        response = client.get("/pre-session-control-tower?session_year=2026&view=sessions")
+        html = response.get_data(as_text=True)
+        modal_start = html.index('id="schedule-workflow-' + str(session_record.id) + '"')
+        staffing_start = html.index('aria-label="Staffing ownership and deadline"', modal_start)
+        staffing_summary = html[staffing_start:html.index("</section>", staffing_start)]
+
+        self.assertIn("Confirmations to be sent", staffing_summary)
+        self.assertIn("Send official confirmation emails", staffing_summary)
+        self.assertIn("<strong>ADMIN</strong>", staffing_summary)
+        self.assertIn("30/12/2026", staffing_summary)
 
     def test_exam_session_pending_tooltip_lists_minimum_candidates_gap(self):
         session_record = ExamSession(
@@ -5199,6 +5457,11 @@ class ScheduleWorkflowTest(unittest.TestCase):
         self.assertEqual(due_at, datetime(2026, 12, 9, 10, 30, tzinfo=LOCAL_TZ))
 
     def test_staffing_control_view_does_not_create_record(self):
+        db.session.add(ExamSessionSupervisorAssignment(
+            exam_session_id=self.session_record.id,
+            participation_status="Pending",
+        ))
+        db.session.commit()
         client = self.login_client()
 
         response = client.get("/pre-session-control-tower?session_year=2026&view=sessions")
@@ -5208,10 +5471,13 @@ class ScheduleWorkflowTest(unittest.TestCase):
         html = response.data.decode()
         self.assertIn("Responsible department", html)
         self.assertIn("ADMIN", html)
-        self.assertIn("Responsible person", html)
-        self.assertIn("Not assigned", html)
+        self.assertNotIn("Responsible person", html)
         self.assertIn("Staffing deadline", html)
         self.assertIn("Not set", html)
+        self.assertIn("It has been verified that all institutions listed in the session have been notified of the schedule.", html)
+        notification_input = html[html.index('name="schedule_notification_confirmed"'):]
+        notification_input = notification_input[:notification_input.index(">")]
+        self.assertIn("disabled", notification_input)
 
     def test_staffing_control_create_update_and_invalid_date(self):
         client = self.login_client()
@@ -5233,7 +5499,23 @@ class ScheduleWorkflowTest(unittest.TestCase):
         control = ExamSessionStaffingControl.query.filter_by(exam_session_id=self.session_record.id).one()
         self.assertEqual(control.staffing_due_at, date(2026, 6, 30))
         self.assertEqual(control.note, "Call candidates before Friday.")
+        self.assertFalse(control.schedule_notification_confirmed)
         self.assertEqual(control.updated_by, "admin")
+
+        response = client.post(
+            f"/pre-session-control-tower/sessions/{self.session_record.id}/staffing-control",
+            data={
+                "csrf_token": "token",
+                "schedule_notification_confirmed_present": "1",
+                "schedule_notification_confirmed": "1",
+            },
+            follow_redirects=False,
+        )
+        self.assertEqual(response.status_code, 302)
+        self.assertEqual(ExamSessionStaffingControl.query.count(), 1)
+        self.assertTrue(control.schedule_notification_confirmed)
+        self.assertEqual(control.staffing_due_at, date(2026, 6, 30))
+        self.assertEqual(control.note, "Call candidates before Friday.")
 
         response = client.post(
             f"/pre-session-control-tower/sessions/{self.session_record.id}/staffing-control",
@@ -11154,6 +11436,7 @@ class ScheduleWorkflowTest(unittest.TestCase):
 
         self.assertIn("ADMIN", row)
         self.assertIn("LOGISTICS", row)
+        self.assertIn("Schedule notifications pending", row)
         self.assertIn("1 confirmation to be sent", row)
         self.assertNotIn("1 confirmation to be sent.", row)
         self.assertIn("Start session package preparation", row)
@@ -11163,6 +11446,38 @@ class ScheduleWorkflowTest(unittest.TestCase):
         self.assertIn(".bundle-action-department-slot,\n.bundle-action-description-stack > span", css)
         self.assertNotIn(".bundle-action-stack > .responsible-chip", css)
         self.assertIn("min-height: 34px;", css)
+
+    def test_bundle_detail_staffing_column_shows_schedule_notification_state(self):
+        self.create_supervisor(staff_id=1, name="Laura Mendez")
+        pending_session = self.create_planning_ready_session(
+            "Schedule notification pending",
+            date(2026, 7, 9),
+            packages_ready=False,
+        )
+        sent_session = self.create_planning_ready_session(
+            "Schedule notification sent",
+            date(2026, 7, 10),
+            packages_ready=False,
+        )
+        db.session.add(ExamSessionStaffingControl(
+            exam_session_id=sent_session.id,
+            schedule_notification_confirmed=True,
+        ))
+        bundle = self.create_shipment_bundle_record(status="Preparing", session_record=pending_session)
+        db.session.add(ExamSessionShipmentBundleSession(bundle_id=bundle.id, exam_session_id=sent_session.id))
+        db.session.commit()
+        client = self.login_client()
+
+        response = client.get(f"/pre-session-control-tower?session_year=2026&view=bundle&bundle_id={bundle.id}")
+        html = response.get_data(as_text=True)
+        table = html[html.index('aria-label="Schedule preparation and approval"'):html.index('<div class="modal"', html.index('aria-label="Schedule preparation and approval"'))]
+        pending_row = table[table.rfind("<tr", 0, table.index("Schedule notification pending")):table.index("</tr>", table.index("Schedule notification pending"))]
+        sent_row = table[table.rfind("<tr", 0, table.index("Schedule notification sent")):table.index("</tr>", table.index("Schedule notification sent"))]
+
+        self.assertIn("1 / 1 confirmed", pending_row)
+        self.assertIn("Schedule notifications pending", pending_row)
+        self.assertIn("1 / 1 confirmed", sent_row)
+        self.assertIn("Schedule notifications sent", sent_row)
 
     def test_bundle_detail_schedule_action_messages_require_registrations_closed_and_date_confirmed(self):
         bundle = self.create_shipment_bundle_record(session_record=self.session_record)

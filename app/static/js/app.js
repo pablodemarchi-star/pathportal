@@ -996,6 +996,22 @@ const flashNotificationMessage = (flash) => (
   flash?.querySelector?.(".flash-message")?.textContent || flash?.textContent || ""
 ).trim();
 
+const showTransientFlash = (message, category = "info") => {
+  if (!message) return;
+  let stack = document.querySelector(".flash-stack");
+  if (!stack) {
+    stack = document.createElement("div");
+    stack.className = "flash-stack";
+    const mainContent = document.querySelector(".main-content") || document.querySelector("main") || document.body;
+    mainContent.prepend(stack);
+  }
+  stack.hidden = false;
+  const item = document.createElement("div");
+  item.className = `flash ${category}`;
+  appendFlashContent(item, message);
+  stack.prepend(item);
+};
+
 document.addEventListener("click", (event) => {
   const button = event.target.closest?.("[data-dismiss-flash]");
   if (!button) return;
@@ -9723,8 +9739,9 @@ const syncLogisticsDeleteButton = (row) => {
 const logisticsRowCanBeConfirmed = (row) => {
   const providerSelect = row?.querySelector("[data-logistics-provider-select]");
   const hasProvider = Array.from(providerSelect?.selectedOptions || []).some((option) => option.value);
+  const staffNotApplicable = row?.dataset.pathSessionManagerConcept === "true";
   const hasStaffMember = Boolean(row?.querySelector("[data-logistics-staff-list] input[type='checkbox']:checked"));
-  return hasProvider && hasStaffMember;
+  return hasProvider && (hasStaffMember || staffNotApplicable);
 };
 
 const syncLogisticsSection = (form) => {
@@ -10965,6 +10982,16 @@ document.querySelectorAll("[data-submit-on-change]").forEach((field) => {
       form.submit();
     }
   });
+});
+
+document.addEventListener("click", (event) => {
+  const disabledPathOrganiser = event.target.closest?.("[data-disabled-path-organiser-option]");
+  if (!disabledPathOrganiser) return;
+  event.preventDefault();
+  showTransientFlash(
+    disabledPathOrganiser.dataset.disabledMessage || "Session managers have not been created in Providers",
+    "warning",
+  );
 });
 
 document.querySelectorAll(".member-form").forEach((form) => {

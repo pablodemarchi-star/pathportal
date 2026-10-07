@@ -276,6 +276,8 @@ MENU_PERMISSION_PATHS = (
 EXAM_SESSION_STATUS_OPTIONS = ["Pending", "Confirmed"]
 EXAM_SESSION_DATE_CONFIRMATION_STATUSES = ["Pending", "Waiting for confirmation", "Confirmed"]
 EXAM_SESSION_ORGANISED_BY_OPTIONS = ["the exam centre", "Path Examinations"]
+PATH_EXAM_SESSION_ORGANISER = "Path Examinations"
+PATH_SESSION_MANAGER_PROVIDER_TYPE = "Session manager"
 EXAM_SESSION_CATEGORY_OPTIONS = [
     "Approved Exam Centre",
     "Premium Exam Centre",
@@ -1625,12 +1627,25 @@ def staffing_readiness_contract(supervisor_assignments=None, examiner_assignment
     else:
         status = "confirmed"
 
+    schedule_notification_confirmed = bool(
+        session_record
+        and getattr(session_record, "staffing_control", None)
+        and session_record.staffing_control.schedule_notification_confirmed
+    )
+    if status == "confirmed" and not schedule_notification_confirmed:
+        status = "awaiting_schedule_notification"
+        blockers.append({
+            "code": "SCHEDULE_NOTIFICATION_UNCONFIRMED",
+            "message": "Schedule notification to all listed institutions must be confirmed.",
+        })
+
     ready = (
         totals["required"] > 0
         and totals["open_positions"] == 0
         and totals["assigned"] == totals["required"]
         and totals["confirmed"] == totals["required"]
         and not invalid_found
+        and schedule_notification_confirmed
     )
 
     return {
@@ -1640,6 +1655,7 @@ def staffing_readiness_contract(supervisor_assignments=None, examiner_assignment
         "totals": totals,
         "by_role": by_role,
         "open_position_details": open_position_details,
+        "schedule_notification_confirmed": schedule_notification_confirmed,
         "blockers": blockers,
     }
 
@@ -1652,6 +1668,8 @@ def staffing_email_blocker_message(contract):
         return "Assign a staff member to every required role before copying the final email."
     if "STAFFING_AWAITING_CONFIRMATIONS" in blocker_codes:
         return "Waiting for all staff members to confirm their participation."
+    if "SCHEDULE_NOTIFICATION_UNCONFIRMED" in blocker_codes:
+        return "Confirm schedule notification to all listed institutions before copying the final email."
     if blocker_codes:
         return "A staff assignment needs to be corrected before copying the final email."
     return "Email copy unavailable"
@@ -2847,6 +2865,8 @@ def validate_exam_session_form(form):
         minimum_candidates_required = int(minimum_candidates_value)
     if exam_session_organised_by not in EXAM_SESSION_ORGANISED_BY_OPTIONS:
         errors.append("Exam session organised by is required.")
+    elif exam_session_organised_by == PATH_EXAM_SESSION_ORGANISER and not session_manager_provider_type():
+        errors.append("Create the Session manager provider type before selecting Path Examinations as organiser.")
     errors.extend(contact_point_errors)
     if not modules:
         errors.append("At least one module is required.")
@@ -4468,6 +4488,78 @@ def provider_type_color_for_name(name):
 
 def provider_type_by_name(name):
     return ProviderType.query.filter(db.func.lower(ProviderType.name) == name.lower()).first()
+
+
+def session_manager_provider_type():
+    return provider_type_by_name(PATH_SESSION_MANAGER_PROVIDER_TYPE)
+
+
+def session_manager_providers(provider_type=None):
+    provider_type = provider_type or session_manager_provider_type()
+    if not provider_type:
+        return []
+    return (
+        Provider.query.filter_by(provider_type_id=provider_type.id)
+        .order_by(Provider.name.asc())
+        .all()
+    )
+
+
+def sync_path_exam_session_logistics(session_record):
+    if session_record.exam_session_organised_by != PATH_EXAM_SESSION_ORGANISER:
+        return True
+
+    provider_type = session_manager_provider_type()
+    if not provider_type:
+        flash("Create the Session manager provider type before selecting Path Examinations as organiser.", "error")
+        return False
+
+    config = ExamSessionLogistics.query.filter_by(exam_session_id=session_record.id).first()
+    if config is None:
+        config = ExamSessionLogistics(exam_session_id=session_record.id)
+        db.session.add(config)
+
+    concept = (
+        ExamSessionLogisticsConcept.query
+        .filter_by(exam_session_id=session_record.id, provider_type_id=provider_type.id)
+        .order_by(ExamSessionLogisticsConcept.id.asc())
+        .first()
+    )
+    if concept is None:
+        concept = ExamSessionLogisticsConcept(exam_session_id=session_record.id)
+        db.session.add(concept)
+
+    providers = session_manager_providers(provider_type)
+    concept.provider_type_id = provider_type.id
+    concept.provider_id = providers[0].id if providers else None
+    concept.provider = ", ".join(provider.display_label for provider in providers)
+    concept.provider_records = providers
+    concept.staff_members = []
+    return True
+
+
+def is_path_session_manager_logistics_concept(concept, session_record=None):
+    session_record = session_record or getattr(concept, "exam_session", None)
+    return bool(
+        concept
+        and session_record
+        and session_record.exam_session_organised_by == PATH_EXAM_SESSION_ORGANISER
+        and is_session_manager_logistics_concept(concept)
+    )
+
+
+def is_session_manager_logistics_concept(concept):
+    return bool(
+        concept
+        and concept.provider_type
+        and concept.provider_type.name == PATH_SESSION_MANAGER_PROVIDER_TYPE
+    )
+
+
+def logistics_concept_display_sort_key(concept, sessions_by_id=None):
+    session_record = sessions_by_id.get(concept.exam_session_id) if sessions_by_id else None
+    path_session_manager_rank = 0 if is_path_session_manager_logistics_concept(concept, session_record) else 1
+    return (path_session_manager_rank, concept.created_on, concept.id)
 
 
 def provider_type_payload(provider_type):
@@ -6460,6 +6552,7 @@ def staffing_contract_status_label(status):
         "not_configured": "Not configured",
         "open_positions": "Open positions",
         "awaiting_confirmations": "Awaiting confirmations",
+        "awaiting_schedule_notification": "Awaiting schedule notification",
         "confirmed": "Ready",
         "invalid": "Needs review",
     }.get(status, "Needs review")
@@ -6486,7 +6579,11 @@ def staffing_contract_blocker_messages(contract):
         messages.append(f"{pluralize_phrase(pending_confirmations, 'confirmation')} to be sent.")
     if sent_confirmations:
         messages.append(f"{pluralize_phrase(sent_confirmations, 'confirmation')} to be updated.")
-    return messages
+    for blocker in contract.get("blockers", []):
+        message = blocker.get("message")
+        if message:
+            messages.append(message)
+    return list(dict.fromkeys(messages))
 
 
 def staffing_presentation_from_contract(contract):
@@ -6557,7 +6654,13 @@ def staffing_presentation_from_contract(contract):
             "label": "Confirmations to be updated",
             "recommended_action": "Follow up on confirmation email status",
         })
-    if required > 0 and open_positions == 0 and confirmed == required:
+    if status == "awaiting_schedule_notification":
+        status_chips.append({
+            "status": "confirmations-to-be-sent",
+            "label": "Confirmations to be sent",
+            "recommended_action": "Send official confirmation emails",
+        })
+    if contract.get("ready"):
         status_chips.append({
             "status": "confirmed-staff",
             "label": "Confirmed",
@@ -6592,6 +6695,7 @@ def staffing_presentation_from_contract(contract):
         "blockers": staffing_contract_blocker_messages(contract),
         "tooltip": "\n".join(tooltip_lines) if tooltip_lines else "Staffing has not been configured for this session.",
         "ready": contract.get("ready", False),
+        "schedule_notification_confirmed": bool(contract.get("schedule_notification_confirmed", False)),
     }
 
 
@@ -7141,6 +7245,7 @@ def staffing_control_contract(staffing_control=None, staffing_contract=None, tod
         "deadline": deadline,
         "deadline_label": deadline_label,
         "deadline_status": deadline_status,
+        "schedule_notification_confirmed": bool(staffing_control.schedule_notification_confirmed) if staffing_control else False,
         "note": note,
         "updated_by": staffing_control.updated_by if staffing_control else "",
         "is_overdue": is_overdue,
@@ -8834,6 +8939,7 @@ def logistics_presentation_from_contract(
     concept_rows = []
     for index, concept in enumerate(concepts, start=1):
         concept_session = session_record or getattr(concept, "exam_session", None)
+        staff_non_applicable = is_session_manager_logistics_concept(concept)
         label = concept.provider_display_label() if hasattr(concept, "provider_display_label") else (concept.provider or "").strip()
         label = label or f"Logistics concept {index}"
         providers = list(concept.provider_records or [])
@@ -8910,12 +9016,13 @@ def logistics_presentation_from_contract(
             "id": concept.id,
             "label": label,
             "status": concept.status,
-            "can_confirm": bool(provider_rows) and bool(staff_member_rows),
+            "can_confirm": bool(provider_rows) and (bool(staff_member_rows) or staff_non_applicable),
             "provider_type": concept.provider_type.name if concept.provider_type else (
                 provider_rows[0]["type_name"] if provider_rows else "-"
             ),
             "providers": provider_rows,
             "staff_members": staff_member_rows,
+            "staff_non_applicable": staff_non_applicable,
             "note_count": len(concept.notes or []),
             "payment_requests": payment_requests_by_concept.get(concept.id, []),
         })
@@ -8956,7 +9063,10 @@ def logistics_concept_can_be_confirmed(concept):
     providers = list(getattr(concept, "provider_records", None) or [])
     provider_label = (getattr(concept, "provider", "") or "").strip()
     staff_members = list(getattr(concept, "staff_members", None) or [])
-    return bool(providers or provider_label) and bool(staff_members)
+    return bool(providers or provider_label) and (
+        bool(staff_members)
+        or is_session_manager_logistics_concept(concept)
+    )
 
 
 def logistics_concept_form_can_be_confirmed(provider_records, staff_member_records):
@@ -9776,14 +9886,6 @@ def bundle_detail_action_items(
                 "department": "",
                 "description": "Logistics planning has been finalised",
             }]
-
-    if logistics_overdue and logistics.get("status") in {"not_started", "in_progress"}:
-        logistics_blockers = logistics.get("blockers") or []
-        actions.append({
-            "department": (logistics_control or {}).get("responsible_label", "ADMIN"),
-            "description": logistics_blockers[0] if logistics_blockers else "Complete pending logistics arrangements.",
-            "overdue": True,
-        })
 
     if packages_action and not packages_action.get("is_complete"):
         actions.append({
@@ -17209,6 +17311,7 @@ def pre_session_control_tower():
     if selected_view in {"bundles", "sessions", "bundle"} and not request.args.get("open_schedule_modal"):
         reconcile_auto_shipment_bundles(sessions, today=today)
     session_ids = [session_record.id for session_record in sessions]
+    sessions_by_id = {session_record.id: session_record for session_record in sessions}
     workflow_records = (
         ExamSessionScheduleWorkflow.query.filter(
             ExamSessionScheduleWorkflow.exam_session_id.in_(session_ids)
@@ -17568,6 +17671,8 @@ def pre_session_control_tower():
     logistics_concepts_by_session = {}
     for concept in logistics_concept_records:
         logistics_concepts_by_session.setdefault(concept.exam_session_id, []).append(concept)
+    for session_concepts in logistics_concepts_by_session.values():
+        session_concepts.sort(key=lambda concept: logistics_concept_display_sort_key(concept, sessions_by_id))
     package_unit_records = (
         ExamSessionPackageUnit.query.filter(
             ExamSessionPackageUnit.exam_session_id.in_(session_ids)
@@ -18791,29 +18896,37 @@ def update_staffing_control(session_id):
         flash("Security token expired. Please try again.", "error")
         return staffing_control_redirect(session_record, status_filter, edit=True)
 
-    due_value = request.form.get("staffing_due_at", "").strip()
-    staffing_due_at = None
-    if due_value:
-        staffing_due_at = parse_schedule_deadline(due_value)
-        if staffing_due_at is None:
-            flash("Please enter a valid staffing deadline.", "error")
-            return staffing_control_redirect(session_record, status_filter, edit=True)
-    note = request.form.get("note", "").strip()
-    if len(note) > 2000:
-        flash("Operational note must be 2000 characters or fewer.", "error")
-        return staffing_control_redirect(session_record, status_filter, edit=True)
-
     control_record = ExamSessionStaffingControl.query.filter_by(
         exam_session_id=session_record.id
     ).first()
     if not control_record:
         control_record = ExamSessionStaffingControl(exam_session_id=session_record.id)
         db.session.add(control_record)
+
+    due_value = request.form.get("staffing_due_at", "").strip() if "staffing_due_at" in request.form else (
+        control_record.staffing_due_at.isoformat() if control_record.staffing_due_at else ""
+    )
+    staffing_due_at = None
+    if due_value:
+        staffing_due_at = parse_schedule_deadline(due_value)
+        if staffing_due_at is None:
+            flash("Please enter a valid staffing deadline.", "error")
+            return staffing_control_redirect(session_record, status_filter, edit=True)
+    note = request.form.get("note", "").strip() if "note" in request.form else (control_record.note or "")
+    if len(note) > 2000:
+        flash("Operational note must be 2000 characters or fewer.", "error")
+        return staffing_control_redirect(session_record, status_filter, edit=True)
+
+    if "schedule_notification_confirmed_present" in request.form:
+        control_record.schedule_notification_confirmed = request.form.get("schedule_notification_confirmed") == "1"
     control_record.staffing_due_at = staffing_due_at
     control_record.note = note or None
     control_record.updated_by = session.get("user")
     db.session.commit()
-    flash("Staffing ownership and deadline saved successfully.", "success")
+    if "schedule_notification_confirmed_present" in request.form and "staffing_due_at" not in request.form and "note" not in request.form:
+        flash("Schedule notification verification saved successfully.", "success")
+    else:
+        flash("Staffing ownership and deadline saved successfully.", "success")
     return staffing_control_redirect(session_record, status_filter)
 
 
@@ -21855,6 +21968,8 @@ def exam_session_planner():
     logistics_concepts = {}
     for concept in logistics_concept_records:
         logistics_concepts.setdefault(concept.exam_session_id, []).append(concept)
+    for session_concepts in logistics_concepts.values():
+        session_concepts.sort(key=lambda concept: logistics_concept_display_sort_key(concept, sessions_by_id))
     logistics_activity_by_session = {session_id: False for session_id in session_ids}
     for assignment in assignment_records + examiner_assignment_records + intern_assignment_records:
         if assignment.logistics_enabled:
@@ -22170,6 +22285,7 @@ def exam_session_planner():
         format_options=EXAM_SESSION_FORMAT_OPTIONS,
         category_options=EXAM_SESSION_CATEGORY_OPTIONS,
         exam_session_organised_by_options=EXAM_SESSION_ORGANISED_BY_OPTIONS,
+        path_exam_session_organiser_available=session_manager_provider_type() is not None,
         csrf_token=session.get("csrf_token"),
     )
 
@@ -22591,6 +22707,9 @@ def create_exam_session():
     ensure_exam_session_year(data["session_date"].year)
     db.session.add(session_record)
     db.session.flush()
+    if not sync_path_exam_session_logistics(session_record):
+        db.session.rollback()
+        return redirect(url_for("staff.exam_session_planner", session_year=selected_year))
     sync_exam_session_concat_sessions(session_record, data["concat_session_ids"])
     db.session.commit()
     flash("Exam session created successfully.", "success")
@@ -22614,6 +22733,9 @@ def update_exam_session(session_id):
 
     apply_exam_session_form(session_record, data)
     ensure_exam_session_year(data["session_date"].year)
+    if not sync_path_exam_session_logistics(session_record):
+        db.session.rollback()
+        return redirect(url_for("staff.exam_session_planner", session_year=selected_year))
     sync_exam_session_concat_sessions(session_record, data["concat_session_ids"])
     db.session.commit()
     flash("Exam session updated successfully.", "success")
@@ -23290,15 +23412,26 @@ def save_exam_session_logistics(session_record):
         is_blank_new_row = concept is None and status == "Pending" and provider_type_id is None and provider_id is None and currency == "ARS" and fee is None and not pending_notes and not staff_member_records
         if is_blank_new_row:
             continue
+        current_session_manager_provider_type = session_manager_provider_type()
+        is_path_session_manager_concept = (
+            session_record.exam_session_organised_by == PATH_EXAM_SESSION_ORGANISER
+            and provider_type_id is not None
+            and current_session_manager_provider_type
+            and provider_type_id == current_session_manager_provider_type.id
+        )
         if logistics_enabled_for_session(session_record.id):
             if provider_type_id is None:
                 flash("Select a Type of provider for each Logistics concept.", "error")
                 return False
-            if not staff_member_records:
+            if not staff_member_records and not is_path_session_manager_concept:
                 flash("Select at least one Staff member for each Logistics concept.", "error")
                 return False
         selected_complex_staff_member_ids.update(member.id for member in staff_member_records)
-        if status == "Confirmed" and not logistics_concept_form_can_be_confirmed(provider_records, staff_member_records):
+        if (
+            status == "Confirmed"
+            and not is_path_session_manager_concept
+            and not logistics_concept_form_can_be_confirmed(provider_records, staff_member_records)
+        ):
             status = "Pending"
             flash("Logistics concept status changed to Pending because Confirmed requires at least one provider and one staff member.", "info")
         if (
@@ -23339,7 +23472,7 @@ def save_exam_session_logistics(session_record):
             "error",
         )
         return False
-    return True
+    return sync_path_exam_session_logistics(session_record)
 
 
 def update_exam_session_overall_status(session_record):
@@ -23663,7 +23796,11 @@ def update_exam_session_members(session_id):
 
     db.session.flush()
     logistics_concepts = ExamSessionLogisticsConcept.query.filter_by(exam_session_id=session_record.id).all()
-    if not logistics_enabled_for_session(session_record.id) and logistics_concepts_have_data(logistics_concepts):
+    if (
+        session_record.exam_session_organised_by != PATH_EXAM_SESSION_ORGANISER
+        and not logistics_enabled_for_session(session_record.id)
+        and logistics_concepts_have_data(logistics_concepts)
+    ):
         db.session.rollback()
         flash("Remove all Logistics concepts before deactivating Logistics from the session.", "error")
         return session_members_redirect(keep_open=True)
@@ -24426,6 +24563,7 @@ def pre_session_dashboard_sessions_department_action_count(department, selected_
         if pre_session_sessions_view_visible(session_record)
     ]
     session_ids = [session_record.id for session_record in visible_sessions]
+    sessions_by_id = {session_record.id: session_record for session_record in visible_sessions}
     if not session_ids:
         return 0
     workflow_records = (
@@ -24474,6 +24612,8 @@ def pre_session_dashboard_sessions_department_action_count(department, selected_
     logistics_concepts_by_session = {}
     for concept in logistics_concept_records:
         logistics_concepts_by_session.setdefault(concept.exam_session_id, []).append(concept)
+    for session_concepts in logistics_concepts_by_session.values():
+        session_concepts.sort(key=lambda concept: logistics_concept_display_sort_key(concept, sessions_by_id))
     today = datetime.now(LOCAL_TZ).date()
     count = 0
     for session_record in visible_sessions:

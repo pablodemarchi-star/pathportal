@@ -112,7 +112,7 @@
   </span>
 {%- endmacro %}
 
-{% macro staffing_table_cell(staffing, schedule_gate, focusable=true, deadline_badge=none) -%}
+{% macro staffing_table_cell(staffing, schedule_gate, focusable=true, deadline_badge=none, show_schedule_notifications=false) -%}
   <span class="staffing-summary-cell">
     {% if schedule_gate.is_ready %}
       <span class="staffing-gate-chip staffing-gate-unblocked" aria-label="Staffing gate unblocked">
@@ -134,6 +134,9 @@
     {{ staffing_status_badge(staffing, focusable) }}
     {% if staffing.required > 0 %}
       <span>{{ staffing.table_summary }}</span>
+      {% if show_schedule_notifications %}
+        <small>{% if staffing.schedule_notification_confirmed %}Schedule notifications sent{% else %}Schedule notifications pending{% endif %}</small>
+      {% endif %}
       {% for line in staffing.secondary_lines %}
         <small>{{ line }}</small>
       {% endfor %}
@@ -1876,7 +1879,7 @@
             </td>
             <td>
               {% call contextual_cell_trigger(session, 'staffing', 'Manage staffing', staffing_only=true) %}
-                {{ staffing_table_cell(view.staffing, view.schedule_gate, false, view.staffing_deadline_badge) }}
+                {{ staffing_table_cell(view.staffing, view.schedule_gate, false, view.staffing_deadline_badge, true) }}
               {% endcall %}
             </td>
             <td>
@@ -2134,6 +2137,13 @@
         <section class="staffing-control-metadata" aria-label="Staffing ownership and deadline">
           {% set staffing_next = namespace(label='Review staffing') %}
           {% set nearest_deadline = namespace(value=none, label='-') %}
+          {% set last_confirmation_deadline = namespace(value=none, label='-') %}
+          {% for row in view.staffing_rows %}
+            {% if row.deadline and (not last_confirmation_deadline.value or row.deadline > last_confirmation_deadline.value) %}
+              {% set last_confirmation_deadline.value = row.deadline %}
+              {% set last_confirmation_deadline.label = row.deadline|session_date %}
+            {% endif %}
+          {% endfor %}
           {% if not view.schedule_gate.is_ready %}
             {% set staffing_next.label = 'Wait for schedule approval' %}
           {% elif view.staffing.ready %}
@@ -2149,6 +2159,10 @@
               {% endif %}
             {% endfor %}
           {% endif %}
+          {% if view.staffing.status == 'awaiting_schedule_notification' and last_confirmation_deadline.value %}
+            {% set nearest_deadline.value = last_confirmation_deadline.value %}
+            {% set nearest_deadline.label = last_confirmation_deadline.label %}
+          {% endif %}
           <div>
             <span>Current status</span>
             <strong>{{ staffing_status_badge(view.staffing) }}</strong>
@@ -2162,14 +2176,12 @@
             <strong>{{ view.staffing_control.department }}</strong>
           </div>
           <div>
-            <span>Responsible person</span>
-            <strong>{{ view.staffing_control.responsible_person_label }}</strong>
-          </div>
-          <div>
             <span>Nearest deadline</span>
             <strong>
               {% if view.staffing.ready %}
                 <span class="muted">Completed</span>
+              {% elif view.staffing.status == 'awaiting_schedule_notification' and last_confirmation_deadline.value %}
+                {{ last_confirmation_deadline.label }}
               {% else %}
                 {{ nearest_deadline.label }}
               {% endif %}
@@ -2207,6 +2219,16 @@
               <p>Editing the staff and staff satus may affect the Package stage, as package preparation has started. Password authorisation is required to continue.</p>
             </div>
           {% endif %}
+          <form method="post" action="{{ url_for('staff.update_staffing_control', session_id=session.id) }}" class="staffing-schedule-notification-form" data-disable-on-submit>
+            <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+            <input type="hidden" name="schedule_status" value="{{ selected_schedule_status }}">
+            <input type="hidden" name="schedule_notification_confirmed_present" value="1">
+            {{ pre_session_return_fields(selected_view, selected_bundle) }}
+            <label class="staffing-role-check-label {% if staffing_actions_disabled %}is-disabled{% endif %}">
+              <input type="checkbox" name="schedule_notification_confirmed" value="1" data-submit-on-change {% if view.staffing_control.schedule_notification_confirmed %}checked{% endif %}{% if staffing_actions_disabled %} disabled{% endif %}>
+              <span>It has been verified that all institutions listed in the session have been notified of the schedule.</span>
+            </label>
+          </form>
           <div class="staffing-role-table-wrap">
             <table class="staffing-role-table">
               <thead>
@@ -2483,7 +2505,7 @@
                             <button class="mini-button provider-details-button" type="button" data-open-modal="pre-logistics-staff-{{ concept.id }}-{{ staff_member.id }}" aria-label="Staff member details for {{ staff_member.name }}" title="Staff member details"{% if logistics_actions_disabled %} disabled aria-disabled="true"{% endif %}>i</button>
                           </div>
                         {% else %}
-                          <span class="muted">No staff members selected</span>
+                          <span class="muted">{{ 'Non-applicable' if concept.staff_non_applicable else 'No staff members selected' }}</span>
                         {% endfor %}
                       </div>
                     </td>

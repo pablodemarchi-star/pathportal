@@ -1043,6 +1043,7 @@ class ExamSessionStaffingControl(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     exam_session_id = db.Column(db.Integer, db.ForeignKey("exam_session.id"), nullable=False, index=True)
     staffing_due_at = db.Column(db.Date, nullable=True, index=True)
+    schedule_notification_confirmed = db.Column(db.Boolean, nullable=False, default=False)
     note = db.Column(db.Text, nullable=True)
     updated_by = db.Column(db.String(120), nullable=True)
     created_at = db.Column(db.DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))

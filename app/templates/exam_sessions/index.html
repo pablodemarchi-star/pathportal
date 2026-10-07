@@ -149,12 +149,13 @@
   {% set selected_status = 'Pre-confirmed' if concept and concept.status == 'Payment scheduled' else (concept.status if concept else 'Pending') %}
   {% set selected_provider_ids = concept.provider_records|map(attribute='id')|list if concept and concept.provider_records else ([concept.provider_id] if concept and concept.provider_id else []) %}
   {% set selected_staff_member_ids = concept.staff_members|map(attribute='id')|list if concept and concept.staff_members else [] %}
-  {% set can_confirm_logistics = selected_provider_ids|length > 0 and selected_staff_member_ids|length > 0 %}
+  {% set is_path_session_manager_concept = concept and concept.provider_type and concept.provider_type.name == 'Session manager' and concept.exam_session and concept.exam_session.exam_session_organised_by == 'Path Examinations' %}
+  {% set can_confirm_logistics = selected_provider_ids|length > 0 and (selected_staff_member_ids|length > 0 or is_path_session_manager_concept) %}
   {% if selected_status == 'Confirmed' and not can_confirm_logistics %}
     {% set selected_status = 'Pending' %}
   {% endif %}
   {% set selected_provider_type_id = concept.provider_type_id if concept and concept.provider_type_id else (concept.provider_record.provider_type_id if concept and concept.provider_record else none) %}
-  <tr data-logistics-concept-row>
+  <tr data-logistics-concept-row {% if is_path_session_manager_concept %}data-path-session-manager-concept="true"{% endif %}>
     <td class="row-status-cell logistics-status-cell">
       <input type="hidden" name="logistics_concept_row_keys" value="{{ row_key }}">
       <input type="hidden" name="logistics_concept_id_{{ row_key }}" value="{{ concept.id if concept else '' }}">
@@ -190,18 +191,22 @@
       </select>
     </td>
     <td class="logistics-staff-members-cell">
-      <div class="logistics-staff-member-list" data-logistics-staff-list data-selected-staff-ids="{{ selected_staff_member_ids|join(',') }}" role="group" aria-required="true">
-        {% if staff_member_options %}
-          {% for staff_member in staff_member_options %}
-            <label class="logistics-staff-member-option">
-              <input type="checkbox" name="logistics_staff_member_ids_{{ row_key }}" value="{{ staff_member.id }}" {% if staff_member.id in selected_staff_member_ids %}checked{% endif %}>
-              <span>{{ staff_member.full_name }}</span>
-            </label>
-          {% endfor %}
-        {% else %}
-          <span class="logistics-staff-empty">No Complex logistics staff</span>
-        {% endif %}
-      </div>
+      {% if is_path_session_manager_concept %}
+        <span class="logistics-staff-empty">Non-applicable</span>
+      {% else %}
+        <div class="logistics-staff-member-list" data-logistics-staff-list data-selected-staff-ids="{{ selected_staff_member_ids|join(',') }}" role="group" aria-required="true">
+          {% if staff_member_options %}
+            {% for staff_member in staff_member_options %}
+              <label class="logistics-staff-member-option">
+                <input type="checkbox" name="logistics_staff_member_ids_{{ row_key }}" value="{{ staff_member.id }}" {% if staff_member.id in selected_staff_member_ids %}checked{% endif %}>
+                <span>{{ staff_member.full_name }}</span>
+              </label>
+            {% endfor %}
+          {% else %}
+            <span class="logistics-staff-empty">No Complex logistics staff</span>
+          {% endif %}
+        </div>
+      {% endif %}
     </td>
     <td class="logistics-provider-details-cell">
       <button class="mini-button provider-details-button" type="button" data-provider-details-button {% if selected_provider_ids|length > 0 %}data-provider-detail-ids="{{ selected_provider_ids|join(',') }}"{% else %}disabled{% endif %} aria-label="Provider details" title="{% if selected_provider_ids|length > 1 %}Provider details for {{ selected_provider_ids|length }} providers{% else %}Provider details{% endif %}">i</button>
@@ -577,7 +582,7 @@
   </article>
 {%- endmacro %}
 
-{% macro session_form(session, action, submit_label, status_options, module_options, shift_options, format_options, category_options, exam_session_organised_by_options, concat_session_options, csrf_token, selected_session_year) -%}
+{% macro session_form(session, action, submit_label, status_options, module_options, shift_options, format_options, category_options, exam_session_organised_by_options, concat_session_options, csrf_token, selected_session_year, path_exam_session_organiser_available) -%}
   {% set selected_modules = session.modules_list() if session else [] %}
   {% set selected_shifts = session.shifts_list() if session else [] %}
   {% set selected_format = session.format if session else '' %}
@@ -623,8 +628,9 @@
     <fieldset class="exam-format-picker exam-session-organiser-picker">
       <legend>Exam session organised by</legend>
       {% for organiser in exam_session_organised_by_options %}
-        <label>
-          <input type="radio" name="exam_session_organised_by" value="{{ organiser }}" {% if selected_exam_session_organised_by == organiser %}checked{% endif %} required>
+        {% set path_organiser_disabled = organiser == 'Path Examinations' and not path_exam_session_organiser_available and selected_exam_session_organised_by != organiser %}
+        <label {% if path_organiser_disabled %}data-disabled-path-organiser-option data-disabled-message="Session managers have not been created in Providers"{% endif %}>
+          <input type="radio" name="exam_session_organised_by" value="{{ organiser }}" {% if selected_exam_session_organised_by == organiser %}checked{% endif %} {% if path_organiser_disabled %}disabled{% endif %} required>
           <span>{{ organiser }}</span>
         </label>
       {% endfor %}
@@ -1199,7 +1205,7 @@
       <h2>New exam session</h2>
       <button class="icon-button" type="button" data-close-modal>&times;</button>
     </div>
-    {{ session_form(None, url_for('staff.create_exam_session'), 'Create exam session', status_options, module_options, shift_options, format_options, category_options, exam_session_organised_by_options, concat_session_options, csrf_token, selected_session_year) }}
+    {{ session_form(None, url_for('staff.create_exam_session'), 'Create exam session', status_options, module_options, shift_options, format_options, category_options, exam_session_organised_by_options, concat_session_options, csrf_token, selected_session_year, path_exam_session_organiser_available) }}
   </div>
 </div>
 
@@ -1752,7 +1758,7 @@
           <h2>Edit exam session</h2>
           <button class="icon-button" type="button" data-close-modal>&times;</button>
         </div>
-        {{ session_form(session, url_for('staff.update_exam_session', session_id=session.id), 'Save changes', status_options, module_options, shift_options, format_options, category_options, exam_session_organised_by_options, concat_session_options, csrf_token, selected_session_year) }}
+        {{ session_form(session, url_for('staff.update_exam_session', session_id=session.id), 'Save changes', status_options, module_options, shift_options, format_options, category_options, exam_session_organised_by_options, concat_session_options, csrf_token, selected_session_year, path_exam_session_organiser_available) }}
       </div>
     </div>
   {% endif %}

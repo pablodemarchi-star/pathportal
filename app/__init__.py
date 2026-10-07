@@ -1055,6 +1055,12 @@ def create_app():
                     )
                 )
                 db.session.commit()
+        staffing_control_columns = {
+            row[1] for row in db.session.execute(text("PRAGMA table_info(exam_session_staffing_control)"))
+        }
+        if staffing_control_columns and "schedule_notification_confirmed" not in staffing_control_columns:
+            db.session.execute(text("ALTER TABLE exam_session_staffing_control ADD COLUMN schedule_notification_confirmed BOOLEAN NOT NULL DEFAULT 0"))
+            db.session.commit()
         logistics_concept_columns = {
             row[1] for row in db.session.execute(text("PRAGMA table_info(exam_session_logistics_concept)"))
         }
