@@ -8,6 +8,7 @@ from app import create_app, db
 from app.models import (
     BillingRequest,
     ExamSession,
+    ExamSessionFinanceControl,
     ExamSessionLogisticsConcept,
     ExamSessionScheduleNoteMention,
     ExamSessionScheduleWorkflow,
@@ -323,6 +324,22 @@ class DashboardTest(unittest.TestCase):
         self.assertIn('href="/finance-requests?tab=management_review">View 2 actions in Management review</a>', body)
         self.assertNotIn("View action in Payment requests", body)
         self.assertNotIn("View action in Invoice requests", body)
+
+    def test_finance_dashboard_counts_pending_sessions_and_links_to_sessions(self):
+        statuses = ['Not reviewed', 'Conditional clearance', 'Mid-risk debt', 'High-risk debt', 'Effective clearance', 'Effective clearance', 'Not reviewed']
+        for index, status in enumerate(statuses):
+            session_record = ExamSession(exam_session_name=f'Finance session {index}', category='Path School', status='Pending', session_date=date(2026, 12, 20), shifts='Morning', modules='Speaking', format='Onsite', monthly_registrations_closed=index != 6, date_confirmation_status='Confirmed')
+            db.session.add(session_record)
+            db.session.flush()
+            db.session.add(ExamSessionFinanceControl(exam_session_id=session_record.id, status=status, institutions_confirmed_with_admin=index == 4))
+        db.session.commit()
+        client = self.permission_client({'pre_session_control_tower': {'view': True}}, department='Finance')
+        response = client.get('/?session_year=2026')
+        body = response.get_data(as_text=True)
+        self.assertEqual(response.status_code, 200)
+        self.assertIn('You have 5 actions to complete in this menu.', body)
+        self.assertIn('>View actions in Session actions</a>', body)
+        self.assertIn('href="/pre-session-control-tower?session_year=2026&amp;view=sessions"', body)
 
     def test_dashboard_shows_pre_session_card_with_department_actions(self):
         session_record = ExamSession(

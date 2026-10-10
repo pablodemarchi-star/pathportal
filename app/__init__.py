@@ -226,6 +226,12 @@ def create_app():
 
     with app.app_context():
         db.create_all()
+        finance_columns = {row[1] for row in db.session.execute(text("PRAGMA table_info(exam_session_finance_control)"))}
+        if "additional_institutions" not in finance_columns:
+            db.session.execute(text("ALTER TABLE exam_session_finance_control ADD COLUMN additional_institutions TEXT NOT NULL DEFAULT '[]'"))
+        if "institutions_confirmed_with_admin" not in finance_columns:
+            db.session.execute(text("ALTER TABLE exam_session_finance_control ADD COLUMN institutions_confirmed_with_admin BOOLEAN NOT NULL DEFAULT 0"))
+        db.session.commit()
         user_menu_permission_sql = db.session.execute(
             text("SELECT sql FROM sqlite_master WHERE type='table' AND name='user_menu_permission'")
         ).scalar()

@@ -24,6 +24,41 @@ class UsersTest(unittest.TestCase):
         db.drop_all()
         self.ctx.pop()
 
+    def test_superadmin_impersonation_and_return(self):
+        original = self.create_user_record(email='admin@example.com', is_superadmin=True)
+        target = self.create_user_record(email='finance@example.com', department='Finance')
+        client = self.admin_client()
+        html = client.get('/users').get_data(as_text=True)
+        self.assertIn(f'/users/{target.id}/impersonate', html)
+        self.assertEqual(client.post(f'/users/{target.id}/impersonate', data={'csrf_token': 'invalid'}).status_code, 403)
+        response = client.post(f'/users/{target.id}/impersonate', data={'csrf_token': 'token'})
+        self.assertEqual(response.status_code, 302)
+        with client.session_transaction() as state:
+            self.assertEqual(state['user_id'], target.id)
+            self.assertEqual(state['user_department'], 'Finance')
+            self.assertEqual(state['impersonating_superadmin_id'], original.id)
+            token = state['csrf_token']
+            self.assertNotEqual(token, 'token')
+        self.assertEqual(client.get('/users').status_code, 403)
+        self.assertEqual(client.post(f'/users/{original.id}/impersonate', data={'csrf_token': token}).status_code, 403)
+        self.assertIn('Return to Super admin', client.get('/').get_data(as_text=True))
+        response = client.post('/users/impersonation/stop', data={'csrf_token': token})
+        self.assertEqual(response.status_code, 302)
+        with client.session_transaction() as state:
+            self.assertEqual(state['user_id'], original.id)
+            self.assertNotIn('impersonating_superadmin_id', state)
+        self.assertEqual(client.get('/users').status_code, 200)
+
+    def test_impersonation_rejects_non_superadmin_and_inactive_target(self):
+        original = self.create_user_record(email='admin@example.com', is_superadmin=True)
+        target = self.create_user_record(email='inactive@example.com', is_active=False)
+        client = self.admin_client()
+        self.assertEqual(client.post(f'/users/{target.id}/impersonate', data={'csrf_token': 'token'}).status_code, 403)
+        original.is_superadmin = False
+        db.session.commit()
+        self.assertEqual(client.post(f'/users/{target.id}/impersonate', data={'csrf_token': 'token'}).status_code, 403)
+        self.assertEqual(client.post('/users/impersonation/stop', data={'csrf_token': 'token'}).status_code, 403)
+
     def admin_client(self):
         client = self.app.test_client()
         with client.session_transaction() as user_session:

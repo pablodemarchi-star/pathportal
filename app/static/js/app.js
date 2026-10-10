@@ -1725,7 +1725,7 @@ const syncFinanceNoteRequirement = (form) => {
 };
 
 const closeFinanceControlForm = (form, { restoreFocus = true } = {}) => {
-  if (!form) return;
+  if (!form || form.hasAttribute("data-finance-institutions-form")) return;
   form.hidden = true;
   const modal = form.closest(".modal");
   const trigger = modal?.querySelector(`[data-finance-control-toggle][aria-controls="${CSS.escape(form.id)}"]`);
@@ -2173,8 +2173,9 @@ document.addEventListener("keydown", (event) => {
 
 document.querySelectorAll("[data-finance-control-form]").forEach((form) => {
   syncFinanceNoteRequirement(form);
-  form.querySelector("[data-finance-status-select]")?.addEventListener("change", () => {
+  form.querySelector("[data-finance-status-select]")?.addEventListener("change", (event) => {
     syncFinanceNoteRequirement(form);
+    if (event.target.hasAttribute("data-finance-auto-save")) form.requestSubmit();
   });
 });
 
@@ -13229,3 +13230,156 @@ document.addEventListener("click", (event) => {
   event.preventDefault();
   event.stopImmediatePropagation();
 }, true);
+
+
+document.querySelectorAll("[data-finance-institutions-form]").forEach((form) => {
+  const list = form.querySelector("[data-finance-institution-list]");
+  const add = form.querySelector("[data-finance-add-institution]");
+  const template = form.querySelector("[data-finance-institution-template]");
+  const locked = form.querySelector('[name="finance_status"]').disabled;
+  const feedback = form.querySelector("[data-finance-auto-save-status]");
+  const collectFinanceData = () => {
+    const data = new FormData();
+    form.querySelectorAll('input[type="hidden"]').forEach((input) => {
+      if (input.name && !input.disabled) data.append(input.name, input.value);
+    });
+    data.set("finance_status", form.querySelector('[name="finance_status"]').value || "");
+    list.querySelectorAll("[data-finance-institution-row]").forEach((row) => {
+      data.append("institution_name", row.querySelector('[name="institution_name"]').value);
+      data.append("institution_standing", row.querySelector('[name="institution_standing"]').value);
+    });
+    if (form.querySelector('[name="institutions_confirmed_with_admin"]').checked) data.set("institutions_confirmed_with_admin", "on");
+    return data;
+  };
+  let saving = false;
+  let dirty = false;
+  let saveTimer;
+  const save = async () => {
+    if (locked) return;
+    dirty = true;
+    if (saving) return;
+    saving = true;
+    let retryCount = 0;
+    while (dirty) {
+      dirty = false;
+      feedback.textContent = "";
+      feedback.classList.remove("is-error");
+      try {
+        const response = await fetch(form.action, {
+          method: "POST", body: collectFinanceData(),
+          headers: { "X-Finance-Autosave": "1", "Accept": "application/json" },
+        });
+        if (!response.headers.get("content-type")?.includes("application/json")) throw new Error("Your session may have expired. Reload the page to continue.");
+        const result = await response.json();
+        if (!response.ok || !result.ok) throw new Error(result.message || "Finance changes could not be saved.");
+        retryCount = 0;
+        if (!dirty) {
+          const section = form.closest(".finance-control-section");
+          const modalId = form.closest(".modal")?.id;
+          const badges = [...section.querySelectorAll(".staffing-control-metadata .badge")];
+          if (modalId) document.querySelectorAll(`[data-open-modal="${CSS.escape(modalId)}"][data-modal-finance-only] .finance-summary-cell > .badge`).forEach((badge) => badges.push(badge));
+          badges.forEach((badge) => {
+            badge.className = `badge finance-status-${result.block_status.replaceAll("_", "-")}`;
+            badge.textContent = result.block_label;
+            badge.title = result.message;
+            badge.setAttribute("aria-label", `Finance ${result.block_label}: ${result.message}`);
+          });
+          if (modalId && result.institution_count) {
+            document.querySelectorAll(`[data-open-modal="${CSS.escape(modalId)}"][data-modal-finance-only] [data-finance-institution-count]`).forEach((label) => {
+              label.textContent = result.institution_count === 1 ? "Single institution" : `${result.institution_count} institutions`;
+            });
+          }
+          if (modalId && result.deadline_badge) {
+            document.querySelectorAll(`[data-open-modal="${CSS.escape(modalId)}"][data-modal-finance-only] .finance-column-deadline-chip`).forEach((chip) => {
+              chip.className = `shipment-deadline-chip shipment-deadline-${result.deadline_badge.status} finance-column-deadline-chip`;
+              chip.title = result.deadline_badge.label;
+              chip.setAttribute("aria-label", `${result.deadline_badge.label}: ${chip.textContent.trim()}`);
+            });
+          }
+          feedback.textContent = "";
+        }
+      } catch (error) {
+        feedback.textContent = error.message || "Finance changes could not be saved. Try changing the field again.";
+        feedback.classList.add("is-error");
+        // A failed earlier request must not discard newer edits waiting to save.
+        if (dirty) continue;
+        if (retryCount < 2) {
+          retryCount += 1;
+          feedback.textContent = "";
+          await new Promise((resolve) => setTimeout(resolve, 500 * retryCount));
+          dirty = true;
+          continue;
+        }
+        break;
+      }
+    }
+    saving = false;
+  };
+  form.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    if (locked) return;
+    clearTimeout(saveTimer);
+    dirty = false;
+    const button = form.querySelector(".finance-save-button");
+    button.disabled = true;
+    button.textContent = "Saving...";
+    while (saving) await new Promise((resolve) => setTimeout(resolve, 50));
+    HTMLFormElement.prototype.submit.call(form);
+  });
+  form.addEventListener("focusout", (event) => {
+    if (!event.target.matches('[name="institution_name"]')) return;
+    clearTimeout(saveTimer);
+    save();
+  });
+  form.addEventListener("input", (event) => {
+    if (!event.target.matches('[name="institution_name"]')) return;
+    clearTimeout(saveTimer);
+    saveTimer = setTimeout(save, 400);
+  });
+  const syncStandingPreview = (select) => {
+    const card = select.closest("[data-finance-institution-row], [data-finance-primary-institution]");
+    const preview = card?.querySelector("[data-finance-status-preview]");
+    if (!preview) return;
+    const option = select.selectedOptions[0];
+    preview.replaceChildren();
+    const chip = select.parentElement.querySelector("[data-finance-selected-chip]");
+    chip.hidden = !option?.value;
+    select.parentElement.classList.toggle("has-selected-standing", Boolean(option?.value));
+    if (!option?.value) { chip.textContent = ""; return; }
+    chip.className = `badge finance-status-${option.value.toLowerCase().replaceAll(" ", "-")}`;
+    chip.textContent = option.value;
+    const description = document.createElement("p");
+    if (option.value === "Not applicable") {
+      description.append("This institution is configured as ");
+      const payer = document.createElement("strong");
+      payer.textContent = "Payer candidate";
+      description.append(payer, ", so a financial status check at institution level is not required.");
+    } else {
+      description.textContent = option.dataset.description || "";
+    }
+    preview.append(description);
+  };
+  form.addEventListener("change", (event) => {
+    if (event.target.matches("[data-finance-status-select]")) syncStandingPreview(event.target);
+    clearTimeout(saveTimer);
+    save();
+  });
+  form.querySelectorAll("[data-finance-status-select]").forEach(syncStandingPreview);
+  const syncLimit = () => { add.disabled = locked || list.children.length >= 9; };
+  add.addEventListener("click", () => {
+    if (locked || list.children.length >= 9) return;
+    list.append(template.content.cloneNode(true));
+    syncStandingPreview(list.lastElementChild.querySelector("select"));
+    list.lastElementChild.querySelector("input").focus();
+    syncLimit();
+    save();
+  });
+  list.addEventListener("click", (event) => {
+    const remove = event.target.closest("[data-finance-remove-institution]");
+    if (!remove || locked) return;
+    remove.closest("[data-finance-institution-row]").remove();
+    syncLimit();
+    save();
+  });
+  syncLimit();
+});

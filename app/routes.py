@@ -331,73 +331,33 @@ LEGACY_LOGISTICS_STATUS_MAP = {
 }
 EXAMINER_CERTIFICATION_MODULE_KEY = "examiner_certification"
 SUPERVISOR_CERTIFICATION_MODULE_KEY = "supervisor_certification"
-FINANCE_STATUS_OPTIONS = [
-    "Not reviewed",
-    "Payment follow-up required",
-    "Conditional clearance",
-    "Finance hold",
-    "Exception approved",
-    "Cleared",
-]
-FINANCE_STATUS_SLUGS = {
-    "Not reviewed": "not_reviewed",
-    "Payment follow-up required": "payment_follow_up_required",
-    "Conditional clearance": "conditional_clearance",
-    "Finance hold": "finance_hold",
-    "Exception approved": "exception_approved",
-    "Cleared": "cleared",
+FINANCE_STATUS_OPTIONS = ["Effective clearance", "Conditional clearance", "Mid-risk debt", "High-risk debt", "Not applicable"]
+FINANCE_STATUS_SLUGS = {label: label.lower().replace("-", "_").replace(" ", "_") for label in FINANCE_STATUS_OPTIONS}
+FINANCE_LEGACY_STATUSES = {
+    "Not reviewed": "Not applicable",
+    "Payment follow-up required": "Mid-risk debt",
+    "Finance hold": "High-risk debt",
+    "Exception approved": "Effective clearance",
+    "Cleared": "Effective clearance",
 }
-FINANCE_CAN_PROCEED_STATUSES = {"Conditional clearance", "Exception approved", "Cleared"}
-FINANCE_ACTION_STATUSES = {"Not reviewed", "Payment follow-up required", "Conditional clearance", "Finance hold"}
-FINANCE_NOTE_REQUIRED_STATUSES = {
-    "Payment follow-up required",
-    "Conditional clearance",
-    "Finance hold",
-    "Exception approved",
+FINANCE_BLOCK_LABELS = {
+    "Effective clearance": "Cleared",
+    "Not applicable": "Cleared",
+    "Conditional clearance": "Monitoring required",
+    "Mid-risk debt": "Monitoring required",
+    "High-risk debt": "Close monitoring required",
 }
-FINANCE_TRANSITIONS = {
-    "Not reviewed": {
-        "Payment follow-up required",
-        "Conditional clearance",
-        "Finance hold",
-        "Exception approved",
-        "Cleared",
-    },
-    "Payment follow-up required": {
-        "Conditional clearance",
-        "Finance hold",
-        "Exception approved",
-        "Cleared",
-        "Not reviewed",
-    },
-    "Conditional clearance": {
-        "Cleared",
-        "Payment follow-up required",
-        "Finance hold",
-        "Exception approved",
-        "Not reviewed",
-    },
-    "Finance hold": {
-        "Payment follow-up required",
-        "Conditional clearance",
-        "Exception approved",
-        "Cleared",
-        "Not reviewed",
-    },
-    "Exception approved": {
-        "Cleared",
-        "Payment follow-up required",
-        "Finance hold",
-        "Not reviewed",
-    },
-    "Cleared": {
-        "Payment follow-up required",
-        "Conditional clearance",
-        "Finance hold",
-        "Exception approved",
-        "Not reviewed",
-    },
+FINANCE_STATUS_MESSAGES = {
+    "Effective clearance": "The institution’s financial status has been verified and there are no financial restrictions preventing the exam session from taking place. The institution may still have scheduled instalments pending, but its payment history with Path shows no late payments or outstanding debt.",
+    "Conditional clearance": "The institution’s financial status has been verified and payments are currently up to date. However, its previous payment history with Path includes delays or outstanding debts, which may represent a potential risk. The institution must pay any remaining balance before the exam session date.",
+    "Mid-risk debt": "The institution’s financial status has been verified and an outstanding debt has been identified. The debt is not considered critical at this stage, but the institution must pay the overdue amount and any remaining balance before the exam session date.",
+    "High-risk debt": "The institution’s financial status has been verified and a significant outstanding debt has been identified. There is a high risk that the institution may not be able to settle the balance before the exam session date. The overdue amount and any remaining balance must be paid before the session can take place.",
+    "Not applicable": "This institution is configured as Payer candidate, so a financial status check at institution level is not required.",
 }
+FINANCE_CAN_PROCEED_STATUSES = {"Effective clearance", "Conditional clearance", "Not applicable"}
+FINANCE_ACTION_STATUSES = {"Conditional clearance", "Mid-risk debt", "High-risk debt"}
+FINANCE_NOTE_REQUIRED_STATUSES = set()
+FINANCE_TRANSITIONS = {status: set(FINANCE_STATUS_OPTIONS) - {status} for status in FINANCE_STATUS_OPTIONS}
 SINAPSIS_STATUS_OPTIONS = ["Not reviewed", "In progress", "Needs correction", "Ready"]
 SINAPSIS_STATUS_SLUGS = {
     "Not reviewed": "not_reviewed",
@@ -533,6 +493,8 @@ def require_menu_edit(menu_key):
 @staff_bp.before_request
 def require_menu_permission_for_request():
     if not session.get("user"):
+        return None
+    if request.endpoint == "staff.stop_impersonating_user":
         return None
     if request.endpoint == "staff.session_journey_public":
         return None
@@ -7402,48 +7364,79 @@ def finance_deadline_state(deadline, requires_action, today=None):
     return "upcoming", "", False
 
 
-def finance_readiness_contract(finance_control=None, today=None):
-    status = finance_control.status if finance_control else "Not reviewed"
+def finance_readiness_contract(finance_control=None, today=None, session_date=None):
+    standing_selected = bool(finance_control and finance_control.status and finance_control.status != "Not reviewed")
+    status = finance_control.status if finance_control else "Not applicable"
+    status = FINANCE_LEGACY_STATUSES.get(status, status)
     if status not in FINANCE_STATUS_OPTIONS:
-        status = "Not reviewed"
-    deadline = finance_control.finance_due_at if finance_control else None
+        status = "Not applicable"
+        standing_selected = False
+    additional_institutions = json.loads(finance_control.additional_institutions or "[]") if finance_control else []
+    confirmed = bool(finance_control and finance_control.institutions_confirmed_with_admin)
+    standings = [status if standing_selected else None] + [institution.get("standing") for institution in additional_institutions]
+    if "High-risk debt" in standings:
+        block_label = "Close monitoring required"
+        action_label = "Resolve finance hold"
+    elif any(value in {"Conditional clearance", "Mid-risk debt"} for value in standings):
+        block_label = "Monitoring required"
+        action_label = "Follow up finance payment"
+    elif not all(value in {"Effective clearance", "Not applicable"} for value in standings):
+        block_label = "Not reviewed"
+        action_label = "Review finance readiness"
+    elif not confirmed:
+        block_label = "Verification missing"
+        action_label = "Confirm with Admin that all institutions are listed"
+    else:
+        block_label = "Cleared"
+        action_label = "—"
+    readiness_label = block_label
+    deadline = session_date - timedelta(days=2) if session_date else (finance_control.finance_due_at if finance_control else None)
     note = (finance_control.note or "").strip() if finance_control and finance_control.note else ""
     evidence_url = (finance_control.evidence_url or "").strip() if finance_control and finance_control.evidence_url else ""
-    can_proceed = status in FINANCE_CAN_PROCEED_STATUSES
-    requires_action = status in FINANCE_ACTION_STATUSES
+    can_proceed = readiness_label == "Cleared"
+    requires_action = not can_proceed
     deadline_status, deadline_label, is_overdue = finance_deadline_state(deadline, requires_action, today=today)
-    messages = {
-        "Not reviewed": "Finance has not reviewed this session yet.",
-        "Payment follow-up required": "Payment follow-up or financial communication is required.",
-        "Conditional clearance": "Finance allows this session to proceed with a condition pending.",
-        "Finance hold": "Finance has placed this session on hold.",
-        "Exception approved": "Finance approved an exception for this session.",
-        "Cleared": "Finance confirmed this session can proceed.",
-    }
-    blocker_map = {
-        "Not reviewed": ("FINANCE_NOT_REVIEWED", "Finance has not reviewed this session yet."),
-        "Payment follow-up required": ("FINANCE_PAYMENT_FOLLOW_UP_REQUIRED", "Payment follow-up or financial communication is required."),
-        "Finance hold": ("FINANCE_HOLD", "Finance has placed this session on hold."),
-    }
+    finance_today = today if today is not None else datetime.now(LOCAL_TZ).date()
+    if block_label != "Cleared" and deadline and finance_today >= deadline:
+        deadline_status, deadline_label, is_overdue = "overdue", "Overdue", True
+        block_label = "Overdue"
+    messages = FINANCE_STATUS_MESSAGES
     blockers = []
-    if status in blocker_map:
-        code, message = blocker_map[status]
-        blockers.append({"code": code, "message": message})
+    if requires_action:
+        codes = {"Not reviewed": "FINANCE_NOT_REVIEWED", "Verification missing": "FINANCE_INSTITUTION_VERIFICATION_MISSING", "Monitoring required": "FINANCE_PAYMENT_FOLLOW_UP_REQUIRED", "Close monitoring required": "FINANCE_HOLD"}
+        blockers.append({"code": codes[readiness_label], "message": action_label})
+    deadline_badge = deadline_badge_contract(
+        deadline, completed=can_proceed,
+        completed_date=local_date(finance_control.updated_at) if finance_control and can_proceed else None,
+        today=today,
+    )
+    if deadline_badge and is_overdue:
+        deadline_badge.update(status="overdue", label="Deadline overdue")
     return {
         "status": finance_status_slug(status),
         "raw_status": status,
         "label": status,
+        "standing_messages": FINANCE_STATUS_MESSAGES,
+        "additional_institutions": additional_institutions,
+        "institutions_confirmed_with_admin": confirmed,
+        "standing_selected": standing_selected,
+        "action_label": action_label,
+        "readiness_label": readiness_label,
+        "block_label": block_label,
+        "block_status": block_label.lower().replace(" ", "_"),
         "can_proceed": can_proceed,
         "requires_action": requires_action,
         "responsible": "FINANCE",
         "responsible_label": "FINANCE",
         "deadline": deadline,
+        "deadline_badge": deadline_badge,
+        "current_deadline": deadline,
         "deadline_label": deadline_label,
         "deadline_status": deadline_status,
         "is_overdue": is_overdue,
         "evidence_url": evidence_url,
         "note": note,
-        "message": messages[status],
+        "message": messages[status] if standing_selected else "Select the current account standing to review Finance.",
         "blockers": blockers,
         "control": finance_control,
         "reviewed_at": finance_control.reviewed_at if finance_control else None,
@@ -7457,16 +7450,16 @@ def finance_readiness_contract(finance_control=None, today=None):
 def finance_action_contract(finance_contract):
     if not finance_contract or not finance_contract.get("requires_action"):
         return None
-    status = finance_contract.get("raw_status", "Not reviewed")
+    status = finance_contract.get("raw_status", "Not applicable")
     labels = {
-        "Not reviewed": "Review finance readiness",
-        "Payment follow-up required": "Follow up finance payment",
+
+        "Mid-risk debt": "Follow up finance payment",
         "Conditional clearance": "Review conditional finance clearance",
-        "Finance hold": "Resolve finance hold",
+        "High-risk debt": "Resolve finance hold",
     }
     return {
         "action_key": f"finance_{finance_contract.get('status', 'not_reviewed')}",
-        "label": labels.get(status, "Review finance readiness"),
+        "label": finance_contract.get("action_label") or labels.get(status, "Review finance readiness"),
         "source": "finance",
         "source_label": "Finance",
         "status": "action_required",
@@ -8062,25 +8055,25 @@ def incident_review_flag_assisted_actions(flag):
         ))
     elif area == "finance":
         control = _finance_control_for_session(session_record)
-        current_status = control.status if control else "Not reviewed"
-        if current_status != "Payment follow-up required" and "Payment follow-up required" in FINANCE_TRANSITIONS.get(current_status, set()):
+        current_status = FINANCE_LEGACY_STATUSES.get(control.status, control.status) if control else "Not applicable"
+        if current_status != "Mid-risk debt" and "Mid-risk debt" in FINANCE_TRANSITIONS.get(current_status, set()):
             actions.append(_assisted_action(
                 "assisted_finance_payment_follow_up",
-                "Mark as Payment follow-up required",
+                "Mark as Mid-risk debt",
                 "Use this if the incident requires finance payment follow-up before the session can proceed.",
                 requires_note=True,
                 danger_level="medium",
                 submit_label="Confirm finance update",
             ))
-        if current_status != "Finance hold" and "Finance hold" in FINANCE_TRANSITIONS.get(current_status, set()):
+        if current_status != "High-risk debt" and "High-risk debt" in FINANCE_TRANSITIONS.get(current_status, set()):
             actions.append(_assisted_action(
                 "assisted_finance_hold",
-                "Mark as Finance hold",
+                "Mark as High-risk debt",
                 "Use this if the incident should block the session from a finance point of view.",
                 requires_note=True,
                 danger_level="high",
                 submit_label="Confirm finance update",
-                warning="This will mark the session as Finance hold.",
+                warning="This will mark the session as High-risk debt.",
             ))
     elif area == "sinapsis":
         control = _sinapsis_control_for_session(session_record)
@@ -8681,23 +8674,12 @@ def apply_communications_status_update(control_record, new_status, communication
 def validate_finance_transition(previous_status, new_status, note):
     if new_status not in FINANCE_STATUS_OPTIONS:
         return "Please select a valid finance status."
-    if previous_status not in FINANCE_STATUS_OPTIONS:
-        previous_status = "Not reviewed"
-    if new_status != previous_status and new_status not in FINANCE_TRANSITIONS.get(previous_status, set()):
-        return "This finance status transition is not allowed."
-    note = (note or "").strip()
-    if new_status in FINANCE_NOTE_REQUIRED_STATUSES and not note:
-        return "A note is required for this finance status."
-    if previous_status == "Finance hold" and new_status != previous_status and not note:
-        return "A note is required when changing a Finance hold."
-    if previous_status == "Cleared" and new_status != previous_status and not note:
-        return "A note is required when reopening a Cleared finance status."
     return None
 
 
 def apply_finance_status_update(control_record, new_status, finance_due_at=None, evidence_url="", note="", updated_by=None):
     is_new_control = control_record.id is None
-    previous_status = control_record.status or "Not reviewed"
+    previous_status = FINANCE_LEGACY_STATUSES.get(control_record.status, control_record.status) or "Not applicable"
     previous_due_at = control_record.finance_due_at
     previous_evidence_url = (control_record.evidence_url or "").strip()
     previous_note = (control_record.note or "").strip()
@@ -8719,13 +8701,13 @@ def apply_finance_status_update(control_record, new_status, finance_due_at=None,
     control_record.updated_by = updated_by
 
     now = datetime.now(timezone.utc)
-    if new_status != "Not reviewed" and not control_record.reviewed_at:
+    if new_status != "Not applicable" and not control_record.reviewed_at:
         control_record.reviewed_at = now
-    if new_status == "Cleared":
+    if new_status == "Effective clearance":
         control_record.cleared_at = now
         control_record.hold_at = None
         control_record.exception_approved_at = None
-    elif new_status == "Finance hold":
+    elif new_status == "High-risk debt":
         control_record.hold_at = now
         control_record.cleared_at = None
         control_record.exception_approved_at = None
@@ -8733,7 +8715,7 @@ def apply_finance_status_update(control_record, new_status, finance_due_at=None,
         control_record.exception_approved_at = now
         control_record.cleared_at = None
         control_record.hold_at = None
-    elif new_status == "Not reviewed":
+    elif new_status == "Not applicable":
         control_record.cleared_at = None
         control_record.hold_at = None
         control_record.exception_approved_at = None
@@ -9809,6 +9791,7 @@ def bundle_detail_action_items(
     logistics_control=None,
     package_deadline_badge=None,
     sessions_logistics_action_mode=False,
+    finance=None,
 ):
     actions = []
     schedule_overdue = deadline_badge_is_red(schedule_deadline_badge)
@@ -9860,36 +9843,49 @@ def bundle_detail_action_items(
 
     logistics = logistics or {}
     if sessions_logistics_action_mode:
+        finance = finance or {}
+        finance_descriptions = {
+            "Not reviewed": "Review account standing of the institutions listed in this session.",
+            "Monitoring required": "Follow up on the account standing of the institutions listed in this session.",
+            "Close monitoring required": "Closely monitor financial standing and notify Management.",
+            "Verification missing": "Verify with Admin whether any other institutions are included in this session.",
+        }
+        finance_state = finance.get("readiness_label") or finance.get("block_label")
+        finance_description = finance_descriptions.get(finance_state)
+        finance_actions = [{"department": "FINANCE", "description": finance_description,
+                            "preserve_period": True, "overdue": bool(finance.get("is_overdue"))}] if finance_description and schedule_preparation_unlocked else []
         logistics_status = logistics.get("status")
         logistics_unblocked = (logistics_gate or {}).get("is_unblocked")
         if logistics_status == "not_applicable":
             return [{
                 "department": "",
                 "description": "Logistics is not needed for this session",
-            }]
+            }] + finance_actions
         if not logistics_unblocked:
             return [{
                 "department": "",
                 "description": "Staffing must be confirmed before proceeding with Logistics planning.",
                 "preserve_period": True,
-            }]
+            }] + finance_actions
         if logistics_status == "not_started":
             return [{
                 "department": "LOGISTICS",
                 "description": "Start Logistics planning",
                 "overdue": logistics_overdue,
-            }]
+            }] + finance_actions
         if logistics_status == "in_progress":
             return [{
                 "department": "LOGISTICS",
                 "description": "Continue with Logistics planning",
                 "overdue": logistics_overdue,
-            }]
+            }] + finance_actions
         if logistics_status == "completed":
             return [{
                 "department": "",
                 "description": "Logistics planning has been finalised",
-            }]
+            }] + finance_actions
+
+        actions.extend(finance_actions)
 
     if packages_action and not packages_action.get("is_complete"):
         actions.append({
@@ -13479,6 +13475,7 @@ def session_readiness_contract(operational_readiness, finance, sinapsis, communi
     incidents_status = incidents.get("status")
     review_flags_status = incident_review_flags.get("status")
     finance_control_status = getattr(finance.get("control"), "status", None)
+    finance_control_status = FINANCE_LEGACY_STATUSES.get(finance_control_status, finance_control_status)
     sinapsis_control_status = getattr(sinapsis.get("control"), "status", None)
     communications_control_status = getattr(communications.get("control"), "status", None)
     if operational_status not in {"needs_review", "blocked", "in_progress", "operationally_ready"}:
@@ -14088,7 +14085,7 @@ def path_session_journey_sources(session_record, today=None):
         staffing_contract=staffing,
     )
     shipment = session_shipment_contract(session_record, shipment_link)
-    finance = finance_readiness_contract(finance_control, today=today)
+    finance = finance_readiness_contract(finance_control, today=today, session_date=session_record.session_date)
     sinapsis = sinapsis_readiness_contract(session_record, sinapsis_control, checklist_items=sinapsis_items, today=today)
     communications = communications_readiness_contract(communications_control, checklist_items=communications_items, today=today)
     operational = operational_readiness_contract(schedule_gate, staffing, logistics, packages, shipment)
@@ -14474,7 +14471,9 @@ def schedule_workflow_view(session_record, workflow=None, today=None, staffing=N
     fallback_logistics_contract = logistics_readiness_contract([], [], None)
     logistics_control_view = logistics_control or logistics_control_contract(None, fallback_logistics_contract, today=today)
     logistics_gate_view = logistics_gate or logistics_gate_contract(fallback_staffing_contract)
-    finance_view = finance or finance_readiness_contract(None, today=today)
+    finance_view = finance or finance_readiness_contract(None, today=today, session_date=session_record.session_date)
+    if not schedule_preparation_unlocked:
+        finance_view = {**finance_view, "block_label": "Not started", "block_status": "not_started"}
     sinapsis_view = sinapsis or sinapsis_readiness_contract(session_record, None, today=today)
     final_checks_deadline_badge = final_checks_deadline_badge_contract(session_record, sinapsis_view, today=today)
     communications_view = communications or communications_readiness_contract(None, today=today)
@@ -14999,7 +14998,7 @@ def logistics_control_redirect(session_record, status_filter="", edit=False):
 
 def finance_control_redirect(session_record, status_filter="", edit=False):
     args = {
-        "session_year": session_record.session_date.year,
+        **pre_session_control_tower_return_args(session_record),
         "open_schedule_modal": session_record.id,
         "open_modal_target": "finance",
         "finance_only": "1",
@@ -15013,7 +15012,7 @@ def finance_control_redirect(session_record, status_filter="", edit=False):
 
 def sinapsis_control_redirect(session_record, status_filter="", edit=False):
     args = {
-        "session_year": session_record.session_date.year,
+        **pre_session_control_tower_return_args(session_record),
         "open_schedule_modal": session_record.id,
         "open_modal_target": "sinapsis",
         "sinapsis_only": "1",
@@ -17063,6 +17062,47 @@ def users():
     )
 
 
+def set_user_session_identity(user, original_superadmin_id=None):
+    permanent = session.permanent
+    session.clear()
+    session.permanent = permanent
+    session.update(user=user.full_name, user_id=user.id, user_full_name=user.full_name,
+                   user_email=user.email, user_department=user.department,
+                   csrf_token=secrets.token_urlsafe(32))
+    if original_superadmin_id is not None:
+        session["impersonating_superadmin_id"] = original_superadmin_id
+
+
+@staff_bp.route("/users/<int:user_id>/impersonate", methods=["POST"])
+@login_required
+def impersonate_user(user_id):
+    if not current_user_is_superadmin() or session.get("impersonating_superadmin_id"):
+        abort(403)
+    if not validate_csrf():
+        abort(403, description="Security token expired. Please try again.")
+    target = User.query.get_or_404(user_id)
+    if not target.is_active or target.id == g.current_user.id:
+        abort(403, description="Select another active user.")
+    original_id = g.current_user.id
+    current_app.logger.info("Super admin %s started impersonating user %s", original_id, target.id)
+    set_user_session_identity(target, original_superadmin_id=original_id)
+    return redirect(url_for("staff.dashboard"))
+
+
+@staff_bp.route("/users/impersonation/stop", methods=["POST"])
+@login_required
+def stop_impersonating_user():
+    if not validate_csrf():
+        abort(403, description="Security token expired. Please try again.")
+    original_id = session.get("impersonating_superadmin_id")
+    original = db.session.get(User, original_id) if original_id else None
+    if not original or not original.is_active or not original.is_superadmin:
+        abort(403)
+    current_app.logger.info("Super admin %s stopped impersonating user %s", original.id, session.get("user_id"))
+    set_user_session_identity(original)
+    return redirect(url_for("staff.users"))
+
+
 @staff_bp.route("/users", methods=["POST"])
 @login_required
 def create_user():
@@ -18051,7 +18091,7 @@ def pre_session_control_tower():
             shipment_planning,
         )
         finance_control = finance_controls_by_session.get(session_record.id)
-        finance_contract = finance_readiness_contract(finance_control, today=today)
+        finance_contract = finance_readiness_contract(finance_control, today=today, session_date=session_record.session_date)
         finance_events = finance_events_by_control.get(finance_control.id, []) if finance_control else []
         sinapsis_control = sinapsis_controls_by_session.get(session_record.id)
         sinapsis_checklist_items = sinapsis_checklists_by_control.get(sinapsis_control.id, []) if sinapsis_control else []
@@ -18237,6 +18277,7 @@ def pre_session_control_tower():
                 logistics_control=logistics_control_presentation,
                 package_deadline_badge=package_deadline_badge,
                 sessions_logistics_action_mode=selected_view == "sessions",
+                finance=finance_contract,
             ),
             schedule_locked_by_staffing=schedule_status == "Approved" and any(
                 normalize_participation_status(assignment.participation_status) != "Pending"
@@ -19358,30 +19399,54 @@ def remove_pre_session_logistics_concept_staff_member(concept_id, staff_member_i
 @staff_bp.route("/pre-session-control-tower/sessions/<int:session_id>/finance-control", methods=["POST"])
 @login_required
 def update_finance_control(session_id):
+    auto_save = request.headers.get("X-Finance-Autosave") == "1"
+
+    def finance_error(message, edit=True):
+        if auto_save:
+            return jsonify({"ok": False, "message": message}), 400
+        flash(message, "error")
+        return finance_control_redirect(session_record, status_filter, edit=edit)
+
     session_record = ExamSession.query.get_or_404(session_id)
     status_filter = request.form.get("schedule_status", "").strip()
     if status_filter not in SCHEDULE_WORKFLOW_STATUSES:
         status_filter = ""
     if not validate_csrf():
-        flash("Security token expired. Please try again.", "error")
-        return finance_control_redirect(session_record, status_filter, edit=True)
+        return finance_error("Security token expired. Please try again.")
+
+    workflow = ExamSessionScheduleWorkflow.query.filter_by(exam_session_id=session_record.id).first()
+    finance_unblocked = bool(session_record.monthly_registrations_closed) and (
+        session_record.date_confirmation_status == "Confirmed"
+        or schedule_workflow_status(workflow) != "Not started"
+    )
+    if not finance_unblocked:
+        return finance_error("Finance is blocked. Unblock Schedule before selecting the current account standing.")
 
     new_status = request.form.get("finance_status", "").strip()
+    additional_institutions = None
+    if request.form.get("finance_institutions_form") == "1":
+        names = request.form.getlist("institution_name")
+        standings = request.form.getlist("institution_standing")
+        if len(names) != len(standings) or len(names) > 9:
+            return finance_error("A session can include up to 10 institutions.")
+        additional_institutions = []
+        for name, standing in zip(names, standings):
+            name = name.strip()
+            if (not name and not auto_save) or len(name) > 200 or standing not in FINANCE_STATUS_OPTIONS:
+                return finance_error("Enter an institution name and a valid current account standing for every institution.")
+            additional_institutions.append({"name": name, "standing": standing})
     due_value = request.form.get("finance_due_at", "").strip()
     finance_due_at = None
     if due_value:
         finance_due_at = parse_schedule_deadline(due_value)
         if finance_due_at is None:
-            flash("Please enter a valid finance deadline.", "error")
-            return finance_control_redirect(session_record, status_filter, edit=True)
+            return finance_error("Please enter a valid finance deadline.")
     evidence_url = request.form.get("evidence_url", "").strip()
     if evidence_url and not is_valid_url(evidence_url):
-        flash("Please enter a valid evidence URL.", "error")
-        return finance_control_redirect(session_record, status_filter, edit=True)
+        return finance_error("Please enter a valid evidence URL.")
     note = request.form.get("note", "").strip()
     if len(note) > 2000:
-        flash("Finance note must be 2000 characters or fewer.", "error")
-        return finance_control_redirect(session_record, status_filter, edit=True)
+        return finance_error("Finance note must be 2000 characters or fewer.")
 
     control_record = ExamSessionFinanceControl.query.filter_by(
         exam_session_id=session_record.id
@@ -19390,25 +19455,37 @@ def update_finance_control(session_id):
         control_record = ExamSessionFinanceControl(exam_session_id=session_record.id)
         db.session.add(control_record)
 
-    error = apply_finance_status_update(
-        control_record,
-        new_status,
-        finance_due_at=finance_due_at,
-        evidence_url=evidence_url,
-        note=note,
-        updated_by=session.get("user"),
-    )
+    if (auto_save or additional_institutions is not None) and not new_status:
+        new_status = "Not reviewed"
+    error = None
+    if new_status == "Not reviewed" and (auto_save or additional_institutions is not None):
+        control_record.status = "Not reviewed"
+        control_record.finance_due_at = session_record.session_date - timedelta(days=2) if session_record.session_date else None
+    else:
+        error = apply_finance_status_update(
+            control_record,
+            new_status,
+            finance_due_at=finance_due_at,
+            evidence_url=evidence_url,
+            note=note,
+            updated_by=session.get("user"),
+        )
     if error:
         db.session.rollback()
-        flash(error, "error")
-        return finance_control_redirect(session_record, status_filter, edit=True)
+        return finance_error(error)
+    if additional_institutions is not None:
+        control_record.additional_institutions = json.dumps(additional_institutions)
+        control_record.institutions_confirmed_with_admin = request.form.get("institutions_confirmed_with_admin") == "on"
+
     try:
         db.session.commit()
     except Exception:
         db.session.rollback()
         current_app.logger.exception("Finance control update failed")
-        flash("The finance status could not be updated. Please try again.", "error")
-        return finance_control_redirect(session_record, status_filter, edit=True)
+        return finance_error("The finance status could not be updated. Please try again.")
+    if auto_save:
+        finance = finance_readiness_contract(control_record, session_date=session_record.session_date)
+        return jsonify({"ok": True, "institution_count": len(finance["additional_institutions"]) + 1, "block_label": finance["block_label"], "block_status": finance["block_status"], "message": finance["message"], "deadline_badge": {"status": finance["deadline_badge"]["status"], "label": finance["deadline_badge"]["label"]} if finance["deadline_badge"] else None})
     flash("Finance status saved successfully.", "success")
     return finance_control_redirect(session_record, status_filter)
 
@@ -20079,7 +20156,7 @@ def _execute_incident_review_flag_assisted_action(flag, action, note, due_at, ac
         if not changed_units:
             return "All package units are already marked as Needs review."
     elif action_key in {"assisted_finance_payment_follow_up", "assisted_finance_hold"}:
-        target_status = "Payment follow-up required" if action_key == "assisted_finance_payment_follow_up" else "Finance hold"
+        target_status = "Mid-risk debt" if action_key == "assisted_finance_payment_follow_up" else "High-risk debt"
         control = _finance_control_for_session(session_record)
         if not control:
             control = ExamSessionFinanceControl(exam_session_id=session_record.id)
@@ -24615,7 +24692,7 @@ def pre_session_dashboard_department_actions(department):
                 view="sessions",
             ),
             "count": sessions_action_count,
-            "text": f"View {sessions_action_count} {action_label} in Sessions",
+            "text": "View actions in Session actions" if department == "FINANCE" else f"View {sessions_action_count} {action_label} in Sessions",
         })
     return action_links
 
@@ -24644,6 +24721,10 @@ def pre_session_dashboard_sessions_department_action_count(department, selected_
         ).all()
     )
     workflows_by_session = {workflow.exam_session_id: workflow for workflow in workflow_records}
+    finance_controls_by_session = {
+        control.exam_session_id: control
+        for control in ExamSessionFinanceControl.query.filter(ExamSessionFinanceControl.exam_session_id.in_(session_ids)).all()
+    }
     supervisor_records = (
         ExamSessionSupervisorAssignment.query.filter(
             ExamSessionSupervisorAssignment.exam_session_id.in_(session_ids)
@@ -24735,6 +24816,7 @@ def pre_session_dashboard_sessions_department_action_count(department, selected_
             logistics=logistics_presentation,
             logistics_gate=logistics_gate,
             logistics_deadline_badge=logistics_deadline_badge,
+            finance=finance_readiness_contract(finance_controls_by_session.get(session_record.id), today=today, session_date=session_record.session_date),
             sessions_logistics_action_mode=True,
         )
         count += sum(

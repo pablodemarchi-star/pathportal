@@ -4,7 +4,7 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>{% block title %}Path Examinations Internal App{% endblock %}</title>
-    <link rel="stylesheet" href="{{ url_for('static', filename='css/styles.css', v='20260929-shipment-dispatch-message-01') }}">
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/styles.css', v='20261010-user-impersonation-02') }}">
   </head>
   <body>
     <div class="app-shell {% if request.args.get('session_fullscreen') == '1' %}session-fullscreen-shell{% endif %}">
@@ -22,11 +22,8 @@
             </svg>
             <span>Dashboard</span>
           </a>
-          {% if user_can_view('potential_entries') or user_can_view('staff_members') or user_can_view('examiner_certification') or user_can_view('supervisor_certification') or user_can_view('internship_stages') %}
-          <section class="nav-group" aria-label="External staff">
-            <div class="nav-section-title">External staff</div>
             {% if user_can_view('potential_entries') %}
-            <a class="nav-link {% if request.endpoint in ['staff.potential_entries', 'staff.create_potential_entry', 'staff.update_potential_entry', 'staff.update_potential_interview_invitation_sent', 'staff.add_potential_cv_review_note', 'staff.save_potential_cv_review', 'staff.delete_potential_cv_review_note', 'staff.reject_potential_cv_review', 'staff.proceed_potential_cv_review', 'staff.reject_potential_entry', 'staff.delete_rejected_potential_entry', 'staff.accept_potential_entry', 'staff.save_potential_acceptance_draft', 'staff.add_potential_note'] %}active{% endif %}" href="{{ url_for('staff.potential_entries') }}">
+            <a class="nav-link standalone-nav-link {% if request.endpoint in ['staff.potential_entries', 'staff.create_potential_entry', 'staff.update_potential_entry', 'staff.update_potential_interview_invitation_sent', 'staff.add_potential_cv_review_note', 'staff.save_potential_cv_review', 'staff.delete_potential_cv_review_note', 'staff.reject_potential_cv_review', 'staff.proceed_potential_cv_review', 'staff.reject_potential_entry', 'staff.delete_rejected_potential_entry', 'staff.accept_potential_entry', 'staff.save_potential_acceptance_draft', 'staff.add_potential_note'] %}active{% endif %}" href="{{ url_for('staff.potential_entries') }}">
               <svg class="nav-icon" viewBox="0 0 24 24" aria-hidden="true">
                 <path d="M8 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8Z" />
                 <path d="M2.5 21a5.5 5.5 0 0 1 11 0" />
@@ -38,7 +35,7 @@
             </a>
             {% endif %}
             {% if user_can_view('staff_members') %}
-            <a class="nav-link {% if request.endpoint == 'staff.index' %}active{% endif %}" href="{{ url_for('staff.index') }}">
+            <a class="nav-link standalone-nav-link {% if request.endpoint == 'staff.index' %}active{% endif %}" href="{{ url_for('staff.index') }}">
               <svg class="nav-icon" viewBox="0 0 24 24" aria-hidden="true">
                 <path d="M16 11a4 4 0 1 0-3.2-6.4" />
                 <path d="M8 13a4 4 0 1 0 0-8 4 4 0 0 0 0 8Z" />
@@ -49,7 +46,7 @@
             </a>
             {% endif %}
             {% if user_can_view('examiner_certification') %}
-            <a class="nav-link {% if request.endpoint == 'staff.annual_certification_programme' %}active{% endif %}" href="{{ url_for('staff.annual_certification_programme') }}">
+            <a class="nav-link standalone-nav-link {% if request.endpoint == 'staff.annual_certification_programme' %}active{% endif %}" href="{{ url_for('staff.annual_certification_programme') }}">
               <svg class="nav-icon" viewBox="0 0 24 24" aria-hidden="true">
                 <path d="M8 4h8" />
                 <path d="M9 2h6v4H9z" />
@@ -60,7 +57,7 @@
             </a>
             {% endif %}
             {% if user_can_view('supervisor_certification') %}
-            <a class="nav-link {% if request.endpoint == 'staff.supervisor_certification' %}active{% endif %}" href="{{ url_for('staff.supervisor_certification') }}">
+            <a class="nav-link standalone-nav-link {% if request.endpoint == 'staff.supervisor_certification' %}active{% endif %}" href="{{ url_for('staff.supervisor_certification') }}">
               <svg class="nav-icon" viewBox="0 0 24 24" aria-hidden="true">
                 <path d="M8 4h8" />
                 <path d="M9 2h6v4H9z" />
@@ -71,7 +68,7 @@
             </a>
             {% endif %}
             {% if user_can_view('internship_stages') %}
-            <a class="nav-link {% if request.endpoint == 'staff.intern_stages' %}active{% endif %}" href="{{ url_for('staff.intern_stages') }}">
+            <a class="nav-link standalone-nav-link {% if request.endpoint == 'staff.intern_stages' %}active{% endif %}" href="{{ url_for('staff.intern_stages') }}">
               <svg class="nav-icon" viewBox="0 0 24 24" aria-hidden="true">
                 <path d="M8 4h8" />
                 <path d="M9 2h6v4H9z" />
@@ -81,8 +78,6 @@
               <span>Internship stages</span>
             </a>
             {% endif %}
-          </section>
-          {% endif %}
           {% if user_can_view('exam_session_planner') %}
           <a class="nav-link standalone-nav-link {% if request.endpoint == 'staff.exam_session_planner' %}active{% endif %}" href="{{ url_for('staff.exam_session_planner') }}">
             <svg class="nav-icon" viewBox="0 0 24 24" aria-hidden="true">
@@ -180,6 +175,15 @@
           </a>
           {% endif %}
         </nav>
+        {% if session.get('impersonating_superadmin_id') %}
+          <div class="impersonation-notice">
+            <p>Signed in as <strong>{{ g.user }}</strong></p>
+            <form method="post" action="{{ url_for('staff.stop_impersonating_user') }}">
+              <input type="hidden" name="csrf_token" value="{{ session.get('csrf_token') }}">
+              <button class="secondary-button" type="submit">Return to Super admin</button>
+            </form>
+          </div>
+        {% endif %}
         <form method="post" action="{{ url_for('logout') }}" class="logout-form">
           <button type="submit">Sign out</button>
         </form>
@@ -214,6 +218,6 @@
         {% block content %}{% endblock %}
       </main>
     </div>
-    <script src="{{ url_for('static', filename='js/app.js', v='20261007-session-modal-save-06') }}"></script>
+    <script src="{{ url_for('static', filename='js/app.js', v='20261010-finance-institutions-16') }}"></script>
   </body>
 </html>

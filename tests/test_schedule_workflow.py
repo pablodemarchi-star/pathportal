@@ -2437,7 +2437,7 @@ class ScheduleWorkflowTest(unittest.TestCase):
 
     def test_finance_readiness_contract_statuses_and_deadlines(self):
         not_reviewed = finance_readiness_contract(None, today=date(2026, 6, 25))
-        self.assertEqual(not_reviewed["status"], "not_reviewed")
+        self.assertEqual(not_reviewed["status"], "not_applicable")
         self.assertFalse(not_reviewed["can_proceed"])
         self.assertTrue(not_reviewed["requires_action"])
         self.assertEqual(not_reviewed["responsible"], "FINANCE")
@@ -2455,6 +2455,7 @@ class ScheduleWorkflowTest(unittest.TestCase):
 
         cleared = ExamSessionFinanceControl(
             status="Cleared",
+            institutions_confirmed_with_admin=True,
             finance_due_at=date(2026, 6, 20),
         )
         cleared_contract = finance_readiness_contract(cleared, today=date(2026, 6, 25))
@@ -15133,11 +15134,144 @@ assert.equal(storage.size, 0);
         self.assertEqual(response.status_code, 200)
         self.assertEqual(ExamSessionFinanceControl.query.count(), 0)
         html = response.data.decode()
-        self.assertIn("<th>Finance</th>", html)
-        self.assertIn("Edit finance status", html)
-        self.assertIn("Save finance status", html)
+        self.assertIn('<th class="finance-column">Finance</th>', html)
+        self.assertIn("Current account standing", html)
+        self.assertIn("Add institution in this session", html)
+
+    def test_finance_blocked_disables_standing_and_rejects_update(self):
+        client = self.login_client()
+        response = client.get("/pre-session-control-tower?session_year=2026&view=sessions")
+        html = response.data.decode()
+        self.assertRegex(html, r'<select[^>]*data-finance-status-select[^>]*disabled')
+        self.assertIn('finance-status-not-started', html)
+        response = client.post(
+            f"/pre-session-control-tower/sessions/{self.session_record.id}/finance-control",
+            data={"csrf_token": "token", "finance_status": "Effective clearance"},
+        )
+        self.assertEqual(response.status_code, 302)
+        self.assertEqual(ExamSessionFinanceControl.query.count(), 0)
+        self.assertEqual(ExamSessionFinanceEvent.query.count(), 0)
+        self.session_record.monthly_registrations_closed = True
+        self.session_record.date_confirmation_status = "Confirmed"
+        db.session.commit()
+        html = client.get("/pre-session-control-tower?session_year=2026&view=sessions").data.decode()
+        self.assertNotRegex(html, r'<select[^>]*data-finance-status-select[^>]*disabled')
+
+    def test_finance_institutions_limit_persistence_and_removal(self):
+        self.session_record.monthly_registrations_closed = True
+        self.session_record.date_confirmation_status = "Confirmed"
+        db.session.commit()
+        client = self.login_client()
+        url = f"/pre-session-control-tower/sessions/{self.session_record.id}/finance-control"
+        data = {"csrf_token": "token", "finance_status": "Effective clearance", "finance_institutions_form": "1",
+                "institution_name": [f"School {i}" for i in range(9)], "institution_standing": ["Conditional clearance"] * 9,
+                "institutions_confirmed_with_admin": "on"}
+        response = client.post(url, data=data)
+        self.assertEqual(response.status_code, 302)
+        control = ExamSessionFinanceControl.query.one()
+        self.assertEqual(len(json.loads(control.additional_institutions)), 9)
+        self.assertTrue(control.institutions_confirmed_with_admin)
+        html = client.get("/pre-session-control-tower?session_year=2026&view=sessions").data.decode()
+        self.assertIn('value="School 8"', html)
+        rows = re.findall(r'<div class="finance-institution-row" data-finance-institution-row>(.*?)</div>\s*<button', re.sub(r'<template.*?</template>', '', html, flags=re.S), re.S)
+        self.assertEqual(len(rows), 9)
+        for row in rows:
+            self.assertEqual(row.count('data-finance-status-preview'), 1)
+            self.assertIn('finance-status-conditional-clearance', row)
+            self.assertIn('its previous payment history with Path includes delays', row)
+
+        self.assertIn('name="institutions_confirmed_with_admin" checked', html)
+        data["institution_name"].append("Eleventh school")
+        data["institution_standing"].append("High-risk debt")
+        client.post(url, data=data)
+        self.assertEqual(len(json.loads(control.additional_institutions)), 9)
+        data["institution_name"] = ["Invalid school"]
+        data["institution_standing"] = ["Unknown"]
+        client.post(url, data=data)
+        self.assertEqual(len(json.loads(control.additional_institutions)), 9)
+        data["institution_name"] = []
+        data["institution_standing"] = []
+        data.pop("institutions_confirmed_with_admin")
+        client.post(url, data=data)
+        self.assertEqual(json.loads(control.additional_institutions), [])
+        self.assertFalse(control.institutions_confirmed_with_admin)
+        self.assertEqual(control.status, "Effective clearance")
+
+    def test_finance_autosave_creates_edits_removes_and_confirms(self):
+        self.session_record.monthly_registrations_closed = True
+        self.session_record.date_confirmation_status = "Confirmed"
+        db.session.commit()
+        client = self.login_client()
+        url = f"/pre-session-control-tower/sessions/{self.session_record.id}/finance-control"
+        headers = {"X-Finance-Autosave": "1", "Accept": "application/json"}
+        data = {"csrf_token": "token", "finance_institutions_form": "1", "finance_status": "",
+                "institution_name": [""], "institution_standing": ["Not applicable"]}
+        response = client.post(url, data=data, headers=headers)
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(response.json["ok"])
+        control = ExamSessionFinanceControl.query.one()
+        self.assertEqual(control.status, "Not reviewed")
+        self.assertEqual(json.loads(control.additional_institutions), [{"name": "", "standing": "Not applicable"}])
+        data.update(finance_status="Effective clearance", institution_name=["New institution"], institution_standing=["Mid-risk debt"], institutions_confirmed_with_admin="on")
+        response = client.post(url, data=data, headers=headers)
+        self.assertEqual(response.json["block_label"], "Overdue")
+        self.assertTrue(control.institutions_confirmed_with_admin)
+        self.assertEqual(json.loads(control.additional_institutions)[0]["name"], "New institution")
+        html = client.get("/pre-session-control-tower?session_year=2026&view=sessions").data.decode()
+        self.assertNotIn('>Save Finance</button>', html)
+        self.assertIn('data-finance-auto-save-status', html)
+        data.update(institution_name=[], institution_standing=[])
+        data.pop("institutions_confirmed_with_admin")
+        self.assertEqual(client.post(url, data=data, headers=headers).status_code, 200)
+        self.assertEqual(json.loads(control.additional_institutions), [])
+        self.assertFalse(control.institutions_confirmed_with_admin)
+        data["csrf_token"] = "bad"
+        self.assertEqual(client.post(url, data=data, headers=headers).status_code, 400)
+        data["csrf_token"] = "token"
+        self.session_record.monthly_registrations_closed = False
+        db.session.commit()
+        self.assertEqual(client.post(url, data=data, headers=headers).status_code, 400)
+
+    def test_finance_manual_save_persists_new_institution_without_primary_selection(self):
+        self.session_record.monthly_registrations_closed = True
+        self.session_record.date_confirmation_status = "Confirmed"
+        db.session.commit()
+        client = self.login_client()
+        response = client.post(
+            f"/pre-session-control-tower/sessions/{self.session_record.id}/finance-control",
+            data={"csrf_token": "token", "finance_institutions_form": "1", "finance_status": "",
+                  "institution_name": ["Institution manually saved"], "institution_standing": ["Conditional clearance"],
+                  "institutions_confirmed_with_admin": "on"},
+        )
+        self.assertEqual(response.status_code, 302)
+        db.session.expire_all()
+        control = ExamSessionFinanceControl.query.one()
+        self.assertEqual(json.loads(control.additional_institutions), [{"name": "Institution manually saved", "standing": "Conditional clearance"}])
+        self.assertTrue(control.institutions_confirmed_with_admin)
+        html = client.get("/pre-session-control-tower?session_year=2026&view=sessions").data.decode()
+        self.assertIn('value="Institution manually saved"', html)
+        self.assertIn('finance-save-button', html)
+
+    def test_control_modal_redirects_preserve_origin_view(self):
+        from app.routes import logistics_control_redirect, finance_control_redirect, sinapsis_control_redirect
+        for helper in [logistics_control_redirect, finance_control_redirect, sinapsis_control_redirect]:
+            for view in ['sessions', 'bundles', 'bundle']:
+                with self.subTest(helper=helper.__name__, view=view):
+                    with self.app.test_request_context(method='POST', data={'view': view, 'bundle_id': '42'}):
+                        response = helper(self.session_record)
+                        query = parse_qs(urlparse(response.headers['Location']).query)
+                        self.assertEqual(query['view'], [view])
+                        self.assertEqual(query['open_schedule_modal'], [str(self.session_record.id)])
+                        if view == 'bundle':
+                            self.assertEqual(query['bundle_id'], ['42'])
+            with self.app.test_request_context(method='POST'):
+                query = parse_qs(urlparse(helper(self.session_record).headers['Location']).query)
+                self.assertEqual(query['view'], ['sessions'])
 
     def test_finance_control_create_event_and_validation(self):
+        self.session_record.monthly_registrations_closed = True
+        self.session_record.date_confirmation_status = "Confirmed"
+        db.session.commit()
         client = self.login_client()
 
         response = client.post(
@@ -15145,7 +15279,7 @@ assert.equal(storage.size, 0);
             data={
                 "csrf_token": "token",
                 "schedule_status": "Not started",
-                "finance_status": "Finance hold",
+                "finance_status": "High-risk debt",
                 "finance_due_at": "2026-06-24",
                 "evidence_url": "https://example.com/evidence",
                 "note": "Payment needs director review.",
@@ -15157,7 +15291,7 @@ assert.equal(storage.size, 0);
         self.assertIn("open_schedule_modal", response.headers["Location"])
         self.assertEqual(ExamSessionFinanceControl.query.count(), 1)
         control = ExamSessionFinanceControl.query.filter_by(exam_session_id=self.session_record.id).one()
-        self.assertEqual(control.status, "Finance hold")
+        self.assertEqual(control.status, "High-risk debt")
         self.assertEqual(control.finance_due_at, date(2026, 6, 24))
         self.assertEqual(control.evidence_url, "https://example.com/evidence")
         self.assertEqual(control.responsible_department, "FINANCE")
@@ -15170,7 +15304,7 @@ assert.equal(storage.size, 0);
             f"/pre-session-control-tower/sessions/{self.session_record.id}/finance-control",
             data={
                 "csrf_token": "token",
-                "finance_status": "Cleared",
+                "finance_status": "Effective clearance",
                 "finance_due_at": "2026-06-25",
                 "evidence_url": "not-a-url",
                 "note": "Should not save.",
@@ -15179,40 +15313,40 @@ assert.equal(storage.size, 0);
         )
         self.assertEqual(response.status_code, 302)
         self.assertIn("open_finance_control=1", response.headers["Location"])
-        self.assertEqual(control.status, "Finance hold")
+        self.assertEqual(control.status, "High-risk debt")
         self.assertEqual(ExamSessionFinanceEvent.query.count(), 1)
 
         response = client.post(
             f"/pre-session-control-tower/sessions/{self.session_record.id}/finance-control",
             data={
                 "csrf_token": "token",
-                "finance_status": "Cleared",
+                "finance_status": "Effective clearance",
                 "finance_due_at": "2026-06-25",
                 "note": "",
             },
             follow_redirects=False,
         )
         self.assertEqual(response.status_code, 302)
-        self.assertIn("open_finance_control=1", response.headers["Location"])
-        self.assertEqual(control.status, "Finance hold")
-        self.assertEqual(ExamSessionFinanceEvent.query.count(), 1)
+        self.assertIn("open_schedule_modal", response.headers["Location"])
+        self.assertEqual(control.status, "Effective clearance")
+        self.assertEqual(ExamSessionFinanceEvent.query.count(), 2)
 
         response = client.post(
             f"/pre-session-control-tower/sessions/{self.session_record.id}/finance-control",
             data={
                 "csrf_token": "token",
-                "finance_status": "Cleared",
+                "finance_status": "Effective clearance",
                 "finance_due_at": "2026-06-25",
                 "note": "Hold resolved by Finance.",
             },
             follow_redirects=False,
         )
         self.assertEqual(response.status_code, 302)
-        self.assertEqual(control.status, "Cleared")
+        self.assertEqual(control.status, "Effective clearance")
         self.assertEqual(control.finance_due_at, date(2026, 6, 25))
         self.assertIsNotNone(control.cleared_at)
         self.assertIsNone(control.hold_at)
-        self.assertEqual(ExamSessionFinanceEvent.query.count(), 2)
+        self.assertEqual(ExamSessionFinanceEvent.query.count(), 3)
 
     def test_control_tower_my_actions_includes_finance(self):
         db.session.add(ExamSessionFinanceControl(
@@ -15229,7 +15363,7 @@ assert.equal(storage.size, 0);
         self.assertEqual(response.status_code, 200)
         html = response.data.decode()
         self.assertIn("Follow up finance payment", html)
-        self.assertIn("Payment follow-up or financial communication is required.", html)
+        self.assertIn("The debt is not considered critical at this stage", html)
         self.assertIn("FINANCE", html)
 
     def test_sinapsis_readiness_contract_statuses_checklist_and_deadlines(self):
@@ -16502,7 +16636,7 @@ assert.equal(storage.size, 0);
             follow_redirects=False,
         )
         self.assertEqual(response.status_code, 302)
-        self.assertEqual(ExamSessionFinanceControl.query.filter_by(exam_session_id=self.session_record.id).one().status, "Payment follow-up required")
+        self.assertEqual(ExamSessionFinanceControl.query.filter_by(exam_session_id=self.session_record.id).one().status, "Mid-risk debt")
         self.assertEqual(ExamSessionFinanceEvent.query.count(), 1)
 
         response = client.post(
@@ -16511,7 +16645,7 @@ assert.equal(storage.size, 0);
             follow_redirects=False,
         )
         self.assertEqual(response.status_code, 302)
-        self.assertEqual(ExamSessionFinanceControl.query.filter_by(exam_session_id=self.session_record.id).one().status, "Finance hold")
+        self.assertEqual(ExamSessionFinanceControl.query.filter_by(exam_session_id=self.session_record.id).one().status, "High-risk debt")
         self.assertEqual(ExamSessionFinanceEvent.query.count(), 2)
 
         response = client.post(

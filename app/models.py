@@ -1085,7 +1085,9 @@ class ExamSessionFinanceControl(db.Model):
 
     id = db.Column(db.Integer, primary_key=True)
     exam_session_id = db.Column(db.Integer, db.ForeignKey("exam_session.id"), nullable=False, index=True)
-    status = db.Column(db.String(40), nullable=False, default="Not reviewed", index=True)
+    status = db.Column(db.String(40), nullable=False, default="Not applicable", index=True)
+    additional_institutions = db.Column(db.Text, nullable=False, default="[]")
+    institutions_confirmed_with_admin = db.Column(db.Boolean, nullable=False, default=False)
     finance_due_at = db.Column(db.Date, nullable=True, index=True)
     evidence_url = db.Column(db.String(500), nullable=True)
     note = db.Column(db.Text, nullable=True)

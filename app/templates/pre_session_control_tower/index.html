@@ -329,22 +329,29 @@
 {%- endmacro %}
 
 {% macro finance_status_badge(finance, focusable=true) -%}
-  <span class="badge finance-status-{{ finance.status|replace('_', '-') }}" title="{{ finance.message }}" aria-label="Finance {{ finance.label }}: {{ finance.message }}"{% if focusable %} tabindex="0"{% endif %}>{{ finance.label }}</span>
+  <span class="badge finance-status-{{ finance.block_status|replace('_', '-') }}" title="{{ finance.message }}" aria-label="Finance {{ finance.block_label }}: {{ finance.message }}"{% if focusable %} tabindex="0"{% endif %}>{{ finance.block_label }}</span>
 {%- endmacro %}
 
-{% macro finance_table_cell(finance, focusable=true) -%}
+{% macro finance_standing_badge(finance) -%}
+  <span class="badge finance-status-{{ finance.status|replace('_', '-') }}">{{ finance.label }}</span>
+{%- endmacro %}
+
+{% macro finance_table_cell(finance, focusable=true, schedule_preparation_unlocked=false) -%}
   <span class="finance-summary-cell">
+    <span class="workflow-gate-chip workflow-gate-{{ 'unblocked' if schedule_preparation_unlocked else 'blocked' }}" aria-label="Finance gate {{ 'unblocked' if schedule_preparation_unlocked else 'blocked' }}">
+      <svg viewBox="0 0 24 24" aria-hidden="true">
+        <rect x="5" y="10" width="14" height="10" rx="2"></rect>
+        {% if schedule_preparation_unlocked %}
+          <path d="M8 10V7a4 4 0 0 1 7.4-2.1"></path>
+        {% else %}
+          <path d="M8 10V7a4 4 0 0 1 8 0v3"></path>
+        {% endif %}
+      </svg>
+      {{ 'UNBLOCKED' if schedule_preparation_unlocked else 'BLOCKED' }}
+    </span>
     {{ finance_status_badge(finance, focusable) }}
-    <span>{{ finance.responsible }}</span>
-    {% if finance.requires_action %}
-      {% if finance.deadline_status in ['overdue', 'due_today', 'not_set'] %}
-        <small>{{ finance.deadline_label }}</small>
-      {% elif finance.deadline %}
-        <small>{{ finance.deadline|session_date }}</small>
-      {% endif %}
-    {% else %}
-      <small>{{ finance.label }}</small>
-    {% endif %}
+    <span data-finance-institution-count>{{ 'Single institution' if not finance.additional_institutions else (finance.additional_institutions|length + 1)|string ~ ' institutions' }}</span>
+    {{ shipment_deadline_chip(finance.deadline_badge, 'finance-column-deadline-chip') }}
   </span>
 {%- endmacro %}
 
@@ -1819,6 +1826,16 @@
 {% endif %}
 <section class="table-wrap control-tower-table-wrap" aria-label="Schedule preparation and approval">
   <table class="control-tower-table{% if selected_view != 'bundle' %} sessions-table{% endif %}">
+    {% if selected_view != 'bundle' %}
+      <colgroup>
+        <col><col><col>
+        {% if show_session_package_column %}<col><col><col>{% endif %}
+        {% if show_session_shipment_column %}<col>{% endif %}
+        <col>
+        <col class="finance-table-column">
+        <col><col>
+      </colgroup>
+    {% endif %}
     <thead>
       <tr>
         <th>Session</th>
@@ -1841,7 +1858,7 @@
             <th>Shipment</th>
           {% endif %}
           <th>Logistics</th>
-          <th>Finance</th>
+          <th class="finance-column">Finance</th>
           <th>Final checks</th>
           <th>Session readiness</th>
         {% endif %}
@@ -1920,9 +1937,9 @@
                 {{ logistics_table_cell(view.logistics, view.logistics_gate, false, view.logistics_deadline_badge) }}
               {% endcall %}
             </td>
-            <td>
+            <td class="finance-column">
               {% call contextual_cell_trigger(session, 'finance', 'Review finance', finance_only=true) %}
-                {{ finance_table_cell(view.finance, false) }}
+                {{ finance_table_cell(view.finance, false, view.schedule_preparation_unlocked) }}
               {% endcall %}
             </td>
             <td>
@@ -3980,47 +3997,48 @@ This stage has already been marked as complete. Reopening it may affect package 
         <div class="staffing-control-header">
           <div>
             <h3 id="finance-title-{{ session.id }}" tabindex="-1">Finance</h3>
-            {{ finance_status_badge(view.finance) }}
-            <p>{{ view.finance.message }}</p>
           </div>
-          <strong class="responsible-chip">FINANCE</strong>
+          {% if view.schedule_preparation_unlocked %}
+            <span class="workflow-gate-chip workflow-gate-unblocked" aria-label="Finance gate unblocked">
+              <svg viewBox="0 0 24 24" aria-hidden="true">
+                <rect x="5" y="10" width="14" height="10" rx="2"></rect>
+                <path d="M8 10V7a4 4 0 0 1 7.4-2.1"></path>
+              </svg>
+              UNBLOCKED
+            </span>
+          {% else %}
+            <span class="workflow-gate-chip workflow-gate-blocked" aria-label="Finance gate blocked">
+              <svg viewBox="0 0 24 24" aria-hidden="true">
+                <rect x="5" y="10" width="14" height="10" rx="2"></rect>
+                <path d="M8 10V7a4 4 0 0 1 8 0v3"></path>
+              </svg>
+              BLOCKED
+            </span>
+          {% endif %}
         </div>
         {{ review_flags_block(view.review_flags.by_area.get('finance', []), session, selected_schedule_status, selected_view, csrf_token) }}
         <section class="staffing-control-metadata" aria-label="Finance readiness details">
           <div>
             <span>Status</span>
-            <strong>{{ view.finance.label }}</strong>
+            <strong>{{ finance_status_badge(view.finance) }}</strong>
+          </div>
+          <div>
+            <span>Recommended next action</span>
+            {% set finance_next_actions = {
+
+              'Mid-risk debt': 'Follow up finance payment',
+              'Conditional clearance': 'Review conditional finance clearance',
+              'High-risk debt': 'Resolve finance hold'
+            } %}
+            <strong>{{ view.finance.action_label }}</strong>
           </div>
           <div>
             <span>Responsible</span>
             <strong>{{ view.finance.responsible }}</strong>
           </div>
           <div>
-            <span>Finance deadline</span>
-            <strong>
-              {% if view.finance.requires_action and view.finance.deadline_status in ['overdue', 'due_today', 'not_set'] %}
-                {{ view.finance.deadline_label }}
-              {% elif view.finance.deadline %}
-                {{ view.finance.deadline|session_date }}
-              {% else %}
-                {{ view.finance.deadline_label }}
-              {% endif %}
-            </strong>
-            {% if not view.finance.requires_action and view.finance.deadline %}
-              <small>Saved deadline: {{ view.finance.deadline|session_date }}</small>
-            {% endif %}
-          </div>
-          <div>
-            <span>Evidence</span>
-            {% if view.finance.evidence_url %}
-              <a class="sinapsis-chip-link" href="{{ view.finance.evidence_url }}" target="_blank" rel="noopener noreferrer">Open evidence</a>
-            {% else %}
-              <strong class="muted">Not added</strong>
-            {% endif %}
-          </div>
-          <div>
-            <span>Note</span>
-            <strong>{{ view.finance.note if view.finance.note else '—' }}</strong>
+            <span>Current deadline</span>
+            <strong>{{ view.finance.current_deadline|session_date if view.finance.current_deadline else '—' }}</strong>
           </div>
         </section>
         {% if view.finance.blockers %}
@@ -4033,40 +4051,58 @@ This stage has already been marked as complete. Reopening it may affect package 
             </ul>
           </div>
         {% endif %}
-        <button class="secondary-button compact-action staffing-control-edit-button" type="button" data-finance-control-toggle aria-controls="finance-control-form-{{ session.id }}" aria-expanded="false">Edit finance status</button>
-        <form method="post" action="{{ url_for('staff.update_finance_control', session_id=session.id) }}" id="finance-control-form-{{ session.id }}" class="staffing-control-form finance-control-form" data-finance-control-form data-disable-on-submit hidden>
+        <form method="post" action="{{ url_for('staff.update_finance_control', session_id=session.id) }}" id="finance-control-form-{{ session.id }}" class="staffing-control-form finance-control-form" data-finance-control-form data-finance-institutions-form>
           <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
           <input type="hidden" name="schedule_status" value="{{ selected_schedule_status }}">
-          <div class="schedule-form-error" data-finance-control-error hidden></div>
+          {{ pre_session_return_fields(selected_view, selected_bundle) }}
+          <input type="hidden" name="finance_due_at" value="{{ view.finance.current_deadline.isoformat() if view.finance.current_deadline else '' }}">
+          <input type="hidden" name="evidence_url" value="{{ view.finance.evidence_url }}">
+          <input type="hidden" name="note" value="{{ view.finance.note }}">
+          <input type="hidden" name="finance_institutions_form" value="1">
+          <div class="finance-institution-row finance-primary-institution" data-finance-primary-institution>
           <label>
-            Responsible department
-            <input value="FINANCE" readonly>
-          </label>
-          <label>
-            Finance status
-            <select name="finance_status" required data-finance-status-select data-note-required-statuses="{{ finance_note_required_statuses|join('|') }}">
+            Current account standing
+            <span class="finance-standing-select"><select name="finance_status" data-finance-status-select{% if not view.schedule_preparation_unlocked %} disabled aria-disabled="true"{% endif %}>
+              {% if not view.finance.standing_selected %}<option value="" selected disabled>Select current account standing</option>{% endif %}
               {% for status_option in finance_status_options %}
-                <option value="{{ status_option }}" {% if view.finance.label == status_option %}selected{% endif %}>{{ status_option }}</option>
+                <option value="{{ status_option }}" data-description="{{ view.finance.standing_messages[status_option] }}" {% if view.finance.standing_selected and view.finance.label == status_option %}selected{% endif %}>{{ status_option }}</option>
               {% endfor %}
-            </select>
+            </select><span class="badge finance-status-{{ view.finance.status|replace('_', '-') }}" data-finance-selected-chip{% if not view.finance.standing_selected %} hidden{% endif %}>{{ view.finance.label if view.finance.standing_selected else '' }}</span></span>
           </label>
-          <label>
-            Finance deadline
-            <input type="date" name="finance_due_at" value="{{ view.finance.deadline.isoformat() if view.finance.deadline else '' }}">
-          </label>
-          <label>
-            Evidence URL
-            <input type="url" name="evidence_url" value="{{ view.finance.evidence_url }}" placeholder="https://...">
-          </label>
-          <label>
-            Note
-            <textarea name="note" rows="3" maxlength="2000" placeholder="Add a finance note" data-finance-note>{{ view.finance.note }}</textarea>
-            <small data-finance-note-hint hidden>A note is required for this finance status.</small>
-          </label>
-          <div class="form-actions">
-            <button class="secondary-button compact-action" type="button" data-finance-control-cancel>Cancel</button>
-            <button class="primary-button compact-action" type="submit">Save finance status</button>
+          <div data-finance-status-preview aria-live="polite">
+            {% if view.finance.standing_selected %}
+            <p>{% if view.finance.label == 'Not applicable' %}This institution is configured as <strong>Payer candidate</strong>, so a financial status check at institution level is not required.{% else %}{{ view.finance.message }}{% endif %}</p>
+            {% endif %}
           </div>
+          </div>
+          <div class="finance-institution-list" data-finance-institution-list>
+            {% for institution in view.finance.additional_institutions %}
+              <div class="finance-institution-row" data-finance-institution-row>
+                <label>Institution name<input name="institution_name" value="{{ institution.name }}" maxlength="200" required{% if not view.schedule_preparation_unlocked %} disabled{% endif %}></label>
+                <label>Current account standing<span class="finance-standing-select"><select name="institution_standing" required data-finance-status-select{% if not view.schedule_preparation_unlocked %} disabled{% endif %}>
+                  {% for status_option in finance_status_options %}<option value="{{ status_option }}" data-description="{{ view.finance.standing_messages[status_option] }}"{% if institution.standing == status_option %} selected{% endif %}>{{ status_option }}</option>{% endfor %}
+                </select><span class="badge finance-status-{{ institution.standing|lower|replace(' ', '-') }}" data-finance-selected-chip>{{ institution.standing }}</span></span></label>
+                <div data-finance-status-preview aria-live="polite">
+                  <p>{% if institution.standing == 'Not applicable' %}This institution is configured as <strong>Payer candidate</strong>, so a financial status check at institution level is not required.{% else %}{{ view.finance.standing_messages[institution.standing] }}{% endif %}</p>
+                </div>
+                <button class="finance-remove-institution" type="button" data-finance-remove-institution{% if not view.schedule_preparation_unlocked %} disabled{% endif %}>Remove</button>
+              </div>
+            {% endfor %}
+          </div>
+          <button class="secondary-button compact-action finance-add-institution" type="button" data-finance-add-institution{% if not view.schedule_preparation_unlocked or view.finance.additional_institutions|length >= 9 %} disabled{% endif %}>Add institution in this session</button>
+          <label class="finance-institutions-confirmation"><input type="checkbox" name="institutions_confirmed_with_admin"{% if view.finance.institutions_confirmed_with_admin %} checked{% endif %}{% if not view.schedule_preparation_unlocked %} disabled{% endif %}><span>It has been confirmed with Admin that there are no additional institutions listed in this exam session.</span></label>
+          <template data-finance-institution-template>
+            <div class="finance-institution-row" data-finance-institution-row>
+              <label>Institution name<input name="institution_name" maxlength="200" required></label>
+              <label>Current account standing<span class="finance-standing-select"><select name="institution_standing" required data-finance-status-select>
+                {% for status_option in finance_status_options %}<option value="{{ status_option }}" data-description="{{ view.finance.standing_messages[status_option] }}"{% if status_option == 'Not applicable' %} selected{% endif %}>{{ status_option }}</option>{% endfor %}
+              </select><span class="badge finance-status-not-applicable" data-finance-selected-chip>Not applicable</span></span></label>
+              <div data-finance-status-preview aria-live="polite"><p>This institution is configured as <strong>Payer candidate</strong>, so a financial status check at institution level is not required.</p></div>
+              <button class="finance-remove-institution" type="button" data-finance-remove-institution>Remove</button>
+            </div>
+          </template>
+          <button class="primary-button compact-action finance-save-button" type="submit"{% if not view.schedule_preparation_unlocked %} disabled{% endif %}>Save</button>
+          <span class="finance-auto-save-status" data-finance-auto-save-status role="status" aria-live="polite"></span>
         </form>
         <section class="logistics-readonly-list finance-history-list" aria-label="Finance history">
           <h4>History</h4>
@@ -4186,6 +4222,7 @@ This stage has already been marked as complete. Reopening it may affect package 
                   <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
                   <input type="hidden" name="schedule_status" value="{{ selected_schedule_status }}">
                   <input type="hidden" name="is_checked" value="{{ '0' if item.is_checked else '1' }}">
+                  {{ pre_session_return_fields(selected_view, selected_bundle) }}
                   <div>
                     <strong>{{ item.label }}</strong>
                     <p>{{ item.description }}</p>

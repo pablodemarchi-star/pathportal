@@ -7983,7 +7983,7 @@ span.session-marker-chip {
 
 .control-tower-table.sessions-table {
   table-layout: fixed;
-  min-width: 1380px;
+  min-width: 1460px;
 }
 
 .control-tower-table.sessions-table th:nth-child(1),
@@ -8075,7 +8075,7 @@ span.session-marker-chip {
 
 .control-tower-table.sessions-table .logistics-summary-cell > span:not(.badge):not(.workflow-deadline-chip),
 .control-tower-table.sessions-table .logistics-summary-cell small,
-.control-tower-table.sessions-table .finance-summary-cell > span:not(.badge),
+.control-tower-table.sessions-table .finance-summary-cell > span:not(.badge):not(.shipment-deadline-chip),
 .control-tower-table.sessions-table .finance-summary-cell small,
 .control-tower-table.sessions-table .sinapsis-readiness-summary-cell > span:not(.badge),
 .control-tower-table.sessions-table .sinapsis-readiness-summary-cell small {
@@ -11280,6 +11280,7 @@ span.session-marker-chip {
 }
 
 .shipment-summary-cell > .shipment-deadline-chip,
+.finance-summary-cell > .shipment-deadline-chip,
 .logistics-summary-cell > .shipment-deadline-chip {
   display: inline-flex;
   align-items: center;
@@ -11295,6 +11296,7 @@ span.session-marker-chip {
 }
 
 .shipment-summary-cell > .shipment-deadline-on-track,
+.finance-summary-cell > .shipment-deadline-on-track,
 .logistics-summary-cell > .shipment-deadline-on-track {
   background: var(--badge-grey-bg);
   color: var(--badge-grey-text);
@@ -11302,6 +11304,8 @@ span.session-marker-chip {
 
 .shipment-summary-cell > .shipment-deadline-overdue,
 .shipment-summary-cell > .shipment-deadline-missed,
+.finance-summary-cell > .shipment-deadline-overdue,
+.finance-summary-cell > .shipment-deadline-missed,
 .logistics-summary-cell > .shipment-deadline-overdue,
 .logistics-summary-cell > .shipment-deadline-missed {
   background: var(--badge-red-bg);
@@ -11309,6 +11313,7 @@ span.session-marker-chip {
 }
 
 .shipment-summary-cell > .shipment-deadline-met,
+.finance-summary-cell > .shipment-deadline-met,
 .logistics-summary-cell > .shipment-deadline-met {
   background: var(--badge-green-bg);
   color: var(--badge-green-text);
@@ -16631,3 +16636,134 @@ span.session-marker-chip {
     grid-template-columns: 1fr;
   }
 }
+
+.finance-status-effective-clearance { background: var(--badge-green-bg); color: var(--badge-green-text); }
+.finance-status-mid-risk-debt { background: var(--badge-yellow-bg); color: var(--badge-yellow-text); }
+.finance-status-high-risk-debt { background: var(--badge-red-bg); color: var(--badge-red-text); }
+.finance-status-not-applicable { background: var(--badge-grey-bg); color: var(--badge-grey-text); }
+.finance-status-monitoring-required { background: var(--path-violet-50); color: var(--path-violet-grey); }
+.finance-status-close-monitoring-required { background: var(--badge-red-bg); color: var(--badge-red-text); }
+.finance-status-overdue { background: var(--badge-red-bg); color: var(--badge-red-text); }
+
+.finance-control-form [data-finance-status-select],
+.finance-control-form [data-finance-status-select] option {
+  font-weight: 500;
+}
+
+.workflow-gate-chip {
+  font-family: var(--font-family);
+  color: var(--color-muted);
+}
+
+.workflow-gate-unblocked svg {
+  color: var(--color-muted);
+}
+
+.workflow-gate-blocked svg {
+  color: var(--color-muted);
+}
+
+.finance-control-form [data-finance-status-select]:disabled {
+  background: var(--path-grey-50);
+  color: var(--color-muted);
+  border-color: var(--color-border);
+  opacity: 0.65;
+  cursor: not-allowed;
+}
+
+.finance-institution-list { display: grid; gap: 12px; grid-column: 1 / -1; }
+.finance-institution-row { display: grid; gap: 10px; padding: 12px; border: 1px solid var(--color-border); border-radius: 8px; }
+.finance-control-form .finance-institutions-confirmation { display: flex; align-items: center; gap: 6px; grid-column: 1 / -1; font-weight: 400; }
+.finance-institutions-confirmation input { width: auto; flex: 0 0 auto; margin: 0; }
+.finance-control-form input:disabled { background: var(--path-grey-50); color: var(--color-muted); cursor: not-allowed; }
+.finance-add-institution { justify-self: start; }
+
+.finance-institution-row { background: var(--color-surface); box-shadow: 0 1px 3px #1111150a; }
+.finance-institution-row [data-finance-status-preview] p { margin: 8px 0 0; color: var(--color-muted); font-size: 13px; line-height: 1.5; }
+.finance-institution-row [data-finance-remove-institution] { justify-self: start; }
+
+.finance-control-form[data-finance-institutions-form] { padding: 0; border: 0; background: transparent; }
+.finance-auto-save-status { color: var(--color-muted); font-size: 12px; }
+.finance-auto-save-status.is-error { color: var(--path-red); }
+
+.finance-institution-row { position: relative; }
+.finance-institution-row:has([data-finance-remove-institution]) { padding-top: 34px; }
+.finance-institution-row .finance-remove-institution {
+  position: absolute; top: 10px; right: 12px; padding: 0; margin: 0;
+  border: 0; border-radius: 0; background: transparent; box-shadow: none;
+  color: var(--color-muted); font-family: var(--font-family); font-size: 11px;
+  font-weight: 400; line-height: 1.2; text-decoration: underline; cursor: pointer;
+}
+.finance-institution-row .finance-remove-institution:disabled { opacity: 0.6; cursor: not-allowed; }
+
+.finance-auto-save-status:empty { display: none; }
+
+.control-tower-table.sessions-table th.finance-column,
+.control-tower-table.sessions-table td.finance-column {
+  width: calc(240px - 5mm);
+}
+
+.control-tower-table.sessions-table col.finance-table-column {
+  width: calc(240px - 5mm);
+}
+
+.control-tower-table.sessions-table .finance-summary-cell > .finance-column-deadline-chip {
+  white-space: nowrap;
+  overflow-wrap: normal;
+  word-break: normal;
+}
+
+.finance-standing-select { display: block; position: relative; min-width: 0; }
+.finance-standing-select select { width: 100%; min-height: 42px; }
+.finance-control-form .finance-standing-select.has-selected-standing select { color: transparent; }
+.finance-standing-select.has-selected-standing select option { color: var(--color-text); }
+.finance-standing-select [data-finance-selected-chip] {
+  position: absolute; top: 50%; left: 12px; transform: translateY(-50%);
+  max-width: calc(100% - 48px); overflow: hidden; text-overflow: ellipsis;
+  white-space: nowrap; pointer-events: none; font-weight: 500;
+}
+.finance-standing-select [data-finance-selected-chip][hidden] { display: none; }
+.finance-standing-select:has(select:disabled) [data-finance-selected-chip] { opacity: 0.55; }
+
+.finance-status-verification-missing { background: var(--badge-yellow-bg); color: var(--badge-yellow-text); }
+.finance-status-not-started { background: var(--badge-grey-bg); color: var(--badge-grey-text); }
+
+.finance-save-button { justify-self: stretch; width: 100%; grid-column: 1 / -1; border-radius: 999px; }
+
+.control-tower-table.sessions-table td.finance-column .contextual-cell-trigger {
+  box-sizing: border-box;
+  width: 100%;
+  min-width: 0;
+  padding: 10px;
+}
+
+.control-tower-table.sessions-table td.finance-column .finance-summary-cell > .badge {
+  box-sizing: border-box;
+  max-width: 100%;
+  min-width: 0;
+  white-space: nowrap;
+  overflow-wrap: normal;
+}
+
+.users-table .users-impersonate-cell { width: 44px; text-align: center; }
+.users-impersonate-button { display: inline-flex; padding: 7px; border: 1px solid var(--color-border); border-radius: 6px; background: transparent; color: var(--color-primary); cursor: pointer; }
+.users-impersonate-button:hover { background: var(--path-blue-50); }
+.users-impersonate-button svg { width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-width: 1.8; }
+.impersonation-notice { margin: 12px 0; padding: 10px; border: 1px solid currentColor; border-radius: 8px; font-size: 12px; }
+.impersonation-notice .secondary-button { width: 100%; }
+
+.users-table.users-table-with-impersonation { width: 100%; max-width: 100%; }
+.users-table.users-table-with-impersonation th:nth-child(1),
+.users-table.users-table-with-impersonation td:nth-child(1) { width: 17%; }
+.users-table.users-table-with-impersonation th:nth-child(2),
+.users-table.users-table-with-impersonation td:nth-child(2) { width: 26%; }
+.users-table.users-table-with-impersonation th:nth-child(3),
+.users-table.users-table-with-impersonation td:nth-child(3) { width: 11%; }
+.users-table.users-table-with-impersonation th:nth-child(4),
+.users-table.users-table-with-impersonation td:nth-child(4) { width: 8%; }
+.users-table.users-table-with-impersonation th:nth-child(5),
+.users-table.users-table-with-impersonation td:nth-child(5) { width: 17%; padding-right: 11px; }
+.users-table.users-table-with-impersonation th:nth-child(6),
+.users-table.users-table-with-impersonation td:nth-child(6) { width: 16%; padding-left: 11px; }
+.users-table.users-table-with-impersonation th:nth-child(7),
+.users-table.users-table-with-impersonation td:nth-child(7) { width: 5%; padding-inline: 4px; text-align: center; }
