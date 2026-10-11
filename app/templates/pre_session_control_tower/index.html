@@ -4166,42 +4166,6 @@ This stage has already been marked as complete. Reopening it may affect package 
           </div>
         </section>
         {{ final_checks_status_track_panel(session, view.sinapsis_events) }}
-        <details class="sinapsis-control-edit-panel">
-          <summary class="secondary-button compact-action">Edit Sinapsis status</summary>
-          <form method="post" action="{{ url_for('staff.update_sinapsis_control', session_id=session.id) }}" class="staffing-control-form sinapsis-control-form" data-disable-on-submit>
-            <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-            <input type="hidden" name="schedule_status" value="{{ selected_schedule_status }}">
-            {{ pre_session_return_fields(selected_view, selected_bundle) }}
-            <label>
-              Sinapsis readiness
-              <select name="sinapsis_status" required>
-                {% for status_option in sinapsis_status_options %}
-                  <option value="{{ status_option }}" {% if view.sinapsis.label == status_option %}selected{% endif %}>{{ status_option }}</option>
-                {% endfor %}
-              </select>
-            </label>
-            <label>
-              Sinapsis deadline
-              <input type="date" name="sinapsis_due_at" value="{{ view.sinapsis.deadline.isoformat() if view.sinapsis.deadline else '' }}">
-            </label>
-            <label>
-              Evidence URL
-              <input type="url" name="evidence_url" value="{{ view.sinapsis.evidence_url }}" placeholder="https://...">
-            </label>
-            <label>
-              Note
-              <textarea name="note" rows="3" maxlength="2000" placeholder="Required when Sinapsis needs correction">{{ view.sinapsis.note }}</textarea>
-            </label>
-            <div class="form-actions">
-              {% if view.sinapsis.details_url_available %}
-                <a class="secondary-button compact-action link-button" href="{{ view.sinapsis.details_url }}" target="_blank" rel="noopener noreferrer">Open link</a>
-              {% else %}
-                <a class="secondary-button compact-action link-button is-disabled" href="#" aria-disabled="true" tabindex="-1">Open link</a>
-              {% endif %}
-              <button class="primary-button compact-action" type="submit">Save Sinapsis status</button>
-            </div>
-          </form>
-        </details>
         {% if view.sinapsis.blockers %}
           <div class="staffing-blockers">
             <h4>Blockers</h4>
@@ -4213,36 +4177,113 @@ This stage has already been marked as complete. Reopening it may affect package 
           </div>
         {% endif %}
 
-        <section class="sinapsis-checklist" aria-label="Final session checklist">
-          <h4>Final session checklist</h4>
+        <section class="sinapsis-checklist" aria-label="Sinapsis checks">
+          <h4>Sinapsis checks</h4>
           {% if view.sinapsis_checklist_items %}
             <div class="sinapsis-checklist-list">
               {% for item in view.sinapsis_checklist_items %}
-                <form method="post" action="{{ url_for('staff.update_sinapsis_checklist_item', session_id=session.id, item_id=item.id) }}" class="sinapsis-checklist-item {% if item.is_checked %}is-checked{% endif %}" data-disable-on-submit>
+                <form method="post" action="{{ url_for('staff.update_sinapsis_checklist_item', session_id=session.id, item_id=item.id) }}" class="sinapsis-checklist-item {% if item.is_checked %}is-checked{% endif %}" data-sinapsis-check-form data-session-id="{{ session.id }}" data-item-id="{{ item.id }}">
                   <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
                   <input type="hidden" name="schedule_status" value="{{ selected_schedule_status }}">
                   <input type="hidden" name="is_checked" value="{{ '0' if item.is_checked else '1' }}">
                   {{ pre_session_return_fields(selected_view, selected_bundle) }}
                   <div>
-                    <strong>{{ item.label }}</strong>
-                    <p>{{ item.description }}</p>
+                    <div class="sinapsis-check-title">
+                      <strong>{{ item.label }}</strong>
+                      {% if item.is_checked %}
+                        <span class="badge sinapsis-check-status is-checked">Checked</span>
+                      {% elif item.needs_review %}
+                        <span class="badge sinapsis-check-status needs-review">Needs review</span>
+                      {% else %}
+                        <span class="badge sinapsis-check-status not-checked">Not checked yet</span>
+                      {% endif %}
+                    </div>
+                    {% if item.item_key == 'marks_upload_enabled' %}
+                      <p>Verify in Sinapsis that the correct number of candidates is listed, including only candidates with <b>Paid</b> or <b>Paying</b> status.</p>
+                    {% else %}
+                      <p>{{ item.description }}</p>
+                    {% endif %}
                     {% if item.checked_at %}
                       <small>Checked {{ item.checked_at|localdt }}{% if item.checked_by %} by {{ item.checked_by }}{% endif %}</small>
                     {% endif %}
                   </div>
-                  <label>
-                    Note
-                    <input name="checklist_note" value="{{ item.note or '' }}" maxlength="1000" placeholder="Optional note">
-                  </label>
-                  <button class="{% if item.is_checked %}secondary-button{% else %}primary-button{% endif %} compact-action" type="submit">
-                    {% if item.is_checked %}Mark unchecked{% else %}Mark checked{% endif %}
-                  </button>
+                  <div class="sinapsis-check-actions">
+                    <button class="danger-button compact-action" type="button" data-open-modal="sinapsis-issue-{{ session.id }}-{{ item.id }}">Mark issue</button>
+                    <button class="{% if item.is_checked %}secondary-button{% else %}primary-button{% endif %} compact-action" type="submit">
+                      {% if item.is_checked %}Mark unchecked{% else %}Mark checked{% endif %}
+                    </button>
+                  </div>
                 </form>
+                <div class="modal nested-modal" id="sinapsis-issue-{{ session.id }}-{{ item.id }}" aria-hidden="true" role="dialog" aria-modal="true" aria-labelledby="sinapsis-issue-title-{{ item.id }}">
+                  <div class="modal-panel sinapsis-issue-panel">
+                    <div class="modal-header"><h2 id="sinapsis-issue-title-{{ item.id }}">Mark issue</h2><button class="icon-button" type="button" data-close-modal aria-label="Close">&times;</button></div>
+                    <form method="post" action="{{ url_for('staff.mark_sinapsis_checklist_issue', session_id=session.id, item_id=item.id) }}" data-sinapsis-issue-form data-session-id="{{ session.id }}" data-item-id="{{ item.id }}">
+                      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                      <input type="hidden" name="schedule_status" value="{{ selected_schedule_status }}">
+                      {{ pre_session_return_fields(selected_view, selected_bundle) }}
+                      <label class="sinapsis-issue-comment"><span class="sinapsis-issue-field-title">Comment</span><textarea name="note" rows="3" maxlength="2000" required></textarea></label>
+                      <label class="note-recipient-field"><span class="sinapsis-issue-field-title">To</span>
+                        <select name="note_to_user_id" multiple data-note-recipient-select>
+                          {% for user_option in note_to_user_options() %}<option value="{{ user_option.id }}">{{ user_option.full_name }}, {{ user_option.department }}</option>{% endfor %}
+                        </select>
+                        <span class="note-recipient-selected-chips" data-note-recipient-chips></span>
+                      </label>
+                      <div class="form-actions"><button class="secondary-button" type="button" data-close-modal>Cancel</button><button class="danger-button" type="submit">Save issue</button></div>
+                    </form>
+                  </div>
+                </div>
               {% endfor %}
             </div>
           {% else %}
             <p class="empty-history">No final session checklist has been created yet.</p>
           {% endif %}
+        </section>
+        <section class="sinapsis-checklist return-materials-section" aria-labelledby="return-materials-title-{{ session.id }}">
+          <h4 id="return-materials-title-{{ session.id }}">Return of exam materials</h4>
+          {% set return_method = view.sinapsis.control.return_materials_method if view.sinapsis.control else '' %}
+          {% set combined_selection = namespace(complete=false) %}
+          {% for other_session in combined_return_options_by_session.get(session.id, []) %}
+            {% if view.sinapsis.control and other_session.id in view.sinapsis.control.combined_return_session_ids and combined_return_examiner_confirmed(other_session) %}
+              {% set combined_selection.complete = true %}
+            {% endif %}
+          {% endfor %}
+          <form method="post" action="{{ url_for('staff.update_return_materials_method', session_id=session.id) }}" class="sinapsis-checklist-list" data-return-materials-form data-session-id="{{ session.id }}" data-linked-session-ids="{{ (view.sinapsis.control.combined_return_session_ids if view.sinapsis.control else [])|tojson|forceescape }}" data-saved-method="{{ return_method or '' }}">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+            {% for option in return_materials_options %}
+              <div class="sinapsis-checklist-item return-material-option{% if return_method == option.key %} is-selected{% if (option.key == 'immediate_dispatch' and not view.sinapsis.return_materials_label_valid) or (option.key == 'combined_dispatch' and (not view.sinapsis.combined_return_materials_label_valid or not combined_selection.complete)) %} needs-label{% endif %}{% endif %}">
+                <div>
+                  <strong id="return-option-{{ session.id }}-{{ option.key }}">{{ option.label }}</strong><p>{{ option.description }}</p>
+                  {% if option.key in ['immediate_dispatch', 'combined_dispatch'] %}
+                    {% set label_url_name = 'return_materials_label_url' if option.key == 'immediate_dispatch' else 'combined_return_materials_label_url' %}
+                    <ul class="return-material-label-link" data-return-label-field{% if return_method != option.key %} hidden{% endif %}>
+                      {% if option.key == 'combined_dispatch' %}
+                        <li class="combined-return-session-row">
+                          <span class="combined-return-session-label">Select exam sessions for combined return dispatch</span>
+                          <details class="combined-return-session-picker">
+                            <summary>Select exam sessions</summary>
+                            <div class="combined-return-session-options">
+                              {% for other_session in combined_return_options_by_session.get(session.id, []) %}
+                                {% set examiner_confirmed = combined_return_examiner_confirmed(other_session) %}
+                                <label{% if not examiner_confirmed %} class="combined-return-session-unconfirmed"{% endif %}><input type="checkbox" name="combined_return_session_ids" value="{{ other_session.id }}" data-return-combined-session{% if examiner_confirmed and view.sinapsis.control and other_session.id in view.sinapsis.control.combined_return_session_ids %} checked{% endif %}{% if not examiner_confirmed %} disabled{% endif %}><span>{{ other_session.exam_session_name }}{% if other_session.session_date %} — {{ other_session.session_date|session_date }}{% endif %}{% if examiner_confirmed %}<span class="badge combined-return-confirmed">Confirmed</span>{% else %}<span class="badge combined-return-not-confirmed">Not confirmed yet</span>{% endif %}</span></label>
+                              {% else %}
+                                <p>No other exam sessions assigned to this supervisor.</p>
+                              {% endfor %}
+                            </div>
+                          </details>
+                          <p class="return-label-url-warning" data-return-materials-selector-feedback role="alert" hidden></p>
+                        </li>
+                      {% endif %}
+                      <li><label for="return-label-url-{{ session.id }}-{{ option.key }}">Insert label link for sealed return exam packages:</label><input id="return-label-url-{{ session.id }}-{{ option.key }}" type="url" name="{{ label_url_name }}" data-return-label-url maxlength="2000" value="{{ (view.sinapsis.control|attr(label_url_name)) or '' if view.sinapsis.control else '' }}" placeholder="https://..."></li>
+                    </ul>
+                    <p class="return-label-url-warning" data-return-url-warning role="alert" hidden>This URL is not valid</p>
+                  {% endif %}
+                </div>
+                <input type="radio" name="return_materials_method" value="{{ option.key }}" aria-labelledby="return-option-{{ session.id }}-{{ option.key }}"{% if return_method == option.key %} checked{% endif %}>
+              </div>
+            {% endfor %}
+
+            <p data-return-materials-feedback role="status" hidden></p>
+          </form>
         </section>
       </section>
 

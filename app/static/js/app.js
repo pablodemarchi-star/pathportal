@@ -1349,6 +1349,7 @@ const closeModal = (modal) => {
   modal.querySelectorAll("form").forEach((form) => {
     form.reset();
   });
+  modal.querySelectorAll("[data-return-materials-form]").forEach(syncReturnMaterialsOptions);
   modal.classList.remove("is-open");
   modal.setAttribute("aria-hidden", "true");
   clearFocusedMode(modal);
@@ -1414,7 +1415,6 @@ const openRequestedScheduleModal = () => {
       closeParams.delete("open_staffing_control");
       closeParams.delete("open_logistics_control");
       closeParams.delete("open_finance_control");
-      closeParams.delete("open_sinapsis_control");
       closeParams.delete("open_communications_control");
       closeParams.delete("highlight_note");
       closeParams.delete("close_view");
@@ -1510,7 +1510,6 @@ const openRequestedScheduleModal = () => {
   params.delete("open_staffing_control");
   params.delete("open_logistics_control");
   params.delete("open_finance_control");
-  params.delete("open_sinapsis_control");
   params.delete("open_communications_control");
   params.delete("highlight_note");
   params.delete("close_view");
@@ -13382,4 +13381,302 @@ document.querySelectorAll("[data-finance-institutions-form]").forEach((form) => 
     save();
   });
   syncLimit();
+});
+
+
+// Save checklist changes without navigating or collapsing the current section.
+document.addEventListener("submit", async (event) => {
+  const form = event.target.closest("[data-sinapsis-check-form], [data-sinapsis-issue-form]");
+  if (!form) return;
+  event.preventDefault();
+  if (form.dataset.saving === "true") return;
+  form.dataset.saving = "true";
+  const body = new FormData(form);
+  const buttons = [...form.querySelectorAll("button")];
+  buttons.forEach((button) => { button.disabled = true; });
+  form.querySelector("[data-sinapsis-save-error]")?.remove();
+  try {
+    const response = await fetch(form.action, {
+      method: "POST", body, headers: { "X-Requested-With": "XMLHttpRequest" },
+    });
+    const result = await response.json();
+    if (!response.ok || !result.saved) throw new Error(result.error || "The change could not be saved.");
+    const cardSelector = `[data-sinapsis-check-form][data-session-id="${form.dataset.sessionId}"][data-item-id="${form.dataset.itemId}"]`;
+    const card = document.querySelector(cardSelector);
+    if (card) {
+      card.classList.toggle("is-checked", result.is_checked);
+      const chip = card.querySelector(".sinapsis-check-status");
+      chip.className = `badge sinapsis-check-status ${result.is_checked ? "is-checked" : result.needs_review ? "needs-review" : "not-checked"}`;
+      chip.textContent = result.is_checked ? "Checked" : result.needs_review ? "Needs review" : "Not checked yet";
+      card.querySelector('[name="is_checked"]').value = result.is_checked ? "0" : "1";
+      const toggle = card.querySelector('button[type="submit"]');
+      toggle.textContent = result.is_checked ? "Mark unchecked" : "Mark checked";
+      toggle.classList.toggle("secondary-button", result.is_checked);
+      toggle.classList.toggle("primary-button", !result.is_checked);
+    }
+    if (form.matches("[data-sinapsis-issue-form]")) {
+      closeModal(form.closest(".modal"));
+      form.querySelectorAll("[data-note-recipient-select]").forEach((select) => select.dispatchEvent(new Event("change", { bubbles: true })));
+    }
+    // Refresh only the saved card and history content, leaving sections and scroll intact.
+    try {
+      const refresh = await fetch(window.location.href);
+      if (!refresh.ok) throw new Error("Refresh failed");
+      const doc = new DOMParser().parseFromString(await refresh.text(), "text/html");
+      const freshCard = doc.querySelector(cardSelector);
+      const parentModal = card?.closest(".modal");
+      const scrollTop = parentModal?.scrollTop;
+      if (card && freshCard) card.innerHTML = freshCard.innerHTML;
+      for (const id of [`schedule-notes-${form.dataset.sessionId}`, `history-${form.dataset.sessionId}`]) {
+        const current = document.getElementById(id);
+        const fresh = doc.getElementById(id);
+        if (!current || !fresh) continue;
+        const oldHistory = current.querySelector(".history-list, .empty-history");
+        const newHistory = fresh.querySelector(".history-list, .empty-history");
+        if (oldHistory && newHistory) oldHistory.replaceWith(newHistory);
+        const count = current.querySelector(".staffing-control-header > .responsible-chip");
+        const newCount = fresh.querySelector(".staffing-control-header > .responsible-chip");
+        if (count && newCount) count.textContent = newCount.textContent;
+      }
+      if (parentModal) parentModal.scrollTop = scrollTop;
+    } catch (error) {
+      console.error("Checklist saved; history refresh failed", error);
+    }
+  } catch (error) {
+    const feedback = document.createElement("p");
+    feedback.dataset.sinapsisSaveError = "true";
+    feedback.setAttribute("role", "alert");
+    feedback.textContent = error.message || "The change could not be saved. Please try again.";
+    form.append(feedback);
+  } finally {
+    delete form.dataset.saving;
+    buttons.forEach((button) => { button.disabled = false; });
+  }
+});
+
+
+const confirmReturnMaterialsChange = (message) => new Promise((resolve) => {
+  const modal = document.createElement("div");
+  modal.className = "modal nested-modal is-open return-materials-confirmation";
+  modal.setAttribute("role", "dialog");
+  modal.setAttribute("aria-modal", "true");
+  modal.setAttribute("aria-label", "Confirm return package change");
+  modal.innerHTML = '<div class="modal-panel confirm-panel"><p></p><div class="form-actions"><button type="button" class="secondary-button" data-return-confirm-cancel>Cancel</button><button type="button" class="primary-button" data-return-confirm-continue>Continue</button></div></div>';
+  modal.querySelector("p").textContent = message;
+  const previousFocus = document.activeElement;
+  const finish = (confirmed) => {
+    document.removeEventListener("keydown", onKeyDown, true);
+    modal.remove();
+    previousFocus?.focus({ preventScroll: true });
+    resolve(confirmed);
+  };
+  const onKeyDown = (event) => {
+    if (event.key === "Escape") { event.preventDefault(); event.stopImmediatePropagation(); finish(false); }
+    if (event.key === "Tab") {
+      const buttons = [...modal.querySelectorAll("button")];
+      if (event.shiftKey && document.activeElement === buttons[0]) { event.preventDefault(); buttons[1].focus(); }
+      else if (!event.shiftKey && document.activeElement === buttons[1]) { event.preventDefault(); buttons[0].focus(); }
+      event.stopImmediatePropagation();
+    }
+  };
+  modal.querySelector("[data-return-confirm-cancel]").addEventListener("click", () => finish(false));
+  modal.querySelector("[data-return-confirm-continue]").addEventListener("click", () => finish(true));
+  modal.addEventListener("click", (event) => { if (event.target === modal) finish(false); });
+  document.addEventListener("keydown", onKeyDown, true);
+  document.body.append(modal);
+  modal.querySelector("[data-return-confirm-cancel]").focus();
+});
+
+const returnMaterialsSaveQueues = new WeakMap();
+const isValidReturnLabelUrl = (value) => {
+  if (!value.trim()) return true;
+  try {
+    const url = new URL(value.trim());
+    return value.trim().length <= 2000 && ["http:", "https:"].includes(url.protocol) && Boolean(url.hostname);
+  } catch (_) { return false; }
+};
+const syncReturnMaterialsOptions = (form) => {
+  form.querySelectorAll('input[type="radio"]').forEach((radio) => {
+    const box = radio.closest(".return-material-option");
+    const urlField = box.querySelector("[data-return-label-url]");
+    const value = urlField?.value.trim() || "";
+    const validSavedUrl = Boolean(value) && isValidReturnLabelUrl(value) && value === urlField?.defaultValue.trim();
+    box.classList.toggle("is-selected", radio.checked);
+    const hasSavedSession = [...box.querySelectorAll("[data-return-combined-session]")].some((checkbox) => checkbox.checked && checkbox.defaultChecked && !checkbox.disabled);
+    const complete = validSavedUrl && (radio.value !== "combined_dispatch" || hasSavedSession);
+    box.classList.toggle("needs-label", radio.checked && Boolean(urlField) && !complete);
+    const field = box.querySelector("[data-return-label-field]");
+    if (field) field.hidden = !radio.checked;
+    if (!radio.checked) {
+      const warning = box.querySelector("[data-return-url-warning]");
+      if (warning) warning.hidden = true;
+    }
+  });
+  const summary = form.querySelector(".combined-return-session-picker summary");
+  const selectedCount = form.querySelectorAll("[data-return-combined-session]:checked").length;
+  if (summary) summary.textContent = selectedCount ? `${selectedCount} exam sessions selected` : "Select exam sessions";
+};
+document.addEventListener("click", (event) => {
+  const box = event.target.closest(".return-material-option");
+  if (!box || event.target.closest("input, label, [data-return-label-field]")) return;
+  box.querySelector('input[type="radio"]')?.click();
+});
+document.addEventListener("change", async (event) => {
+  const field = event.target.closest('[data-return-materials-form] input');
+  if (!field || !field.matches('input[type="radio"], [data-return-label-url], [data-return-combined-session]')) return;
+  const form = field.closest("[data-return-materials-form]");
+  const linkedIds = JSON.parse(form.dataset.linkedSessionIds || "[]");
+  const changingLinkedMethod = field.matches('input[type="radio"]') && field.value !== form.dataset.savedMethod && linkedIds.length > 0;
+  if (changingLinkedMethod && !(await confirmReturnMaterialsChange("Are you sure you want to continue? Linked sessions will keep the original selection of return of exam packages."))) {
+    form.querySelectorAll('input[type="radio"]').forEach((radio) => { radio.checked = radio.value === form.dataset.savedMethod; });
+    syncReturnMaterialsOptions(form);
+    return;
+  }
+  syncReturnMaterialsOptions(form);
+  const feedback = form.querySelector(field.matches("[data-return-combined-session]") ? "[data-return-materials-selector-feedback]" : "[data-return-materials-feedback]");
+  const body = new FormData(form);
+  if (changingLinkedMethod) body.set("confirm_return_method_change", "1");
+  const isUrlChange = field.matches("[data-return-label-url]");
+  const isSessionChange = field.matches("[data-return-combined-session]");
+  if (isSessionChange) {
+    body.set("save_combined_return_sessions", "1");
+    body.set("return_materials_method", "combined_dispatch");
+  }
+  else body.delete("combined_return_session_ids");
+  // Selecting the method never depends on completing or validating the optional URL.
+  for (const name of ["return_materials_label_url", "combined_return_materials_label_url"]) {
+    if (!isUrlChange || name !== field.name) body.delete(name);
+  }
+  const invalidUrl = isUrlChange && (!field.checkValidity() || !isValidReturnLabelUrl(field.value));
+  if (invalidUrl) {
+    field.value = "";
+    body.set(field.name, "");
+    const warning = field.closest(".return-material-option").querySelector("[data-return-url-warning]");
+    if (warning) warning.hidden = false;
+    syncReturnMaterialsOptions(form);
+  }
+  let queue = returnMaterialsSaveQueues.get(form);
+  if (!queue) {
+    queue = [];
+    returnMaterialsSaveQueues.set(form, queue);
+  }
+  queue.push({ body, isUrlChange, isSessionChange, invalidUrl, field });
+  if (queue.length > 1) return;
+  while (queue.length) {
+    const job = queue[0];
+    if (!job.invalidUrl) feedback.hidden = true;
+    try {
+      let response = await fetch(form.action, { method: "POST", body: job.body, headers: { "X-Requested-With": "XMLHttpRequest" } });
+      let result = await response.json();
+      while (result.confirmation_required) {
+        if (!(await confirmReturnMaterialsChange(result.error))) {
+          const cancelled = new Error("Change cancelled.");
+          cancelled.cancelled = true;
+          throw cancelled;
+        }
+        if (result.confirmation_type === "return_option_conflict") {
+          for (const id of result.conflicting_session_ids || []) job.body.append("confirm_return_option_session_ids", String(id));
+        } else {
+          job.body.set("confirm_return_method_change", "1");
+        }
+        response = await fetch(form.action, { method: "POST", body: job.body, headers: { "X-Requested-With": "XMLHttpRequest" } });
+        result = await response.json();
+      }
+      if (!response.ok || !result.saved) throw new Error(result.error || "The return method could not be saved.");
+      form.dataset.savedMethod = result.method;
+      form.dataset.linkedSessionIds = JSON.stringify(result.linked_session_ids || []);
+      form.querySelectorAll('input[type="radio"]').forEach((radio) => {
+        radio.defaultChecked = radio.value === result.method;
+      });
+      if (job.isSessionChange) {
+        const selected = job.body.getAll("combined_return_session_ids");
+        form.querySelectorAll("[data-return-combined-session]").forEach((checkbox) => { checkbox.defaultChecked = selected.includes(checkbox.value); });
+      }
+      if (job.isUrlChange) job.field.defaultValue = job.body.get(job.field.name);
+      for (const synced of result.synced_sessions || []) {
+        const targetForms = [...document.querySelectorAll("[data-return-materials-form]")].filter((candidate) =>
+          candidate.dataset.sessionId === String(synced.session_id) || new URL(candidate.action, window.location.href).pathname.endsWith(`/sessions/${synced.session_id}/return-materials`));
+        for (const targetForm of targetForms) {
+        targetForm.dataset.savedMethod = synced.method;
+        targetForm.dataset.linkedSessionIds = JSON.stringify(synced.session_ids);
+        const pending = returnMaterialsSaveQueues.get(targetForm);
+        const hasNewerEdit = targetForm === form ? queue.length > 1 : Boolean(pending?.length);
+        targetForm.querySelectorAll('input[type="radio"]').forEach((radio) => {
+          radio.defaultChecked = radio.value === synced.method;
+          if (!hasNewerEdit) radio.checked = radio.defaultChecked;
+        });
+        targetForm.querySelectorAll("[data-return-combined-session]").forEach((checkbox) => {
+          checkbox.defaultChecked = synced.session_ids.includes(Number(checkbox.value)) && !checkbox.disabled;
+          if (!hasNewerEdit) checkbox.checked = checkbox.defaultChecked;
+        });
+        const url = targetForm.querySelector('[name="combined_return_materials_label_url"]');
+        if (url) {
+          url.defaultValue = synced.label_url;
+          if (!hasNewerEdit) url.value = synced.label_url;
+        }
+        syncReturnMaterialsOptions(targetForm);
+        }
+      }
+      syncReturnMaterialsOptions(form);
+      const warning = job.field.closest(".return-material-option").querySelector("[data-return-url-warning]");
+      if (warning && job.isUrlChange && queue.length === 1) warning.hidden = !job.invalidUrl;
+    } catch (error) {
+      feedback.textContent = error.message || "The change could not be saved. Please try again.";
+      feedback.hidden = Boolean(error.cancelled);
+      if (job.isSessionChange && queue.length === 1) {
+        form.querySelectorAll("[data-return-combined-session]").forEach((checkbox) => { checkbox.checked = checkbox.defaultChecked; });
+        syncReturnMaterialsOptions(form);
+      }
+      if (!job.isUrlChange && !job.isSessionChange && queue.length === 1) {
+        form.querySelectorAll('input[type="radio"]').forEach((radio) => { radio.checked = radio.value === form.dataset.savedMethod; });
+        syncReturnMaterialsOptions(form);
+      }
+    }
+    queue.shift();
+  }
+});
+document.addEventListener("submit", (event) => {
+  if (event.target.matches("[data-return-materials-form]")) event.preventDefault();
+});
+
+document.addEventListener("input", (event) => {
+  if (!event.target.matches("[data-return-label-url]")) return;
+  const form = event.target.closest("[data-return-materials-form]");
+  syncReturnMaterialsOptions(form);
+  const warning = event.target.closest(".return-material-option").querySelector("[data-return-url-warning]");
+  if (warning) warning.hidden = !event.target.value.trim() || isValidReturnLabelUrl(event.target.value);
+});
+
+document.querySelectorAll("[data-return-materials-form]").forEach(syncReturnMaterialsOptions);
+
+document.addEventListener("click", (event) => {
+  document.querySelectorAll(".combined-return-session-picker[open]").forEach((picker) => {
+    if (!picker.contains(event.target)) picker.open = false;
+  });
+}, true);
+
+// Reconcile the opened modal with persisted state after changes in another session.
+document.addEventListener("click", async (event) => {
+  const opener = event.target.closest('[data-open-modal][data-modal-sinapsis-only="true"]');
+  if (!opener) return;
+  const modal = document.getElementById(opener.dataset.openModal);
+  const form = modal?.querySelector("[data-return-materials-form]");
+  if (!form || returnMaterialsSaveQueues.get(form)?.length) return;
+  try {
+    const response = await fetch(form.action, { headers: { "X-Requested-With": "XMLHttpRequest" } });
+    if (!response.ok) return;
+    const result = await response.json();
+    if (returnMaterialsSaveQueues.get(form)?.length) return;
+    form.dataset.savedMethod = result.method;
+    form.dataset.linkedSessionIds = JSON.stringify(result.session_ids);
+    form.querySelectorAll('input[type="radio"]').forEach((radio) => { radio.checked = radio.defaultChecked = radio.value === result.method; });
+    form.querySelectorAll("[data-return-combined-session]").forEach((checkbox) => {
+      checkbox.checked = checkbox.defaultChecked = result.session_ids.includes(Number(checkbox.value)) && !checkbox.disabled;
+    });
+    for (const [name, value] of [["return_materials_label_url", result.immediate_label_url], ["combined_return_materials_label_url", result.label_url]]) {
+      const input = form.querySelector(`[name="${name}"]`);
+      if (input) input.value = input.defaultValue = value;
+    }
+    syncReturnMaterialsOptions(form);
+  } catch (error) { console.error("Could not refresh return materials state", error); }
 });

@@ -112,7 +112,7 @@ def create_app():
         UserMenuPermission,
         VALID_MENU_PERMISSION_KEYS,
     )
-    from app.routes import staff_bp
+    from app.routes import staff_bp, SINAPSIS_CHECKLIST_ITEMS
 
     app.register_blueprint(staff_bp)
 
@@ -226,6 +226,25 @@ def create_app():
 
     with app.app_context():
         db.create_all()
+        sinapsis_control_columns = {row[1] for row in db.session.execute(text("PRAGMA table_info(exam_session_sinapsis_control)"))}
+        if "return_materials_method" not in sinapsis_control_columns:
+            db.session.execute(text("ALTER TABLE exam_session_sinapsis_control ADD COLUMN return_materials_method VARCHAR(60)"))
+        if "return_materials_label_url" not in sinapsis_control_columns:
+            db.session.execute(text("ALTER TABLE exam_session_sinapsis_control ADD COLUMN return_materials_label_url VARCHAR(2000)"))
+        if "combined_return_materials_label_url" not in sinapsis_control_columns:
+            db.session.execute(text("ALTER TABLE exam_session_sinapsis_control ADD COLUMN combined_return_materials_label_url VARCHAR(2000)"))
+        if "combined_return_session_ids_json" not in sinapsis_control_columns:
+            db.session.execute(text("ALTER TABLE exam_session_sinapsis_control ADD COLUMN combined_return_session_ids_json TEXT NOT NULL DEFAULT '[]'"))
+        if "return_materials_local_override" not in sinapsis_control_columns:
+            db.session.execute(text("ALTER TABLE exam_session_sinapsis_control ADD COLUMN return_materials_local_override BOOLEAN NOT NULL DEFAULT 0"))
+        sinapsis_checklist_columns = {row[1] for row in db.session.execute(text("PRAGMA table_info(exam_session_sinapsis_checklist_item)"))}
+        if "needs_review" not in sinapsis_checklist_columns:
+            db.session.execute(text("ALTER TABLE exam_session_sinapsis_checklist_item ADD COLUMN needs_review BOOLEAN NOT NULL DEFAULT 0"))
+        for checklist_item in SINAPSIS_CHECKLIST_ITEMS:
+            if checklist_item["key"] not in {"modules_configured", "staff_assigned", "attendance_enabled", "marks_upload_enabled"}:
+                continue
+            db.session.execute(text("UPDATE exam_session_sinapsis_checklist_item SET label = :label, description = :description WHERE item_key = :item_key"),
+                {"label": checklist_item["label"], "description": checklist_item["description"], "item_key": checklist_item["key"]})
         finance_columns = {row[1] for row in db.session.execute(text("PRAGMA table_info(exam_session_finance_control)"))}
         if "additional_institutions" not in finance_columns:
             db.session.execute(text("ALTER TABLE exam_session_finance_control ADD COLUMN additional_institutions TEXT NOT NULL DEFAULT '[]'"))

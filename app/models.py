@@ -1132,6 +1132,11 @@ class ExamSessionSinapsisControl(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     exam_session_id = db.Column(db.Integer, db.ForeignKey("exam_session.id"), nullable=False, index=True)
     status = db.Column(db.String(40), nullable=False, default="Not reviewed", index=True)
+    return_materials_method = db.Column(db.String(60), nullable=True)
+    return_materials_label_url = db.Column(db.String(2000), nullable=True)
+    combined_return_materials_label_url = db.Column(db.String(2000), nullable=True)
+    combined_return_session_ids_json = db.Column(db.Text, nullable=False, default="[]")
+    return_materials_local_override = db.Column(db.Boolean, nullable=False, default=False)
     sinapsis_due_at = db.Column(db.Date, nullable=True, index=True)
     evidence_url = db.Column(db.String(500), nullable=True)
     note = db.Column(db.Text, nullable=True)
@@ -1148,6 +1153,14 @@ class ExamSessionSinapsisControl(db.Model):
     )
     updated_by = db.Column(db.String(120), nullable=True)
 
+    @property
+    def combined_return_session_ids(self):
+        try:
+            value = json.loads(self.combined_return_session_ids_json or "[]")
+            return value if isinstance(value, list) else []
+        except (ValueError, TypeError):
+            return []
+
     exam_session = db.relationship("ExamSession", backref=db.backref("sinapsis_control", uselist=False))
 
 
@@ -1163,6 +1176,7 @@ class ExamSessionSinapsisChecklistItem(db.Model):
     description = db.Column(db.Text, nullable=True)
     is_required = db.Column(db.Boolean, nullable=False, default=True)
     is_checked = db.Column(db.Boolean, nullable=False, default=False)
+    needs_review = db.Column(db.Boolean, nullable=False, default=False)
     checked_at = db.Column(db.DateTime(timezone=True), nullable=True)
     checked_by = db.Column(db.String(120), nullable=True)
     note = db.Column(db.Text, nullable=True)

@@ -374,50 +374,56 @@ SINAPSIS_TRANSITIONS = {
 }
 SINAPSIS_CHECKLIST_ITEMS = [
     {
-        "key": "session_visible",
-        "label": "Session visible in Sinapsis",
-        "description": "Verify that the exam session is visible and accessible in Sinapsis.",
-    },
-    {
-        "key": "candidates_loaded",
-        "label": "Candidates correctly loaded",
-        "description": "Verify that candidates are correctly loaded for the exam session.",
-    },
-    {
         "key": "modules_configured",
-        "label": "Modules correctly configured",
-        "description": "Verify that the correct modules are configured for the session.",
+        "label": "Staffing verification",
+        "description": "Verify in Sinapsis that all confirmed Supervisors and Examiners have been assigned to the exam session, and that all declined staff members have been removed.",
     },
     {
         "key": "staff_assigned",
-        "label": "Staff members correctly assigned",
-        "description": "Verify that the assigned staff members are correctly reflected in Sinapsis.",
+        "label": "Staff access and module availability check",
+        "description": "Impersonate in Sinapsis as each assigned Examiner and Supervisor to verify that the corresponding modules are available and that attendance registration can be completed.",
     },
     {
         "key": "attendance_enabled",
-        "label": "Attendance enabled",
-        "description": "Verify that attendance can be completed in Sinapsis.",
+        "label": "Listening audio verification",
+        "description": "Check in Sinapsis that the Listening audio files are the correct version and that they play properly.",
     },
     {
         "key": "marks_upload_enabled",
-        "label": "Marks upload enabled",
-        "description": "Verify that marks can be uploaded in Sinapsis.",
+        "label": "Candidate list verification",
+        "description": "Verify in Sinapsis that the correct number of candidates is listed, including only candidates with Paid or Paying status.",
     },
-    {
-        "key": "speaking_recordings_checked",
-        "label": "Speaking recordings process checked",
-        "description": "Verify that the Speaking recordings process is clear and available when applicable.",
-    },
-    {
-        "key": "details_link_verified",
-        "label": "Session details link verified",
-        "description": "Verify that the session details link works correctly.",
-    },
-    {
-        "key": "final_check_completed",
-        "label": "Final Sinapsis check completed",
-        "description": "Complete the final check before the exam session date.",
-    },
+]
+SINAPSIS_RETIRED_CHECKLIST_KEYS = {"session_visible", "candidates_loaded", "speaking_recordings_checked", "details_link_verified", "final_check_completed"}
+def combined_return_examiner_confirmed(session_record):
+    examiners = list(session_record.examiner_assignments)
+    return bool(examiners) and all(
+        (assignment.team_member_id or assignment.potential_entry_id) and assignment.participation_status == "Confirmed"
+        for assignment in examiners
+    )
+
+
+def combined_return_session_options(session_record):
+    supervisor = shipment_recipient_supervisor_assignment([
+        assignment for assignment in session_record.supervisor_assignments
+        if assignment.participation_status not in {"Declined", "Cancelled"}
+    ])
+    if not supervisor:
+        return []
+    return (ExamSession.query.options(joinedload(ExamSession.examiner_assignments)).join(ExamSessionSupervisorAssignment)
+            .filter(ExamSession.id != session_record.id,
+                    ExamSessionSupervisorAssignment.is_shipment_recipient.is_(True),
+                    ExamSessionSupervisorAssignment.team_member_id == supervisor.team_member_id,
+                    ExamSessionSupervisorAssignment.participation_status.notin_(["Declined", "Cancelled"]))
+            .distinct().order_by(ExamSession.session_date.asc(), ExamSession.exam_session_name.asc()).all())
+
+
+RETURN_MATERIALS_OPTIONS = [
+    {"key": "immediate_dispatch", "label": "Immediate return dispatch", "description": "Dispatch the sealed return exam packages of this session after the exam session has ended."},
+    {"key": "combined_dispatch", "label": "Combined return dispatch", "description": "Dispatch the sealed return exam packages of this session together with the sealed return packages of other sessions."},
+    {"key": "staff_handover", "label": "Staff member handover", "description": "Hand over the sealed return exam packages of this session to another staff member."},
+    {"key": "location_drop_off", "label": "Agreed location drop-off", "description": "Leave the sealed return exam packages of this session at an agreed location after the exam session has ended."},
+    {"key": "combined_location_drop_off", "label": "Combined agreed location drop-off", "description": "Leave the sealed return exam packages of this session at an agreed location together with sealed return packages of other sessions."},
 ]
 COMMUNICATIONS_STATUS_OPTIONS = ["Not started", "In progress", "Needs follow-up", "Completed"]
 COMMUNICATIONS_STATUS_SLUGS = {
@@ -7496,7 +7502,7 @@ def ensure_sinapsis_checklist_items(sinapsis_control):
 
 
 def sinapsis_checklist_counts(items):
-    checklist_items = list(items or [])
+    checklist_items = [item for item in (items or []) if item.item_key not in SINAPSIS_RETIRED_CHECKLIST_KEYS]
     required_items = [item for item in checklist_items if item.is_required]
     total = len(required_items) if required_items else len(SINAPSIS_CHECKLIST_ITEMS)
     checked = sum(1 for item in required_items if item.is_checked)
@@ -7566,6 +7572,8 @@ def sinapsis_readiness_contract(session_record, sinapsis_control=None, checklist
         "details_url_available": details_url_available,
         "message": messages[status],
         "blockers": blockers,
+        "combined_return_materials_label_valid": bool(sinapsis_control and sinapsis_control.combined_return_materials_label_url and is_valid_url(sinapsis_control.combined_return_materials_label_url)),
+        "return_materials_label_valid": bool(sinapsis_control and sinapsis_control.return_materials_label_url and is_valid_url(sinapsis_control.return_materials_label_url)),
         "control": sinapsis_control,
         "reviewed_at": sinapsis_control.reviewed_at if sinapsis_control else None,
         "ready_at": sinapsis_control.ready_at if sinapsis_control else None,
@@ -15010,7 +15018,7 @@ def finance_control_redirect(session_record, status_filter="", edit=False):
     return redirect(url_for("staff.pre_session_control_tower", **args))
 
 
-def sinapsis_control_redirect(session_record, status_filter="", edit=False):
+def sinapsis_control_redirect(session_record, status_filter=""):
     args = {
         **pre_session_control_tower_return_args(session_record),
         "open_schedule_modal": session_record.id,
@@ -15019,8 +15027,6 @@ def sinapsis_control_redirect(session_record, status_filter="", edit=False):
     }
     if status_filter in SCHEDULE_WORKFLOW_STATUSES:
         args["schedule_status"] = status_filter
-    if edit:
-        args["open_sinapsis_control"] = "1"
     return redirect(url_for("staff.pre_session_control_tower", **args))
 
 
@@ -17570,7 +17576,8 @@ def pre_session_control_tower():
     sinapsis_control_ids = [record.id for record in sinapsis_control_records]
     sinapsis_checklist_records = (
         ExamSessionSinapsisChecklistItem.query.filter(
-            ExamSessionSinapsisChecklistItem.sinapsis_control_id.in_(sinapsis_control_ids)
+            ExamSessionSinapsisChecklistItem.sinapsis_control_id.in_(sinapsis_control_ids),
+            ExamSessionSinapsisChecklistItem.item_key.notin_(SINAPSIS_RETIRED_CHECKLIST_KEYS),
         )
         .order_by(ExamSessionSinapsisChecklistItem.display_order.asc(), ExamSessionSinapsisChecklistItem.id.asc())
         .all()
@@ -18520,7 +18527,9 @@ def pre_session_control_tower():
         schedule_status_options=SCHEDULE_WORKFLOW_STATUSES,
         finance_status_options=FINANCE_STATUS_OPTIONS,
         finance_note_required_statuses=FINANCE_NOTE_REQUIRED_STATUSES,
-        sinapsis_status_options=SINAPSIS_STATUS_OPTIONS,
+        return_materials_options=RETURN_MATERIALS_OPTIONS,
+        combined_return_examiner_confirmed=combined_return_examiner_confirmed,
+        combined_return_options_by_session={view["session"].id: combined_return_session_options(view["session"]) for view in modal_views},
         communications_status_options=COMMUNICATIONS_STATUS_OPTIONS,
         communications_groups=COMMUNICATIONS_GROUPS,
         incident_type_options=INCIDENT_TYPES,
@@ -19490,74 +19499,148 @@ def update_finance_control(session_id):
     return finance_control_redirect(session_record, status_filter)
 
 
-@staff_bp.route("/pre-session-control-tower/sessions/<int:session_id>/sinapsis-control", methods=["POST"])
+@staff_bp.route("/pre-session-control-tower/sessions/<int:session_id>/return-materials", methods=["GET", "POST"])
 @login_required
-def update_sinapsis_control(session_id):
+def update_return_materials_method(session_id):
     session_record = ExamSession.query.get_or_404(session_id)
-    status_filter = request.form.get("schedule_status", "").strip()
-    if status_filter not in SCHEDULE_WORKFLOW_STATUSES:
-        status_filter = ""
+    if request.method == "GET":
+        control = ExamSessionSinapsisControl.query.filter_by(exam_session_id=session_id).first()
+        return jsonify(session_id=session_id, method=control.return_materials_method if control else "",
+            label_url=control.combined_return_materials_label_url or "" if control else "",
+            immediate_label_url=control.return_materials_label_url or "" if control else "",
+            session_ids=control.combined_return_session_ids if control else [])
     if not validate_csrf():
-        flash("Security token expired. Please try again.", "error")
-        return sinapsis_control_redirect(session_record, status_filter, edit=True)
+        return jsonify(error="Security token expired. Please try again."), 403
+    method = request.form.get("return_materials_method", "").strip()
+    option = next((option for option in RETURN_MATERIALS_OPTIONS if option["key"] == method), None)
+    if option is None:
+        return jsonify(error="Select a valid return method."), 400
+    label_urls = {name: request.form[name].strip() for name in ("return_materials_label_url", "combined_return_materials_label_url") if name in request.form}
+    if any(value and (len(value) > 2000 or not is_valid_url(value)) for value in label_urls.values()):
+        return jsonify(error="This URL is not valid"), 400
+    combined_session_ids = None
+    if request.form.get("save_combined_return_sessions") == "1":
+        try:
+            combined_session_ids = sorted({int(value) for value in request.form.getlist("combined_return_session_ids")})
+        except ValueError:
+            return jsonify(error="Select valid exam sessions."), 400
+        eligible_ids = {record.id for record in combined_return_session_options(session_record) if combined_return_examiner_confirmed(record)}
+        if not set(combined_session_ids).issubset(eligible_ids):
+            return jsonify(error="Select sessions assigned to this supervisor with confirmed Examiner participation."), 400
+    control = ExamSessionSinapsisControl.query.filter_by(exam_session_id=session_id).first()
+    if control is None:
+        control = ExamSessionSinapsisControl(exam_session_id=session_id, status="Not reviewed")
+        db.session.add(control)
+    changing_linked_method = control.return_materials_method != method and bool(control.combined_return_session_ids) and combined_session_ids is None
+    if changing_linked_method:
+        if request.form.get("confirm_return_method_change") != "1":
+            return jsonify(confirmation_required=True, error="Are you sure you want to continue? Linked sessions will keep the original selection of return of exam packages."), 409
+        control.return_materials_local_override = True
+    if combined_session_ids is not None:
+        conflicts = ExamSessionSinapsisControl.query.filter(
+            ExamSessionSinapsisControl.exam_session_id.in_(combined_session_ids),
+            ExamSessionSinapsisControl.return_materials_method.isnot(None),
+            ExamSessionSinapsisControl.return_materials_method != "",
+        ).all()
+        try:
+            confirmed_ids = {int(value) for value in request.form.getlist("confirm_return_option_session_ids")}
+        except ValueError:
+            return jsonify(error="Invalid confirmation."), 400
+        desired_group = {session_id, *combined_session_ids}
+        conflicting_ids = {peer.exam_session_id for peer in conflicts
+            if peer.return_materials_method != "combined_dispatch"
+            or (peer.exam_session_id not in control.combined_return_session_ids
+                and {peer.exam_session_id, *peer.combined_return_session_ids} != desired_group)}
+        unconfirmed_ids = sorted(conflicting_ids - confirmed_ids)
+        if unconfirmed_ids:
+            db.session.rollback()
+            return jsonify(confirmation_required=True, confirmation_type="return_option_conflict",
+                conflicting_session_ids=unconfirmed_ids,
+                error="Are you sure you want to continue? A different return package option has already been configured for this session."), 409
+    previous_group = {session_id, *control.combined_return_session_ids}
+    if combined_session_ids is not None:
+        control.combined_return_session_ids_json = json.dumps(combined_session_ids)
+        if not changing_linked_method:
+            control.return_materials_local_override = False
+    for name, value in label_urls.items():
+        setattr(control, name, value or None)
+    if control.return_materials_method != method:
+        control.return_materials_method = method
+        control.updated_by = session.get("user")
+        db.session.add(ExamSessionSinapsisEvent(sinapsis_control=control,
+            event_type="return_materials_method", previous_status=control.status,
+            new_status=control.status, note=f"Return of exam materials: {option['label']}",
+            created_by=session.get("user")))
+    synced_controls = []
+    if changing_linked_method:
+        peers = ExamSessionSinapsisControl.query.filter(
+            ExamSessionSinapsisControl.exam_session_id.in_(previous_group - {session_id})
+        ).all()
+        for peer in peers:
+            if session_id in peer.combined_return_session_ids:
+                peer.combined_return_session_ids_json = json.dumps(sorted(set(peer.combined_return_session_ids) - {session_id}))
+                peer.updated_by = session.get("user")
+                synced_controls.append(peer)
+        control.combined_return_session_ids_json = "[]"
+        synced_controls.append(control)
 
-    new_status = request.form.get("sinapsis_status", "").strip()
-    due_value = request.form.get("sinapsis_due_at", "").strip()
-    sinapsis_due_at = None
-    if due_value:
-        sinapsis_due_at = parse_schedule_deadline(due_value)
-        if sinapsis_due_at is None:
-            flash("Please enter a valid Sinapsis deadline.", "error")
-            return sinapsis_control_redirect(session_record, status_filter, edit=True)
-    evidence_url = request.form.get("evidence_url", "").strip()
-    if evidence_url and not is_valid_url(evidence_url):
-        flash("Please enter a valid evidence URL.", "error")
-        return sinapsis_control_redirect(session_record, status_filter, edit=True)
-    note = request.form.get("note", "").strip()
-    if len(note) > 2000:
-        flash("Sinapsis note must be 2000 characters or fewer.", "error")
-        return sinapsis_control_redirect(session_record, status_filter, edit=True)
-
-    control_record = ExamSessionSinapsisControl.query.filter_by(
-        exam_session_id=session_record.id
-    ).first()
-    if not control_record:
-        control_record = ExamSessionSinapsisControl(exam_session_id=session_record.id)
-        db.session.add(control_record)
-    else:
-        ensure_sinapsis_checklist_items(control_record)
-
-    error = apply_sinapsis_status_update(
-        control_record,
-        new_status,
-        sinapsis_due_at=sinapsis_due_at,
-        evidence_url=evidence_url,
-        note=note,
-        updated_by=session.get("user"),
-    )
-    if error:
-        db.session.rollback()
-        flash(error, "error")
-        return sinapsis_control_redirect(session_record, status_filter, edit=True)
+    if method == "combined_dispatch" and not control.return_materials_local_override:
+        eligible_ids = {record.id for record in combined_return_session_options(session_record) if combined_return_examiner_confirmed(record)}
+        member_ids = {session_id, *(set(control.combined_return_session_ids) & eligible_ids)}
+        control.combined_return_session_ids_json = json.dumps(sorted(member_ids - {session_id}))
+        peers = ExamSessionSinapsisControl.query.filter(
+            ExamSessionSinapsisControl.exam_session_id.in_((member_ids | previous_group) - {session_id})
+        ).all()
+        peers_by_session = {peer.exam_session_id: peer for peer in peers}
+        if combined_session_ids is None:
+            member_ids -= {member_id for member_id, peer in peers_by_session.items() if peer.return_materials_local_override}
+            control.combined_return_session_ids_json = json.dumps(sorted(member_ids - {session_id}))
+        for member_id in sorted(member_ids - {session_id}):
+            peer = peers_by_session.get(member_id)
+            if peer is None:
+                peer = ExamSessionSinapsisControl(exam_session_id=member_id, status="Not reviewed")
+                db.session.add(peer)
+            peer.return_materials_method = "combined_dispatch"
+            peer.return_materials_local_override = False
+            peer.combined_return_materials_label_url = control.combined_return_materials_label_url
+            peer.combined_return_session_ids_json = json.dumps(sorted(member_ids - {member_id}))
+            peer.updated_by = session.get("user")
+            synced_controls.append(peer)
+        # Detach removed members only when they still belong to the previous group.
+        for removed_id in previous_group - member_ids:
+            peer = peers_by_session.get(removed_id)
+            if peer and not peer.return_materials_local_override and {removed_id, *peer.combined_return_session_ids} == previous_group:
+                peer.combined_return_session_ids_json = "[]"
+                peer.combined_return_materials_label_url = None
+                peer.updated_by = session.get("user")
+                synced_controls.append(peer)
+        synced_controls.append(control)
     try:
         db.session.commit()
     except Exception:
         db.session.rollback()
-        current_app.logger.exception("Sinapsis control update failed")
-        flash("The Sinapsis status could not be updated. Please try again.", "error")
-        return sinapsis_control_redirect(session_record, status_filter, edit=True)
-    flash("Sinapsis status saved successfully.", "success")
-    return sinapsis_control_redirect(session_record, status_filter)
+        current_app.logger.exception("Return materials method save failed")
+        return jsonify(error="The return method could not be saved. Please try again."), 500
+    result = {"saved": True, "method": control.return_materials_method, "linked_session_ids": control.combined_return_session_ids}
+    if synced_controls:
+        result["synced_sessions"] = [{"session_id": record.exam_session_id,
+            "method": record.return_materials_method,
+            "label_url": record.combined_return_materials_label_url or "",
+            "session_ids": record.combined_return_session_ids} for record in synced_controls]
+    return jsonify(result)
 
 
 @staff_bp.route("/pre-session-control-tower/sessions/<int:session_id>/sinapsis-checklist/<int:item_id>", methods=["POST"])
 @login_required
 def update_sinapsis_checklist_item(session_id, item_id):
+    is_async = request.headers.get("X-Requested-With") == "XMLHttpRequest"
     session_record = ExamSession.query.get_or_404(session_id)
     status_filter = request.form.get("schedule_status", "").strip()
     if status_filter not in SCHEDULE_WORKFLOW_STATUSES:
         status_filter = ""
     if not validate_csrf():
+        if is_async:
+            return jsonify(error="Security token expired. Please try again."), 403
         flash("Security token expired. Please try again.", "error")
         return sinapsis_control_redirect(session_record, status_filter)
 
@@ -19566,17 +19649,23 @@ def update_sinapsis_checklist_item(session_id, item_id):
         .join(ExamSessionSinapsisControl)
         .filter(
             ExamSessionSinapsisChecklistItem.id == item_id,
+            ExamSessionSinapsisChecklistItem.item_key.notin_(SINAPSIS_RETIRED_CHECKLIST_KEYS),
             ExamSessionSinapsisControl.exam_session_id == session_record.id,
         )
         .first_or_404()
     )
     note = request.form.get("checklist_note", "").strip()
     if len(note) > 1000:
+        if is_async:
+            return jsonify(error="Checklist note must be 1000 characters or fewer."), 400
         flash("Checklist note must be 1000 characters or fewer.", "error")
         return sinapsis_control_redirect(session_record, status_filter)
     is_checked = request.form.get("is_checked", "").strip() == "1"
+    if is_checked:
+        item.needs_review = False
     previous_checked = bool(item.is_checked)
-    item.note = note or None
+    if "checklist_note" in request.form:
+        item.note = note or None
     now = datetime.now(timezone.utc)
     if is_checked and not previous_checked:
         item.is_checked = True
@@ -19604,10 +19693,60 @@ def update_sinapsis_checklist_item(session_id, item_id):
     except Exception:
         db.session.rollback()
         current_app.logger.exception("Sinapsis checklist update failed")
+        if is_async:
+            return jsonify(error="The checklist item could not be saved. Please try again."), 500
         flash("The Sinapsis checklist item could not be updated. Please try again.", "error")
         return sinapsis_control_redirect(session_record, status_filter)
+    if is_async:
+        return jsonify(saved=True, is_checked=bool(item.is_checked), needs_review=bool(item.needs_review))
     flash("Sinapsis checklist updated successfully.", "success")
     return sinapsis_control_redirect(session_record, status_filter)
+
+
+@staff_bp.route("/pre-session-control-tower/sessions/<int:session_id>/sinapsis-checklist/<int:item_id>/issue", methods=["POST"])
+@login_required
+def mark_sinapsis_checklist_issue(session_id, item_id):
+    is_async = request.headers.get("X-Requested-With") == "XMLHttpRequest"
+    session_record = ExamSession.query.get_or_404(session_id)
+    if not validate_csrf():
+        if is_async:
+            return jsonify(error="Security token expired. Please try again."), 403
+        abort(403, description="Security token expired. Please try again.")
+    item = (ExamSessionSinapsisChecklistItem.query.join(ExamSessionSinapsisControl)
+            .filter(ExamSessionSinapsisChecklistItem.id == item_id,
+            ExamSessionSinapsisChecklistItem.item_key.notin_(SINAPSIS_RETIRED_CHECKLIST_KEYS),
+                    ExamSessionSinapsisControl.exam_session_id == session_id).first_or_404())
+    comment = request.form.get("note", "").strip()
+    if not comment or len(comment) > 2000:
+        if is_async:
+            return jsonify(error="Enter an issue comment of up to 2000 characters."), 400
+        flash("Enter an issue comment of up to 2000 characters.", "error")
+        return sinapsis_control_redirect(session_record)
+    note_text = f"Sinapsis checks — {item.label}: {comment}"
+    workflow = get_or_create_schedule_workflow(session_record)
+    create_schedule_note(workflow, note_text, request.form)
+    item.needs_review = True
+    item.is_checked = False
+    item.checked_at = None
+    item.checked_by = None
+    db.session.add(ExamSessionSinapsisEvent(sinapsis_control=item.sinapsis_control,
+        event_type="checklist_issue", previous_status=item.sinapsis_control.status,
+        new_status=item.sinapsis_control.status, note=note_text, created_by=session.get("user")))
+    try:
+        db.session.commit()
+    except Exception:
+        db.session.rollback()
+        current_app.logger.exception("Sinapsis checklist issue save failed")
+        if is_async:
+            return jsonify(error="The issue could not be saved. Please try again."), 500
+        flash("The issue could not be saved. Please try again.", "error")
+        return sinapsis_control_redirect(session_record)
+    if is_async:
+        return jsonify(saved=True, is_checked=bool(item.is_checked), needs_review=bool(item.needs_review))
+    flash("Issue saved in Notes.", "success")
+    return redirect(url_for("staff.pre_session_control_tower",
+        **pre_session_control_tower_return_args(session_record),
+        open_schedule_modal=session_id, open_modal_target="schedule-notes", sinapsis_only="1"))
 
 
 @staff_bp.route("/pre-session-control-tower/sessions/<int:session_id>/communications-control", methods=["POST"])
