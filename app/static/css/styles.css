@@ -10806,6 +10806,18 @@ span.session-marker-chip {
   font-size: 16px;
 }
 
+.sinapsis-checklist[aria-label="Sinapsis checks"] {
+  padding-top: 4mm;
+}
+
+.return-materials-section {
+  padding-top: 3mm;
+}
+
+.final-communications-section {
+  padding-top: 4mm;
+}
+
 .sinapsis-checklist-list,
 .communications-checklist-list {
   display: grid;
@@ -16831,3 +16843,5 @@ span.session-marker-chip {
 .combined-return-confirmed { margin-left: 4px; background: var(--badge-green-bg); color: var(--badge-green-text); font-size: 10px; white-space: nowrap; }
 
 .return-materials-confirmation.is-open { place-items: center; z-index: 90; }
+
+.return-material-label-link select[data-return-handover-staff] { width: 200px; max-width: 100%; padding: 4px 7px; font-size: 12px; }

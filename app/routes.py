@@ -421,9 +421,9 @@ def combined_return_session_options(session_record):
 RETURN_MATERIALS_OPTIONS = [
     {"key": "immediate_dispatch", "label": "Immediate return dispatch", "description": "Dispatch the sealed return exam packages of this session after the exam session has ended."},
     {"key": "combined_dispatch", "label": "Combined return dispatch", "description": "Dispatch the sealed return exam packages of this session together with the sealed return packages of other sessions."},
+    {"key": "location_drop_off", "label": "Inmediate location drop-off", "description": "Leave the sealed return exam packages of this session at an agreed location after the exam session has ended."},
+    {"key": "combined_location_drop_off", "label": "Combined location drop-off", "description": "Leave the sealed return exam packages of this session at an agreed location together with sealed return packages of other sessions."},
     {"key": "staff_handover", "label": "Staff member handover", "description": "Hand over the sealed return exam packages of this session to another staff member."},
-    {"key": "location_drop_off", "label": "Agreed location drop-off", "description": "Leave the sealed return exam packages of this session at an agreed location after the exam session has ended."},
-    {"key": "combined_location_drop_off", "label": "Combined agreed location drop-off", "description": "Leave the sealed return exam packages of this session at an agreed location together with sealed return packages of other sessions."},
 ]
 COMMUNICATIONS_STATUS_OPTIONS = ["Not started", "In progress", "Needs follow-up", "Completed"]
 COMMUNICATIONS_STATUS_SLUGS = {
@@ -7573,6 +7573,8 @@ def sinapsis_readiness_contract(session_record, sinapsis_control=None, checklist
         "message": messages[status],
         "blockers": blockers,
         "combined_return_materials_label_valid": bool(sinapsis_control and sinapsis_control.combined_return_materials_label_url and is_valid_url(sinapsis_control.combined_return_materials_label_url)),
+        "combined_return_drop_off_address_valid": bool(sinapsis_control and sinapsis_control.combined_return_drop_off_address_url and is_valid_url(sinapsis_control.combined_return_drop_off_address_url)),
+        "return_drop_off_address_valid": bool(sinapsis_control and sinapsis_control.return_drop_off_address_url and is_valid_url(sinapsis_control.return_drop_off_address_url)),
         "return_materials_label_valid": bool(sinapsis_control and sinapsis_control.return_materials_label_url and is_valid_url(sinapsis_control.return_materials_label_url)),
         "control": sinapsis_control,
         "reviewed_at": sinapsis_control.reviewed_at if sinapsis_control else None,
@@ -17519,7 +17521,7 @@ def pre_session_control_tower():
         if session_ids else []
     )
     sinapsis_control_records = (
-        ExamSessionSinapsisControl.query.filter(
+        ExamSessionSinapsisControl.query.options(joinedload(ExamSessionSinapsisControl.checklist_items)).filter(
             ExamSessionSinapsisControl.exam_session_id.in_(session_ids)
         ).all()
         if session_ids else []
@@ -17558,6 +17560,23 @@ def pre_session_control_tower():
         record.exam_session_id: record
         for record in communications_control_records
     }
+    # Every session needs persisted checklist items, including controls created
+    # through return-material selections and older incomplete checklists.
+    checklist_initialized = False
+    required_checklist_keys = {item["key"] for item in SINAPSIS_CHECKLIST_ITEMS}
+    for session_id in session_ids:
+        control = sinapsis_controls_by_session.get(session_id)
+        if control is None:
+            control = ExamSessionSinapsisControl(exam_session_id=session_id, status="Not reviewed")
+            db.session.add(control)
+            sinapsis_control_records.append(control)
+            sinapsis_controls_by_session[session_id] = control
+        existing_keys = {item.item_key for item in control.checklist_items}
+        if not required_checklist_keys.issubset(existing_keys):
+            ensure_sinapsis_checklist_items(control)
+            checklist_initialized = True
+    if checklist_initialized:
+        db.session.commit()
     incidents_by_session = {}
     for incident in incident_records:
         incidents_by_session.setdefault(incident.exam_session_id, []).append(incident)
@@ -18528,6 +18547,7 @@ def pre_session_control_tower():
         finance_status_options=FINANCE_STATUS_OPTIONS,
         finance_note_required_statuses=FINANCE_NOTE_REQUIRED_STATUSES,
         return_materials_options=RETURN_MATERIALS_OPTIONS,
+        return_handover_staff_options=AcademicStaff.query.order_by(AcademicStaff.full_name.asc(), AcademicStaff.id.asc()).all(),
         combined_return_examiner_confirmed=combined_return_examiner_confirmed,
         combined_return_options_by_session={view["session"].id: combined_return_session_options(view["session"]) for view in modal_views},
         communications_status_options=COMMUNICATIONS_STATUS_OPTIONS,
@@ -19507,7 +19527,10 @@ def update_return_materials_method(session_id):
         control = ExamSessionSinapsisControl.query.filter_by(exam_session_id=session_id).first()
         return jsonify(session_id=session_id, method=control.return_materials_method if control else "",
             label_url=control.combined_return_materials_label_url or "" if control else "",
+            combined_drop_off_address_url=control.combined_return_drop_off_address_url or "" if control else "",
+            drop_off_address_url=control.return_drop_off_address_url or "" if control else "",
             immediate_label_url=control.return_materials_label_url or "" if control else "",
+            handover_staff_id=control.return_handover_staff_id if control else None,
             session_ids=control.combined_return_session_ids if control else [])
     if not validate_csrf():
         return jsonify(error="Security token expired. Please try again."), 403
@@ -19515,11 +19538,23 @@ def update_return_materials_method(session_id):
     option = next((option for option in RETURN_MATERIALS_OPTIONS if option["key"] == method), None)
     if option is None:
         return jsonify(error="Select a valid return method."), 400
-    label_urls = {name: request.form[name].strip() for name in ("return_materials_label_url", "combined_return_materials_label_url") if name in request.form}
+    label_urls = {name: request.form[name].strip() for name in ("return_materials_label_url", "combined_return_materials_label_url", "return_drop_off_address_url", "combined_return_drop_off_address_url") if name in request.form}
     if any(value and (len(value) > 2000 or not is_valid_url(value)) for value in label_urls.values()):
         return jsonify(error="This URL is not valid"), 400
+    handover_staff_id = None
+    if "return_handover_staff_id" in request.form:
+        try:
+            handover_staff_id = int(request.form["return_handover_staff_id"]) if request.form["return_handover_staff_id"] else None
+        except ValueError:
+            return jsonify(error="Select a valid staff member."), 400
+        if handover_staff_id is not None and db.session.get(AcademicStaff, handover_staff_id) is None:
+            return jsonify(error="Select a valid staff member."), 400
+    combined_methods = {"combined_dispatch", "combined_location_drop_off"}
+    combined_url_field = "combined_return_drop_off_address_url" if method == "combined_location_drop_off" else "combined_return_materials_label_url"
     combined_session_ids = None
     if request.form.get("save_combined_return_sessions") == "1":
+        if method not in combined_methods:
+            return jsonify(error="Select a combined return method."), 400
         try:
             combined_session_ids = sorted({int(value) for value in request.form.getlist("combined_return_session_ids")})
         except ValueError:
@@ -19548,7 +19583,7 @@ def update_return_materials_method(session_id):
             return jsonify(error="Invalid confirmation."), 400
         desired_group = {session_id, *combined_session_ids}
         conflicting_ids = {peer.exam_session_id for peer in conflicts
-            if peer.return_materials_method != "combined_dispatch"
+            if peer.return_materials_method != method
             or (peer.exam_session_id not in control.combined_return_session_ids
                 and {peer.exam_session_id, *peer.combined_return_session_ids} != desired_group)}
         unconfirmed_ids = sorted(conflicting_ids - confirmed_ids)
@@ -19562,6 +19597,8 @@ def update_return_materials_method(session_id):
         control.combined_return_session_ids_json = json.dumps(combined_session_ids)
         if not changing_linked_method:
             control.return_materials_local_override = False
+    if "return_handover_staff_id" in request.form:
+        control.return_handover_staff_id = handover_staff_id
     for name, value in label_urls.items():
         setattr(control, name, value or None)
     if control.return_materials_method != method:
@@ -19584,7 +19621,7 @@ def update_return_materials_method(session_id):
         control.combined_return_session_ids_json = "[]"
         synced_controls.append(control)
 
-    if method == "combined_dispatch" and not control.return_materials_local_override:
+    if method in combined_methods and not control.return_materials_local_override:
         eligible_ids = {record.id for record in combined_return_session_options(session_record) if combined_return_examiner_confirmed(record)}
         member_ids = {session_id, *(set(control.combined_return_session_ids) & eligible_ids)}
         control.combined_return_session_ids_json = json.dumps(sorted(member_ids - {session_id}))
@@ -19600,9 +19637,9 @@ def update_return_materials_method(session_id):
             if peer is None:
                 peer = ExamSessionSinapsisControl(exam_session_id=member_id, status="Not reviewed")
                 db.session.add(peer)
-            peer.return_materials_method = "combined_dispatch"
+            peer.return_materials_method = method
             peer.return_materials_local_override = False
-            peer.combined_return_materials_label_url = control.combined_return_materials_label_url
+            setattr(peer, combined_url_field, getattr(control, combined_url_field))
             peer.combined_return_session_ids_json = json.dumps(sorted(member_ids - {member_id}))
             peer.updated_by = session.get("user")
             synced_controls.append(peer)
@@ -19611,7 +19648,7 @@ def update_return_materials_method(session_id):
             peer = peers_by_session.get(removed_id)
             if peer and not peer.return_materials_local_override and {removed_id, *peer.combined_return_session_ids} == previous_group:
                 peer.combined_return_session_ids_json = "[]"
-                peer.combined_return_materials_label_url = None
+                setattr(peer, combined_url_field, None)
                 peer.updated_by = session.get("user")
                 synced_controls.append(peer)
         synced_controls.append(control)
@@ -19621,11 +19658,12 @@ def update_return_materials_method(session_id):
         db.session.rollback()
         current_app.logger.exception("Return materials method save failed")
         return jsonify(error="The return method could not be saved. Please try again."), 500
-    result = {"saved": True, "method": control.return_materials_method, "linked_session_ids": control.combined_return_session_ids}
+    result = {"saved": True, "method": control.return_materials_method, "linked_session_ids": control.combined_return_session_ids, "handover_staff_id": control.return_handover_staff_id}
     if synced_controls:
         result["synced_sessions"] = [{"session_id": record.exam_session_id,
             "method": record.return_materials_method,
             "label_url": record.combined_return_materials_label_url or "",
+            "combined_drop_off_address_url": record.combined_return_drop_off_address_url or "",
             "session_ids": record.combined_return_session_ids} for record in synced_controls]
     return jsonify(result)
 

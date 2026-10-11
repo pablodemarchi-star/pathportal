@@ -15446,12 +15446,12 @@ assert.equal(storage.size, 0);
             self.assertEqual(response.json["method"], option["key"])
             self.assertEqual(ExamSessionSinapsisControl.query.one().return_materials_method, option["key"])
         html = client.get("/pre-session-control-tower?session_year=2026&view=sessions").get_data(as_text=True)
-        self.assertRegex(html, r'value="combined_location_drop_off"[^>]* checked')
+        self.assertRegex(html, rf'value="{RETURN_MATERIALS_OPTIONS[-1]["key"]}"[^>]* checked')
         self.assertEqual(ExamSessionSinapsisControl.query.count(), 1)
         self.assertEqual(ExamSessionSinapsisEvent.query.count(), 5)
         self.assertEqual(client.post(path, data={"csrf_token": "bad", "return_materials_method": "immediate_dispatch"}).status_code, 403)
         self.assertEqual(client.post(path, data={"csrf_token": "token", "return_materials_method": "unknown"}).status_code, 400)
-        self.assertEqual(ExamSessionSinapsisControl.query.one().return_materials_method, "combined_location_drop_off")
+        self.assertEqual(ExamSessionSinapsisControl.query.one().return_materials_method, RETURN_MATERIALS_OPTIONS[-1]["key"])
 
     def test_sinapsis_return_materials_optional_label_url(self):
         client = self.login_client()
@@ -15650,11 +15650,241 @@ assert.equal(storage.size, 0);
 
 
 
+    def test_sinapsis_combined_location_sessions_filter_and_persist(self):
+        from app.routes import combined_return_session_options
+        supervisor = AcademicStaff(full_name="Return Supervisor", status="Active", roles="Supervisor")
+        other_supervisor = AcademicStaff(full_name="Other Supervisor", status="Active", roles="Supervisor")
+        records = [ExamSession(exam_session_name=name, session_date=date(2026, 7, 1),
+            category="Path School", status="Pending", shifts="Morning", modules="Speaking", format="Onsite")
+            for name in ["Eligible one", "Eligible two", "Other supervisor", "Declined session"]]
+        db.session.add_all([supervisor, other_supervisor, *records])
+        db.session.flush()
+        db.session.add(ExamSessionSupervisorAssignment(exam_session_id=self.session_record.id, team_member_id=supervisor.id, participation_status="Confirmed", is_shipment_recipient=True))
+        for index, record in enumerate(records):
+            db.session.add(ExamSessionSupervisorAssignment(exam_session_id=record.id,
+                team_member_id=other_supervisor.id if index == 2 else supervisor.id,
+                participation_status="Declined" if index == 3 else "Confirmed", is_shipment_recipient=True))
+        # A secondary supervisor in another session must not qualify that session.
+        db.session.add(ExamSessionSupervisorAssignment(exam_session_id=records[2].id,
+            team_member_id=supervisor.id, participation_status="Confirmed", is_shipment_recipient=False))
+        db.session.add(ExamSessionExaminerAssignment(exam_session_id=self.session_record.id,
+            team_member_id=supervisor.id, participation_status="Confirmed"))
+        for record in records:
+            db.session.add(ExamSessionExaminerAssignment(exam_session_id=record.id,
+                team_member_id=supervisor.id, participation_status="Confirmed"))
+        db.session.commit()
+        self.assertEqual({record.id for record in combined_return_session_options(self.session_record)}, {records[0].id, records[1].id})
+        client = self.login_client()
+        path = f"/pre-session-control-tower/sessions/{self.session_record.id}/return-materials"
+        data = {"csrf_token": "token", "return_materials_method": "combined_location_drop_off", "save_combined_return_sessions": "1",
+            "combined_return_session_ids": [str(records[0].id), str(records[1].id)]}
+        self.assertEqual(client.post(path, data=data).status_code, 200)
+        control = ExamSessionSinapsisControl.query.filter_by(exam_session_id=self.session_record.id).one()
+        self.assertEqual(control.combined_return_session_ids, [records[0].id, records[1].id])
+        for member in records[:2]:
+            peer = ExamSessionSinapsisControl.query.filter_by(exam_session_id=member.id).one()
+            self.assertEqual(peer.return_materials_method, "combined_location_drop_off")
+            self.assertEqual(set(peer.combined_return_session_ids), {self.session_record.id, records[0].id, records[1].id} - {member.id})
+        html = client.get("/pre-session-control-tower?session_year=2026&view=sessions").get_data(as_text=True)
+        self.assertIn('return-material-option is-selected needs-label', html)
+        self.assertEqual(client.post(path, data={"csrf_token": "token", "return_materials_method": "combined_location_drop_off", "combined_return_drop_off_address_url": "https://example.com/combined"}).status_code, 200)
+        html = client.get("/pre-session-control-tower?session_year=2026&view=sessions").get_data(as_text=True)
+        self.assertNotIn('return-material-option is-selected needs-label', html)
+        for member in records[:2]:
+            peer = ExamSessionSinapsisControl.query.filter_by(exam_session_id=member.id).one()
+            self.assertEqual(peer.combined_return_drop_off_address_url, "https://example.com/combined")
+        response = client.post(f"/pre-session-control-tower/sessions/{records[0].id}/return-materials",
+            data={"csrf_token": "token", "return_materials_method": "combined_location_drop_off", "combined_return_drop_off_address_url": "https://example.com/updated"})
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(control.combined_return_drop_off_address_url, "https://example.com/updated")
+        self.assertEqual(len(response.json["synced_sessions"]), 3)
+        html = client.get("/pre-session-control-tower?session_year=2026&view=sessions").get_data(as_text=True)
+        self.assertIn("Select exam sessions for combined return dispatch", html)
+        self.assertIn(f'value="{records[0].id}" data-return-combined-session checked', html)
+        self.assertEqual(client.post(path, data={**data, "combined_return_session_ids": [str(records[2].id)]}).status_code, 400)
+        self.assertEqual(client.post(path, data={**data, "combined_return_session_ids": [str(self.session_record.id)]}).status_code, 400)
+        examiner = ExamSessionExaminerAssignment.query.filter_by(exam_session_id=records[1].id).one()
+        examiner.participation_status = "Pending"
+        db.session.commit()
+        html = client.get("/pre-session-control-tower?session_year=2026&view=sessions").get_data(as_text=True)
+        self.assertIn(f'value="{records[1].id}" data-return-combined-session disabled', html)
+        self.assertIn("Not confirmed yet", html)
+        self.assertIn('badge combined-return-confirmed">Confirmed</span>', html)
+        self.assertEqual(client.post(path, data=data).status_code, 400)
+        self.assertEqual(client.post(path, data={**data, "combined_return_session_ids": [str(records[0].id)]}).status_code, 200)
+        self.assertEqual(client.post(path, data={**data, "combined_return_session_ids": []}).status_code, 200)
+        self.assertEqual(control.combined_return_session_ids, [])
+        html = client.get("/pre-session-control-tower?session_year=2026&view=sessions").get_data(as_text=True)
+        self.assertIn('return-material-option is-selected needs-label', html)
+
+    def test_sinapsis_linked_location_method_change_requires_confirmation_and_stays_local(self):
+        supervisor = AcademicStaff(full_name="Linked Return Supervisor", status="Active", roles="Supervisor")
+        other = ExamSession(exam_session_name="Linked other", session_date=date(2026, 7, 1),
+            category="Path School", status="Pending", shifts="Morning", modules="Speaking", format="Onsite")
+        db.session.add_all([supervisor, other])
+        db.session.flush()
+        for record in [self.session_record, other]:
+            db.session.add(ExamSessionSupervisorAssignment(exam_session_id=record.id,
+                team_member_id=supervisor.id, participation_status="Confirmed", is_shipment_recipient=True))
+            db.session.add(ExamSessionExaminerAssignment(exam_session_id=record.id,
+                team_member_id=supervisor.id, participation_status="Confirmed"))
+        db.session.commit()
+        client = self.login_client()
+        source_path = f"/pre-session-control-tower/sessions/{self.session_record.id}/return-materials"
+        peer_path = f"/pre-session-control-tower/sessions/{other.id}/return-materials"
+        original_url = "https://example.com/original"
+        self.assertEqual(client.post(source_path, data={"csrf_token": "token", "return_materials_method": "combined_location_drop_off",
+            "save_combined_return_sessions": "1", "combined_return_session_ids": str(other.id),
+            "combined_return_drop_off_address_url": original_url}).status_code, 200)
+        source = ExamSessionSinapsisControl.query.filter_by(exam_session_id=self.session_record.id).one()
+        peer = ExamSessionSinapsisControl.query.filter_by(exam_session_id=other.id).one()
+        data = {"csrf_token": "token", "return_materials_method": "immediate_dispatch"}
+        response = client.post(peer_path, data=data)
+        self.assertEqual(response.status_code, 409)
+        self.assertTrue(response.json["confirmation_required"])
+        self.assertEqual(peer.return_materials_method, "combined_location_drop_off")
+        response = client.post(peer_path, data={**data, "confirm_return_method_change": "1"})
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(len(response.json["synced_sessions"]), 2)
+        self.assertTrue(all(not record["session_ids"] for record in response.json["synced_sessions"]))
+        self.assertEqual(peer.return_materials_method, "immediate_dispatch")
+        self.assertEqual(source.return_materials_method, "combined_location_drop_off")
+        self.assertEqual(source.combined_return_drop_off_address_url, original_url)
+        self.assertEqual(source.combined_return_session_ids, [])
+        self.assertEqual(peer.combined_return_session_ids, [])
+        self.assertEqual(client.post(peer_path, data={"csrf_token": "token", "return_materials_method": "staff_handover"}).status_code, 200)
+        response = client.post(source_path, data={"csrf_token": "token", "return_materials_method": "combined_location_drop_off", "combined_return_drop_off_address_url": "https://example.com/new"})
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(peer.return_materials_method, "staff_handover")
+        self.assertEqual(peer.combined_return_drop_off_address_url, original_url)
+        # Explicitly creating a group also works after a previous local choice.
+        source.return_materials_method = "immediate_dispatch"
+        source.return_materials_local_override = True
+        source.combined_return_session_ids_json = json.dumps([other.id])
+        db.session.commit()
+        relink = {"csrf_token": "token", "return_materials_method": "combined_location_drop_off",
+            "save_combined_return_sessions": "1", "combined_return_session_ids": str(other.id)}
+        response = client.post(source_path, data=relink)
+        self.assertEqual(response.status_code, 409)
+        self.assertEqual(response.json["confirmation_type"], "return_option_conflict")
+        self.assertEqual(response.json["error"], "Are you sure you want to continue? A different return package option has already been configured for this session.")
+        self.assertEqual(peer.return_materials_method, "staff_handover")
+        self.assertEqual(source.combined_return_session_ids, [other.id])
+        self.assertEqual(client.post(source_path, data={**relink, "confirm_return_option_session_ids": str(other.id)}).status_code, 200)
+        self.assertEqual(peer.return_materials_method, "combined_location_drop_off")
+        self.assertEqual(peer.combined_return_drop_off_address_url, "https://example.com/new")
+        self.assertEqual(peer.combined_return_session_ids, [self.session_record.id])
+        persisted = client.get(peer_path)
+        self.assertEqual(persisted.status_code, 200)
+        self.assertEqual(persisted.json["method"], "combined_location_drop_off")
+        self.assertEqual(persisted.json["combined_drop_off_address_url"], "https://example.com/new")
+        self.assertEqual(persisted.json["session_ids"], [self.session_record.id])
+        third = ExamSession(exam_session_name="Different combined group", session_date=date(2026, 7, 2),
+            category="Path School", status="Pending", shifts="Morning", modules="Speaking", format="Onsite")
+        db.session.add(third)
+        db.session.flush()
+        db.session.add(ExamSessionSupervisorAssignment(exam_session_id=third.id, team_member_id=supervisor.id,
+            participation_status="Confirmed", is_shipment_recipient=True))
+        db.session.add(ExamSessionExaminerAssignment(exam_session_id=third.id, team_member_id=supervisor.id, participation_status="Confirmed"))
+        third_control = ExamSessionSinapsisControl(exam_session_id=third.id, return_materials_method="combined_location_drop_off",
+            combined_return_session_ids_json=json.dumps([other.id]), combined_return_drop_off_address_url="https://example.com/different")
+        db.session.add(third_control)
+        db.session.commit()
+        response = client.post(source_path, data={**relink, "combined_return_session_ids": [str(other.id), str(third.id)]})
+        self.assertEqual(response.status_code, 409)
+        self.assertEqual(response.json["conflicting_session_ids"], [third.id])
+        self.assertEqual(third_control.combined_return_drop_off_address_url, "https://example.com/different")
+        self.assertEqual(client.post(source_path, data={**relink, "combined_return_session_ids": [str(other.id), str(third.id)],
+            "confirm_return_option_session_ids": str(third.id)}).status_code, 200)
+        self.assertEqual(third_control.combined_return_drop_off_address_url, "https://example.com/new")
+
+
+
+    def test_sinapsis_staff_handover_single_staff_selection_persists(self):
+        staff = AcademicStaff(full_name="Handover staff", status="Active", roles="Supervisor")
+        other = AcademicStaff(full_name="Other handover staff", status="Inactive", roles="Examiner")
+        db.session.add_all([staff, other])
+        db.session.commit()
+        client = self.login_client()
+        path = f"/pre-session-control-tower/sessions/{self.session_record.id}/return-materials"
+        data = {"csrf_token": "token", "return_materials_method": "staff_handover"}
+        self.assertEqual(client.post(path, data=data).status_code, 200)
+        html = client.get("/pre-session-control-tower?session_year=2026&view=sessions").get_data(as_text=True)
+        self.assertIn('return-material-option is-selected needs-label', html)
+        response = client.post(path, data={**data, "return_handover_staff_id": str(staff.id)})
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json["handover_staff_id"], staff.id)
+        self.assertEqual(client.get(path).json["handover_staff_id"], staff.id)
+        html = client.get("/pre-session-control-tower?session_year=2026&view=sessions").get_data(as_text=True)
+        self.assertIn('data-return-handover-field>', html)
+        self.assertNotIn('return-material-option is-selected needs-label', html)
+        self.assertIn("Select the staff member for the return package handover:", html)
+        self.assertIn(f'value="{staff.id}" selected>Handover staff', html)
+        self.assertIn("Other handover staff", html)
+        self.assertEqual(client.post(path, data={**data, "return_handover_staff_id": "999999"}).status_code, 400)
+        self.assertEqual(client.get(path).json["handover_staff_id"], staff.id)
+        self.assertEqual(client.post(path, data={**data, "return_handover_staff_id": ""}).status_code, 200)
+        self.assertIsNone(client.get(path).json["handover_staff_id"])
+
+    def test_sinapsis_location_drop_off_address_url_persists(self):
+        client = self.login_client()
+        path = f"/pre-session-control-tower/sessions/{self.session_record.id}/return-materials"
+        data = {"csrf_token": "token", "return_materials_method": "location_drop_off"}
+        self.assertEqual(client.post(path, data=data).status_code, 200)
+        url = "https://maps.example.com/drop-off"
+        self.assertEqual(client.post(path, data={**data, "return_drop_off_address_url": url}).status_code, 200)
+        self.assertEqual(client.get(path).json["drop_off_address_url"], url)
+        html = client.get("/pre-session-control-tower?session_year=2026&view=sessions").get_data(as_text=True)
+        self.assertIn("Enter drop-off address for return exam packages:", html)
+        self.assertIn(f'name="return_drop_off_address_url" data-return-label-url maxlength="2000" value="{url}"', html)
+        self.assertEqual(client.post(path, data={**data, "return_drop_off_address_url": "invalid"}).status_code, 400)
+        self.assertEqual(client.get(path).json["drop_off_address_url"], url)
+        self.assertEqual(client.post(path, data={**data, "return_drop_off_address_url": ""}).status_code, 200)
+        self.assertEqual(client.get(path).json["drop_off_address_url"], "")
+
+    def test_sinapsis_combined_location_drop_off_address_url_persists(self):
+        client = self.login_client()
+        path = f"/pre-session-control-tower/sessions/{self.session_record.id}/return-materials"
+        data = {"csrf_token": "token", "return_materials_method": "combined_location_drop_off"}
+        self.assertEqual(client.post(path, data=data).status_code, 200)
+        url = "https://maps.example.com/drop-off"
+        self.assertEqual(client.post(path, data={**data, "combined_return_drop_off_address_url": url}).status_code, 200)
+        self.assertEqual(client.get(path).json["combined_drop_off_address_url"], url)
+        html = client.get("/pre-session-control-tower?session_year=2026&view=sessions").get_data(as_text=True)
+        self.assertIn("Enter drop-off address for return exam packages:", html)
+        self.assertIn(f'name="combined_return_drop_off_address_url" data-return-label-url maxlength="2000" value="{url}"', html)
+        self.assertEqual(client.post(path, data={**data, "combined_return_drop_off_address_url": "invalid"}).status_code, 400)
+        self.assertEqual(client.get(path).json["combined_drop_off_address_url"], url)
+        self.assertEqual(client.post(path, data={**data, "combined_return_drop_off_address_url": ""}).status_code, 200)
+        self.assertEqual(client.get(path).json["combined_drop_off_address_url"], "")
+
+    def test_sinapsis_checklist_always_created_and_missing_items_repaired(self):
+        from app.routes import SINAPSIS_CHECKLIST_ITEMS
+        client = self.login_client()
+        path = "/pre-session-control-tower?session_year=2026&view=sessions"
+        html = client.get(path).get_data(as_text=True)
+        control = ExamSessionSinapsisControl.query.filter_by(exam_session_id=self.session_record.id).one()
+        self.assertEqual({item.item_key for item in control.checklist_items}, {item["key"] for item in SINAPSIS_CHECKLIST_ITEMS})
+        self.assertNotIn("No final session checklist has been created yet.", html)
+        kept = control.checklist_items[0]
+        kept.is_checked = True
+        kept.note = "Keep existing verification"
+        removed = control.checklist_items[-1]
+        db.session.delete(removed)
+        db.session.commit()
+        self.assertEqual(client.get(path).status_code, 200)
+        db.session.refresh(control)
+        self.assertEqual(len(control.checklist_items), 4)
+        self.assertTrue(kept.is_checked)
+        self.assertEqual(kept.note, "Keep existing verification")
+        self.assertEqual(client.get(path).status_code, 200)
+        self.assertEqual(ExamSessionSinapsisChecklistItem.query.filter_by(sinapsis_control_id=control.id).count(), 4)
+
     def test_sinapsis_control_editor_removed(self):
         client = self.login_client()
         response = client.get("/pre-session-control-tower?session_year=2026&view=sessions")
         self.assertEqual(response.status_code, 200)
-        self.assertEqual(ExamSessionSinapsisControl.query.count(), 0)
+        self.assertEqual(ExamSessionSinapsisControl.query.count(), 1)
         html = response.get_data(as_text=True)
         self.assertIn("<th>Final checks</th>", html)
         self.assertIn("Sinapsis checks", html)
@@ -15663,7 +15893,7 @@ assert.equal(storage.size, 0);
         response = client.post(f"/pre-session-control-tower/sessions/{self.session_record.id}/sinapsis-control",
             data={"csrf_token": "token", "sinapsis_status": "Ready"})
         self.assertEqual(response.status_code, 404)
-        self.assertEqual(ExamSessionSinapsisControl.query.count(), 0)
+        self.assertEqual(ExamSessionSinapsisControl.query.count(), 1)
 
     def test_sinapsis_checklist_update_and_counts(self):
         control = ExamSessionSinapsisControl(

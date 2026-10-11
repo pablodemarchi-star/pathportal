@@ -13503,27 +13503,31 @@ const syncReturnMaterialsOptions = (form) => {
     const validSavedUrl = Boolean(value) && isValidReturnLabelUrl(value) && value === urlField?.defaultValue.trim();
     box.classList.toggle("is-selected", radio.checked);
     const hasSavedSession = [...box.querySelectorAll("[data-return-combined-session]")].some((checkbox) => checkbox.checked && checkbox.defaultChecked && !checkbox.disabled);
-    const complete = validSavedUrl && (radio.value !== "combined_dispatch" || hasSavedSession);
-    box.classList.toggle("needs-label", radio.checked && Boolean(urlField) && !complete);
-    const field = box.querySelector("[data-return-label-field]");
+    const handover = box.querySelector("[data-return-handover-staff]");
+    const savedStaff = handover && [...handover.options].some((option) => option.value && option.selected && option.defaultSelected);
+    const complete = handover ? Boolean(savedStaff) : validSavedUrl && (!["combined_dispatch", "combined_location_drop_off"].includes(radio.value) || hasSavedSession);
+    box.classList.toggle("needs-label", radio.checked && Boolean(urlField || handover) && !complete);
+    const field = box.querySelector("[data-return-label-field], [data-return-handover-field]");
     if (field) field.hidden = !radio.checked;
     if (!radio.checked) {
       const warning = box.querySelector("[data-return-url-warning]");
       if (warning) warning.hidden = true;
     }
   });
-  const summary = form.querySelector(".combined-return-session-picker summary");
-  const selectedCount = form.querySelectorAll("[data-return-combined-session]:checked").length;
-  if (summary) summary.textContent = selectedCount ? `${selectedCount} exam sessions selected` : "Select exam sessions";
+  form.querySelectorAll(".combined-return-session-picker").forEach((picker) => {
+    const summary = picker.querySelector("summary");
+    const selectedCount = picker.querySelectorAll("[data-return-combined-session]:checked").length;
+    if (summary) summary.textContent = selectedCount ? `${selectedCount} exam sessions selected` : "Select exam sessions";
+  });
 };
 document.addEventListener("click", (event) => {
   const box = event.target.closest(".return-material-option");
-  if (!box || event.target.closest("input, label, [data-return-label-field]")) return;
+  if (!box || event.target.closest("input, select, option, label, [data-return-label-field], [data-return-handover-field]")) return;
   box.querySelector('input[type="radio"]')?.click();
 });
 document.addEventListener("change", async (event) => {
-  const field = event.target.closest('[data-return-materials-form] input');
-  if (!field || !field.matches('input[type="radio"], [data-return-label-url], [data-return-combined-session]')) return;
+  const field = event.target.closest('[data-return-materials-form] input, [data-return-materials-form] select');
+  if (!field || !field.matches('input[type="radio"], [data-return-label-url], [data-return-combined-session], [data-return-handover-staff]')) return;
   const form = field.closest("[data-return-materials-form]");
   const linkedIds = JSON.parse(form.dataset.linkedSessionIds || "[]");
   const changingLinkedMethod = field.matches('input[type="radio"]') && field.value !== form.dataset.savedMethod && linkedIds.length > 0;
@@ -13533,18 +13537,23 @@ document.addEventListener("change", async (event) => {
     return;
   }
   syncReturnMaterialsOptions(form);
-  const feedback = form.querySelector(field.matches("[data-return-combined-session]") ? "[data-return-materials-selector-feedback]" : "[data-return-materials-feedback]");
+  const feedback = field.matches("[data-return-combined-session]") ? field.closest(".return-material-option").querySelector("[data-return-materials-selector-feedback]") : form.querySelector("[data-return-materials-feedback]");
   const body = new FormData(form);
   if (changingLinkedMethod) body.set("confirm_return_method_change", "1");
   const isUrlChange = field.matches("[data-return-label-url]");
   const isSessionChange = field.matches("[data-return-combined-session]");
+  const isHandoverChange = field.matches("[data-return-handover-staff]");
+  if (!isHandoverChange) body.delete("return_handover_staff_id");
   if (isSessionChange) {
     body.set("save_combined_return_sessions", "1");
-    body.set("return_materials_method", "combined_dispatch");
+    const box = field.closest(".return-material-option");
+    body.set("return_materials_method", box.querySelector('input[type="radio"]').value);
+    body.delete("combined_return_session_ids");
+    box.querySelectorAll("[data-return-combined-session]:checked:not(:disabled)").forEach((checkbox) => body.append("combined_return_session_ids", checkbox.value));
   }
   else body.delete("combined_return_session_ids");
   // Selecting the method never depends on completing or validating the optional URL.
-  for (const name of ["return_materials_label_url", "combined_return_materials_label_url"]) {
+  for (const name of ["return_materials_label_url", "combined_return_materials_label_url", "return_drop_off_address_url", "combined_return_drop_off_address_url"]) {
     if (!isUrlChange || name !== field.name) body.delete(name);
   }
   const invalidUrl = isUrlChange && (!field.checkValidity() || !isValidReturnLabelUrl(field.value));
@@ -13560,7 +13569,7 @@ document.addEventListener("change", async (event) => {
     queue = [];
     returnMaterialsSaveQueues.set(form, queue);
   }
-  queue.push({ body, isUrlChange, isSessionChange, invalidUrl, field });
+  queue.push({ body, isUrlChange, isSessionChange, isHandoverChange, invalidUrl, field });
   if (queue.length > 1) return;
   while (queue.length) {
     const job = queue[0];
@@ -13590,7 +13599,10 @@ document.addEventListener("change", async (event) => {
       });
       if (job.isSessionChange) {
         const selected = job.body.getAll("combined_return_session_ids");
-        form.querySelectorAll("[data-return-combined-session]").forEach((checkbox) => { checkbox.defaultChecked = selected.includes(checkbox.value); });
+        form.querySelectorAll("[data-return-combined-session]").forEach((checkbox) => { checkbox.defaultChecked = checkbox.closest(".return-material-option").querySelector('input[type="radio"]').value === result.method && selected.includes(checkbox.value); });
+      }
+      if (job.isHandoverChange) {
+        [...job.field.options].forEach((option) => { option.defaultSelected = option.value === String(result.handover_staff_id || ""); });
       }
       if (job.isUrlChange) job.field.defaultValue = job.body.get(job.field.name);
       for (const synced of result.synced_sessions || []) {
@@ -13606,13 +13618,15 @@ document.addEventListener("change", async (event) => {
           if (!hasNewerEdit) radio.checked = radio.defaultChecked;
         });
         targetForm.querySelectorAll("[data-return-combined-session]").forEach((checkbox) => {
-          checkbox.defaultChecked = synced.session_ids.includes(Number(checkbox.value)) && !checkbox.disabled;
+          checkbox.defaultChecked = checkbox.closest(".return-material-option").querySelector('input[type="radio"]').value === synced.method && synced.session_ids.includes(Number(checkbox.value)) && !checkbox.disabled;
           if (!hasNewerEdit) checkbox.checked = checkbox.defaultChecked;
         });
-        const url = targetForm.querySelector('[name="combined_return_materials_label_url"]');
-        if (url) {
-          url.defaultValue = synced.label_url;
-          if (!hasNewerEdit) url.value = synced.label_url;
+        for (const [name, value] of [["combined_return_materials_label_url", synced.label_url], ["combined_return_drop_off_address_url", synced.combined_drop_off_address_url]]) {
+          const url = targetForm.querySelector(`[name="${name}"]`);
+          if (url) {
+            url.defaultValue = value || "";
+            if (!hasNewerEdit) url.value = value || "";
+          }
         }
         syncReturnMaterialsOptions(targetForm);
         }
@@ -13627,7 +13641,10 @@ document.addEventListener("change", async (event) => {
         form.querySelectorAll("[data-return-combined-session]").forEach((checkbox) => { checkbox.checked = checkbox.defaultChecked; });
         syncReturnMaterialsOptions(form);
       }
-      if (!job.isUrlChange && !job.isSessionChange && queue.length === 1) {
+      if (job.isHandoverChange && queue.length === 1) {
+        [...job.field.options].forEach((option) => { option.selected = option.defaultSelected; });
+      }
+      if (!job.isUrlChange && !job.isSessionChange && !job.isHandoverChange && queue.length === 1) {
         form.querySelectorAll('input[type="radio"]').forEach((radio) => { radio.checked = radio.value === form.dataset.savedMethod; });
         syncReturnMaterialsOptions(form);
       }
@@ -13671,9 +13688,11 @@ document.addEventListener("click", async (event) => {
     form.dataset.linkedSessionIds = JSON.stringify(result.session_ids);
     form.querySelectorAll('input[type="radio"]').forEach((radio) => { radio.checked = radio.defaultChecked = radio.value === result.method; });
     form.querySelectorAll("[data-return-combined-session]").forEach((checkbox) => {
-      checkbox.checked = checkbox.defaultChecked = result.session_ids.includes(Number(checkbox.value)) && !checkbox.disabled;
+      checkbox.checked = checkbox.defaultChecked = checkbox.closest(".return-material-option").querySelector('input[type="radio"]').value === result.method && result.session_ids.includes(Number(checkbox.value)) && !checkbox.disabled;
     });
-    for (const [name, value] of [["return_materials_label_url", result.immediate_label_url], ["combined_return_materials_label_url", result.label_url]]) {
+    const handover = form.querySelector("[data-return-handover-staff]");
+    if (handover) [...handover.options].forEach((option) => { option.selected = option.defaultSelected = option.value === String(result.handover_staff_id || ""); });
+    for (const [name, value] of [["combined_return_drop_off_address_url", result.combined_drop_off_address_url], ["return_drop_off_address_url", result.drop_off_address_url], ["return_materials_label_url", result.immediate_label_url], ["combined_return_materials_label_url", result.label_url]]) {
       const input = form.querySelector(`[name="${name}"]`);
       if (input) input.value = input.defaultValue = value;
     }

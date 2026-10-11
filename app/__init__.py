@@ -229,6 +229,10 @@ def create_app():
         sinapsis_control_columns = {row[1] for row in db.session.execute(text("PRAGMA table_info(exam_session_sinapsis_control)"))}
         if "return_materials_method" not in sinapsis_control_columns:
             db.session.execute(text("ALTER TABLE exam_session_sinapsis_control ADD COLUMN return_materials_method VARCHAR(60)"))
+        if "combined_return_drop_off_address_url" not in sinapsis_control_columns:
+            db.session.execute(text("ALTER TABLE exam_session_sinapsis_control ADD COLUMN combined_return_drop_off_address_url VARCHAR(2000)"))
+        if "return_drop_off_address_url" not in sinapsis_control_columns:
+            db.session.execute(text("ALTER TABLE exam_session_sinapsis_control ADD COLUMN return_drop_off_address_url VARCHAR(2000)"))
         if "return_materials_label_url" not in sinapsis_control_columns:
             db.session.execute(text("ALTER TABLE exam_session_sinapsis_control ADD COLUMN return_materials_label_url VARCHAR(2000)"))
         if "combined_return_materials_label_url" not in sinapsis_control_columns:
@@ -237,6 +241,8 @@ def create_app():
             db.session.execute(text("ALTER TABLE exam_session_sinapsis_control ADD COLUMN combined_return_session_ids_json TEXT NOT NULL DEFAULT '[]'"))
         if "return_materials_local_override" not in sinapsis_control_columns:
             db.session.execute(text("ALTER TABLE exam_session_sinapsis_control ADD COLUMN return_materials_local_override BOOLEAN NOT NULL DEFAULT 0"))
+        if "return_handover_staff_id" not in sinapsis_control_columns:
+            db.session.execute(text("ALTER TABLE exam_session_sinapsis_control ADD COLUMN return_handover_staff_id INTEGER REFERENCES academic_staff(id)"))
         sinapsis_checklist_columns = {row[1] for row in db.session.execute(text("PRAGMA table_info(exam_session_sinapsis_checklist_item)"))}
         if "needs_review" not in sinapsis_checklist_columns:
             db.session.execute(text("ALTER TABLE exam_session_sinapsis_checklist_item ADD COLUMN needs_review BOOLEAN NOT NULL DEFAULT 0"))
