@@ -4298,10 +4298,90 @@ This stage has already been marked as complete. Reopening it may affect package 
           <h4 id="final-communications-title-{{ session.id }}">Final communications</h4>
           <div class="sinapsis-checklist-list">
             <div class="sinapsis-checklist-item">
-              <div><strong>Final staff confirmation</strong></div>
+              <div class="final-staff-confirmation">
+                <strong>Final staff confirmation</strong>
+                <div class="final-staff-table-wrap">
+                  <table class="final-staff-table" aria-label="Final staff confirmation">
+                    <thead><tr><th scope="col">Staff member</th><th scope="col">Role</th><th scope="col">Status</th><th scope="col">Final confirmation</th><th scope="col">Check</th></tr></thead>
+                    <tbody>
+                  {% for row in view.staffing_rows if row.has_staff_member %}
+                    <tr>
+                        <td><span class="staffing-member-name">{{ row.staff_name }}</span></td>
+                        <td><span class="badge {% if row.assignment_type == 'emergency_contact' %}fee-role-emergency-contact{% else %}role-{{ row.assignment_type }}{% endif %}">{{ row.role }}</span></td>
+                        <td><span class="staff-card-header-tag participation-{{ row.status_class }}">{{ row.status }}</span></td>
+                      <td>
+                        <div class="final-staff-email-actions">
+                          {% if row.staff_email %}
+                            <a class="staffing-action-chip staffing-action-chip-blue" href="{{ row.final_confirmation_gmail_url }}" target="_blank" rel="noopener noreferrer">Send email</a>
+                          {% else %}
+                            <button class="staffing-action-chip staffing-action-chip-blue is-disabled" type="button" disabled title="No email added">Send email</button>
+                          {% endif %}
+                          <button class="copy-icon-button email-invitation-copy-button" type="button" data-copy-final-confirmation data-final-confirmation-payload='{{ row.official_confirmation_email_payload|tojson }}' aria-label="Copy final confirmation email" title="Copy final confirmation email">
+                            <svg class="copy-icon" viewBox="0 0 24 24" aria-hidden="true">
+                              <rect x="9" y="9" width="10" height="10" rx="2"></rect>
+                              <path d="M5 15V7a2 2 0 0 1 2-2h8"></path>
+                            </svg>
+                          </button>
+                        </div>
+                      </td>
+                      <td>
+                        <form method="post" action="{{ url_for('staff.update_staff_final_confirmation', session_id=session.id, assignment_type=row.assignment_type, assignment_id=row.assignment_id) }}">
+                          <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                          <input type="hidden" name="schedule_status" value="{{ selected_schedule_status }}">
+                          {{ pre_session_return_fields(selected_view, selected_bundle) }}
+                          <label class="final-staff-sent-label">
+                            <input type="checkbox" name="final_confirmation_sent" value="1" data-final-confirmation-sent{% if row.final_confirmation_sent %} checked{% endif %}>
+                            <span>Mark as sent</span>
+                          </label>
+                        </form>
+                      </td>
+                    </tr>
+                  {% else %}
+                    <tr><td colspan="5" class="muted">No staff members assigned to this session.</td></tr>
+                  {% endfor %}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
             </div>
             <div class="sinapsis-checklist-item">
-              <div><strong>Exam centre pre-session reminder</strong></div>
+              <div class="exam-centre-reminders">
+                <strong>Exam centre pre-session reminder</strong>
+                <div class="final-staff-table-wrap">
+                  <table class="final-staff-table exam-centre-reminder-table" aria-label="Exam centre pre-session reminders">
+                    <thead><tr><th scope="col">Channel</th><th scope="col">Reminder</th><th scope="col">Check</th></tr></thead>
+                    <tbody>
+                      {% for channel, label, sent in [('whatsapp', 'WhatsApp reminder', session.exam_centre_whatsapp_reminder_sent), ('email', 'Email reminder', session.exam_centre_email_reminder_sent)] %}
+                        <tr>
+                          <td><span class="exam-centre-reminder-label">{{ label }}</span></td>
+                          <td>
+                              <div class="final-staff-email-actions">
+                                <button class="staffing-action-chip staffing-action-chip-blue" type="button" aria-label="Send {{ label }}">Send reminder</button>
+                                {% if channel == 'email' %}
+                                  <button class="copy-icon-button email-invitation-copy-button" type="button" aria-label="Copy email reminder" title="Copy email reminder">
+                                    <svg class="copy-icon" viewBox="0 0 24 24" aria-hidden="true">
+                                      <rect x="9" y="9" width="10" height="10" rx="2"></rect>
+                                      <path d="M5 15V7a2 2 0 0 1 2-2h8"></path>
+                                    </svg>
+                                  </button>
+                                {% endif %}
+                              </div>
+                          </td>
+                          <td>
+                            <form method="post" action="{{ url_for('staff.update_exam_centre_reminder_sent', session_id=session.id, channel=channel) }}">
+                              <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                              <label class="final-staff-sent-label">
+                                <input type="checkbox" name="reminder_sent" value="1" data-exam-centre-reminder-sent{% if sent %} checked{% endif %}>
+                                <span>Mark as sent</span>
+                              </label>
+                            </form>
+                          </td>
+                        </tr>
+                      {% endfor %}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
             </div>
           </div>
         </section>

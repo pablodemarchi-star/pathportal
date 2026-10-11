@@ -16845,3 +16845,28 @@ span.session-marker-chip {
 .return-materials-confirmation.is-open { place-items: center; z-index: 90; }
 
 .return-material-label-link select[data-return-handover-staff] { width: 200px; max-width: 100%; padding: 4px 7px; font-size: 12px; }
+
+.final-staff-confirmation { grid-column: 1 / -1; min-width: 0; }
+.final-staff-table-wrap { margin-top: 12px; min-width: 0; max-width: 100%; border: 1px solid var(--color-border); border-radius: 8px; }
+.final-staff-table { width: 100%; min-width: 0; table-layout: fixed; border-collapse: collapse; font-size: 12px; text-align: left; }
+.final-staff-table th { padding: 10px 8px; background: #f5f8fb; color: var(--color-muted); font-size: 11px; font-weight: 800; white-space: normal; overflow-wrap: anywhere; }
+.final-staff-table td { padding: 10px 8px; overflow-wrap: anywhere; vertical-align: middle; border-top: 1px solid var(--color-border); }
+.final-staff-table tbody tr:hover { background: #f8fbfe; }
+.final-staff-table form { margin: 0; }
+.final-staff-table .badge, .final-staff-table .staff-card-header-tag, .final-staff-table .staffing-action-chip { min-width: 0; max-width: 100%; box-sizing: border-box; white-space: normal; overflow-wrap: anywhere; text-align: center; }
+.final-staff-table th:nth-child(1) { width: 25%; }
+.final-staff-table th:nth-child(2) { width: 17%; }
+.final-staff-table th:nth-child(3) { width: 20%; }
+.final-staff-table th:nth-child(4) { width: 23%; }
+.final-staff-table th:nth-child(5) { width: 15%; }
+.final-staff-email-actions { display: flex; align-items: center; gap: 6px; }
+.final-staff-email-actions .staffing-action-chip { flex: 0 1 auto; }
+.final-staff-email-actions .copy-icon-button { flex: 0 0 auto; }
+.sinapsis-checklist-item .final-staff-sent-label { display: inline-flex; align-items: center; gap: 4px; max-width: 100%; white-space: normal; }
+.final-staff-sent-label input[type="checkbox"] { width: 14px; height: 14px; margin: 0; flex: 0 0 auto; }
+
+.exam-centre-reminders { grid-column: 1 / -1; min-width: 0; }
+.exam-centre-reminder-table th:nth-child(1) { width: 62%; }
+.exam-centre-reminder-table th:nth-child(2) { width: 23%; }
+.exam-centre-reminder-table th:nth-child(3) { width: 15%; }
+.exam-centre-reminder-label { font-weight: 700; }

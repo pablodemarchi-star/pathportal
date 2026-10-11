@@ -7479,6 +7479,112 @@ const syncInvitationEmailCopyButtons = (root = document) => {
   });
 };
 
+const buildFinalStaffConfirmationEmail = ({ fullName, logisticsEnabled, logisticsUrl, pathCyan50, sectionTitleStyle, paragraphStyle, pathBlue, bodyStyle, cardCellStyle, safeName, pathGrey50, pathBorder, smallLabelStyle, valueStyle, formattedDate, finalStructureTimeHtml, formatEmoji, sessionFormat, venueHtml, sectionCardStyle, sectionIntroStyle, contactItemsHtml, contacts, finalStructureTimeText, finalStructureVenueText, fontStack }) => {
+    const finalIntroText = logisticsEnabled
+      ? "Now that the staff appointment process has been completed, all members have confirmed their participation, and the session logistics have been fully defined, we are sharing below the final staff structure for your exam session."
+      : "Now that the staff appointment process has been completed and all members have confirmed their participation, we are sharing below the final staff structure for your exam session.";
+    const finalLogisticsHtml = logisticsEnabled && emailLinkIsUsable(logisticsUrl)
+      ? `
+        <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="border-collapse:separate;border-spacing:0;background:${pathCyan50};border:1px solid #b9e2ec;border-radius:14px;margin:0 0 22px;">
+          <tr>
+            <td style="padding:22px;">
+              <h2 style="${sectionTitleStyle}">🚌✈️🚗 Travel and commuting</h2>
+              <p style="${paragraphStyle};margin-bottom:0;">All logistical arrangements for your trip or commute have now been fully defined. The corresponding information and documents can be found <a href="${escapeEmailAttribute(logisticsUrl)}" style="color:${pathBlue};font-weight:700;text-decoration:underline;">in this folder</a>.</p>
+            </td>
+          </tr>
+        </table>
+      `
+      : "";
+    const finalLogisticsText = logisticsEnabled && emailLinkIsUsable(logisticsUrl)
+      ? `\n\nTravel and commuting\n\nAll logistical arrangements for your trip or commute have now been fully defined. The corresponding information and documents can be found here:\n${logisticsUrl}`
+      : "";
+    const finalHtml = `<!doctype html><html><body style="${bodyStyle}">
+      <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="border-collapse:collapse;background:${pathBlue};margin:0;padding:0;">
+        <tr>
+          <td align="center" style="padding:24px 12px;">
+            <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="width:100%;max-width:680px;border-collapse:separate;border-spacing:0;">
+              <tr>
+                <td style="${cardCellStyle}">
+                  <p style="${paragraphStyle};font-size:16px;">Dear <strong>${safeName}</strong>,</p>
+                  <p style="${paragraphStyle}">Hope you’re doing very well.</p>
+                  <p style="${paragraphStyle};margin-bottom:22px;">${escapeEmailHtml(finalIntroText)}</p>
+
+                  <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="border-collapse:separate;border-spacing:0;background:${pathGrey50};border:1px solid ${pathBorder};border-radius:14px;margin:0 0 20px;">
+                    <tr>
+                      <td style="padding:20px;">
+                        <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="border-collapse:collapse;">
+                          <tr><td style="${smallLabelStyle}">🗓️ Date</td></tr>
+                          <tr><td style="${valueStyle}">${escapeEmailHtml(formattedDate)}</td></tr>
+                          <tr><td style="${smallLabelStyle}">🕗 Time</td></tr>
+                          <tr><td style="${valueStyle}">${finalStructureTimeHtml}</td></tr>
+                          <tr><td style="${smallLabelStyle}">${formatEmoji ? `${formatEmoji} ` : ""}Format</td></tr>
+                          <tr><td style="${valueStyle}">${escapeEmailHtml(sessionFormat)}</td></tr>
+                          ${venueHtml}
+                        </table>
+                      </td>
+                    </tr>
+                  </table>
+
+                  ${finalLogisticsHtml}
+
+                  <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="border-collapse:separate;border-spacing:0;${sectionCardStyle};margin:0 0 22px;">
+                    <tr><td><h2 style="${sectionTitleStyle}">👥 Staff members and emergency line</h2></td></tr>
+                    <tr><td><p style="${sectionIntroStyle}">Please find below the contact details of the staff members confirmed, together with the Path emergency line for any urgent matters:</p></td></tr>
+                    ${contactItemsHtml}
+                    <tr>
+                      <td style="padding-top:2px;">
+                        <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="border-collapse:separate;border-spacing:0;background:#fff4e8;border:1px solid #f1cfa8;border-radius:10px;">
+                          <tr>
+                            <td style="padding:12px 14px;">
+                              <div style="color:#9a5a12;font:700 10px/1.3 ${fontStack};letter-spacing:1px;text-transform:uppercase;">Emergency line</div>
+                              <a href="tel:+5491128508482" style="display:block;margin-top:4px;color:#9a5a12;font:800 16px/1.35 ${fontStack};text-decoration:none;">+54 9 11 2850-8482</a>
+                            </td>
+                          </tr>
+                        </table>
+                      </td>
+                    </tr>
+                  </table>
+
+                  <p style="${paragraphStyle}">Please feel free to contact us if you need anything, have any questions, or would like to check any details with us.</p>
+                  <p style="${paragraphStyle};font-weight:600;">Thank you very much for your collaboration and commitment! 💙</p>
+                  <p style="${paragraphStyle};margin-bottom:0;">Warm regards,</p>
+                </td>
+              </tr>
+            </table>
+          </td>
+        </tr>
+      </table>
+    </body></html>`;
+
+    const finalPlainContacts = contacts.map((contact) => (
+      `${contact.label}: ${contact.name} (Confirmed)${contact.phone ? ` - ${contact.phone}` : ""}`
+    )).join("\n");
+    const finalText = `Dear ${fullName},
+
+Hope you’re doing very well.
+
+${finalIntroText}
+
+Date: ${formattedDate}
+Time: ${finalStructureTimeText}
+${formatEmoji ? `${formatEmoji} ` : ""}Format: ${sessionFormat}${finalStructureVenueText}${finalLogisticsText}
+
+Staff members and emergency line
+
+Please find below the contact details of the staff members confirmed, together with the Path emergency line for any urgent matters:
+
+${finalPlainContacts}
+Emergency line: +54 9 11 2850-8482
+
+Please feel free to contact us if you need anything, have any questions, or would like to check any details with us.
+
+Thank you very much for your collaboration and commitment! 💙
+
+Warm regards,`;
+
+    return { html: finalHtml, text: finalText };
+};
+
 const buildInvitationEmail = (button) => {
   const row = button.closest("[data-supervisor-row]");
   const form = button.closest("[data-session-members-form]");
@@ -7631,109 +7737,7 @@ const buildInvitationEmail = (button) => {
   const finalStructureTimeText = timeRanges.length ? timeRanges.join("\n") : "-";
   const finalStructureVenueText = sessionFormat === "Onsite" && address ? `\nVenue: ${address}` : "";
   if (finalStaffStructureReady) {
-    const finalIntroText = logisticsEnabled
-      ? "Now that the staff appointment process has been completed, all members have confirmed their participation, and the session logistics have been fully defined, we are sharing below the final staff structure for your exam session."
-      : "Now that the staff appointment process has been completed and all members have confirmed their participation, we are sharing below the final staff structure for your exam session.";
-    const finalLogisticsHtml = logisticsEnabled && emailLinkIsUsable(logisticsUrl)
-      ? `
-        <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="border-collapse:separate;border-spacing:0;background:${pathCyan50};border:1px solid #b9e2ec;border-radius:14px;margin:0 0 22px;">
-          <tr>
-            <td style="padding:22px;">
-              <h2 style="${sectionTitleStyle}">🚌✈️🚗 Travel and commuting</h2>
-              <p style="${paragraphStyle};margin-bottom:0;">All logistical arrangements for your trip or commute have now been fully defined. The corresponding information and documents can be found <a href="${escapeEmailAttribute(logisticsUrl)}" style="color:${pathBlue};font-weight:700;text-decoration:underline;">in this folder</a>.</p>
-            </td>
-          </tr>
-        </table>
-      `
-      : "";
-    const finalLogisticsText = logisticsEnabled && emailLinkIsUsable(logisticsUrl)
-      ? `\n\nTravel and commuting\n\nAll logistical arrangements for your trip or commute have now been fully defined. The corresponding information and documents can be found here:\n${logisticsUrl}`
-      : "";
-    const finalHtml = `<!doctype html><html><body style="${bodyStyle}">
-      <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="border-collapse:collapse;background:${pathBlue};margin:0;padding:0;">
-        <tr>
-          <td align="center" style="padding:24px 12px;">
-            <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="width:100%;max-width:680px;border-collapse:separate;border-spacing:0;">
-              <tr>
-                <td style="${cardCellStyle}">
-                  <p style="${paragraphStyle};font-size:16px;">Dear <strong>${safeName}</strong>,</p>
-                  <p style="${paragraphStyle}">Hope you’re doing very well.</p>
-                  <p style="${paragraphStyle};margin-bottom:22px;">${escapeEmailHtml(finalIntroText)}</p>
-
-                  <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="border-collapse:separate;border-spacing:0;background:${pathGrey50};border:1px solid ${pathBorder};border-radius:14px;margin:0 0 20px;">
-                    <tr>
-                      <td style="padding:20px;">
-                        <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="border-collapse:collapse;">
-                          <tr><td style="${smallLabelStyle}">🗓️ Date</td></tr>
-                          <tr><td style="${valueStyle}">${escapeEmailHtml(formattedDate)}</td></tr>
-                          <tr><td style="${smallLabelStyle}">🕗 Time</td></tr>
-                          <tr><td style="${valueStyle}">${finalStructureTimeHtml}</td></tr>
-                          <tr><td style="${smallLabelStyle}">${formatEmoji ? `${formatEmoji} ` : ""}Format</td></tr>
-                          <tr><td style="${valueStyle}">${escapeEmailHtml(sessionFormat)}</td></tr>
-                          ${venueHtml}
-                        </table>
-                      </td>
-                    </tr>
-                  </table>
-
-                  ${finalLogisticsHtml}
-
-                  <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="border-collapse:separate;border-spacing:0;${sectionCardStyle};margin:0 0 22px;">
-                    <tr><td><h2 style="${sectionTitleStyle}">👥 Staff members and emergency line</h2></td></tr>
-                    <tr><td><p style="${sectionIntroStyle}">Please find below the contact details of the staff members confirmed, together with the Path emergency line for any urgent matters:</p></td></tr>
-                    ${contactItemsHtml}
-                    <tr>
-                      <td style="padding-top:2px;">
-                        <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="border-collapse:separate;border-spacing:0;background:#fff4e8;border:1px solid #f1cfa8;border-radius:10px;">
-                          <tr>
-                            <td style="padding:12px 14px;">
-                              <div style="color:#9a5a12;font:700 10px/1.3 ${fontStack};letter-spacing:1px;text-transform:uppercase;">Emergency line</div>
-                              <a href="tel:+5491128508482" style="display:block;margin-top:4px;color:#9a5a12;font:800 16px/1.35 ${fontStack};text-decoration:none;">+54 9 11 2850-8482</a>
-                            </td>
-                          </tr>
-                        </table>
-                      </td>
-                    </tr>
-                  </table>
-
-                  <p style="${paragraphStyle}">Please feel free to contact us if you need anything, have any questions, or would like to check any details with us.</p>
-                  <p style="${paragraphStyle};font-weight:600;">Thank you very much for your collaboration and commitment! 💙</p>
-                  <p style="${paragraphStyle};margin-bottom:0;">Warm regards,</p>
-                </td>
-              </tr>
-            </table>
-          </td>
-        </tr>
-      </table>
-    </body></html>`;
-
-    const finalPlainContacts = contacts.map((contact) => (
-      `${contact.label}: ${contact.name} (Confirmed)${contact.phone ? ` - ${contact.phone}` : ""}`
-    )).join("\n");
-    const finalText = `Dear ${fullName},
-
-Hope you’re doing very well.
-
-${finalIntroText}
-
-Date: ${formattedDate}
-Time: ${finalStructureTimeText}
-${formatEmoji ? `${formatEmoji} ` : ""}Format: ${sessionFormat}${finalStructureVenueText}${finalLogisticsText}
-
-Staff members and emergency line
-
-Please find below the contact details of the staff members confirmed, together with the Path emergency line for any urgent matters:
-
-${finalPlainContacts}
-Emergency line: +54 9 11 2850-8482
-
-Please feel free to contact us if you need anything, have any questions, or would like to check any details with us.
-
-Thank you very much for your collaboration and commitment! 💙
-
-Warm regards,`;
-
-    return { html: finalHtml, text: finalText };
+    return buildFinalStaffConfirmationEmail({ fullName, logisticsEnabled, logisticsUrl, pathCyan50, sectionTitleStyle, paragraphStyle, pathBlue, bodyStyle, cardCellStyle, safeName, pathGrey50, pathBorder, smallLabelStyle, valueStyle, formattedDate, finalStructureTimeHtml, formatEmoji, sessionFormat, venueHtml, sectionCardStyle, sectionIntroStyle, contactItemsHtml, contacts, finalStructureTimeText, finalStructureVenueText, fontStack });
   }
   const logisticsHtml = logisticsEnabled && emailLinkIsUsable(logisticsUrl)
     ? `
@@ -13698,4 +13702,103 @@ document.addEventListener("click", async (event) => {
     }
     syncReturnMaterialsOptions(form);
   } catch (error) { console.error("Could not refresh return materials state", error); }
+});
+
+// Final checks has its own sent flag, independent of Staffing participation status.
+document.addEventListener("change", async (event) => {
+  const checkbox = event.target.closest("[data-final-confirmation-sent], [data-exam-centre-reminder-sent]");
+  if (!checkbox) return;
+  const form = checkbox.closest("form");
+  if (!form) return;
+  const previousChecked = !checkbox.checked;
+  const isReminder = checkbox.matches("[data-exam-centre-reminder-sent]");
+  const body = new FormData(form);
+  checkbox.disabled = true;
+  try {
+    const response = await fetch(form.action, {
+      method: "POST",
+      body,
+      headers: { Accept: "application/json" },
+    });
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok || payload.ok !== true) {
+      throw new Error(payload.error || "Final confirmation could not be saved. Please try again.");
+    }
+    checkbox.checked = Boolean(isReminder ? payload.reminder_sent : payload.final_confirmation_sent);
+  } catch (error) {
+    checkbox.checked = previousChecked;
+    showTransientFlash(error.message || "Final confirmation could not be saved.", "error");
+  } finally {
+    checkbox.disabled = false;
+  }
+});
+
+
+const finalStaffConfirmationPayloadFromButton = (button) => {
+  let payload;
+  try { payload = JSON.parse(button.dataset.finalConfirmationPayload || "{}"); }
+  catch (_) { return { error: "Final confirmation details could not be read." }; }
+  const fullName = cleanEmailValue(payload.full_name);
+  if (!fullName) return { error: "Select a staff member before copying the final confirmation." };
+  const formattedDate = cleanEmailValue(payload.session_date);
+  const sessionFormat = cleanEmailValue(payload.format);
+  const address = cleanEmailValue(payload.address);
+  const timeRanges = payload.time_ranges || [];
+  const formatEmoji = formatEmojiForSession(sessionFormat);
+  const logisticsUrl = cleanEmailValue(payload.logistics_url);
+  const logisticsEnabled = payload.logistics_status !== "Does not apply" && Boolean(payload.logistics_status);
+  const contacts = (payload.contacts || []).filter((contact) => contact.assigned && contact.status === "Confirmed");
+  const pathBlue = "#00506b";
+  const pathCyan50 = "#e7f5f8";
+  const pathBlue50 = "#e6f0f3";
+  const pathGrey50 = "#f1f3f2";
+  const pathYellow50 = "#fbf4e6";
+  const pathAmberDark = "#8a5a00";
+  const pathRed50 = "#fbecea";
+  const pathRed = "#cd4d40";
+  const pathBorder = "#d9dfdc";
+  const pathText = "#111115";
+  const pathMuted = "#62727a";
+  const fontStack = "Arial, Helvetica, sans-serif";
+  const bodyStyle = `margin:0;padding:0;background:${pathBlue};color:${pathText};font:400 15px/1.55 ${fontStack};`;
+  const paragraphStyle = `margin:0 0 14px;color:${pathText};font:400 15px/1.55 ${fontStack};`;
+  const cardCellStyle = `padding:26px 28px;background:#ffffff;border:1px solid ${pathBorder};border-radius:16px;`;
+  const sectionCardStyle = `padding:22px;background:#ffffff;border:1px solid ${pathBorder};border-left:4px solid ${pathBlue};border-radius:14px;`;
+  const sectionTitleStyle = `margin:0 0 8px;color:${pathBlue};font:700 18px ${fontStack};`;
+  const sectionIntroStyle = `margin:0 0 16px;color:${pathMuted};font:400 14px/1.5 ${fontStack};`;
+  const smallLabelStyle = `padding:0 0 4px;color:${pathMuted};font:700 11px/1.3 ${fontStack};letter-spacing:1px;text-transform:uppercase;`;
+  const valueStyle = `padding:0 0 16px;color:${pathText};font:700 16px/1.45 ${fontStack};`;
+  const safeName = escapeEmailHtml(fullName);
+
+  const finalStructureTimeHtml = timeRanges.length ? timeRanges.map(escapeEmailHtml).join("<br>") : "-";
+  const finalStructureTimeText = timeRanges.length ? timeRanges.join("\n") : "-";
+  const finalStructureVenueText = sessionFormat === "Onsite" && address ? `\nVenue: ${address}` : "";
+  const venueHtml = sessionFormat === "Onsite" && address
+    ? `<tr><td style="${smallLabelStyle}">📍 Venue</td></tr><tr><td style="${valueStyle}">${escapeEmailHtml(address)}</td></tr>` : "";
+  const contactItemsHtml = contacts.map((contact) => {
+    const phone = cleanEmailValue(contact.phone);
+    const telHref = phone.replace(/[^+\d]/g, "");
+    return `<tr><td style="padding:0 0 10px;"><table role="presentation" width="100%" style="background:${pathGrey50};border:1px solid ${pathBorder};border-radius:10px;"><tr><td style="padding:12px 14px;">
+      <div style="color:${pathMuted};font:700 10px ${fontStack};text-transform:uppercase;">${escapeEmailHtml(contact.label)}</div>
+      <div style="margin-top:3px;color:${pathText};font:700 15px ${fontStack};">${escapeEmailHtml(contact.name)} <span style="color:#4f7f4c;font:600 11px ${fontStack};">Confirmed</span></div>
+      ${phone ? `<a href="tel:${escapeEmailAttribute(telHref)}" style="color:${pathBlue};font:600 13px ${fontStack};">${escapeEmailHtml(phone)}</a>` : ""}
+    </td></tr></table></td></tr>`;
+  }).join("");
+  return buildFinalStaffConfirmationEmail({ fullName, logisticsEnabled, logisticsUrl, pathCyan50, sectionTitleStyle, paragraphStyle, pathBlue, bodyStyle, cardCellStyle, safeName, pathGrey50, pathBorder, smallLabelStyle, valueStyle, formattedDate, finalStructureTimeHtml, formatEmoji, sessionFormat, venueHtml, sectionCardStyle, sectionIntroStyle, contactItemsHtml, contacts, finalStructureTimeText, finalStructureVenueText, fontStack });
+};
+
+document.addEventListener("click", async (event) => {
+  const button = event.target.closest?.("[data-copy-final-confirmation]");
+  if (!button) return;
+  event.preventDefault();
+  if (button.disabled) return;
+  const payload = finalStaffConfirmationPayloadFromButton(button);
+  if (payload.error) { showTransientFlash(payload.error, "error"); return; }
+  button.disabled = true;
+  try {
+    await copyRichTextToClipboard(payload);
+    showTransientFlash("Final confirmation email copied.", "success");
+  } catch (_) {
+    showTransientFlash("Could not copy the final confirmation email. Please try again.", "error");
+  } finally { button.disabled = false; }
 });

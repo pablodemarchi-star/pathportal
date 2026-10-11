@@ -863,6 +863,13 @@ def create_app():
         if exam_session_columns and "emergency_contact_status_due_started_at" not in exam_session_columns:
             db.session.execute(text("ALTER TABLE exam_session ADD COLUMN emergency_contact_status_due_started_at DATETIME"))
             db.session.commit()
+        for reminder_column in ("exam_centre_whatsapp_reminder_sent", "exam_centre_email_reminder_sent"):
+            if exam_session_columns and reminder_column not in exam_session_columns:
+                db.session.execute(text(f"ALTER TABLE exam_session ADD COLUMN {reminder_column} BOOLEAN NOT NULL DEFAULT 0"))
+                db.session.commit()
+        if exam_session_columns and "emergency_contact_final_confirmation_sent" not in exam_session_columns:
+            db.session.execute(text("ALTER TABLE exam_session ADD COLUMN emergency_contact_final_confirmation_sent BOOLEAN NOT NULL DEFAULT 0"))
+            db.session.commit()
         if exam_session_columns and "emergency_contact_role_check_verified" not in exam_session_columns:
             db.session.execute(text("ALTER TABLE exam_session ADD COLUMN emergency_contact_role_check_verified BOOLEAN NOT NULL DEFAULT 0"))
             db.session.commit()
@@ -1072,6 +1079,10 @@ def create_app():
                 db.session.execute(text(f"ALTER TABLE {table_name} ADD COLUMN staffing_status_due_started_at DATETIME"))
                 db.session.commit()
                 table_columns.add("staffing_status_due_started_at")
+            if table_columns and "final_confirmation_sent" not in table_columns:
+                db.session.execute(text(f"ALTER TABLE {table_name} ADD COLUMN final_confirmation_sent BOOLEAN NOT NULL DEFAULT 0"))
+                db.session.commit()
+                table_columns.add("final_confirmation_sent")
             if table_columns and "staffing_role_check_verified" not in table_columns:
                 db.session.execute(text(f"ALTER TABLE {table_name} ADD COLUMN staffing_role_check_verified BOOLEAN NOT NULL DEFAULT 0"))
                 db.session.commit()

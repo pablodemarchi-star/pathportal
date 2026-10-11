@@ -7104,6 +7104,9 @@ def staffing_assignment_row(role, assignment=None, assignment_type="", status="P
         "assignment_id": assignment_id if assignment_id is not None else (assignment.id if assignment else None),
         "staff_name": resolved_name or "Assigned staff member",
         "staff_email": resolved_email,
+        "final_confirmation_gmail_url": "https://mail.google.com/mail/?" + urlencode({"view": "cm", "fs": "1", "to": resolved_email, "su": "Final confirmation - Colegio Nuestra Señora de La Salette"}) if resolved_email else "",
+        "final_confirmation_email_url": f"mailto:{quote(resolved_email, safe='@')}?{urlencode({'subject': 'Final staff confirmation - ' + (getattr(session_record, 'exam_session_name', '') or '')}, quote_via=quote)}" if resolved_email else "",
+        "final_confirmation_sent": bool(getattr(session_record, "emergency_contact_final_confirmation_sent", False) if assignment_type == "emergency_contact" else getattr(assignment, "final_confirmation_sent", False)),
         "official_confirmation_email_url": staffing_official_confirmation_email_url(resolved_email, session_record, role),
         "official_confirmation_email_payload": staffing_official_confirmation_email_payload(
             session_record,
@@ -19130,6 +19133,50 @@ def staffing_assignment_role_check_is_verified(session_record, assignment_type, 
     if assignment_type == "emergency_contact":
         return bool(getattr(session_record, "emergency_contact_role_check_verified", False))
     return bool(getattr(assignment, "staffing_role_check_verified", False))
+
+
+@staff_bp.route("/pre-session-control-tower/sessions/<int:session_id>/exam-centre-reminders/<channel>", methods=["POST"])
+@login_required
+def update_exam_centre_reminder_sent(session_id, channel):
+    session_record = ExamSession.query.get_or_404(session_id)
+    if channel not in {"whatsapp", "email"}:
+        abort(404)
+    if not validate_csrf():
+        return jsonify({"ok": False, "error": "Security token expired. Please try again."}), 400
+    sent = request.form.get("reminder_sent") == "1"
+    setattr(session_record, f"exam_centre_{channel}_reminder_sent", sent)
+    db.session.commit()
+    return jsonify({"ok": True, "reminder_sent": sent})
+
+
+@staff_bp.route("/pre-session-control-tower/sessions/<int:session_id>/staffing-assignments/<assignment_type>/<int:assignment_id>/final-confirmation", methods=["POST"])
+@login_required
+def update_staff_final_confirmation(session_id, assignment_type, assignment_id):
+    session_record = ExamSession.query.get_or_404(session_id)
+    status_filter = request.form.get("schedule_status", "").strip()
+    if status_filter not in SCHEDULE_WORKFLOW_STATUSES:
+        status_filter = ""
+    if not validate_csrf():
+        if request.headers.get("Accept") == "application/json":
+            return jsonify({"ok": False, "error": "Security token expired. Please try again."}), 400
+        abort(400)
+    sent = request.form.get("final_confirmation_sent") == "1"
+    if assignment_type == "emergency_contact":
+        if assignment_id != session_record.id or not session_record.emergency_contact_member_id:
+            abort(404)
+        session_record.emergency_contact_final_confirmation_sent = sent
+    else:
+        assignment_model = staffing_assignment_model(assignment_type)
+        if not assignment_model:
+            abort(404)
+        assignment = assignment_model.query.filter_by(id=assignment_id, exam_session_id=session_id).first_or_404()
+        if not (assignment.team_member_id or assignment.potential_entry_id):
+            abort(404)
+        assignment.final_confirmation_sent = sent
+    db.session.commit()
+    if request.headers.get("Accept") == "application/json":
+        return jsonify({"ok": True, "final_confirmation_sent": sent})
+    return staffing_control_redirect(session_record, status_filter)
 
 
 @staff_bp.route("/pre-session-control-tower/sessions/<int:session_id>/staffing-assignments/<assignment_type>/<int:assignment_id>/role-check", methods=["POST"])
