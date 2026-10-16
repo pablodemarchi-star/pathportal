@@ -4349,34 +4349,49 @@ This stage has already been marked as complete. Reopening it may affect package 
                 <strong>Exam centre pre-session reminder</strong>
                 <div class="final-staff-table-wrap">
                   <table class="final-staff-table exam-centre-reminder-table" aria-label="Exam centre pre-session reminders">
-                    <thead><tr><th scope="col">Channel</th><th scope="col">Reminder</th><th scope="col">Check</th></tr></thead>
+                    <thead><tr><th scope="col">Contact point</th><th scope="col">WhatsApp</th><th scope="col">Email</th><th scope="col">Check</th></tr></thead>
                     <tbody>
-                      {% for channel, label, sent in [('whatsapp', 'WhatsApp reminder', session.exam_centre_whatsapp_reminder_sent), ('email', 'Email reminder', session.exam_centre_email_reminder_sent)] %}
+                      {% set reminder_sent_keys = session.contact_reminder_sent_keys() %}
+                      {% for contact in session.contact_points_list() %}
+                        {% set contact_key = session.contact_reminder_key(contact) %}
+                        {% set phone = contact.phone|whatsapp_phone %}
                         <tr>
-                          <td><span class="exam-centre-reminder-label">{{ label }}</span></td>
+                          <td><span class="exam-centre-reminder-label">{{ contact.full_name or '—' }}</span></td>
                           <td>
-                              <div class="final-staff-email-actions">
-                                <button class="staffing-action-chip staffing-action-chip-blue" type="button" aria-label="Send {{ label }}">Send reminder</button>
-                                {% if channel == 'email' %}
-                                  <button class="copy-icon-button email-invitation-copy-button" type="button" aria-label="Copy email reminder" title="Copy email reminder">
-                                    <svg class="copy-icon" viewBox="0 0 24 24" aria-hidden="true">
-                                      <rect x="9" y="9" width="10" height="10" rx="2"></rect>
-                                      <path d="M5 15V7a2 2 0 0 1 2-2h8"></path>
-                                    </svg>
-                                  </button>
-                                {% endif %}
-                              </div>
+                            {% if phone %}
+                              <a class="staffing-action-chip staffing-action-chip-blue" href="https://wa.me/{{ phone }}" target="_blank" rel="noopener noreferrer">Send WhatsApp</a>
+                            {% else %}
+                              <button class="staffing-action-chip staffing-action-chip-blue" type="button" disabled title="No phone number configured">Send WhatsApp</button>
+                            {% endif %}
                           </td>
                           <td>
-                            <form method="post" action="{{ url_for('staff.update_exam_centre_reminder_sent', session_id=session.id, channel=channel) }}">
+                            <div class="final-staff-email-actions">
+                              {% if contact.email %}
+                                <a class="staffing-action-chip staffing-action-chip-blue" href="https://mail.google.com/mail/?view=cm&amp;fs=1&amp;to={{ contact.email|urlencode }}&amp;su={{ '¡Muy pronto, los visitaremos!'|urlencode }}" target="_blank" rel="noopener noreferrer">Send email</a>
+                              {% else %}
+                                <button class="staffing-action-chip staffing-action-chip-blue" type="button" disabled title="No email address configured">Send email</button>
+                              {% endif %}
+                              <button class="copy-icon-button" type="button" aria-label="Copy email reminder" title="Copy email reminder">
+                                <svg class="copy-icon" viewBox="0 0 24 24" aria-hidden="true">
+                                  <rect x="9" y="9" width="10" height="10" rx="2"></rect>
+                                  <path d="M5 15V7a2 2 0 0 1 2-2h8"></path>
+                                </svg>
+                              </button>
+                            </div>
+                          </td>
+                          <td>
+                            <form method="post" action="{{ url_for('staff.update_exam_centre_reminder_sent', session_id=session.id, channel='contact') }}">
                               <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                              <input type="hidden" name="contact_key" value="{{ contact_key }}">
                               <label class="final-staff-sent-label">
-                                <input type="checkbox" name="reminder_sent" value="1" data-exam-centre-reminder-sent{% if sent %} checked{% endif %}>
+                                <input type="checkbox" name="reminder_sent" value="1" data-exam-centre-reminder-sent{% if contact_key in reminder_sent_keys %} checked{% endif %}>
                                 <span>Mark as sent</span>
                               </label>
                             </form>
                           </td>
                         </tr>
+                      {% else %}
+                        <tr><td colspan="4" class="muted">No contact points configured for this session.</td></tr>
                       {% endfor %}
                     </tbody>
                   </table>

@@ -19139,12 +19139,24 @@ def staffing_assignment_role_check_is_verified(session_record, assignment_type, 
 @login_required
 def update_exam_centre_reminder_sent(session_id, channel):
     session_record = ExamSession.query.get_or_404(session_id)
-    if channel not in {"whatsapp", "email"}:
+    if channel not in {"whatsapp", "email", "contact"}:
         abort(404)
     if not validate_csrf():
         return jsonify({"ok": False, "error": "Security token expired. Please try again."}), 400
     sent = request.form.get("reminder_sent") == "1"
-    setattr(session_record, f"exam_centre_{channel}_reminder_sent", sent)
+    if channel == "contact":
+        key = request.form.get("contact_key", "")
+        valid_keys = {session_record.contact_reminder_key(contact) for contact in session_record.contact_points_list()}
+        if key not in valid_keys:
+            abort(404)
+        sent_keys = set(session_record.contact_reminder_sent_keys()) & valid_keys
+        if sent:
+            sent_keys.add(key)
+        else:
+            sent_keys.discard(key)
+        session_record.exam_centre_contact_reminders_sent = json.dumps(sorted(sent_keys), ensure_ascii=False)
+    else:
+        setattr(session_record, f"exam_centre_{channel}_reminder_sent", sent)
     db.session.commit()
     return jsonify({"ok": True, "reminder_sent": sent})
 
@@ -22566,6 +22578,7 @@ def exam_session_planner():
         ),
         session_fullscreen=session_fullscreen,
         selected_session_year=selected_year,
+        consideration_recipient_options=note_to_user_options(),
         filters={
             "q": session_name_filter,
             "date_status": date_status_filter,
@@ -23085,6 +23098,9 @@ def serialize_exam_session_considerations(comments):
             "id": (comment.get("id") or uuid.uuid4().hex).strip(),
             "text": text,
             "author": (comment.get("author") or "").strip(),
+            "to_user_id": comment.get("to_user_id"),
+            "to_full_name": (comment.get("to_full_name") or "").strip(),
+            "to_department": (comment.get("to_department") or "").strip(),
             "created_at": (comment.get("created_at") or "").strip(),
             "replies": replies,
         })
@@ -23108,7 +23124,13 @@ def update_exam_session_considerations(session_id):
     if action == "add_comment":
         text = (request.form.get("comment_text") or request.form.get("considerations") or "").strip()
         if text:
-            comments.append(build_exam_session_consideration(text))
+            recipient = selected_note_recipient(request.form)
+            if request.form.get("note_to_user_id", "").strip() and not recipient["user_id"]:
+                flash("Please select an active recipient.", "error")
+                return redirect(url_for("staff.exam_session_planner", session_year=selected_year or session_record.session_date.year))
+            comment = build_exam_session_consideration(text)
+            comment.update(to_user_id=recipient["user_id"], to_full_name=recipient["full_name"], to_department=recipient["department"])
+            comments.append(comment)
     elif action == "add_reply":
         text = (request.form.get("reply_text") or "").strip()
         if text and comment_id:

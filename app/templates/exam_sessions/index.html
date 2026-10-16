@@ -986,6 +986,7 @@
                                 <button class="session-consideration-delete" type="submit">Delete</button>
                               </form>
                             </div>
+                            {% if consideration.to_full_name %}<p><strong>To:</strong> {{ consideration.to_full_name }}{% if consideration.to_department %}, {{ consideration.to_department }}{% endif %}</p>{% endif %}
                             <p>{{ consideration.text }}</p>
                             {% if consideration.replies %}
                               <div class="session-consideration-replies">
@@ -1030,6 +1031,15 @@
                       <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
                       <input type="hidden" name="session_year" value="{{ selected_session_year }}">
                       <input type="hidden" name="action" value="add_comment">
+                      <label>
+                        <span>To:</span>
+                        <select name="note_to_user_id">
+                          <option value="">Select a user</option>
+                          {% for user_option in consideration_recipient_options %}
+                            <option value="{{ user_option.id }}">{{ user_option.full_name }}, {{ user_option.department }}</option>
+                          {% endfor %}
+                        </select>
+                      </label>
                       <label>
                         <span>New consideration</span>
                         <textarea name="comment_text" rows="3" maxlength="4000" required></textarea>
@@ -1641,6 +1651,7 @@
                       <button class="session-consideration-delete" type="submit">Delete</button>
                     </form>
                   </div>
+                  {% if consideration.to_full_name %}<p><strong>To:</strong> {{ consideration.to_full_name }}{% if consideration.to_department %}, {{ consideration.to_department }}{% endif %}</p>{% endif %}
                   <p>{{ consideration.text }}</p>
                   {% if consideration.replies %}
                     <div class="session-consideration-replies">
@@ -1685,6 +1696,15 @@
             <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
             <input type="hidden" name="session_year" value="{{ selected_session_year }}">
             <input type="hidden" name="action" value="add_comment">
+            <label>
+              <span>To:</span>
+              <select name="note_to_user_id">
+                <option value="">Select a user</option>
+                {% for user_option in consideration_recipient_options %}
+                  <option value="{{ user_option.id }}">{{ user_option.full_name }}, {{ user_option.department }}</option>
+                {% endfor %}
+              </select>
+            </label>
             <label>
               <span>New consideration</span>
               <textarea name="comment_text" rows="3" maxlength="4000" required></textarea>

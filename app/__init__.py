@@ -863,6 +863,9 @@ def create_app():
         if exam_session_columns and "emergency_contact_status_due_started_at" not in exam_session_columns:
             db.session.execute(text("ALTER TABLE exam_session ADD COLUMN emergency_contact_status_due_started_at DATETIME"))
             db.session.commit()
+        if exam_session_columns and "exam_centre_contact_reminders_sent" not in exam_session_columns:
+            db.session.execute(text("ALTER TABLE exam_session ADD COLUMN exam_centre_contact_reminders_sent TEXT NOT NULL DEFAULT '[]'"))
+            db.session.commit()
         for reminder_column in ("exam_centre_whatsapp_reminder_sent", "exam_centre_email_reminder_sent"):
             if exam_session_columns and reminder_column not in exam_session_columns:
                 db.session.execute(text(f"ALTER TABLE exam_session ADD COLUMN {reminder_column} BOOLEAN NOT NULL DEFAULT 0"))

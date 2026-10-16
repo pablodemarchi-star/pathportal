@@ -699,6 +699,7 @@ class ExamSession(db.Model):
     emergency_contact_status_due_started_at = db.Column(db.DateTime(timezone=True), nullable=True)
     exam_centre_whatsapp_reminder_sent = db.Column(db.Boolean, nullable=False, default=False)
     exam_centre_email_reminder_sent = db.Column(db.Boolean, nullable=False, default=False)
+    exam_centre_contact_reminders_sent = db.Column(db.Text, nullable=False, default="[]")
     emergency_contact_final_confirmation_sent = db.Column(db.Boolean, nullable=False, default=False)
     emergency_contact_role_check_verified = db.Column(db.Boolean, nullable=False, default=False)
     monthly_registrations_closed = db.Column(db.Boolean, nullable=False, default=False)
@@ -768,6 +769,17 @@ class ExamSession(db.Model):
             })
         return contacts[:10]
 
+    @staticmethod
+    def contact_reminder_key(contact):
+        return json.dumps([contact.get(field, "") for field in ("full_name", "phone", "email")], ensure_ascii=False)
+
+    def contact_reminder_sent_keys(self):
+        try:
+            values = json.loads(self.exam_centre_contact_reminders_sent or "[]")
+        except (TypeError, ValueError):
+            return []
+        return [value for value in values if isinstance(value, str)] if isinstance(values, list) else []
+
     def considerations_thread(self):
         raw_value = (self.considerations or "").strip()
         if not raw_value:
@@ -809,6 +821,9 @@ class ExamSession(db.Model):
                 "id": (value.get("id") or "").strip(),
                 "text": text,
                 "author": (value.get("author") or "").strip(),
+                "to_user_id": value.get("to_user_id"),
+                "to_full_name": (value.get("to_full_name") or "").strip(),
+                "to_department": (value.get("to_department") or "").strip(),
                 "created_at": (value.get("created_at") or "").strip(),
                 "replies": replies,
             })

@@ -636,6 +636,32 @@ class ScheduleWorkflowTest(unittest.TestCase):
         self.assertLess(html.index('name="format" value="Online"'), html.index('name="format" value="Online at exam centre"'))
         self.assertNotIn("Minimum number of candidates required", table_head)
 
+    def test_consideration_recipient_is_saved_displayed_and_preserved_on_reply(self):
+        recipient = User(full_name="Consideration Reviewer", email="consideration@example.com", department="Management", is_active=True)
+        recipient.set_password("test-password")
+        inactive = User(full_name="Inactive Reviewer", email="inactive-consideration@example.com", department="Management", is_active=False)
+        inactive.set_password("test-password")
+        db.session.add_all([recipient, inactive])
+        db.session.commit()
+        client = self.login_client()
+        url = f"/exam-session-planner/sessions/{self.session_record.id}/considerations"
+        html = client.get("/exam-session-planner?session_year=2026").get_data(as_text=True)
+        self.assertIn('name="note_to_user_id"', html)
+        self.assertIn("Consideration Reviewer, Management", html)
+        self.assertNotIn("Inactive Reviewer", html)
+        response = client.post(url, data={"csrf_token": "token", "action": "add_comment", "comment_text": "Review arrangements", "note_to_user_id": str(recipient.id)}, follow_redirects=True)
+        self.assertIn("<strong>To:</strong> Consideration Reviewer", response.get_data(as_text=True))
+        comment = db.session.get(ExamSession, self.session_record.id).considerations_thread()[0]
+        self.assertEqual(comment["to_user_id"], recipient.id)
+        client.post(url, data={"csrf_token": "token", "action": "add_reply", "comment_id": comment["id"], "reply_text": "Reviewed"})
+        comment = db.session.get(ExamSession, self.session_record.id).considerations_thread()[0]
+        self.assertEqual(comment["to_user_id"], recipient.id)
+        self.assertEqual(comment["to_full_name"], recipient.full_name)
+        self.assertEqual(len(comment["replies"]), 1)
+        for invalid_id in (str(inactive.id), "999999", "invalid"):
+            client.post(url, data={"csrf_token": "token", "action": "add_comment", "comment_text": "Invalid recipient", "note_to_user_id": invalid_id})
+        self.assertEqual(len(db.session.get(ExamSession, self.session_record.id).considerations_thread()), 1)
+
     def test_exam_session_considerations_support_conversation_replies_and_delete(self):
         client = self.login_client()
         response = client.get("/exam-session-planner?session_year=2026")
@@ -15926,26 +15952,50 @@ assert.equal(storage.size, 0);
         self.assertTrue(self.session_record.emergency_contact_final_confirmation_sent)
 
     def test_exam_centre_reminders_render_and_save_independently(self):
+        contacts = [
+            {"full_name": "Ana López", "phone": "+54 9 11 1234-5678", "email": "ana@example.com"},
+            {"full_name": "Juan Pérez", "phone": "", "email": ""},
+        ]
+        self.session_record.contact_points = json.dumps(contacts)
+        db.session.commit()
         client = self.login_client()
         response = client.get("/pre-session-control-tower?session_year=2026&view=sessions")
         self.assertEqual(response.status_code, 200)
         section = response.get_data(as_text=True).split('<div class="exam-centre-reminders">', 1)[1].split('</table>', 1)[0]
-        self.assertIn("WhatsApp reminder", section)
-        self.assertIn("Email reminder", section)
-        self.assertEqual(section.count(">Send reminder</button>"), 2)
-        self.assertEqual(section.count('aria-label="Copy email reminder"'), 1)
+        for heading in ("Contact point", "WhatsApp", "Email", "Check"):
+            self.assertIn(f'<th scope="col">{heading}</th>', section)
+        self.assertNotIn('<th scope="col">Reminder</th>', section)
+        self.assertIn("Ana López", section)
+        self.assertIn("Juan Pérez", section)
+        self.assertIn('href="https://wa.me/5491112345678" target="_blank"', section)
+        gmail_url = html_lib.unescape(re.search(r'href="(https://mail.google.com/[^"]+)"', section).group(1))
+        params = parse_qs(urlparse(gmail_url).query)
+        self.assertEqual(params["to"], ["ana@example.com"])
+        self.assertEqual(params["su"], ["¡Muy pronto, los visitaremos!"])
+        self.assertEqual(section.count('aria-label="Copy email reminder"'), 2)
         self.assertEqual(section.count("data-exam-centre-reminder-sent"), 2)
-        endpoint = f"/pre-session-control-tower/sessions/{self.session_record.id}/exam-centre-reminders/whatsapp"
-        self.assertEqual(client.post(endpoint, data={"csrf_token": "bad", "reminder_sent": "1"}).status_code, 400)
-        response = client.post(endpoint, data={"csrf_token": "token", "reminder_sent": "1"})
-        self.assertEqual(response.status_code, 200)
+        self.assertIn('disabled title="No phone number configured"', section)
+        self.assertIn('disabled title="No email address configured"', section)
+        endpoint = f"/pre-session-control-tower/sessions/{self.session_record.id}/exam-centre-reminders/contact"
+        key = self.session_record.contact_reminder_key(contacts[0])
+        data = {"csrf_token": "token", "contact_key": key, "reminder_sent": "1"}
+        self.assertEqual(client.post(endpoint, data={**data, "csrf_token": "bad"}).status_code, 400)
+        self.assertEqual(client.post(endpoint, data={**data, "contact_key": "invalid"}).status_code, 404)
+        response = client.post(endpoint, data=data)
         self.assertEqual(response.get_json(), {"ok": True, "reminder_sent": True})
-        self.assertNotIn("Location", response.headers)
-        self.assertTrue(self.session_record.exam_centre_whatsapp_reminder_sent)
-        self.assertFalse(self.session_record.exam_centre_email_reminder_sent)
-        self.assertFalse(self.session_record.emergency_contact_final_confirmation_sent)
-        client.post(endpoint, data={"csrf_token": "token"})
-        self.assertFalse(self.session_record.exam_centre_whatsapp_reminder_sent)
+        self.assertEqual(self.session_record.contact_reminder_sent_keys(), [key])
+        self.session_record.contact_points = json.dumps(list(reversed(contacts)))
+        db.session.commit()
+        self.assertEqual(self.session_record.contact_reminder_sent_keys(), [key])
+        response = client.get("/pre-session-control-tower?session_year=2026&view=sessions")
+        section = response.get_data(as_text=True).split('<div class="exam-centre-reminders">', 1)[1].split('</table>', 1)[0]
+        self.assertEqual(section.count('data-exam-centre-reminder-sent checked'), 1)
+        client.post(endpoint, data={"csrf_token": "token", "contact_key": key})
+        self.assertEqual(self.session_record.contact_reminder_sent_keys(), [])
+        self.session_record.contact_points = "[]"
+        db.session.commit()
+        response = client.get("/pre-session-control-tower?session_year=2026&view=sessions")
+        self.assertIn("No contact points configured for this session.", response.get_data(as_text=True))
 
     def test_sinapsis_control_editor_removed(self):
         client = self.login_client()

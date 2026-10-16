@@ -16866,7 +16866,8 @@ span.session-marker-chip {
 .final-staff-sent-label input[type="checkbox"] { width: 14px; height: 14px; margin: 0; flex: 0 0 auto; }
 
 .exam-centre-reminders { grid-column: 1 / -1; min-width: 0; }
-.exam-centre-reminder-table th:nth-child(1) { width: 62%; }
+.exam-centre-reminder-table th:nth-child(1) { width: 35%; }
 .exam-centre-reminder-table th:nth-child(2) { width: 23%; }
-.exam-centre-reminder-table th:nth-child(3) { width: 15%; }
+.exam-centre-reminder-table th:nth-child(3) { width: 27%; }
+.exam-centre-reminder-table th:nth-child(4) { width: 15%; }
 .exam-centre-reminder-label { font-weight: 700; }
