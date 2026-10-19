@@ -758,6 +758,10 @@ def create_app():
         if exam_session_columns and "exam_entry_slips_url" not in exam_session_columns:
             db.session.execute(text("ALTER TABLE exam_session ADD COLUMN exam_entry_slips_url VARCHAR(500)"))
             db.session.commit()
+        for folder_column in ("session_pictures_folder_url", "absence_documentation_folder_url", "digitalised_exams_url"):
+            if exam_session_columns and folder_column not in exam_session_columns:
+                db.session.execute(text(f"ALTER TABLE exam_session ADD COLUMN {folder_column} VARCHAR(500)"))
+                db.session.commit()
         schedule_folder_column_exists = bool(exam_session_columns and "schedule_folder_url" in exam_session_columns)
         if exam_session_columns and not schedule_folder_column_exists:
             db.session.execute(text("ALTER TABLE exam_session ADD COLUMN schedule_folder_url VARCHAR(500)"))

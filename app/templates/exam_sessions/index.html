@@ -716,6 +716,24 @@
             <input type="url" name="exam_entry_slips_url" value="{{ session.exam_entry_slips_url if session else '' }}" placeholder="https://...">
           </label>
         </li>
+        <li>
+          <label>
+            <span>Session pictures folder:</span>
+            <input type="url" name="session_pictures_folder_url" value="{{ (session.session_pictures_folder_url or '') if session else '' }}" placeholder="https://...">
+          </label>
+        </li>
+        <li>
+          <label>
+            <span>Absence documentation folder:</span>
+            <input type="url" name="absence_documentation_folder_url" value="{{ (session.absence_documentation_folder_url or '') if session else '' }}" placeholder="https://...">
+          </label>
+        </li>
+        <li>
+          <label>
+            <span>Digitalised exams:</span>
+            <input type="url" name="digitalised_exams_url" value="{{ (session.digitalised_exams_url or '') if session else '' }}" placeholder="https://...">
+          </label>
+        </li>
       </ul>
     </fieldset>
     <div class="full-span exam-session-concat-field field-label">
@@ -1159,6 +1177,21 @@
                 <a href="{{ session.exam_entry_slips_url }}" target="_blank" rel="noopener noreferrer">Exam entry slips folder</a>
               {% else %}
                 <span>Exam entry slips folder</span>
+              {% endif %}
+              {% if session.session_pictures_folder_url %}
+                <a href="{{ session.session_pictures_folder_url }}" target="_blank" rel="noopener noreferrer">Session pictures folder</a>
+              {% else %}
+                <span>Session pictures folder</span>
+              {% endif %}
+              {% if session.absence_documentation_folder_url %}
+                <a href="{{ session.absence_documentation_folder_url }}" target="_blank" rel="noopener noreferrer">Absence documentation folder</a>
+              {% else %}
+                <span>Absence documentation folder</span>
+              {% endif %}
+              {% if session.digitalised_exams_url %}
+                <a href="{{ session.digitalised_exams_url }}" target="_blank" rel="noopener noreferrer">Digitalised exams</a>
+              {% else %}
+                <span>Digitalised exams</span>
               {% endif %}
             </div>
           </td>

@@ -1246,6 +1246,9 @@ class ScheduleWorkflowTest(unittest.TestCase):
     def test_exam_session_create_and_update_persist_minimum_candidates_required(self):
         provider_type = ProviderType(name="Session manager", is_system=False, color_key="provider-type-1")
         db.session.add(provider_type)
+        db.session.flush()
+        db.session.add(Provider(name="Session folder test manager", provider_type_id=provider_type.id,
+                                full_address="Street 1", available_in_logistics=True))
         db.session.commit()
 
         client = self.login_client()
@@ -1269,6 +1272,9 @@ class ScheduleWorkflowTest(unittest.TestCase):
                 "details_url": "https://example.com/details",
                 "schedule_folder_url": "https://example.com/schedule-folder",
                 "exam_entry_slips_url": "https://example.com/entry-slips-folder",
+                "session_pictures_folder_url": "https://example.com/session_pictures_folder_url",
+                "absence_documentation_folder_url": "https://example.com/absence_documentation_folder_url",
+                "digitalised_exams_url": "https://example.com/digitalised_exams_url",
             },
             follow_redirects=True,
         )
@@ -1284,6 +1290,16 @@ class ScheduleWorkflowTest(unittest.TestCase):
         self.assertEqual(created_session.date_confirmation_status, "Pending")
         self.assertEqual(created_session.schedule_folder_url, "https://example.com/schedule-folder")
         self.assertEqual(created_session.exam_entry_slips_url, "https://example.com/entry-slips-folder")
+
+        self.assertEqual(created_session.session_pictures_folder_url, "https://example.com/session_pictures_folder_url")
+        self.assertIn('href="https://example.com/session_pictures_folder_url"', response.get_data(as_text=True))
+        self.assertIn('name="session_pictures_folder_url"', response.get_data(as_text=True))
+        self.assertEqual(created_session.absence_documentation_folder_url, "https://example.com/absence_documentation_folder_url")
+        self.assertIn('href="https://example.com/absence_documentation_folder_url"', response.get_data(as_text=True))
+        self.assertIn('name="absence_documentation_folder_url"', response.get_data(as_text=True))
+        self.assertEqual(created_session.digitalised_exams_url, "https://example.com/digitalised_exams_url")
+        self.assertIn('href="https://example.com/digitalised_exams_url"', response.get_data(as_text=True))
+        self.assertIn('name="digitalised_exams_url"', response.get_data(as_text=True))
 
         response = client.post(
             f"/exam-session-planner/sessions/{created_session.id}",
@@ -1302,6 +1318,9 @@ class ScheduleWorkflowTest(unittest.TestCase):
                 "details_url": "https://example.com/details",
                 "schedule_folder_url": "https://example.com/revised-schedule-folder",
                 "exam_entry_slips_url": "https://example.com/revised-entry-slips-folder",
+                "session_pictures_folder_url": "https://example.com/revised-session_pictures_folder_url",
+                "absence_documentation_folder_url": "https://example.com/revised-absence_documentation_folder_url",
+                "digitalised_exams_url": "https://example.com/revised-digitalised_exams_url",
             },
             follow_redirects=True,
         )
@@ -1312,6 +1331,13 @@ class ScheduleWorkflowTest(unittest.TestCase):
         self.assertEqual(db.session.get(ExamSession, created_session.id).full_address_google_maps, "")
         self.assertEqual(db.session.get(ExamSession, created_session.id).schedule_folder_url, "https://example.com/revised-schedule-folder")
         self.assertEqual(db.session.get(ExamSession, created_session.id).exam_entry_slips_url, "https://example.com/revised-entry-slips-folder")
+
+        self.assertEqual(db.session.get(ExamSession, created_session.id).session_pictures_folder_url, "https://example.com/revised-session_pictures_folder_url")
+        self.assertIn('href="https://example.com/revised-session_pictures_folder_url"', response.get_data(as_text=True))
+        self.assertEqual(db.session.get(ExamSession, created_session.id).absence_documentation_folder_url, "https://example.com/revised-absence_documentation_folder_url")
+        self.assertIn('href="https://example.com/revised-absence_documentation_folder_url"', response.get_data(as_text=True))
+        self.assertEqual(db.session.get(ExamSession, created_session.id).digitalised_exams_url, "https://example.com/revised-digitalised_exams_url")
+        self.assertIn('href="https://example.com/revised-digitalised_exams_url"', response.get_data(as_text=True))
 
     def test_path_organiser_requires_session_manager_provider(self):
         db.session.add(ProviderType(name="Session manager", is_system=False, color_key="provider-type-1"))

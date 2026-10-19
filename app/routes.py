@@ -2811,6 +2811,9 @@ def validate_exam_session_form(form):
     details_url = form.get("details_url", "").strip()
     schedule_folder_url = form.get("schedule_folder_url", "").strip()
     exam_entry_slips_url = form.get("exam_entry_slips_url", "").strip()
+    session_pictures_folder_url = form.get("session_pictures_folder_url", "").strip()
+    absence_documentation_folder_url = form.get("absence_documentation_folder_url", "").strip()
+    digitalised_exams_url = form.get("digitalised_exams_url", "").strip()
     full_address_google_maps = form.get("full_address_google_maps", "").strip()
     city = form.get("city", "").strip()
     province = form.get("province", "").strip()
@@ -2857,6 +2860,13 @@ def validate_exam_session_form(form):
         errors.append("Please enter a valid Schedule folder link.")
     if exam_entry_slips_url and not is_valid_url(exam_entry_slips_url):
         errors.append("Please enter a valid Exam entry slips folder link.")
+    if session_pictures_folder_url and not is_valid_url(session_pictures_folder_url):
+        errors.append("Please enter a valid Session pictures folder link.")
+    if absence_documentation_folder_url and not is_valid_url(absence_documentation_folder_url):
+        errors.append("Please enter a valid Absence documentation folder link.")
+    if digitalised_exams_url and not is_valid_url(digitalised_exams_url):
+        errors.append("Please enter a valid Digitalised exams link.")
+
 
     return errors, {
         "exam_session_name": exam_session_name,
@@ -2876,6 +2886,9 @@ def validate_exam_session_form(form):
         "details_url": details_url,
         "schedule_folder_url": schedule_folder_url,
         "exam_entry_slips_url": exam_entry_slips_url,
+        "session_pictures_folder_url": session_pictures_folder_url,
+        "absence_documentation_folder_url": absence_documentation_folder_url,
+        "digitalised_exams_url": digitalised_exams_url,
         "concat_session_ids": concat_session_ids,
     }
 
@@ -2901,6 +2914,9 @@ def apply_exam_session_form(session_record, data):
     session_record.details_url = data["details_url"]
     session_record.schedule_folder_url = data["schedule_folder_url"]
     session_record.exam_entry_slips_url = data["exam_entry_slips_url"]
+    session_record.session_pictures_folder_url = data["session_pictures_folder_url"]
+    session_record.absence_documentation_folder_url = data["absence_documentation_folder_url"]
+    session_record.digitalised_exams_url = data["digitalised_exams_url"]
 
 
 def serialize_concat_session_ids(session_ids, current_session_id=None):
@@ -24303,6 +24319,9 @@ def duplicate_exam_session_year():
             details_url=source_session.details_url,
             schedule_folder_url=source_session.schedule_folder_url,
             exam_entry_slips_url=source_session.exam_entry_slips_url,
+            session_pictures_folder_url=source_session.session_pictures_folder_url,
+            absence_documentation_folder_url=source_session.absence_documentation_folder_url,
+            digitalised_exams_url=source_session.digitalised_exams_url,
             contact_points=source_session.contact_points,
             considerations=source_session.considerations,
             unified_candidate_total=source_session.unified_candidate_total,
