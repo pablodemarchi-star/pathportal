@@ -3264,6 +3264,41 @@ class ScheduleWorkflowTest(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json["monthly_status"], "Achieved")
 
+    def test_concat_monthly_minimum_uses_unified_total(self):
+        from app.routes import monthly_candidate_requirement_contracts, monthly_registration_status
+
+        other = ExamSession(
+            exam_session_name="Linked minimum", category="Path School", status="Pending",
+            session_date=date(2026, 7, 25), shifts="Morning", modules="Speaking", format="Onsite",
+        )
+        db.session.add(other)
+        db.session.flush()
+        self.session_record.concat_session_ids = json.dumps([other.id])
+        db.session.add(ExamSessionMonthlyCandidateTotal(
+            exam_session_id=self.session_record.id, month=6, total_candidates=100,
+        ))
+        db.session.commit()
+        client = self.login_client()
+        for value, expected in [("20", "In progress"), ("30", "Achieved"), ("", "In progress")]:
+            response = client.post(
+                f"/monthly-exam-session-registrations/{self.session_record.id}/unified-total",
+                data={"csrf_token": "token", "unified_candidate_total": value},
+                headers={"X-Requested-With": "XMLHttpRequest"},
+            )
+            self.assertEqual(response.status_code, 200)
+            self.assertEqual(response.json["monthly_statuses"][str(self.session_record.id)], expected)
+            contracts = monthly_candidate_requirement_contracts([self.session_record.id, other.id])
+            self.assertEqual(contracts[self.session_record.id]["ready"], value == "30")
+            self.assertEqual(contracts[other.id]["ready"], value == "30")
+            self.assertEqual(monthly_registration_status(other), "Pending" if not value else expected)
+            client.post(
+                f"/monthly-exam-session-registrations/{self.session_record.id}/closed",
+                data={"csrf_token": "token", "action": "close"},
+            )
+            self.assertEqual(self.session_record.monthly_registrations_closed, value == "30")
+            self.session_record.monthly_registrations_closed = False
+            db.session.commit()
+
     def test_monthly_registration_unified_total_syncs_concat_sessions(self):
         other_session = ExamSession(
             exam_session_name="Linked monthly session",

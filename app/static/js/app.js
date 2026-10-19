@@ -4307,6 +4307,15 @@ const saveMonthlyUnifiedTotalForm = async (form) => {
     });
     if (!response.ok) throw new Error("Unable to save unified total.");
     const data = await response.json();
+    Object.entries(data.monthly_statuses || {}).forEach(([sessionId, status]) => {
+      const badge = document.querySelector(`[data-monthly-session-row][data-session-id="${sessionId}"] [data-monthly-session-status]`);
+      if (!badge) return;
+      Array.from(badge.classList).forEach((name) => {
+        if (name.startsWith("exam-status-")) badge.classList.remove(name);
+      });
+      badge.classList.add(`exam-status-${status.toLowerCase().replace(/ /g, "-")}`);
+      badge.textContent = status;
+    });
     const value = data.unified_candidate_total ?? "";
     (data.session_ids || []).forEach((sessionId) => {
       document.querySelectorAll(`[data-unified-total-input][data-session-id="${sessionId}"]`).forEach((input) => {

@@ -1749,6 +1749,7 @@ def monthly_candidate_requirement_contracts(session_ids):
     ):
         active_months_by_session.setdefault(session_id, set()).add(month)
 
+    concat_components = exam_session_concat_component_map()
     contracts = {}
     for session_id in session_ids:
         session_record = sessions_by_id.get(session_id)
@@ -1756,8 +1757,10 @@ def monthly_candidate_requirement_contracts(session_ids):
         required = required if required is not None else 30
         latest_month = max(active_months_by_session.get(session_id, set()) or [0])
         current = totals_by_session_month.get((session_id, latest_month), 0) if latest_month else 0
+        if session_record and len(concat_components.get(session_id, {session_id})) > 1:
+            current = session_record.unified_candidate_total
         contracts[session_id] = {
-            "ready": current >= required,
+            "ready": current is not None and current >= required,
             "current": current,
             "required": required,
             "latest_month": latest_month or None,
@@ -1794,6 +1797,8 @@ def monthly_registration_close_requirement(session_record):
             month=latest_month,
         ).first()
     current = total_record.total_candidates if total_record else None
+    if len(monthly_unified_total_session_ids(session_record)) > 1:
+        current = session_record.unified_candidate_total
     return {
         "ready": current is not None and current >= required,
         "current": current,
@@ -1806,7 +1811,7 @@ def monthly_registration_status(session_record, requirement=None):
     if session_record and session_record.monthly_registrations_closed:
         return "Closed"
     requirement = requirement or monthly_registration_close_requirement(session_record)
-    if requirement["latest_month"] is None:
+    if requirement["latest_month"] is None and requirement["current"] is None:
         return "Pending"
     return "Achieved" if requirement["ready"] else "In progress"
 
@@ -22937,6 +22942,10 @@ def update_monthly_exam_session_unified_total(session_id):
         return jsonify({
             "unified_candidate_total": unified_total if unified_total is not None else "",
             "session_ids": synced_session_ids,
+            "monthly_statuses": {
+                related.id: monthly_registration_status(related)
+                for related in ExamSession.query.filter(ExamSession.id.in_(synced_session_ids)).all()
+            },
             "monthly_totals": monthly_candidate_total_sums(filtered_session_ids),
         })
     flash("Unified total updated successfully.", "success")
@@ -22985,7 +22994,12 @@ def toggle_monthly_exam_session_registration_closed(session_id):
         if not requirement["ready"]:
             current = requirement["current"]
             latest_month = requirement["latest_month"]
-            if latest_month is None:
+            if len(monthly_unified_total_session_ids(session_record)) > 1:
+                flash(
+                    f"Monthly registrations cannot be closed because Unified total is {current if current is not None else 'not loaded'}/{requirement['required']}.",
+                    "error",
+                )
+            elif latest_month is None:
                 flash("Monthly registrations cannot be closed until Total candidates is loaded.", "error")
             elif current is None:
                 flash("Monthly registrations cannot be closed because the latest loaded month has no Total candidates value.", "error")
