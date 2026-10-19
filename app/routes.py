@@ -30,6 +30,7 @@ from app.models import (
     AnnualMeetingRecord,
     CertificationYearConfiguration,
     ExaminerCertificationAnnualMeetingSelection,
+    ExaminerCertificationRsgAnnualMeetingSelection,
     ExaminerCertificationFut1Selection,
     ExaminerCertificationFut2Selection,
     ExaminerCertificationRemoteTrainingSelection,
@@ -234,6 +235,11 @@ STAFF_CERTIFICATION_TYPES = [
     {"key": "annual_meeting", "label": "Annual meeting", "roles": []},
     {"key": "remote_training", "label": "Remote training", "roles": []},
     {"key": "fut", "label": "FUT", "roles": []},
+]
+EXAMINER_CERTIFICATION_TYPES = [
+    {"key": "annual_meeting", "label": "Annual general meeting", "roles": []},
+    {"key": "rsg_annual_meeting", "label": "Annual RSG! meeting", "roles": ["RSG"]},
+    *STAFF_CERTIFICATION_TYPES[1:],
 ]
 INTERN_STAGE_CERTIFICATION_TYPES = [
     {"key": "remote_training", "label": "Stage 1", "roles": []},
@@ -3146,6 +3152,11 @@ def certification_export_value(
 ):
     if not certification_allowed(member, certification):
         return "N/A"
+    if certification["key"] == "rsg_annual_meeting":
+        selection = ExaminerCertificationRsgAnnualMeetingSelection.query.filter_by(
+            member_id=member.id, year=selected_examiner_certification_year()[0]
+        ).first()
+        return selection.status if selection else "*"
     if certification["key"] == "remote_training" and remote_training_selections is not None:
         selection = remote_training_selections.get(member.id)
         return selection.status if selection else "*"
@@ -27945,12 +27956,16 @@ def annual_certification_programme():
         roles=ROLE_OPTIONS,
         visible_role_filters=ROLE_OPTIONS,
         statuses=["Pending", "In progress", "Certified"],
-        certifications=STAFF_CERTIFICATION_TYPES,
+        certifications=EXAMINER_CERTIFICATION_TYPES,
         filter_certifications=STAFF_YEAR_CERTIFICATION_TYPES,
         certification_years=certification_years,
         remote_training_selections=remote_training_selections,
         remote_training_options=REMOTE_TRAINING_OPTIONS,
         annual_meeting_selections=annual_meeting_selections,
+        rsg_annual_meeting_selections={
+            selection.member_id: selection
+            for selection in ExaminerCertificationRsgAnnualMeetingSelection.query.filter_by(year=selected_certification_year).all()
+        },
         annual_meeting_options=ANNUAL_MEETING_OPTIONS,
         fut_selections=fut_selections,
         fut2_selections=fut2_selections,
@@ -28155,7 +28170,7 @@ def export_annual_certification():
         export_title="Examiner Certification Export",
         sheet_title="Examiner Certification",
         status_header="Certification status",
-        certification_types=STAFF_CERTIFICATION_TYPES,
+        certification_types=EXAMINER_CERTIFICATION_TYPES,
         session_counts=session_counts,
         fut_selections=fut_selections,
         fut2_selections=fut2_selections,
@@ -28399,6 +28414,48 @@ def update_examiner_annual_meeting(member_id):
         )
     db.session.commit()
     flash("Annual meeting updated successfully.", "success")
+    return certification_redirect()
+
+
+@staff_bp.route("/annual-certification-programme/members/<int:member_id>/rsg-annual-meeting", methods=["POST"])
+@login_required
+def update_examiner_rsg_annual_meeting(member_id):
+    if not validate_csrf():
+        flash("Security token expired. Please try again.", "error")
+        return certification_redirect()
+
+    member = AcademicStaff.query.get_or_404(member_id)
+    selected_certification_year, _ = selected_examiner_certification_year()
+    status = request.form.get("annual_meeting_status", "").strip()
+    if member.status != "Active" or "RSG" not in member.roles_list():
+        flash("Annual RSG! meeting is only available for active RSG members.", "error")
+        return certification_redirect()
+    selection = ExaminerCertificationRsgAnnualMeetingSelection.query.filter_by(
+        member_id=member.id,
+        year=selected_certification_year,
+    ).first()
+    if not status:
+        if selection:
+            db.session.delete(selection)
+            db.session.commit()
+            flash("Annual RSG! meeting cleared successfully.", "success")
+        return certification_redirect()
+    if status not in ANNUAL_MEETING_OPTIONS:
+        flash("Please select a valid Annual RSG! meeting status.", "error")
+        return certification_redirect()
+
+    if selection:
+        selection.status = status
+    else:
+        db.session.add(
+            ExaminerCertificationRsgAnnualMeetingSelection(
+                member_id=member.id,
+                year=selected_certification_year,
+                status=status,
+            )
+        )
+    db.session.commit()
+    flash("Annual RSG! meeting updated successfully.", "success")
     return certification_redirect()
 
 

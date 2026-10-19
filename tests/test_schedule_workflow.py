@@ -22,6 +22,7 @@ from app.models import (
     ExamSessionCommunicationsEvent,
     ExamSessionExaminerAssignment,
     ExaminerCertificationAnnualMeetingSelection,
+    ExaminerCertificationRsgAnnualMeetingSelection,
     ExaminerCertificationFut1Selection,
     ExaminerCertificationRemoteTrainingSelection,
     ExamSessionFinanceControl,
@@ -9168,6 +9169,50 @@ class ScheduleWorkflowTest(unittest.TestCase):
             "Confirmed",
         ]:
             self.assertIn(f'<option value="{status}"', html)
+
+    def test_examiner_rsg_meeting_dropdown_persists_independently(self):
+        client = self.login_client()
+        member = AcademicStaff(full_name="Meeting examiner", status="Active", roles="Examiner,RSG")
+        db.session.add(member)
+        db.session.commit()
+        db.session.add(ExaminerCertificationAnnualMeetingSelection(
+            member_id=member.id, year=2026, status="Attended"
+        ))
+        db.session.commit()
+        url = "/annual-certification-programme?certification_year=2026"
+        page = client.get(url).get_data(as_text=True)
+        self.assertLess(page.index("Annual general meeting"), page.index("Annual RSG! meeting"))
+        action = f"/annual-certification-programme/members/{member.id}/rsg-annual-meeting"
+        self.assertIn(action, page)
+        for status in ["Attended", "Absent"]:
+            response = client.post(action, data={
+                "csrf_token": "token", "annual_meeting_status": status, "return_to": url,
+            })
+            self.assertEqual(response.status_code, 302)
+            selection = ExaminerCertificationRsgAnnualMeetingSelection.query.filter_by(member_id=member.id).one()
+            self.assertEqual(selection.year, 2026)
+            self.assertEqual(selection.status, status)
+            self.assertEqual(ExaminerCertificationAnnualMeetingSelection.query.filter_by(member_id=member.id).one().status, "Attended")
+            page = client.get(url).get_data(as_text=True)
+            form = page.split(f'action="{action}"', 1)[1].split("</form>", 1)[0]
+            self.assertIn(f'<option value="{status}" selected>', form)
+        client.post(action, data={"csrf_token": "token", "annual_meeting_status": "Invalid", "return_to": url})
+        self.assertEqual(ExaminerCertificationRsgAnnualMeetingSelection.query.one().status, "Absent")
+
+    def test_examiner_rsg_meeting_without_rsg_role_is_not_applicable(self):
+        client = self.login_client()
+        member = AcademicStaff(full_name="Non RSG examiner", status="Active", roles="Examiner")
+        db.session.add(member)
+        db.session.commit()
+        url = "/annual-certification-programme?certification_year=2026"
+        page = client.get(url).get_data(as_text=True)
+        cell = page.split('class="certification-cell certification-rsg-annual-meeting', 1)[1].split("</td>", 1)[0]
+        self.assertIn('<span class="na-badge">Not applicable</span>', cell)
+        self.assertNotIn("<select", cell)
+        client.post(f"/annual-certification-programme/members/{member.id}/rsg-annual-meeting", data={
+            "csrf_token": "token", "annual_meeting_status": "Attended", "return_to": url,
+        })
+        self.assertEqual(ExaminerCertificationRsgAnnualMeetingSelection.query.count(), 0)
 
     def test_certification_year_settings_render_and_persist_for_examiner_and_supervisor(self):
         client = self.login_client()

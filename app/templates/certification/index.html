@@ -551,12 +551,17 @@
             {% set is_certification_available = certification_allowed(member, certification) %}
             <td class="certification-cell certification-{{ certification.key|replace('_', '-') }} {% if not is_certification_available %}is-na{% endif %}">
               {% if is_certification_available %}
-                {% if certification.key in ['remote_training', 'stage_2', 'stage_3', 'annual_meeting'] and module_key == 'certification' %}
+                {% if certification.key in ['remote_training', 'stage_2', 'stage_3', 'annual_meeting', 'rsg_annual_meeting'] and module_key == 'certification' %}
                   {% if certification.key == 'annual_meeting' %}
                     {% set status_selection = annual_meeting_selections.get(member.id) %}
                     {% set status_options = annual_meeting_options %}
                     {% set status_field = 'annual_meeting_status' %}
                     {% set status_endpoint = update_annual_meeting_endpoint %}
+                  {% elif certification.key == 'rsg_annual_meeting' %}
+                    {% set status_selection = rsg_annual_meeting_selections.get(member.id) %}
+                    {% set status_options = annual_meeting_options %}
+                    {% set status_field = 'annual_meeting_status' %}
+                    {% set status_endpoint = 'staff.update_examiner_rsg_annual_meeting' %}
                   {% elif certification.key == 'stage_2' %}
                     {% set status_selection = stage_2_selections.get(member.id) %}
                     {% set status_options = stage_3_options %}
@@ -743,7 +748,7 @@
                   </form>
                 {% endif %}
               {% else %}
-                <span class="na-badge">N/A</span>
+                <span class="na-badge">{{ 'Not applicable' if certification.key == 'rsg_annual_meeting' else 'N/A' }}</span>
               {% endif %}
             </td>
           {% endfor %}
