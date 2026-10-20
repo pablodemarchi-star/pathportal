@@ -18219,6 +18219,222 @@ assert.equal(storage.size, 0);
         for technical_token in ["undefined", "null", "{&quot;", "STATUS_CHANGED", "review_flag_created"]:
             self.assertNotIn(technical_token, html)
 
+    def test_journey_finance_readiness_follows_control_tower_block_status(self):
+        from app.routes import journey_finance_readiness
+
+        for standing in ["Effective clearance", "Conditional clearance", "Mid-risk debt", "High-risk debt", "Not applicable"]:
+            for confirmed in [False, True]:
+                with self.subTest(standing=standing, confirmed=confirmed):
+                    control = ExamSessionFinanceControl(
+                        status=standing, institutions_confirmed_with_admin=confirmed,
+                    )
+                    finance = finance_readiness_contract(control, today=date(2026, 6, 25))
+                    readiness = journey_finance_readiness(finance)
+                    cleared = finance["block_label"] == "Cleared"
+                    self.assertEqual(readiness["status"], "Finance approved and cleared" if cleared else "Finance approval and clearance pending")
+                    self.assertEqual(readiness["message"], "The exam session has been confirmed" if cleared else "The exam session is awaiting confirmation")
+                    self.assertEqual(readiness["milestone_status"], "completed" if cleared else "in_progress")
+        for finance in [None, {}, {"block_label": "Overdue"}]:
+            self.assertEqual(journey_finance_readiness(finance)["status"], "Finance approval and clearance pending")
+
+    def test_journey_airplane_matches_institution_for_both_audiences(self):
+        workflow = ExamSessionScheduleWorkflow.query.filter_by(exam_session_id=self.session_record.id).first()
+        if workflow is None:
+            workflow = ExamSessionScheduleWorkflow(exam_session_id=self.session_record.id)
+            db.session.add(workflow)
+        workflow.status = "Approved"
+        workflow.approved_at = datetime(2026, 6, 1, tzinfo=timezone.utc)
+        self.session_record.session_date = date(2026, 7, 25)
+        db.session.commit()
+        for name, expected in [("Colegio Nuestra Señora de La Salette", "Pending"), ("Other school", "In transit")]:
+            with self.subTest(name=name), self.app.test_request_context():
+                self.session_record.exam_session_name = name
+                now = datetime(2026, 6, 20, tzinfo=timezone.utc)
+                institution = path_session_journey_contract(self.session_record, "institution", now=now)
+                public = path_session_journey_contract(self.session_record, "public", now=now)
+                self.assertEqual(public["material_shipment"], institution["material_shipment"])
+                self.assertEqual(public["material_shipment"]["status"], expected)
+                if expected == "Pending":
+                    self.assertEqual(public["material_shipment"]["progress_percent"], 0)
+
+    def test_absence_upload_window_boundaries_use_gmt_minus_three_and_business_hours(self):
+        from app.routes import journey_absence_upload_window, argentina_add_business_hours
+        local_tz = timezone(timedelta(hours=-3))
+        # Friday through Wednesday: the weekend does not consume the 72 hours.
+        self.session_record.session_date = date(2026, 10, 23)
+        starts = datetime(2026, 10, 23, tzinfo=local_tz)
+        expires = datetime(2026, 10, 28, tzinfo=local_tz)
+        self.assertEqual(argentina_add_business_hours(starts, 72), expires)
+        for now, expected in [(starts - timedelta(seconds=1), "pending"), (starts, "open"), (expires - timedelta(seconds=1), "open"), (expires, "expired")]:
+            with self.subTest(now=now):
+                window = journey_absence_upload_window(self.session_record, now=now.astimezone(timezone.utc))
+                self.assertEqual(window["state"], expected)
+        self.session_record.session_date = date(2026, 12, 24)
+        # Christmas and the weekend are excluded.
+        self.assertEqual(argentina_add_business_hours(datetime(2026, 12, 24, tzinfo=local_tz), 72), datetime(2026, 12, 30, tzinfo=local_tz))
+
+    def test_institution_journey_language_switch_translates_checklist_and_forms(self):
+        from app.routes import ensure_journey_share_token
+        client = self.login_client()
+        for path in [f"/path-session-journeys/sessions/{self.session_record.id}", f"/path-session-journey/{ensure_journey_share_token(self.session_record, 'institution').token}/institution"]:
+            with self.subTest(path=path):
+                response = client.get(path, query_string={"lang": "es"})
+                self.assertEqual(response.status_code, 200)
+                html = response.get_data(as_text=True)
+                for translated in ["Choose your language / Elige tu idioma", "Versión en español", "Sigue las etapas clave", "Estado administrativo y de pagos", "Cronograma de la sesión de examen", "Checklist de preparación del centro de examen", "Preparación de la sede de examen", "Constancia de examen para candidatos", "Número de candidato", "Nombre completo del candidato", "Justificativos de ausencia a examen", "Solicitar cambios en el cronograma", "Confirmar", "Cancelar", "Evolución en la evaluación de idiomas"]:
+                    self.assertIn(translated, html)
+                self.assertIn('<h2 id="journey-attendance-request-title">Constancia de examen para candidatos</h2>', html)
+                for english in [">Administrative &amp; payment readiness<", ">Candidate number<", ">View session schedule<", ">Session venue setup<", "the <strong>"]:
+                    self.assertNotIn(english, html)
+                english = client.get(path, query_string={"lang": "en"}).get_data(as_text=True)
+                self.assertIn("Follow the key stages", english)
+                self.assertIn("Exam centre readiness checklist", english)
+                self.assertIn("Candidate number", english)
+
+    def test_institution_absence_block_matches_public_for_each_upload_state(self):
+        from unittest.mock import patch
+        from app.routes import journey_absence_upload_window
+        from flask import render_template
+        self.session_record.absence_documentation_folder_url = "https://example.com/absence"
+        self.session_record.session_date = date(2026, 10, 23)
+        local_tz = timezone(timedelta(hours=-3))
+        for day, state in [(22, "pending"), (23, "open"), (28, "expired")]:
+            with self.subTest(state=state), self.app.test_request_context():
+                now = datetime(2026, 10, day, tzinfo=local_tz)
+                window = journey_absence_upload_window(self.session_record, now=now)
+                self.assertEqual(window["state"], state)
+                with patch("app.routes.journey_absence_upload_window", return_value=window):
+                    institution = path_session_journey_contract(self.session_record, "institution", now=now)
+                    public = path_session_journey_contract(self.session_record, "public", now=now)
+                institution["next_steps"] = ["Checklist"]
+                args = {"share": None, "is_preview": True, "csrf_token": "token"}
+                institution_html = render_template("pre_session_control_tower/session_journey.html", journey=institution, **args)
+                public_html = render_template("pre_session_control_tower/session_journey.html", journey=public, **args)
+                start = '<li class="journey-milestone is-upcoming">'
+                title = "<strong>Exam absence documentation</strong>"
+                def block(html):
+                    begin = html.rfind(start, 0, html.index(title))
+                    return html[begin:html.index("        </ol>", begin)].strip()
+                self.assertEqual(institution["absence_upload"], public["absence_upload"])
+                self.assertIn("to upload supporting documentation for absent candidates. You must submit them", block(institution_html))
+                self.assertIn("to upload your supporting documentation for an exam absence. You must submit it", block(public_html))
+                self.assertGreater(institution_html.index(title), institution_html.index("<strong>Exam session feedback</strong>"))
+                self.assertEqual('href="https://example.com/absence"' in block(institution_html), state == "open")
+
+    def test_institution_attendance_requests_persist_in_creation_order(self):
+        from app.models import ExamSessionAttendanceRequest
+        from app.routes import ensure_journey_share_token
+        client = self.login_client()
+        endpoint = f"/path-session-journeys/sessions/{self.session_record.id}/attendance-requests"
+        for number, name in [("001", "First Candidate"), ("002", "Second Candidate")]:
+            response = client.post(endpoint, data={"csrf_token": "token", "candidate_number": number, "candidate_full_name": name})
+            self.assertEqual(response.status_code, 201)
+        html = client.get(f"/path-session-journeys/sessions/{self.session_record.id}").get_data(as_text=True)
+        self.assertLess(html.index("001 — First Candidate"), html.index("002 — Second Candidate"))
+        self.assertEqual(html.count('class="journey-attendance-download"'), 2)
+        self.assertEqual(html.count('is-in-progress">In process</span>'), 2)
+        self.assertIn('type="submit" data-view-only-allowed="true">Submit', html)
+        invalid = client.post(endpoint, data={"csrf_token": "token", "candidate_number": "", "candidate_full_name": "Missing number"})
+        self.assertEqual(invalid.status_code, 400)
+        self.assertEqual(ExamSessionAttendanceRequest.query.count(), 2)
+        share = ensure_journey_share_token(self.session_record, "institution")
+        anonymous = self.app.test_client()
+        shared_endpoint = f"/path-session-journey/{share.token}/institution/attendance-requests"
+        response = anonymous.post(shared_endpoint, data={"candidate_number": "003", "candidate_full_name": "Third Candidate"})
+        self.assertEqual(response.status_code, 201)
+        shared_html = anonymous.get(f"/path-session-journey/{share.token}/institution").get_data(as_text=True)
+        self.assertIn("003 — Third Candidate", shared_html)
+        public = ensure_journey_share_token(self.session_record, "public")
+        public_html = anonymous.get(f"/path-session-journey/{public.token}/public").get_data(as_text=True)
+        self.assertNotIn("First Candidate", public_html)
+        self.assertEqual(anonymous.post(f"/path-session-journey/{public.token}/public/attendance-requests").status_code, 404)
+        share.is_enabled = False
+        db.session.commit()
+        self.assertEqual(anonymous.post(shared_endpoint).status_code, 410)
+        self.assertEqual(ExamSessionAttendanceRequest.query.count(), 3)
+
+    def test_candidates_journey_absence_documentation_uses_session_link(self):
+        self.session_record.session_date = datetime.now(timezone(timedelta(hours=-3))).date()
+        self.session_record.absence_documentation_folder_url = "https://example.com/session-absence-documents"
+        db.session.commit()
+        client = self.login_client()
+        client.get(f"/path-session-journeys/sessions/{self.session_record.id}")
+        share = ExamSessionJourneyShare.query.filter_by(exam_session_id=self.session_record.id, audience="public").one()
+        path = f"/path-session-journey/{share.token}/public"
+        for language, heading in [("es", "Justificativos de ausencia a examen"), ("en", "Exam absence documentation")]:
+            html = self.app.test_client().get(path, query_string={"lang": language}).get_data(as_text=True)
+            self.assertIn(heading, html)
+            self.assertIn('href="https://example.com/session-absence-documents"', html)
+            self.assertLess(html.index("Información para candidatos" if language == "es" else "Information for candidates"), html.index(heading))
+            if language == "es":
+                for text in ["Haz clic aquí", "dos días hábiles posteriores a la sesión de examen", "Certificado médico:", "Pasaje de viaje:", "Certificado institucional:", "no implica su aprobación automática"]:
+                    self.assertIn(text, html)
+        self.session_record.absence_documentation_folder_url = None
+        db.session.commit()
+        html = self.app.test_client().get(path, query_string={"lang": "es"}).get_data(as_text=True)
+        self.assertNotIn('href="https://example.com/session-absence-documents"', html)
+        institution = client.get(f"/path-session-journeys/sessions/{self.session_record.id}").get_data(as_text=True)
+        self.assertIn("journey-absence-details", institution)
+
+    def test_candidates_journey_language_switch_translates_public_content(self):
+        client = self.login_client()
+        client.get(f"/path-session-journeys/sessions/{self.session_record.id}")
+        share = ExamSessionJourneyShare.query.filter_by(exam_session_id=self.session_record.id, audience="public").one()
+        path = f"/path-session-journey/{share.token}/public"
+        for language in ["en", "es"]:
+            response = self.app.test_client().get(path, query_string={"lang": language})
+            self.assertEqual(response.status_code, 200)
+            html = response.get_data(as_text=True)
+            self.assertIn("Version in English", html)
+            self.assertIn("Versión en español", html)
+            if language == "es":
+                for translated in ["¡El día de tu examen Path se acerca! 💙", "Información sobre la sesión de examen", "Información para candidatos", "Instrucciones para candidatos", "Disponible por 10 días luego de la fecha de examen", "Copiar información de la sesión", "- Fecha:", "- Modalidad:", "acompañados y listos para demostrar"]:
+                    self.assertIn(translated, html)
+                for english in ["Your Path exam day is getting closer", "Information about the exam session", "Exam session supervisor", "to download the instructions for candidates", "Available for 10 days", "supported and ready to show"]:
+                    self.assertNotIn(english, html)
+            else:
+                self.assertIn("Information about the exam session", html)
+                self.assertNotIn("Información sobre la sesión de examen", html)
+        institution = client.get(f"/path-session-journeys/sessions/{self.session_record.id}?lang=es").get_data(as_text=True)
+        self.assertIn("journey-language-switch", institution)
+        self.assertIn("Sigue las etapas clave", institution)
+
+    def test_candidates_journey_copy_link_has_separate_public_content(self):
+        client = self.login_client()
+        response = client.get(f"/path-session-journeys/sessions/{self.session_record.id}")
+        self.assertEqual(response.status_code, 200)
+        public_share = ExamSessionJourneyShare.query.filter_by(
+            exam_session_id=self.session_record.id, audience="public",
+        ).one()
+        public_path = f"/path-session-journey/{public_share.token}/public"
+        self.assertIn(public_path, response.get_data(as_text=True))
+        public_response = self.app.test_client().get(public_path)
+        self.assertEqual(public_response.status_code, 200)
+        html = public_response.get_data(as_text=True)
+        for hidden in ["Administrative &amp; payment readiness", "Exam session schedule", "Entry slips for candidates", "Exam session staff", "Exam centre readiness checklist", "Session journey for candidates and families"]:
+            self.assertNotIn(hidden, html)
+        with self.app.test_request_context():
+            institution = path_session_journey_contract(self.session_record, "institution")
+            public = path_session_journey_contract(self.session_record, "public")
+        self.assertEqual(public["hero_message"], "Your Path exam day is getting closer 💙")
+        self.assertIn("journey-candidate-message", html)
+        self.assertIn(public["supporting_message"], html)
+        self.assertIn(public["visibility_note"], html.replace("<br>", " "))
+        self.assertLess(html.index('class="journey-candidate-message"'), html.index("Information about the exam session"))
+        self.assertEqual(public["title"], institution["title"])
+        self.assertEqual(public["final_message"], institution["final_message"])
+        self.assertEqual([m["key"] for m in public["milestones"]], ["confirmed", "material_shipment"])
+        self.assertIn("journey-institution-title-row", html)
+        self.assertIn("Information about the exam session", html)
+        self.assertIn("Exam session date", html)
+        self.assertIn("Exam material shipment", html)
+        self.assertIn("journey-shipment-timeline", html)
+        self.assertIn("Instructions for candidates", html)
+        self.assertIn("to download the instructions for candidates", html)
+        self.assertIn("Exam session feedback", html)
+        self.assertIn("to complete the exam session feedback", html)
+        self.assertNotIn('href="#"', html)
+
     def test_path_session_journey_countdown_labels_are_date_based(self):
         today = date(2026, 6, 20)
 
@@ -18676,7 +18892,7 @@ assert.equal(storage.size, 0);
             f"/pre-session-control-tower/sessions/{self.session_record.id}/journey/public/preview"
         )
         self.assertEqual(preview.status_code, 200)
-        self.assertIn("Path Session Journey \u2014 for families and candidates", preview.data.decode())
+        self.assertIn("Path Session Journey", preview.data.decode())
         self.assertEqual(ExamSessionJourneyShare.query.count(), tokens_before)
         self.assertEqual(self.pre_session_data_counts(), counts_before)
 
@@ -18711,8 +18927,8 @@ assert.equal(storage.size, 0);
         public_share = self.app.test_client().get(f"/path-session-journey/{public_share_record.token}/public")
         public_html = public_share.data.decode()
         self.assertEqual(public_share.status_code, 200)
-        self.assertIn("Thank you for being part of the Path experience", public_html)
-        self.assertIn("Milestones", public_html)
+        self.assertIn("Your Path exam day is getting closer", public_html)
+        self.assertIn("Information about the exam session", public_html)
         for forbidden in [
             "Finance",
             "Payment follow-up required",
@@ -18975,8 +19191,8 @@ assert.equal(storage.size, 0);
 
         self.assertTrue(journey["countdown"]["has_passed"])
         self.assertEqual(journey["countdown"]["label"], "This Path exam session has taken place.")
-        self.assertIn("Thank you for being part of the Path experience", journey["hero_message"])
-        self.assertIn("Thank you for being part of the Path experience", journey["final_message"])
+        self.assertEqual(journey["hero_message"], "Your Path exam day is getting closer 💙")
+        self.assertEqual(journey["final_message"], "Path International Examinations")
 
     def test_control_tower_manage_shows_path_session_journey_controls(self):
         client = self.login_client()

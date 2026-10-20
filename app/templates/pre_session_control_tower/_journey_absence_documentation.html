@@ -1,0 +1,22 @@
+          <li class="journey-milestone is-upcoming">
+            <span class="journey-milestone-marker" aria-hidden="true">&gt;</span>
+            <div>
+              <span class="journey-stage-heading">
+                <strong>{{ t('Exam absence documentation') }}</strong>
+                <span class="journey-status-chip {{ 'is-confirmed' if journey.absence_upload.state == 'open' else 'is-pending' }}" data-absence-upload-window data-state="{{ journey.absence_upload.state }}" data-starts-at="{{ journey.absence_upload.starts_at }}" data-expires-at="{{ journey.absence_upload.expires_at }}">{{ t(journey.absence_upload.label) }}</span>
+              </span>
+              <div class="journey-absence-details">
+                <p class="journey-absence-intro">{% if journey.absence_documentation_url %}<a class="journey-inline-link" href="{{ journey.absence_documentation_url }}" target="_blank" rel="noopener noreferrer">{{ t('Click here') }}</a>{% else %}<span class="journey-disabled-link">{{ t('Click here') }}</span>{% endif %}{% if spanish %}{% if journey.audience == 'institution' %} para cargar justificativos de ausencia de tus candidatos. Recuerda que dispones de un plazo máximo de {% else %}{{ t(' to upload your absence documentation. Remember that you have a maximum of ') }}{% endif %}<strong>{{ t('72 business hours after the exam session') }}</strong>{{ t(' to submit the documentation.') }}{% else %}{% if journey.audience == 'institution' %} to upload supporting documentation for absent candidates.{% else %} to upload your supporting documentation for an exam absence.{% endif %} You must submit {{ 'them' if journey.audience == 'institution' else 'it' }} <strong>within two business days after the exam session</strong>.{% endif %}</p>
+                <section class="journey-absence-requirements">
+                  <p class="journey-absence-requirements-title">{{ t('Only the following supporting documents will be accepted:') }}</p>
+                <ul>
+                  <li><strong>{{ t('Medical certificate:') }}</strong>{{ t(' signed and stamped by a licensed medical professional. Valid for onsite and online exams.') }}</li>
+                  <li><strong>{{ t('Travel ticket:') }}</strong>{% if spanish %}{{ t(' in the candidate’s name, proving that they were more than ') }}{% else %} issued in the candidate’s name, confirming that they were more than {% endif %}<strong>{{ t('200 km from the exam venue') }}</strong>{% if spanish %}{{ t(' on the relevant date. Valid only for onsite exams.') }}{% else %} on the exam date. Valid for onsite exams only.{% endif %}</li>
+                  <li><strong>{{ t('Institutional certificate:') }}</strong>{{ t(' issued by an educational institution (school or university) or another organisation that duly justifies the absence, with the appropriate signature and stamp.') }}</li>
+                </ul>
+                </section>
+                <p class="journey-absence-note"><strong>{{ t('Important:') }}</strong>{% if spanish %}{{ t(' Notes from family members or explanations without professional or institutional support will not be accepted.') }}{% else %} Notes from family members or justifications without professional or institutional supporting evidence will not be accepted.{% endif %}</p>
+                <p class="journey-absence-note">{{ t('Submitting supporting documentation ') }}<strong>{{ t('does not imply automatic approval') }}</strong>{{ t('. All documentation will be reviewed and assessed by the Path Examinations team.') }}</p>
+              </div>
+            </div>
+          </li>

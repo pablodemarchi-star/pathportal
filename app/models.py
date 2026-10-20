@@ -918,6 +918,15 @@ class ExamSession(db.Model):
     emergency_contact_member = db.relationship("AcademicStaff", foreign_keys=[emergency_contact_member_id])
 
 
+class ExamSessionAttendanceRequest(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    exam_session_id = db.Column(db.Integer, db.ForeignKey("exam_session.id"), nullable=False, index=True)
+    candidate_number = db.Column(db.String(80), nullable=False)
+    candidate_full_name = db.Column(db.String(200), nullable=False)
+    created_at = db.Column(db.DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))
+    exam_session = db.relationship("ExamSession", backref=db.backref("attendance_requests", lazy=True, cascade="all, delete-orphan"))
+
+
 class ExamSessionJourneyShare(db.Model):
     __table_args__ = (
         db.UniqueConstraint("token", name="uq_exam_session_journey_share_token"),

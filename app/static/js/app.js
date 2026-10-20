@@ -8889,7 +8889,23 @@ const initCopyTextButtons = (root = document) => {
           ? document.getElementById(button.dataset.copyTextTarget)
           : null;
         const copyText = target ? (target.value || target.textContent || "") : (button.dataset.copyText || "");
-        await copyTextToClipboard(copyText);
+        if (button.dataset.copyBoldLabels === "true") {
+          const html = copyText.split("\n").map((line) => {
+            const row = document.createElement("div");
+            const match = line.match(/^- (Session|Date|Format|Venue address|Sesión|Fecha|Modalidad|Dirección de la sede): (.*)$/);
+            if (match) {
+              const label = document.createElement("strong");
+              label.textContent = `${match[1]}:`;
+              row.append("- ", label, ` ${match[2]}`);
+            } else {
+              row.textContent = line;
+            }
+            return row.outerHTML;
+          }).join("");
+          await copyRichTextToClipboard({ html, text: copyText });
+        } else {
+          await copyTextToClipboard(copyText);
+        }
         showFeedback(successMessage);
       } catch (error) {
         showFeedback(errorMessage, true);
@@ -12810,7 +12826,7 @@ document.addEventListener("change", (event) => {
     if (confirmButton) {
       confirmButton.disabled = confirmed || !allChecked;
       confirmButton.classList.toggle("is-disabled", confirmButton.disabled);
-      confirmButton.textContent = "Confirm";
+      confirmButton.textContent = document.querySelector('.journey-page[lang="es"]') ? "Confirmar" : "Confirm";
     }
     if (requestButton) {
       requestButton.disabled = confirmed;
@@ -12861,7 +12877,7 @@ document.addEventListener("change", (event) => {
         window.location.reload();
       } catch (error) {
         confirmButton.disabled = false;
-        window.alert(error.message);
+        window.alert(document.querySelector('.journey-page[lang="es"]') ? "No se pudo actualizar el cronograma. Recarga la página e inténtalo de nuevo." : error.message);
       }
     });
 
@@ -12894,7 +12910,7 @@ document.addEventListener("change", (event) => {
         window.location.reload();
       } catch (error) {
         submitButton.disabled = false;
-        window.alert(error.message);
+        window.alert(document.querySelector('.journey-page[lang="es"]') ? "No se pudo actualizar el cronograma. Recarga la página e inténtalo de nuevo." : error.message);
       }
     });
 
@@ -13810,4 +13826,95 @@ document.addEventListener("click", async (event) => {
   } catch (_) {
     showTransientFlash("Could not copy the final confirmation email. Please try again.", "error");
   } finally { button.disabled = false; }
+});
+
+// Keep the Spanish journey title at the largest size that fits its column.
+document.querySelectorAll("[data-fit-single-line-title]").forEach((title) => {
+  const fitTitle = () => {
+    title.style.removeProperty("font-size");
+    const preferredSize = parseFloat(getComputedStyle(title).fontSize);
+    const availableWidth = title.clientWidth;
+    if (!availableWidth || title.scrollWidth <= availableWidth) return;
+    let lower = 1;
+    let upper = preferredSize;
+    while (upper - lower > 0.1) {
+      const size = (lower + upper) / 2;
+      title.style.fontSize = `${size}px`;
+      if (title.scrollWidth <= availableWidth) lower = size;
+      else upper = size;
+    }
+    title.style.fontSize = `${lower}px`;
+  };
+  fitTitle();
+  if (document.fonts?.ready) document.fonts.ready.then(fitTitle);
+  if (window.ResizeObserver) new ResizeObserver(fitTitle).observe(title.parentElement);
+  else window.addEventListener("resize", fitTitle);
+});
+
+// Shrink the Spanish preparation message only as much as two lines require.
+document.querySelectorAll("[data-fit-two-lines]").forEach((message) => {
+  const fitMessage = () => {
+    message.style.removeProperty("font-size");
+    const preferredSize = parseFloat(getComputedStyle(message).fontSize);
+    if (!message.clientWidth) return;
+    const fits = () => message.scrollHeight <= parseFloat(getComputedStyle(message).lineHeight) * 2 + 1;
+    if (fits()) return;
+    let lower = 1;
+    let upper = preferredSize;
+    while (upper - lower > 0.1) {
+      const size = (lower + upper) / 2;
+      message.style.fontSize = `${size}px`;
+      if (fits()) lower = size;
+      else upper = size;
+    }
+    message.style.fontSize = `${lower}px`;
+  };
+  fitMessage();
+  if (document.fonts?.ready) document.fonts.ready.then(fitMessage);
+  if (window.ResizeObserver) new ResizeObserver(fitMessage).observe(message.parentElement);
+  else window.addEventListener("resize", fitMessage);
+});
+
+// Refresh the upload window at its next boundary, including tabs left open overnight.
+document.querySelectorAll("[data-absence-upload-window]").forEach((chip) => {
+  const checkWindow = () => {
+    const now = Date.now();
+    const starts = Date.parse(chip.dataset.startsAt);
+    const expires = Date.parse(chip.dataset.expiresAt);
+    const state = now < starts ? "pending" : now >= expires ? "expired" : "open";
+    if (state !== chip.dataset.state) {
+      window.location.reload();
+      return;
+    }
+    const boundary = state === "pending" ? starts : state === "open" ? expires : null;
+    if (boundary) window.setTimeout(checkWindow, Math.min(Math.max(boundary - now + 50, 50), 60000));
+  };
+  checkWindow();
+  document.addEventListener("visibilitychange", () => {
+    if (!document.hidden) checkWindow();
+  });
+});
+
+document.querySelectorAll(".journey-attendance-request-form").forEach((form) => {
+  form.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const submit = form.querySelector('[type="submit"]');
+    if (submit.disabled) return;
+    const error = form.querySelector(".journey-attendance-error");
+    error.hidden = true;
+    submit.disabled = true;
+    try {
+      const response = await fetch(form.action, {
+        method: "POST", body: new FormData(form), credentials: "same-origin",
+        headers: { "X-Requested-With": "XMLHttpRequest" },
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.message || "Unable to submit your request. Please try again.");
+      window.location.reload();
+    } catch (failure) {
+      error.textContent = document.querySelector('.journey-page[lang="es"]') ? form.dataset.errorMessage : failure.message || form.dataset.errorMessage;
+      error.hidden = false;
+      submit.disabled = false;
+    }
+  });
 });

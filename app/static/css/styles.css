@@ -9653,9 +9653,49 @@ span.session-marker-chip {
 }
 
 .journey-session-card {
+  position: relative;
+  padding-right: 56px;
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 12px;
+}
+
+.journey-session-card .journey-date-field {
+  transform: translateX(30mm);
+}
+
+.journey-summary-copy {
+  position: absolute;
+  top: 14px;
+  right: 14px;
+  width: 30px;
+  height: 30px;
+}
+
+.journey-session-card .journey-venue-field {
+  grid-column: 1 / -1;
+  min-width: 0;
+  overflow-x: auto;
+}
+
+.journey-venue-chip {
+  display: inline-flex;
+  justify-self: start;
+  align-items: center;
+  padding: 6px 12px;
+  border: 1px solid #b7dfe8;
+  border-radius: 18px;
+  background: #f3fbfd;
+  color: var(--color-primary);
+  font-size: 14px;
+  font-weight: 700;
+  white-space: nowrap;
+  text-decoration: none;
+}
+
+.journey-venue-chip:hover {
+  background: #e5f4f8;
+  text-decoration: underline;
 }
 
 .journey-session-card div,
@@ -9684,6 +9724,11 @@ span.session-marker-chip {
   gap: 10px;
   border-color: #b7dfe8;
   background: #f3fbfd;
+}
+
+.journey-admin-card.is-finance-pending {
+  border-color: #eadba7;
+  background: #fff7df;
 }
 
 .journey-admin-card p,
@@ -9950,6 +9995,7 @@ span.session-marker-chip {
   position: absolute;
   inset: 0;
   background-image: url("../img/journey-world-map.png");
+  transform: scaleX(-1);
   background-repeat: no-repeat;
   background-position: center;
   background-size: cover;
@@ -10290,6 +10336,34 @@ span.session-marker-chip {
 .journey-milestone p {
   margin: 0;
   color: var(--color-muted);
+}
+
+.journey-candidate-message {
+  box-sizing: border-box;
+  min-height: 40mm;
+  display: grid;
+  place-items: center;
+  margin-top: 18px;
+  padding: 24px 32px;
+  border: 1px solid #b7dfe8;
+  border-radius: 14px;
+  background: #f3fbfd;
+  text-align: center;
+}
+
+.journey-candidate-message p {
+  max-width: 850px;
+  margin: 0;
+  color: var(--color-primary-dark);
+  font-size: clamp(20px, 2.4vw, 27px);
+  font-weight: 700;
+  line-height: 1.45;
+}
+
+.journey-candidate-footer .journey-visibility-note {
+  font-style: italic;
+  font-weight: 400;
+  line-height: 1.45;
 }
 
 .journey-footer {
@@ -16871,3 +16945,157 @@ span.session-marker-chip {
 .exam-centre-reminder-table th:nth-child(3) { width: 27%; }
 .exam-centre-reminder-table th:nth-child(4) { width: 15%; }
 .exam-centre-reminder-label { font-weight: 700; }
+
+.journey-language-switch {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  margin-bottom: 18px;
+  padding: 18px 22px;
+  border: 1px solid #b7dfe8;
+  border-radius: 14px;
+  background: #eaf6fa;
+  box-shadow: 0 6px 20px rgba(18, 48, 58, 0.07);
+}
+
+.journey-language-label {
+  flex-basis: 100%;
+  text-align: center;
+  color: var(--color-primary-dark);
+  font-size: 15px;
+  font-weight: 700;
+}
+
+.journey-language-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 48px;
+  padding: 10px 24px;
+  border: 2px solid #90bdca;
+  border-radius: 9px;
+  background: white;
+  color: var(--color-primary-dark);
+  font-size: 17px;
+  font-weight: 700;
+  text-decoration: none;
+}
+
+.journey-language-button:hover {
+  background: #d9edf4;
+  border-color: #075d75;
+}
+
+.journey-language-button.is-active {
+  background: #075d75;
+  border-color: #075d75;
+  color: white;
+}
+
+@media (max-width: 520px) {
+  .journey-language-button {
+    flex: 1 1 100%;
+  }
+}
+
+.journey-page[lang="es"] .journey-institution-title-copy {
+  min-width: 0;
+}
+
+[data-fit-single-line-title] {
+  white-space: nowrap;
+}
+
+.journey-absence-details {
+  display: grid;
+  gap: 16px;
+  margin-top: 12px;
+  color: var(--color-muted);
+  font-size: 14px;
+  line-height: 1.65;
+}
+
+.journey-absence-details .journey-absence-intro {
+  font-size: 16px;
+  line-height: normal;
+}
+
+.journey-absence-requirements {
+  border: 1px solid var(--color-border);
+  border-radius: 10px;
+  padding: 14px 18px;
+}
+
+.journey-absence-requirements .journey-absence-requirements-title {
+  color: var(--color-primary-dark);
+  font-weight: 700;
+}
+
+.journey-absence-details ul {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+  margin: 16px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.journey-absence-details li {
+  padding: 14px;
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  background: #fafcfc;
+}
+
+.journey-absence-details li > strong:first-child {
+  display: block;
+  margin-bottom: 6px;
+  color: var(--color-primary-dark);
+}
+
+.journey-absence-details strong {
+  font-size: inherit;
+}
+
+.journey-absence-details .journey-absence-note {
+  font-size: 16px;
+  line-height: normal;
+}
+
+@media (max-width: 760px) {
+  .journey-absence-details ul {
+    grid-template-columns: 1fr;
+  }
+}
+
+.journey-attendance-requests {
+  display: grid;
+  gap: 10px;
+  margin: 8px 0 0;
+  padding-left: 20px;
+  list-style: disc;
+}
+
+.journey-attendance-requests:empty {
+  display: none;
+}
+
+.journey-attendance-request-status {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin-left: 8px;
+}
+
+.journey-attendance-download {
+  color: var(--color-muted);
+  text-decoration: underline;
+  cursor: not-allowed;
+}
+
+.journey-attendance-error {
+  color: #a52828;
+}

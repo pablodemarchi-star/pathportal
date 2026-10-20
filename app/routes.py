@@ -23,6 +23,7 @@ from sqlalchemy.orm import joinedload
 from werkzeug.datastructures import MultiDict
 from werkzeug.utils import secure_filename
 
+from app.journey_translations import SPANISH_JOURNEY_TEXT
 from app import db, login_required, validate_csrf
 from app.models import (
     AcademicStaff,
@@ -49,6 +50,7 @@ from app.models import (
     ExamSessionIncidentReviewFlag,
     ExamSessionInternAssignment,
     ExamSessionJourneyShare,
+    ExamSessionAttendanceRequest,
     ExamSessionLogistics,
     ExamSessionLogisticsControl,
     ExamSessionLogisticsConcept,
@@ -13806,6 +13808,9 @@ def journey_countdown(session_date, today=None):
 
 
 def journey_safe_location(session_record):
+    full_address = journey_clean_text(session_record.full_address_google_maps)
+    if full_address:
+        return full_address
     parts = [journey_clean_text(session_record.city), journey_clean_text(session_record.province)]
     return ", ".join(part for part in parts if part)
 
@@ -14041,13 +14046,32 @@ def finalize_journey_milestones(milestones, audience):
     return milestones
 
 
+def journey_absence_upload_window(session_record, now=None):
+    now = now or datetime.now(LOCAL_TZ)
+    now = now.replace(tzinfo=LOCAL_TZ) if now.tzinfo is None else now.astimezone(LOCAL_TZ)
+    starts_at = datetime.combine(session_record.session_date, time.min).replace(tzinfo=LOCAL_TZ)
+    expires_at = argentina_add_business_hours(starts_at, 72)
+    state = "pending" if now < starts_at else "expired" if now >= expires_at else "open"
+    return {
+        "state": state,
+        "starts_at": starts_at.isoformat(),
+        "expires_at": expires_at.isoformat(),
+        "label": {
+            "pending": "Available for 2 days after the exam date",
+            "open": "Upload your documentation now. Time is running out!",
+            "expired": "Upload deadline expired",
+        }[state],
+    }
+
+
 def journey_finance_readiness(finance):
+    cleared = (finance or {}).get("block_label") == "Cleared"
     return {
         "visible": True,
         "label": "Administrative & payment readiness",
-        "status": "Finance approved and cleared",
-        "milestone_status": "completed",
-        "message": "Finance approved and cleared",
+        "status": "Finance approved and cleared" if cleared else "Finance approval and clearance pending",
+        "milestone_status": "completed" if cleared else "in_progress",
+        "message": "The exam session has been confirmed" if cleared else "The exam session is awaiting confirmation",
     }
 
 
@@ -14182,8 +14206,7 @@ def path_session_journey_contract(session_record, audience, today=None, sources=
     countdown = journey_countdown(session_record.session_date, today=today)
     schedule_ready = bool(schedule_gate_status(sources.get("workflow")).get("is_ready"))
     session_journey_schedule_override_pending = (
-        audience == "institution"
-        and "colegio nuestra señora de la salette" in (session_record.exam_session_name or "").casefold()
+        "colegio nuestra señora de la salette" in (session_record.exam_session_name or "").casefold()
     )
     if session_journey_schedule_override_pending:
         schedule_ready = False
@@ -14235,46 +14258,19 @@ def path_session_journey_contract(session_record, audience, today=None, sources=
     date_confirmed = session_record.date_confirmation_status == "Confirmed"
     entry_slips_ready = schedule_ready
 
-    if audience == "institution":
-        milestones = [
-            journey_milestone("confirmed", "Exam session date", date_confirmed, "The exam session date has been confirmed.", "The exam session date is in progress."),
-            journey_milestone("schedule", "Exam session schedule", schedule_ready, "The exam session schedule has been confirmed.", "Schedule preparation is in progress."),
-            journey_milestone("entry_slips", "Entry slips for candidates", entry_slips_ready, "Download candidate entry slips for this session.", "Entry slips will be available once the exam session schedule is confirmed."),
-            journey_milestone("staffing", "Exam session staff", staff_status["status"] == "Confirmed", staff_summary["message"], staff_summary["message"]),
-            journey_milestone("material_shipment", "Exam material shipment", material_shipment["status"] == "Dispatched", "Exam materials have been dispatched.", "Exam materials are in transit.", "Exam material shipment is pending."),
-        ]
-        hero_message = "Follow the key stages as we prepare your upcoming Path exam session."
-        final_message = "Path International Examinations"
-        next_steps = [] if session_ready else ["Path International Examinations"]
-    else:
-        milestones = [
-            journey_milestone("confirmed", "Your Path exam session is confirmed", True, "Your Path exam session is confirmed."),
-            journey_milestone("schedule", "Schedules are being organised", schedule_ready, "Schedules are organised for exam day.", "Schedules are being organised with care."),
-            journey_milestone("team", "Path team getting ready", staffing_ready, "The Path team is getting ready for the session.", "The Path team is getting ready."),
-            journey_milestone("materials", "Session materials being prepared", packages_ready, "Session materials are being prepared with care.", "Session materials are being prepared with care."),
-            journey_milestone("arrangements", "Final arrangements in progress", operational_ready, "Final arrangements are in place.", "Final arrangements are in progress."),
-            journey_milestone("digital", "Digital readiness checked", sinapsis_ready, "Digital readiness has been checked.", "Digital readiness checks are in progress."),
-            journey_milestone("communications", "Final session details shared", communications_ready, "Final session details have been shared.", "Final session details are being prepared."),
-            journey_milestone("ready", "Everything is ready for exam day", session_ready, "Everything is ready for exam day.", "We\u2019re getting everything ready for exam day."),
-        ]
-        if countdown.get("has_passed"):
-            hero_message = "Thank you for being part of the Path experience \U0001f499"
-            supporting_message = "Thank you for sharing this Path exam session with us."
-            final_message = "This Path exam session has taken place. Thank you for being part of the Path experience."
-            next_steps = []
-        else:
-            hero_message = (
-                "Everything is ready for exam day \U0001f499"
-                if session_ready else
-                "Your Path exam day is getting closer \U0001f499"
-            )
-            final_message = (
-                "We\u2019re looking forward to sharing this Path experience with you."
-                if session_ready else
-                "Every Path session is carefully prepared so students can feel confident, supported and ready to show what they can do in English."
-            )
-            supporting_message = "We\u2019re getting everything ready to make this a meaningful, organised and memorable experience for students and the school team."
-            next_steps = [] if session_ready else ["We\u2019re getting everything ready to make this a meaningful, organised and memorable experience for students and the school team."]
+    milestones = [
+        journey_milestone("confirmed", "Exam session date", date_confirmed, "The exam session date has been confirmed.", "The exam session date is in progress."),
+        journey_milestone("schedule", "Exam session schedule", schedule_ready, "The exam session schedule has been confirmed.", "Schedule preparation is in progress."),
+        journey_milestone("entry_slips", "Entry slips for candidates", entry_slips_ready, "Download candidate entry slips for this session.", "Entry slips will be available once the exam session schedule is confirmed."),
+        journey_milestone("staffing", "Exam session staff", staff_status["status"] == "Confirmed", staff_summary["message"], staff_summary["message"]),
+        journey_milestone("material_shipment", "Exam material shipment", material_shipment["status"] == "Dispatched", "Exam materials have been dispatched.", "Exam materials are in transit.", "Exam material shipment is pending."),
+    ]
+    hero_message = "Follow the key stages as we prepare your upcoming Path exam session."
+    final_message = "Path International Examinations"
+    next_steps = [] if session_ready else ["Path International Examinations"]
+    if audience == "public":
+        milestones = [milestone for milestone in milestones if milestone["key"] not in {"schedule", "entry_slips", "staffing"}]
+        next_steps = []
     milestones = finalize_journey_milestones(milestones, audience)
     last_updated = journey_last_updated(
         session_record,
@@ -14288,14 +14284,21 @@ def path_session_journey_contract(session_record, audience, today=None, sources=
         sources.get("communications_control"),
     )
     public_journey_share = journey_share_for_session(session_record.id, "public") if audience == "institution" else None
+    if audience == "institution" and has_request_context() and public_journey_share is None:
+        public_journey_share = ensure_journey_share_token(session_record, "public")
     public_journey_url = (
         url_for("staff.shared_path_session_journey", token=public_journey_share.token, audience="public", _external=True)
-        if public_journey_share and public_journey_share.is_enabled and not public_journey_share.revoked_at
+        if has_request_context() and public_journey_share and public_journey_share.is_enabled and not public_journey_share.revoked_at
         else ""
     )
+    absence_upload = journey_absence_upload_window(session_record, now=now)
     return {
         "audience": audience,
-        "title": JOURNEY_TITLES[audience],
+        "absence_upload": absence_upload,
+        "attendance_requests": ExamSessionAttendanceRequest.query.filter_by(exam_session_id=session_record.id).order_by(ExamSessionAttendanceRequest.id.asc()).all() if audience == "institution" else [],
+        "language": "es" if has_request_context() and request.args.get("lang") == "es" else "en",
+        "translations": SPANISH_JOURNEY_TEXT,
+        "title": JOURNEY_TITLES["institution"],
         "session_name": session_record.exam_session_name,
         "session_date": session_record.session_date,
         "session_id": session_record.id,
@@ -14311,21 +14314,24 @@ def path_session_journey_contract(session_record, audience, today=None, sources=
         "entry_slips_confirmation_label": "Confirmed" if entry_slips_ready else "In progress",
         "entry_slips_confirmed": entry_slips_ready,
         "public_journey_url": public_journey_url,
+        "absence_documentation_url": (session_record.absence_documentation_folder_url or "").strip() if absence_upload["state"] == "open" else "",
+        "candidate_instructions_url": "https://drive.google.com/file/d/1iJ-y1uYeVSSqrXDU8dSFSaXE_WQZWslx/view?usp=sharing",
+        "exam_session_feedback_url": current_app.config.get("JOURNEY_EXAM_SESSION_FEEDBACK_URL", ""),
         "material_shipment": material_shipment,
         "staff_status": staff_status,
         "staff_summary": staff_summary,
         "format": session_record.format,
         "venue": journey_safe_location(session_record),
         "countdown": countdown,
-        "hero_message": hero_message,
-        "supporting_message": supporting_message if audience == "public" else "",
+        "hero_message": "Your Path exam day is getting closer 💙" if audience == "public" else hero_message,
+        "supporting_message": "We’re getting everything ready to make this a meaningful, organised and memorable experience for students and the school team! 💪" if audience == "public" else "",
         "overall_label": "Everything ready" if session_ready else "Getting ready",
         "last_updated": last_updated,
         "milestones": milestones,
         "administrative_readiness": journey_finance_readiness(sources.get("finance")) if audience == "institution" else {"visible": False},
         "next_steps": next_steps,
         "final_message": final_message,
-        "visibility_note": "Evolution in language assessment" if audience == "institution" else "",
+        "visibility_note": "All our exam sessions are carefully prepared so students can feel confident, supported and ready to show what they can do in English." if audience == "public" else "Evolution in language assessment",
     }
 
 
@@ -18649,6 +18655,39 @@ def shared_path_session_journey(token, audience):
     auto_approve_expired_schedule_review(share.exam_session, commit=True)
     journey = path_session_journey_contract(share.exam_session, audience)
     return render_template("pre_session_control_tower/session_journey.html", journey=journey, share=share, is_preview=False, csrf_token="")
+
+
+def create_journey_attendance_request(session_record):
+    candidate_number = request.form.get("candidate_number", "").strip()
+    candidate_name = request.form.get("candidate_full_name", "").strip()
+    if not candidate_number or not candidate_name or len(candidate_number) > 80 or len(candidate_name) > 200:
+        return jsonify({"ok": False, "message": "Enter a candidate number and full name (maximum 80 and 200 characters)."}), 400
+    record = ExamSessionAttendanceRequest(
+        exam_session_id=session_record.id,
+        candidate_number=candidate_number,
+        candidate_full_name=candidate_name,
+    )
+    db.session.add(record)
+    db.session.commit()
+    return jsonify({"ok": True, "id": record.id}), 201
+
+
+@staff_bp.route("/path-session-journeys/sessions/<int:session_id>/attendance-requests", methods=["POST"])
+@login_required
+def request_journey_attendance_statement(session_id):
+    if not validate_csrf():
+        return jsonify({"ok": False, "message": "Security token expired. Please refresh and try again."}), 400
+    return create_journey_attendance_request(ExamSession.query.get_or_404(session_id))
+
+
+@staff_bp.route("/path-session-journey/<token>/<audience>/attendance-requests", methods=["POST"])
+def request_shared_journey_attendance_statement(token, audience):
+    if audience != "institution":
+        abort(404)
+    share = ExamSessionJourneyShare.query.filter_by(token=token, audience="institution").first_or_404()
+    if not share.is_enabled or share.revoked_at:
+        abort(410)
+    return create_journey_attendance_request(share.exam_session)
 
 
 def journey_schedule_action_response(session_record, action, note="", created_by="Path Session Journey", auto_confirm=False):

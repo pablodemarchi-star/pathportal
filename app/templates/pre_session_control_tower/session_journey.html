@@ -1,9 +1,12 @@
 {% extends "base.html" %}
 
-{% block title %}{% if journey %}{{ journey.title }}{% else %}Path Session Journey unavailable{% endif %}{% endblock %}
+{% set spanish = journey and journey.language == 'es' %}
+{% macro t(text) -%}{{ journey.translations.get(text, text) if spanish else text }}{%- endmacro %}
+
+{% block title %}{% if journey %}{{ t(journey.title) }}{% else %}Path Session Journey unavailable{% endif %}{% endblock %}
 
 {% block content %}
-<section class="journey-page {% if journey %}journey-page-{{ journey.audience }}{% endif %}">
+<section class="journey-page {% if journey %}journey-page-institution{% endif %}" lang="{{ 'es' if spanish else 'en' }}">
   {% if unavailable %}
     <article class="journey-unavailable">
       <p class="eyebrow">Path Session Journey</p>
@@ -11,116 +14,113 @@
       <p>{{ unavailable_message or 'Please contact Path Examinations if you need an updated link.' }}</p>
     </article>
   {% else %}
+      <nav class="journey-language-switch" aria-label="Language / Idioma">
+        <span class="journey-language-label">Choose your language / Elige tu idioma</span>
+        <a href="{{ request.path }}?lang=en" lang="en" class="journey-language-button{% if not spanish %} is-active{% endif %}"{% if not spanish %} aria-current="true"{% endif %}>Version in English</a>
+        <a href="{{ request.path }}?lang=es" lang="es" class="journey-language-button{% if spanish %} is-active{% endif %}"{% if spanish %} aria-current="true"{% endif %}>Versión en español</a>
+      </nav>
     <header class="journey-hero">
-      {% if journey.audience == 'institution' %}
+      {% if true %}
         <div class="journey-institution-title-row">
           <img class="journey-path-logo" src="{{ url_for('static', filename='img/path-logo-white-transparent.png') }}" alt="Path International Examinations">
           <div class="journey-institution-title-copy">
-            <h1>{{ journey.title }}</h1>
+            <h1{% if spanish %} data-fit-single-line-title{% endif %}>{{ t(journey.title) }}</h1>
             <p>{{ journey.session_name }}</p>
           </div>
         </div>
       {% else %}
         <div class="journey-brand-mark">Path International Examinations</div>
       {% endif %}
-      {% if journey.audience != 'institution' %}
-        <p class="eyebrow">{% if is_preview %}Preview{% else %}Shared journey{% endif %}</p>
-      {% endif %}
-      {% if journey.audience != 'institution' %}
-        <h1>{{ journey.title }}</h1>
-      {% endif %}
-      <p class="journey-hero-message">{{ journey.hero_message }}</p>
-      <div class="journey-countdown" aria-label="Countdown">
-        <strong>{{ journey.countdown.label }}</strong>
+      <p class="journey-hero-message">{{ t(journey.hero_message) }}</p>
+      <div class="journey-countdown" aria-label="{{ t('Countdown') }}">
+        <strong>{% if spanish and journey.countdown.days_to_go and not journey.countdown.has_passed %}{{ 'Falta 1 día' if journey.countdown.days_to_go == 1 else 'Faltan ' ~ journey.countdown.days_to_go ~ ' días' }}{% else %}{{ t(journey.countdown.label) }}{% endif %}</strong>
         {% if not journey.countdown.is_today and not journey.countdown.has_passed and journey.countdown.days_to_go is not none %}
-          <span>until {% if journey.audience == 'public' %}your Path exam session{% else %}the exam session{% endif %}</span>
+          <span>{{ t('until the exam session') }}</span>
         {% endif %}
       </div>
-      {% if journey.audience == 'public' %}
-        <p class="journey-emotional-copy">{{ journey.supporting_message }}</p>
-      {% endif %}
     </header>
 
-    <section class="journey-session-card" aria-label="Session summary">
+    <section class="journey-session-card" aria-label="{{ t('Session summary') }}">
+      {% set session_summary_text = '- ' ~ t('Session') ~ ': ' ~ journey.session_name ~ '\n- ' ~ t('Date') ~ ': ' ~ journey.session_date.strftime('%d/%m/%Y') ~ '\n- ' ~ t('Format') ~ ': ' ~ t(journey.format or 'To be confirmed') ~ '\n- ' ~ t('Venue address') ~ ': ' ~ (journey.venue or t('To be confirmed')) %}
+      <button class="copy-icon-button journey-summary-copy" type="button" data-copy-text="{{ session_summary_text }}" data-copy-bold-labels="true" data-view-only-allowed="true" aria-label="{{ t('Copy session information') }}" title="{{ t('Copy session information') }}">
+        <svg viewBox="0 0 24 24" aria-hidden="true">
+          <rect x="9" y="9" width="10" height="10" rx="2"></rect>
+          <path d="M5 15V7a2 2 0 0 1 2-2h8"></path>
+        </svg>
+        <span class="copy-button-feedback">{{ t('Copied') }}</span>
+      </button>
       <div>
-        <span>Session</span>
+        <span>{{ t('Session') }}</span>
         <strong>{{ journey.session_name }}</strong>
       </div>
-      <div>
-        <span>Date</span>
-        <strong>{{ journey.session_date|session_date }}</strong>
+      <div class="journey-date-field">
+        <span>{{ t('Date') }}</span>
+        <strong>{{ journey.session_date.strftime('%d/%m/%Y') if spanish else journey.session_date|session_date }}</strong>
       </div>
       <div>
-        <span>Format</span>
-        <strong>{{ journey.format or 'To be confirmed' }}</strong>
+        <span>{{ t('Format') }}</span>
+        <strong>{{ t(journey.format or 'To be confirmed') }}</strong>
       </div>
       {% if journey.venue %}
-        <div>
-          <span>Venue</span>
-          <strong>{{ journey.venue }}</strong>
-        </div>
-      {% endif %}
-      <div>
-        <span>Journey status</span>
-        <strong>{{ journey.overall_label }}</strong>
-      </div>
-      {% if journey.last_updated %}
-        <div>
-          <span>Last updated</span>
-          <strong>{{ journey.last_updated|localdt }}</strong>
+        <div class="journey-venue-field">
+          <span>{{ t('Venue address') }}</span>
+          <a class="journey-venue-chip" href="https://www.google.com/maps/search/?api=1&amp;query={{ journey.venue|urlencode }}" target="_blank" rel="noopener noreferrer">{{ journey.venue }}</a>
         </div>
       {% endif %}
     </section>
 
     {% if journey.administrative_readiness.visible %}
-      <section class="journey-admin-card" aria-label="Administrative and payment readiness">
+      <section class="journey-admin-card{% if journey.administrative_readiness.milestone_status == 'in_progress' %} is-finance-pending{% endif %}" aria-label="{{ t('Administrative and payment readiness') }}">
         <div>
-          <span>{{ journey.administrative_readiness.label }}</span>
-          <strong>{{ journey.administrative_readiness.status }}</strong>
+          <span>{{ t(journey.administrative_readiness.label) }}</span>
+          <strong>{{ t(journey.administrative_readiness.status) }}</strong>
         </div>
-        <p>{{ journey.administrative_readiness.message }}</p>
+        <p>{{ t(journey.administrative_readiness.message) }}</p>
       </section>
     {% endif %}
 
-    <section class="journey-timeline" aria-label="{% if journey.audience == 'institution' %}Journey stages{% else %}Journey milestones{% endif %}">
-      <h2>{% if journey.audience == 'institution' %}Exam session stages{% else %}Milestones{% endif %}</h2>
+    {% if journey.audience == 'public' %}
+      <section class="journey-candidate-message" aria-label="{{ t('Preparing your exam experience') }}">
+        <p{% if spanish %} data-fit-two-lines{% endif %}>{{ t(journey.supporting_message) }}</p>
+      </section>
+    {% endif %}
+
+    <section class="journey-timeline" aria-label="{{ t('Journey stages') }}">
+      <h2>{{ t('Information about the exam session') }}</h2>
       <ol>
         {% for milestone in journey.milestones %}
-          <li class="journey-milestone is-{{ milestone.status }}{% if journey.audience == 'institution' and milestone.key == 'confirmed' and not journey.date_confirmation_confirmed %} is-date-pending{% endif %}{% if journey.audience == 'institution' and milestone.key == 'entry_slips' and not journey.entry_slips_confirmed %} is-entry-slips-pending{% endif %}">
+          <li class="journey-milestone is-{{ milestone.status }}{% if milestone.key == 'confirmed' and not journey.date_confirmation_confirmed %} is-date-pending{% endif %}{% if milestone.key == 'entry_slips' and not journey.entry_slips_confirmed %} is-entry-slips-pending{% endif %}">
             <span class="journey-milestone-marker" aria-hidden="true">{% if milestone.status == 'completed' %}✓{% else %}•{% endif %}</span>
             <div>
               <span class="journey-stage-heading">
-                <strong>{{ milestone.label }}</strong>
-                {% if journey.audience == 'institution' and milestone.key == 'confirmed' %}
-                  <span class="journey-status-chip {% if journey.date_confirmation_confirmed %}is-confirmed{% else %}is-in-progress{% endif %}">{{ journey.date_confirmation_label }}</span>
-                {% elif journey.audience == 'institution' and milestone.key == 'schedule' %}
-                  <span class="journey-status-chip {{ journey.schedule_confirmation_class }}" data-journey-schedule-status-chip>{{ journey.schedule_confirmation_label }}</span>
+                <strong>{% if spanish and milestone.key == 'entry_slips' %}<em>Exam entry slips</em> para candidatos{% else %}{{ t(milestone.label) }}{% endif %}</strong>
+                {% if milestone.key == 'confirmed' %}
+                  <span class="journey-status-chip {% if journey.date_confirmation_confirmed %}is-confirmed{% else %}is-in-progress{% endif %}">{{ t(journey.date_confirmation_label) }}</span>
+                {% elif milestone.key == 'schedule' %}
+                  <span class="journey-status-chip {{ journey.schedule_confirmation_class }}" data-journey-schedule-status-chip>{{ t(journey.schedule_confirmation_label) }}</span>
                   {% if journey.schedule_review_countdown.visible %}
                     <span class="journey-countdown-chip" data-journey-schedule-countdown data-deadline="{{ journey.schedule_review_countdown.due_at_iso }}">{{ (journey.schedule_review_countdown.remaining_seconds // 3600) }}:{{ '%02d'|format((journey.schedule_review_countdown.remaining_seconds % 3600) // 60) }}:{{ '%02d'|format(journey.schedule_review_countdown.remaining_seconds % 60) }} h</span>
                   {% endif %}
-                {% elif journey.audience == 'institution' and milestone.key == 'entry_slips' %}
-                  <span class="journey-status-chip {% if journey.entry_slips_confirmed %}is-confirmed{% else %}is-in-progress{% endif %}">{{ journey.entry_slips_confirmation_label }}</span>
-                {% elif journey.audience == 'institution' and milestone.key == 'material_shipment' %}
-                  <span class="journey-status-chip is-{{ journey.material_shipment.status_key }}">{{ journey.material_shipment.status }}</span>
-                {% elif journey.audience == 'institution' and milestone.key == 'staffing' %}
-                  <span class="journey-status-chip is-{{ journey.staff_status.status_key }}">{{ journey.staff_status.status }}</span>
+                {% elif milestone.key == 'entry_slips' %}
+                  <span class="journey-status-chip {% if journey.entry_slips_confirmed %}is-confirmed{% else %}is-in-progress{% endif %}">{{ t(journey.entry_slips_confirmation_label) }}</span>
+                {% elif milestone.key == 'material_shipment' %}
+                  <span class="journey-status-chip is-{{ journey.material_shipment.status_key }}">{{ t(journey.material_shipment.status) }}</span>
+                {% elif milestone.key == 'staffing' %}
+                  <span class="journey-status-chip is-{{ journey.staff_status.status_key }}">{{ t(journey.staff_status.status) }}</span>
                 {% endif %}
               </span>
-              {% if journey.audience != 'institution' %}
-                <small>{{ milestone.status_label }}</small>
-              {% endif %}
-              {% if journey.audience == 'institution' and milestone.key == 'entry_slips' %}
+              {% if milestone.key == 'entry_slips' %}
                 <p class="journey-inline-action-row">
-                  <span>{{ milestone.message }}</span>
+                  <span>{% if spanish and not journey.entry_slips_confirmed %}Las <em>Exam entry slips</em> estarán disponibles cuando se confirme el cronograma de la sesión de examen.{% else %}{{ t(milestone.message) }}{% endif %}</span>
                   {% if journey.entry_slips_confirmed and journey.entry_slips_url %}
-                    <a class="journey-access-chip" href="{{ journey.entry_slips_url }}" target="_blank" rel="noopener noreferrer">Access</a>
+                    <a class="journey-access-chip" href="{{ journey.entry_slips_url }}" target="_blank" rel="noopener noreferrer">{{ t('Access') }}</a>
                   {% else %}
-                    <span class="journey-access-chip is-disabled" aria-disabled="true">Access</span>
+                    <span class="journey-access-chip is-disabled" aria-disabled="true">{{ t('Access') }}</span>
                   {% endif %}
                 </p>
-              {% elif journey.audience == 'institution' and milestone.key == 'material_shipment' %}
-                <p>{{ milestone.message }}</p>
-                <section class="journey-shipment-timeline is-{{ journey.material_shipment.status_key }}" style="--journey-plane-progress: {{ journey.material_shipment.progress_percent }}%;" aria-label="Exam material shipment progress">
+              {% elif milestone.key == 'material_shipment' %}
+                <p>{{ t(milestone.message) }}</p>
+                <section class="journey-shipment-timeline is-{{ journey.material_shipment.status_key }}" style="--journey-plane-progress: {{ journey.material_shipment.progress_percent }}%;" aria-label="{{ t('Exam material shipment progress') }}">
                   <div class="journey-shipment-endpoint">
                     <svg viewBox="0 0 24 24" aria-hidden="true">
                       <path d="M4 21V7l8-4 8 4v14" />
@@ -128,7 +128,7 @@
                       <path d="M9 9h1" />
                       <path d="M14 9h1" />
                     </svg>
-                    <span>Path UK</span>
+                    <span>{{ t('Path UK') }}</span>
                   </div>
                   <div class="journey-shipment-track" aria-hidden="true">
                     <span class="journey-shipment-plane">
@@ -140,14 +140,14 @@
                       <path d="M12 12a4 4 0 1 0 0-8 4 4 0 0 0 0 8z" />
                       <path d="M4 21a8 8 0 0 1 16 0" />
                     </svg>
-                    <span>Exam session supervisor</span>
+                    <span>{{ t('Exam session supervisor') }}</span>
                   </div>
                 </section>
-              {% elif journey.audience == 'institution' and milestone.key == 'staffing' %}
-                <p>{{ milestone.message }}</p>
+              {% elif milestone.key == 'staffing' %}
+                <p>{% if spanish %}Se {{ 'ha asignado ' if journey.staff_summary.count == 1 else 'han asignado ' }}{{ journey.staff_summary.count }} {{ 'integrante del equipo a esta sesión de examen internacional.' if journey.staff_summary.count == 1 else 'integrantes del equipo a esta sesión de examen internacional.' }}{% else %}{{ t(milestone.message) }}{% endif %}</p>
                 {% if journey.staff_summary.dietary_count %}
-                  <section class="journey-dietary-summary" aria-label="Staff dietary requirements">
-                    <p>Please note that {{ journey.staff_summary.dietary_count }} staff {% if journey.staff_summary.dietary_count == 1 %}member has{% else %}members have{% endif %} special dietary requirements:</p>
+                  <section class="journey-dietary-summary" aria-label="{{ t('Staff dietary requirements') }}">
+                    <p>{% if spanish %}Ten en cuenta que {{ journey.staff_summary.dietary_count }} {{ 'integrante tiene requisitos alimentarios especiales' if journey.staff_summary.dietary_count == 1 else 'integrantes tienen requisitos alimentarios especiales' }}:{% else %}Please note that {{ journey.staff_summary.dietary_count }} staff {% if journey.staff_summary.dietary_count == 1 %}member has{% else %}members have{% endif %} special dietary requirements:{% endif %}</p>
                     <div class="journey-dietary-chip-list">
                       {% for requirement in journey.staff_summary.dietary_requirements %}
                         <span class="journey-dietary-chip">{{ requirement }}</span>
@@ -156,51 +156,51 @@
                   </section>
                 {% endif %}
               {% else %}
-                <p>{{ milestone.message }}</p>
+                <p>{{ t(milestone.message) }}</p>
               {% endif %}
-              {% if journey.audience == 'institution' and milestone.key == 'schedule' %}
+              {% if milestone.key == 'schedule' %}
                 {% set schedule_confirm_url = url_for('staff.shared_path_session_journey_schedule_action', token=share.token, audience=journey.audience, action='confirm') if share else url_for('staff.path_session_journey_schedule_action', session_id=journey.session_id, action='confirm') %}
                 {% set schedule_request_url = url_for('staff.shared_path_session_journey_schedule_action', token=share.token, audience=journey.audience, action='request-changes') if share else url_for('staff.path_session_journey_schedule_action', session_id=journey.session_id, action='request-changes') %}
-                <section class="journey-schedule-review" data-journey-schedule-review data-journey-review-key="journey-schedule-{{ journey.session_id }}" data-initial-schedule-confirmed="{{ 'true' if journey.schedule_confirmed else 'false' }}" data-confirm-url="{{ schedule_confirm_url }}" data-request-url="{{ schedule_request_url }}" data-csrf-token="{{ csrf_token or '' }}" aria-label="Session schedule review">
+                <section class="journey-schedule-review" data-journey-schedule-review data-journey-review-key="journey-schedule-{{ journey.session_id }}" data-initial-schedule-confirmed="{{ 'true' if journey.schedule_confirmed else 'false' }}" data-confirm-url="{{ schedule_confirm_url }}" data-request-url="{{ schedule_request_url }}" data-csrf-token="{{ csrf_token or '' }}" aria-label="{{ t('Session schedule review') }}">
                   {% if journey.schedule_url and journey.schedule_link_enabled %}
-                    <a class="journey-schedule-link" href="{{ journey.schedule_url }}" target="_blank" rel="noopener noreferrer">View session schedule</a>
+                    <a class="journey-schedule-link" href="{{ journey.schedule_url }}" target="_blank" rel="noopener noreferrer">{{ t('View session schedule') }}</a>
                   {% else %}
-                    <span class="journey-schedule-link is-disabled" aria-disabled="true">View session schedule</span>
+                    <span class="journey-schedule-link is-disabled" aria-disabled="true">{{ t('View session schedule') }}</span>
                   {% endif %}
                   <fieldset class="journey-schedule-checklist">
-                    <legend>Verify the following information before approving the session schedule:</legend>
+                    <legend>{{ t('Verify the following information before approving the session schedule:') }}</legend>
                     <label>
                       <input type="checkbox" data-journey-schedule-checkbox data-view-only-allowed="true"{% if journey.schedule_confirmed %} checked disabled{% endif %}>
-                      <span>the <strong>exam venue address</strong></span>
+                      <span>{{ 'la ' if spanish else 'the ' }}<strong>{{ t('exam venue address') }}</strong></span>
                     </label>
                     <label>
                       <input type="checkbox" data-journey-schedule-checkbox data-view-only-allowed="true"{% if journey.schedule_confirmed %} checked disabled{% endif %}>
-                      <span>the <strong>number and names of the exam rooms</strong></span>
+                      <span>{{ 'el ' if spanish else 'the ' }}<strong>{{ t('number and names of the exam rooms') }}</strong></span>
                     </label>
                     <label>
                       <input type="checkbox" data-journey-schedule-checkbox data-view-only-allowed="true"{% if journey.schedule_confirmed %} checked disabled{% endif %}>
-                      <span>the <strong>maximum capacity of each room</strong>, ensuring it matches the number of candidates assigned to that room</span>
+                      <span>{{ 'la ' if spanish else 'the ' }}<strong>{{ t('maximum capacity of each room') }}</strong>{{ ', verificando que coincida con el número de candidatos asignados a esa sala' if spanish else ', ensuring it matches the number of candidates assigned to that room' }}</span>
                     </label>
                     <label>
                       <input type="checkbox" data-journey-schedule-checkbox data-view-only-allowed="true"{% if journey.schedule_confirmed %} checked disabled{% endif %}>
-                      <span>the <strong>start and end time</strong> for each exam room within the session</span>
+                      <span>{{ 'el ' if spanish else 'the ' }}<strong>{{ t('start and end time') }}</strong>{{ ' de cada sala de examen de la sesión' if spanish else ' for each exam room within the session' }}</span>
                     </label>
                     <label>
                       <input type="checkbox" data-journey-schedule-checkbox data-view-only-allowed="true"{% if journey.schedule_confirmed %} checked disabled{% endif %}>
-                      <span>the <strong>candidates included in the session</strong></span>
+                      <span>{{ 'los ' if spanish else 'the ' }}<strong>{{ t('candidates included in the session') }}</strong></span>
                     </label>
                   </fieldset>
                   <div class="journey-schedule-actions">
-                    <button class="journey-action-chip confirm" type="button" disabled data-journey-confirm-schedule data-view-only-allowed="true">Confirm</button>
-                    <button class="journey-action-chip request" type="button" data-journey-request-changes data-view-only-allowed="true">Request schedule changes</button>
-                    <button class="journey-see-request-link" type="button" hidden data-journey-see-request data-view-only-allowed="true">See request</button>
+                    <button class="journey-action-chip confirm" type="button" disabled data-journey-confirm-schedule data-view-only-allowed="true">{{ t('Confirm') }}</button>
+                    <button class="journey-action-chip request" type="button" data-journey-request-changes data-view-only-allowed="true">{{ t('Request schedule changes') }}</button>
+                    <button class="journey-see-request-link" type="button" hidden data-journey-see-request data-view-only-allowed="true">{{ t('See request') }}</button>
                   </div>
-                  <section class="journey-change-request-panel" hidden data-journey-request-panel aria-label="Schedule change request">
-                    <p>Change requests must comply with the terms and conditions established by Path Examinations. Submission of a request does not guarantee that the change will be processed or applied.</p>
-                    <textarea rows="4" placeholder="Describe the requested schedule changes" data-journey-request-text data-view-only-allowed="true"></textarea>
+                  <section class="journey-change-request-panel" hidden data-journey-request-panel aria-label="{{ t('Schedule change request') }}">
+                    <p>{{ t('Change requests must comply with the terms and conditions established by Path Examinations. Submission of a request does not guarantee that the change will be processed or applied.') }}</p>
+                    <textarea rows="4" placeholder="{{ t('Describe the requested schedule changes') }}" data-journey-request-text data-view-only-allowed="true"></textarea>
                     <div class="journey-request-actions">
-                      <button class="journey-action-chip request" type="button" data-journey-cancel-request data-view-only-allowed="true">Cancel</button>
-                      <button class="journey-action-chip submit" type="button" data-journey-submit-request data-view-only-allowed="true">Submit request</button>
+                      <button class="journey-action-chip request" type="button" data-journey-cancel-request data-view-only-allowed="true">{{ t('Cancel') }}</button>
+                      <button class="journey-action-chip submit" type="button" data-journey-submit-request data-view-only-allowed="true">{{ t('Submit request') }}</button>
                     </div>
                   </section>
                 </section>
@@ -208,22 +208,49 @@
             </div>
           </li>
         {% endfor %}
+
       </ol>
     </section>
 
-    {% if journey.next_steps %}
-      <section class="journey-next-steps" aria-label="Next steps">
-        <h2>Exam centre readiness checklist</h2>
+    {% if journey.audience == 'public' %}
+      <section class="journey-next-steps" aria-label="{{ t('Information for candidates') }}">
+        <h2>{{ t('Information for candidates') }}</h2>
+        <ol>
+          <li class="journey-milestone is-upcoming">
+            <span class="journey-milestone-marker" aria-hidden="true">&gt;</span>
+            <div>
+              <strong>{{ t('Instructions for candidates') }}</strong>
+              <p>{% if journey.candidate_instructions_url %}<a class="journey-inline-link" href="{{ journey.candidate_instructions_url }}" target="_blank" rel="noopener noreferrer">{{ t('Click here') }}</a>{% else %}<span class="journey-disabled-link">{{ t('Click here') }}</span>{% endif %}{{ t(' to download the instructions for candidates') }}</p>
+            </div>
+          </li>
+          <li class="journey-milestone is-upcoming">
+            <span class="journey-milestone-marker" aria-hidden="true">&gt;</span>
+            <div>
+              <span class="journey-stage-heading">
+                <strong>{{ t('Exam session feedback') }}</strong>
+                <span class="journey-status-chip is-pending">{{ t('Available for 10 days after the exam date') }}</span>
+              </span>
+              <p>{% if journey.exam_session_feedback_url %}<a class="journey-inline-link" href="{{ journey.exam_session_feedback_url }}" target="_blank" rel="noopener noreferrer">{{ t('Click here') }}</a>{% else %}<span class="journey-disabled-link">{{ t('Click here') }}</span>{% endif %}{{ t(' to complete the exam session feedback') }}</p>
+            </div>
+          </li>
+          {% include 'pre_session_control_tower/_journey_absence_documentation.html' %}
+        </ol>
+      </section>
+    {% endif %}
+
+    {% if journey.audience == 'institution' and journey.next_steps %}
+      <section class="journey-next-steps" aria-label="{{ t('Next steps') }}">
+        <h2>{{ t('Exam centre readiness checklist') }}</h2>
         <ol>
           <li class="journey-milestone is-upcoming">
             <span class="journey-milestone-marker" aria-hidden="true">&gt;</span>
             <div>
               <span class="journey-stage-heading">
-                <strong>Session journey for candidates and families</strong>
+                <strong>{{ t('Session journey for candidates and families') }}</strong>
               </span>
               <p class="journey-inline-copy-row">
-                <span>Share this link with your candidates and their families</span>
-                <button class="copy-icon-button journey-copy-link-button" type="button" data-copy-text="{{ journey.public_journey_url }}" aria-label="Copy session journey link" title="Copy session journey link"{% if not journey.public_journey_url %} disabled{% endif %}>
+                <span>{{ t('Share this link with your candidates and their families') }}</span>
+                <button class="copy-icon-button journey-copy-link-button" type="button" data-copy-text="{{ journey.public_journey_url }}" aria-label="{{ t('Copy session journey link') }}" title="{{ t('Copy session journey link') }}"{% if not journey.public_journey_url %} disabled{% endif %}>
                   <svg class="copy-icon" viewBox="0 0 24 24" aria-hidden="true">
                     <rect x="9" y="9" width="11" height="11" rx="2"></rect>
                     <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
@@ -231,7 +258,7 @@
                   <svg class="check-icon" viewBox="0 0 24 24" aria-hidden="true">
                     <path d="M20 6 9 17l-5-5"></path>
                   </svg>
-                  <span class="copy-button-feedback">Copied</span>
+                  <span class="copy-button-feedback">{{ t('Copied') }}</span>
                 </button>
               </p>
             </div>
@@ -240,59 +267,66 @@
             <span class="journey-milestone-marker" aria-hidden="true">&gt;</span>
             <div>
               <span class="journey-stage-heading">
-                <strong>Instructions for candidates</strong>
+                <strong>{{ t('Instructions for candidates') }}</strong>
               </span>
-              <p><a class="journey-inline-link" href="#">Click here</a> to download the instructions for candidates</p>
+              <p><a class="journey-inline-link" href="https://drive.google.com/file/d/1iJ-y1uYeVSSqrXDU8dSFSaXE_WQZWslx/view?usp=drive_link" target="_blank" rel="noopener noreferrer">{{ t('Click here') }}</a>{{ t(' to download the instructions for candidates') }}</p>
             </div>
           </li>
           <li class="journey-milestone is-upcoming">
             <span class="journey-milestone-marker" aria-hidden="true">&gt;</span>
             <div>
               <span class="journey-stage-heading">
-                <strong>Session venue setup</strong>
+                <strong>{{ t('Session venue setup') }}</strong>
               </span>
-              <p><a class="journey-inline-link" href="#">Click here</a> to download the checklist for exam centres</p>
+              <p><a class="journey-inline-link" href="https://drive.google.com/file/d/1M-9bpmUddNKPh5eP_HJvUXt8MPIN6Xcd/view?usp=sharing" target="_blank" rel="noopener noreferrer">{{ t('Click here') }}</a>{{ t(' to download the checklist for exam centres') }}</p>
             </div>
           </li>
           <li class="journey-milestone is-upcoming">
             <span class="journey-milestone-marker" aria-hidden="true">&gt;</span>
             <div>
               <span class="journey-stage-heading">
-                <strong>Statement of session attendance for candidates</strong>
+                <strong>{{ t('Statement of session attendance for candidates') }}</strong>
               </span>
-              <p><button class="journey-inline-link journey-link-button" type="button" data-open-modal="journey-attendance-request-modal" data-view-only-allowed="true">Click here</button> to request a statement of session attendance for candidates</p>
+              <p><button class="journey-inline-link journey-link-button" type="button" data-open-modal="journey-attendance-request-modal" data-view-only-allowed="true">{{ t('Click here') }}</button>{{ t(' to request a statement of session attendance for candidates') }}</p>
+              <ul class="journey-attendance-requests">
+                {% for attendance in journey.attendance_requests %}
+                  <li><span>{{ attendance.candidate_number }} — {{ attendance.candidate_full_name }}</span> <span class="journey-attendance-request-status"><span class="journey-status-chip is-in-progress">{{ t('In process') }}</span><span class="journey-attendance-download" aria-disabled="true">{{ t('Download here') }}</span></span></li>
+                {% endfor %}
+              </ul>
             </div>
           </li>
           <li class="journey-milestone is-upcoming">
             <span class="journey-milestone-marker" aria-hidden="true">&gt;</span>
             <div>
               <span class="journey-stage-heading">
-                <strong>Exam session feedback</strong>
-                <span class="journey-status-chip is-pending">Available on exam date</span>
+                <strong>{{ t('Exam session feedback') }}</strong>
+                <span class="journey-status-chip is-pending">{{ t('Available on exam date') }}</span>
               </span>
-              <p><span class="journey-disabled-link">Click here</span> to complete the exam session feedback</p>
+              <p><span class="journey-disabled-link">{{ t('Click here') }}</span>{{ t(' to complete the exam session feedback') }}</p>
             </div>
           </li>
+          {% include 'pre_session_control_tower/_journey_absence_documentation.html' %}
         </ol>
       </section>
     {% endif %}
 
-    <footer class="journey-footer">
+    <footer class="journey-footer{% if journey.audience == 'public' %} journey-candidate-footer{% endif %}">
       <p>{{ journey.final_message }}</p>
       {% if journey.visibility_note %}
-        <small class="journey-visibility-note">{{ journey.visibility_note }}</small>
+        <small class="journey-visibility-note">{% if journey.audience == 'public' %}{{ t('All our exam sessions are carefully prepared so students can feel confident,') }}<br>{{ t('supported and ready to show what they can do in English.') }}{% else %}{{ t(journey.visibility_note) }}{% endif %}</small>
       {% endif %}
     </footer>
 
+    {% if journey.audience == 'institution' %}
     <div class="modal journey-entry-slip-modal" id="journey-entry-slip-modal" aria-hidden="true" role="dialog" aria-modal="true" aria-labelledby="journey-entry-slip-title">
       <div class="modal-panel journey-image-modal-panel">
         <div class="modal-header">
           <div>
-            <h2 id="journey-entry-slip-title">Entry slips for candidates</h2>
+            <h2 id="journey-entry-slip-title">{% if spanish %}<em>Exam entry slips</em> para candidatos{% else %}{{ t('Entry slips for candidates') }}{% endif %}</h2>
           </div>
           <button class="icon-button" type="button" data-close-modal data-view-only-allowed="true">&times;</button>
         </div>
-        <img class="journey-entry-slip-preview" src="{{ url_for('static', filename='img/path-entry-slip-preview.png') }}" alt="International exam entry slip preview">
+        <img class="journey-entry-slip-preview" src="{{ url_for('static', filename='img/path-entry-slip-preview.png') }}" alt="{{ t('International exam entry slip preview') }}">
       </div>
     </div>
 
@@ -300,26 +334,29 @@
       <div class="modal-panel confirm-panel">
         <div class="modal-header">
           <div>
-            <h2 id="journey-attendance-request-title">Statement of session attendance for candidates</h2>
+            <h2 id="journey-attendance-request-title">{{ t('Statement of session attendance for candidates') }}</h2>
           </div>
           <button class="icon-button" type="button" data-close-modal data-view-only-allowed="true">&times;</button>
         </div>
-        <form class="journey-attendance-request-form">
+        <form data-error-message="{{ 'No se pudo enviar la solicitud. Revisa los datos e inténtalo de nuevo.' if spanish else 'Unable to submit your request. Please try again.' }}" class="journey-attendance-request-form" method="post" action="{{ url_for('staff.request_shared_journey_attendance_statement', token=share.token, audience='institution') if share else url_for('staff.request_journey_attendance_statement', session_id=journey.session_id) }}">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token or '' }}">
           <label>
-            <span>Candidate number</span>
-            <input type="text" name="candidate_number" data-view-only-allowed="true">
+            <span>{{ t('Candidate number') }}</span>
+            <input type="text" name="candidate_number" required maxlength="80" data-view-only-allowed="true">
           </label>
           <label>
-            <span>Candidate full name</span>
-            <input type="text" name="candidate_full_name" data-view-only-allowed="true">
+            <span>{{ t('Candidate full name') }}</span>
+            <input type="text" name="candidate_full_name" required maxlength="200" data-view-only-allowed="true">
           </label>
+          <p class="journey-attendance-error" role="alert" hidden></p>
           <div class="journey-request-actions">
-            <button class="journey-action-chip request" type="button" data-close-modal data-view-only-allowed="true">Cancel</button>
-            <button class="journey-action-chip submit" type="button" data-close-modal data-view-only-allowed="true">Submit</button>
+            <button class="journey-action-chip request" type="button" data-close-modal data-view-only-allowed="true">{{ t('Cancel') }}</button>
+            <button class="journey-action-chip submit" type="submit" data-view-only-allowed="true">{{ t('Submit') }}</button>
           </div>
         </form>
       </div>
     </div>
+    {% endif %}
   {% endif %}
 </section>
 {% endblock %}
