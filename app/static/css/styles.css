@@ -7613,7 +7613,7 @@ span.session-marker-chip {
 
 .schedule-status-in-progress {
   background: var(--badge-yellow-bg);
-  color: var(--badge-blue-text);
+  color: var(--badge-yellow-text);
 }
 
 .schedule-status-ready-to-send,
