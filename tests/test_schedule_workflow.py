@@ -5722,7 +5722,7 @@ class ScheduleWorkflowTest(unittest.TestCase):
         self.assertEqual(self.session_record.schedule_folder_url, "https://example.com/schedule-folder")
         self.assertEqual(self.session_record.exam_entry_slips_url, "https://example.com/entry-slips-folder")
         self.assertEqual(workflow.status, "Ready to send")
-        self.assertEqual(workflow.next_action_due_at, argentina_add_business_days(datetime.now(LOCAL_TZ).date(), 2))
+        self.assertEqual(workflow.next_action_due_at, argentina_next_business_day(datetime.now(LOCAL_TZ).date()))
 
     def test_mark_revised_ready_rejects_missing_upload_confirmations(self):
         db.session.add(ExamSessionScheduleWorkflow(
@@ -5915,27 +5915,75 @@ class ScheduleWorkflowTest(unittest.TestCase):
         workflow = ExamSessionScheduleWorkflow.query.filter_by(exam_session_id=self.session_record.id).one()
         self.assertEqual(workflow.status, "In progress")
 
+    def test_schedule_state_deadlines_start_at_local_transition_time(self):
+        from app.routes import schedule_status_deadline
+        entered_at = datetime(2026, 10, 22, 1, 30, tzinfo=timezone.utc)
+        self.assertEqual(schedule_status_deadline("Ready to send", entered_at), date(2026, 10, 22))
+        self.assertEqual(schedule_status_deadline("Sent for review", entered_at), date(2026, 10, 23))
+        friday = datetime(2026, 11, 20, 15, tzinfo=LOCAL_TZ)
+        self.assertEqual(schedule_status_deadline("Ready to send", friday), date(2026, 11, 24))
+        self.assertEqual(schedule_status_deadline("Sent for review", friday), date(2026, 11, 25))
+        self.assertEqual(argentina_next_business_day(date(2026, 7, 8)), date(2026, 7, 13))
+        self.assertEqual(argentina_next_business_day(date(2026, 6, 12)), date(2026, 6, 16))
+
+    def test_bundle_refresh_repairs_state_deadlines_from_history(self):
+        from unittest.mock import patch
+        from app.routes import sync_schedule_preparation_deadline_for_bundle
+        workflow = ExamSessionScheduleWorkflow(exam_session_id=self.session_record.id,
+            status="Ready to send", next_action_due_at=date(2026, 10, 28))
+        db.session.add(workflow)
+        event = ExamSessionScheduleEvent(workflow=workflow, previous_status="In progress",
+            new_status="Ready to send", created_at=datetime(2026, 10, 21, 15, tzinfo=timezone.utc))
+        db.session.add(event)
+        db.session.flush()
+        with patch("app.routes.shipment_bundle_sessions", return_value=[self.session_record]):
+            self.assertTrue(sync_schedule_preparation_deadline_for_bundle(object()))
+            self.assertEqual(workflow.next_action_due_at, date(2026, 10, 22))
+            self.assertFalse(sync_schedule_preparation_deadline_for_bundle(object()))
+            workflow.status = "Sent for review"
+            db.session.add(ExamSessionScheduleEvent(workflow=workflow, previous_status="Ready to send",
+                new_status="Sent for review", created_at=datetime(2026, 10, 21, 16, tzinfo=timezone.utc)))
+            db.session.flush()
+            self.assertTrue(sync_schedule_preparation_deadline_for_bundle(object()))
+            self.assertEqual(workflow.next_action_due_at, date(2026, 10, 23))
+            workflow.status = "Changes requested"
+            workflow.next_action_due_at = date(2026, 10, 26)
+            self.assertFalse(sync_schedule_preparation_deadline_for_bundle(object()))
+            self.assertEqual(workflow.next_action_due_at, date(2026, 10, 26))
+
+    def test_schedule_transitions_assign_automatic_deadlines(self):
+        workflow = ExamSessionScheduleWorkflow(exam_session_id=self.session_record.id, status="In progress")
+        db.session.add(workflow)
+        db.session.flush()
+        workflow, error = apply_schedule_workflow_transition(self.session_record, "mark_ready", due_at=date(2026, 1, 1))
+        self.assertIsNone(error)
+        self.assertEqual(workflow.next_action_due_at, argentina_next_business_day(datetime.now(LOCAL_TZ).date()))
+        db.session.flush()
+        workflow, error = apply_schedule_workflow_transition(self.session_record, "send_for_review", due_at=date(2026, 1, 1))
+        self.assertIsNone(error)
+        self.assertEqual(workflow.next_action_due_at, argentina_add_business_hours(workflow.last_sent_at, 48).date())
+
     def test_argentina_next_business_day_skips_weekends_and_holidays(self):
         self.assertEqual(argentina_next_business_day(date(2026, 7, 10)), date(2026, 7, 13))
         self.assertEqual(argentina_next_business_day(date(2026, 12, 7)), date(2026, 12, 9))
 
     def test_argentina_add_business_days_skips_weekends_and_holidays(self):
         self.assertEqual(argentina_add_business_days(date(2026, 7, 10), 2), date(2026, 7, 14))
-        self.assertEqual(argentina_add_business_days(date(2026, 12, 4), 2), date(2026, 12, 9))
+        self.assertEqual(argentina_add_business_days(date(2026, 12, 4), 2), date(2026, 12, 10))
 
     def test_argentina_add_business_hours_pauses_for_weekends(self):
-        sent_at = datetime(2026, 7, 10, 10, 30, tzinfo=LOCAL_TZ)
+        sent_at = datetime(2026, 7, 3, 10, 30, tzinfo=LOCAL_TZ)
 
         due_at = argentina_add_business_hours(sent_at, 48)
 
-        self.assertEqual(due_at, datetime(2026, 7, 14, 10, 30, tzinfo=LOCAL_TZ))
+        self.assertEqual(due_at, datetime(2026, 7, 7, 10, 30, tzinfo=LOCAL_TZ))
 
     def test_argentina_add_business_hours_pauses_for_holidays(self):
         sent_at = datetime(2026, 12, 4, 10, 30, tzinfo=LOCAL_TZ)
 
         due_at = argentina_add_business_hours(sent_at, 48)
 
-        self.assertEqual(due_at, datetime(2026, 12, 9, 10, 30, tzinfo=LOCAL_TZ))
+        self.assertEqual(due_at, datetime(2026, 12, 10, 10, 30, tzinfo=LOCAL_TZ))
 
     def test_staffing_control_view_does_not_create_record(self):
         db.session.add(ExamSessionSupervisorAssignment(
@@ -19149,7 +19197,7 @@ assert.equal(storage.size, 0);
         self.assertNotIn("data-start-minutes", html)
 
     def test_path_session_journey_confirm_schedule_approves_workflow(self):
-        sent_at = datetime(2026, 7, 10, 10, 30, tzinfo=LOCAL_TZ)
+        sent_at = datetime(2026, 7, 3, 10, 30, tzinfo=LOCAL_TZ)
         workflow = ExamSessionScheduleWorkflow(
             exam_session_id=self.session_record.id,
             status="Sent for review",
@@ -19195,7 +19243,7 @@ assert.equal(storage.size, 0);
         self.assertNotIn("data-journey-schedule-countdown", html)
 
     def test_shared_path_session_journey_request_changes_updates_bundle_schedule(self):
-        sent_at = datetime(2026, 7, 10, 10, 30, tzinfo=LOCAL_TZ)
+        sent_at = datetime(2026, 7, 3, 10, 30, tzinfo=LOCAL_TZ)
         self.session_record.monthly_registrations_closed = True
         self.session_record.date_confirmation_status = "Confirmed"
         workflow = ExamSessionScheduleWorkflow(
@@ -19262,7 +19310,7 @@ assert.equal(storage.size, 0);
         self.assertIn("Please revise Room 2 capacity.", html)
 
     def test_expired_path_session_journey_countdown_confirms_schedule_automatically(self):
-        sent_at = datetime(2026, 7, 10, 10, 30, tzinfo=LOCAL_TZ)
+        sent_at = datetime(2026, 7, 3, 10, 30, tzinfo=LOCAL_TZ)
         now = datetime(2026, 7, 14, 10, 31, tzinfo=LOCAL_TZ)
         self.session_record.monthly_registrations_closed = True
         self.session_record.date_confirmation_status = "Confirmed"

@@ -6463,8 +6463,37 @@ def schedule_workflow_review_round(workflow):
     return workflow.review_round if workflow else 0
 
 
+def schedule_status_deadline(status, entered_at):
+    if not entered_at or status not in {"Ready to send", "Sent for review"}:
+        return None
+    if entered_at.tzinfo is None:
+        entered_at = entered_at.replace(tzinfo=timezone.utc)
+    entered_at = entered_at.astimezone(LOCAL_TZ)
+    if status == "Ready to send":
+        return argentina_next_business_day(entered_at.date())
+    return argentina_add_business_hours(entered_at, 48).date()
+
+
 def schedule_workflow_current_deadline(workflow):
-    return workflow.next_action_due_at if workflow else None
+    if not workflow:
+        return None
+    if workflow.status in {"Ready to send", "Sent for review"}:
+        # Bundle refreshes used to overwrite these deadlines. Recover the original
+        # state-entry timestamp rather than the mutable workflow.updated_at.
+        entries = [event for event in workflow.events
+                   if event.new_status == workflow.status
+                   and event.previous_status != event.new_status and event.created_at]
+        def event_key(event):
+            return (event.created_at.replace(tzinfo=timezone.utc)
+                    if event.created_at.tzinfo is None else event.created_at,
+                    event.id or 0)
+        entered_at = max(entries, key=event_key).created_at if entries else None
+        if not entered_at and workflow.status == "Sent for review":
+            entered_at = workflow.last_sent_at
+        expected = schedule_status_deadline(workflow.status, entered_at)
+        if expected:
+            workflow.next_action_due_at = expected
+    return workflow.next_action_due_at
 
 
 def local_date(value):
@@ -11404,7 +11433,7 @@ def easter_sunday(year):
 
 def argentina_national_holidays(year):
     easter = easter_sunday(year)
-    return {
+    holidays = {
         date(year, 1, 1),
         easter - timedelta(days=48),
         easter - timedelta(days=47),
@@ -11413,15 +11442,24 @@ def argentina_national_holidays(year):
         date(year, 4, 2),
         date(year, 5, 1),
         date(year, 5, 25),
-        date(year, 6, 17),
         date(year, 6, 20),
         date(year, 7, 9),
-        date(year, 8, 17),
-        date(year, 10, 12),
-        date(year, 11, 20),
         date(year, 12, 8),
         date(year, 12, 25),
     }
+    # Ley 27.399, art. 6: observe movable holidays on the appropriate Monday.
+    for month, day in ((6, 17), (8, 17), (10, 12), (11, 20)):
+        holiday = date(year, month, day)
+        if holiday.weekday() in (1, 2):
+            holiday -= timedelta(days=holiday.weekday())
+        elif holiday.weekday() in (3, 4):
+            holiday += timedelta(days=7 - holiday.weekday())
+        holidays.add(holiday)
+    # National 2026 calendar: Resolución 164/2025 and Decreto 1103/2026.
+    if year == 2026:
+        holidays.update({date(2026, 3, 23), date(2026, 7, 10),
+                         date(2026, 11, 9), date(2026, 12, 7)})
+    return holidays
 
 
 def is_argentina_business_day(value):
@@ -11668,11 +11706,16 @@ def sync_schedule_preparation_deadline_for_bundle(bundle, today=None):
     sessions = shipment_bundle_sessions(bundle)
     changed = False
     for session_record in sessions:
+        workflow = get_or_create_schedule_workflow(session_record)
+        if workflow.status in {"Ready to send", "Sent for review"}:
+            previous_deadline = workflow.next_action_due_at
+            schedule_workflow_current_deadline(workflow)
+            changed = changed or previous_deadline != workflow.next_action_due_at
+            continue
+        if workflow.status not in {"Not started", "In progress"}:
+            continue
         deadline = schedule_preparation_deadline_for_session(session_record, today=today, bundle_sessions=sessions)
         if not deadline:
-            continue
-        workflow = get_or_create_schedule_workflow(session_record)
-        if workflow.status == "Approved":
             continue
         if workflow.next_action_due_at != deadline:
             workflow.next_action_due_at = deadline
@@ -13918,7 +13961,7 @@ def schedule_workflow_sent_for_review_datetime(workflow):
     if not workflow:
         return None
     sent_events = sorted(
-        (event for event in workflow.events if event.new_status == "Sent for review" and event.created_at),
+        (event for event in workflow.events if event.new_status == "Sent for review" and event.previous_status != event.new_status and event.created_at),
         key=lambda event: (event.created_at or datetime.min.replace(tzinfo=timezone.utc), event.id or 0),
         reverse=True,
     )
@@ -15399,6 +15442,8 @@ def apply_schedule_workflow_transition(session_record, action_key, due_at=None, 
                 setattr(record, field, value)
 
     now = datetime.now(timezone.utc)
+    if not action.get("same_status") and action["to"] in {"Ready to send", "Sent for review"}:
+        due_at = schedule_status_deadline(action["to"], now)
     workflow.status = previous_status if action.get("same_status") else action["to"]
     workflow.next_action_due_at = None if action["to"] == "Approved" else due_at
     if action.get("sent"):
@@ -15420,6 +15465,7 @@ def apply_schedule_workflow_transition(session_record, action_key, due_at=None, 
         note=clean_note or None,
         due_at=workflow.next_action_due_at,
         created_by=created_by,
+        created_at=now,
     )
     db.session.add(event)
     for related in component_sessions:
@@ -15436,6 +15482,7 @@ def apply_schedule_workflow_transition(session_record, action_key, due_at=None, 
             new_status=linked_workflow.status,
             note=clean_note or None,
             due_at=linked_workflow.next_action_due_at,
+            created_at=now,
             created_by=created_by,
         ))
     return workflow, None
@@ -19100,7 +19147,7 @@ def update_schedule_workflow(session_id):
         due_at = argentina_next_business_day(datetime.now(LOCAL_TZ).date())
     if action_key == "send_for_review":
         due_at = argentina_add_business_hours(datetime.now(LOCAL_TZ), 48).date()
-    if action_key in {"record_changes", "mark_revised_ready"}:
+    if action_key == "record_changes":
         due_at = argentina_add_business_days(datetime.now(LOCAL_TZ).date(), 2)
     if action_key == "continue_editing":
         workflow = ExamSessionScheduleWorkflow.query.filter_by(exam_session_id=session_record.id).first()
