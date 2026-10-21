@@ -5088,6 +5088,11 @@ This stage has already been marked as complete. Reopening it may affect package 
           </section>
           {{ schedule_status_track_panel(session, events) }}
 
+          {% if view.schedule_concat_sessions and action_ns.primary and action_ns.primary.key in ['mark_ready', 'mark_revised_ready'] %}
+            <aside class="schedule-concat-upload-notice" role="note">
+              <strong>Important:</strong> this exam session is concatenated with {% for linked in view.schedule_concat_sessions %}<a href="{{ linked.url }}">{{ linked.name }}</a>{% if not loop.last %}, {% endif %}{% endfor %}. All schedules and Exam entry slips for every concatenated session must be uploaded before the status can be changed to {{ schedule_status_badge('Ready to send') }}.
+            </aside>
+          {% endif %}
           {% if view.status == 'Approved' %}
             <article class="schedule-recommended-action is-completed">
               <div>

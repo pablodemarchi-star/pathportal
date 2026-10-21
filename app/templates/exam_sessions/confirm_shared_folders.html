@@ -1,0 +1,21 @@
+{% extends "base.html" %}
+{% block title %}Confirm shared folder changes | Path Examinations{% endblock %}
+{% block content %}
+<section class="panel">
+  <h1>Confirm shared folder changes</h1>
+  <p>Changing these folder links will also update them in the following concatenated sessions:</p>
+  <ul>
+    {% for linked in related_sessions %}<li>{{ linked.exam_session_name }}</li>{% endfor %}
+  </ul>
+  <p>The following links will be the same for all sessions in the group:</p>
+  <ul>
+    {% for change in changes %}<li><strong>{{ change.label }}:</strong> {{ change.url or 'No link (the current link will be removed)' }}</li>{% endfor %}
+  </ul>
+  <form method="post" action="{{ submit_url }}">
+    {% for name, value in submitted_fields %}<input type="hidden" name="{{ name }}" value="{{ value }}">{% endfor %}
+    <input type="hidden" name="confirm_concat_folder_changes" value="1">
+    <button type="submit" class="primary-button">Confirm and save for all sessions</button>
+    <a class="secondary-button" href="{{ cancel_url }}">Cancel</a>
+  </form>
+</section>
+{% endblock %}

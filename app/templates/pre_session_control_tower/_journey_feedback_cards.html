@@ -1,0 +1,10 @@
+            <div class="journey-feedback-cards-row" style="--journey-feedback-columns: {{ journey.feedback_cards|length }};">
+              {% for card in journey.feedback_cards %}
+                <section class="journey-feedback-card" data-feedback-session-id="{{ card.session_id }}">
+                  <h3 data-fit-single-line-text>{{ ts('Exam session feedback for') }} {{ card.session_name }}</h3>
+  <time class="journey-session-resource-date" datetime="{{ card.session_date.isoformat() }}">{{ ts('Date') }}: {{ card.session_date.strftime('%d/%m/%Y') }}</time>
+                  <span class="journey-status-chip is-pending">{{ ts('Available for 10 days after the exam date') if journey.audience == 'public' else ts('Available on exam date') }}</span>
+                  <p>{% if journey.audience == 'public' and journey.exam_session_feedback_url %}<a class="journey-inline-link" href="{{ journey.exam_session_feedback_url }}" target="_blank" rel="noopener noreferrer">{{ ts('Click here') }}</a>{% else %}<span class="journey-disabled-link">{{ ts('Click here') }}</span>{% endif %}{{ ts(' to complete the exam session feedback') }}</p>
+                </section>
+              {% endfor %}
+            </div>

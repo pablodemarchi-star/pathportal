@@ -1,0 +1,13 @@
+<section class="journey-staff-card" data-staff-session-id="{{ card.session_id }}">
+  <h3 data-fit-single-line-text>{{ ts('Exam session staff for') }} {{ card.session_name }}</h3>
+  <span class="journey-status-chip is-{{ card.status.status_key }}">{{ 'Confirmado' if spanish and card.status.status == 'Confirmed' else ts(card.status.status) }}</span>
+  <p>{% if spanish %}Se {{ 'ha asignado ' if card.summary.count == 1 else 'han asignado ' }}{{ card.summary.count }} {{ 'integrante del equipo a esta sesión de examen internacional.' if card.summary.count == 1 else 'integrantes del equipo a esta sesión de examen internacional.' }}{% else %}{{ card.summary.message }}{% endif %}</p>
+  {% if card.summary.dietary_count %}
+    <section class="journey-dietary-summary" aria-label="{{ ts('Staff dietary requirements') }}">
+      <p>{% if spanish %}Ten en cuenta que {{ card.summary.dietary_count }} {{ 'integrante tiene requisitos alimentarios especiales' if card.summary.dietary_count == 1 else 'integrantes tienen requisitos alimentarios especiales' }}:{% else %}Please note that {{ card.summary.dietary_count }} staff {% if card.summary.dietary_count == 1 %}member has{% else %}members have{% endif %} special dietary requirements:{% endif %}</p>
+      <div class="journey-dietary-chip-list">
+        {% for requirement in card.summary.dietary_requirements %}<span class="journey-dietary-chip">{{ requirement }}</span>{% endfor %}
+      </div>
+    </section>
+  {% endif %}
+</section>

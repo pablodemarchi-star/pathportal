@@ -1,0 +1,10 @@
+                <section class="journey-absence-requirements">
+                  <p class="journey-absence-requirements-title">{{ t('Only the following supporting documents will be accepted:') }}</p>
+                <ul>
+                  <li><strong>{{ t('Medical certificate:') }}</strong>{{ t(' signed and stamped by a licensed medical professional. Valid for onsite and online exams.') }}</li>
+                  <li><strong>{{ t('Travel ticket:') }}</strong>{% if spanish %}{{ t(' in the candidate’s name, proving that they were more than ') }}{% else %} issued in the candidate’s name, confirming that they were more than {% endif %}<strong>{{ t('200 km from the exam venue') }}</strong>{% if spanish %}{{ t(' on the relevant date. Valid only for onsite exams.') }}{% else %} on the exam date. Valid for onsite exams only.{% endif %}</li>
+                  <li><strong>{{ t('Institutional certificate:') }}</strong>{{ t(' issued by an educational institution (school or university) or another organisation that duly justifies the absence, with the appropriate signature and stamp.') }}</li>
+                </ul>
+                </section>
+                <p class="journey-absence-note"><strong>{{ t('Important:') }}</strong>{% if spanish %}{{ t(' Notes from family members or explanations without professional or institutional support will not be accepted.') }}{% else %} Notes from family members or justifications without professional or institutional supporting evidence will not be accepted.{% endif %}</p>
+                <p class="journey-absence-note">{{ t('Submitting supporting documentation ') }}<strong>{{ t('does not imply automatic approval') }}</strong>{{ t('. All documentation will be reviewed and assessed by the Path Examinations team.') }}</p>

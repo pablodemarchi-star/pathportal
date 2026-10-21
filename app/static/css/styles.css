@@ -9567,6 +9567,7 @@ span.session-marker-chip {
 }
 
 .journey-institution-title-copy {
+  min-width: 0;
   flex: 1 1 360px;
   display: grid;
   gap: 6px;
@@ -17098,4 +17099,404 @@ span.session-marker-chip {
 
 .journey-attendance-error {
   color: #a52828;
+}
+
+.journey-countdown-row {
+  display: grid;
+  grid-template-columns: repeat(var(--journey-countdown-columns), minmax(0, 1fr));
+  gap: clamp(4px, 1.2vw, 14px);
+  margin-top: 10px;
+}
+
+.journey-countdown-row .journey-countdown-concatenated {
+  container-type: inline-size;
+  box-sizing: border-box;
+  align-content: start;
+  width: 100%;
+  min-width: 0;
+  margin-top: 0;
+  padding: clamp(6px, 1.5vw, 18px);
+  overflow-wrap: anywhere;
+}
+
+.journey-countdown-concatenated strong {
+  font-size: clamp(14px, 12cqi, 54px);
+  line-height: 1.1;
+}
+
+.journey-countdown-concatenated span {
+  font-size: clamp(10px, 5cqi, 15px);
+}
+
+.journey-countdown-concatenated .journey-countdown-session-name {
+  margin-bottom: 6px;
+  color: white;
+  font-size: clamp(11px, 6cqi, 19px);
+  font-weight: 700;
+  line-height: 1.3;
+}
+
+[data-fit-single-line-text] {
+  min-width: 0;
+  max-width: 100%;
+  white-space: nowrap;
+}
+
+.journey-name-separator {
+  font-style: normal;
+}
+
+.journey-session-cards-row {
+  display: grid;
+  grid-template-columns: repeat(var(--journey-session-columns), minmax(0, 1fr));
+  gap: clamp(6px, 1.2vw, 14px);
+  margin-top: 18px;
+}
+
+.journey-session-cards-row .journey-session-card-compact {
+  container-type: inline-size;
+  min-width: 0;
+  margin-top: 0;
+  padding: 14px clamp(8px, 1.5vw, 18px) 16px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  align-content: start;
+  gap: 12px 8px;
+}
+
+.journey-session-card-compact .journey-session-card-name {
+  grid-column: 1 / -1;
+}
+
+.journey-session-card-compact strong {
+  font-size: clamp(12px, 5cqi, 16px);
+  line-height: 1.35;
+}
+
+.journey-session-card-compact span {
+  font-size: clamp(9px, 3.5cqi, 11px);
+}
+
+.journey-session-card-compact .journey-venue-chip {
+  max-width: 100%;
+  box-sizing: border-box;
+  overflow-x: auto;
+  font-size: clamp(11px, 4cqi, 13px);
+  padding: 5px 9px;
+}
+
+.journey-session-card-compact .journey-session-card-name {
+  padding-right: 36px;
+}
+
+.journey-milestone .journey-staff-cards-row {
+  display: grid;
+  grid-template-columns: repeat(var(--journey-staff-columns), minmax(0, 1fr));
+  gap: clamp(6px, 1.2vw, 14px);
+  min-width: 0;
+}
+
+.journey-staff-card {
+  container-type: inline-size;
+  min-width: 0;
+  padding: clamp(8px, 1.5vw, 18px);
+  border: 1px solid var(--color-border);
+  border-radius: 12px;
+  background: #fafcfc;
+  overflow-wrap: anywhere;
+}
+
+.journey-staff-card h3 {
+  margin: 0 0 10px;
+  color: var(--color-primary-dark);
+  font-size: clamp(12px, 6cqi, 18px);
+  line-height: 1.35;
+}
+
+.journey-staff-card > .journey-status-chip {
+  max-width: 100%;
+  box-sizing: border-box;
+  width: fit-content;
+  margin-bottom: 10px;
+  font-size: clamp(9px, 4cqi, 12px);
+}
+
+.journey-staff-card p,
+.journey-staff-card .journey-dietary-chip {
+  font-size: clamp(11px, 4.5cqi, 15px);
+  line-height: 1.5;
+}
+
+.journey-staff-card .journey-dietary-chip-list {
+  display: flex;
+  flex-wrap: wrap;
+  min-width: 0;
+  padding-bottom: 0;
+  border-bottom: 0;
+}
+
+.journey-milestone .journey-feedback-cards-row {
+  display: grid;
+  grid-template-columns: repeat(var(--journey-feedback-columns), minmax(0, 1fr));
+  gap: clamp(6px, 1.2vw, 14px);
+  min-width: 0;
+}
+
+.journey-feedback-card {
+  container-type: inline-size;
+  min-width: 0;
+  padding: clamp(8px, 1.5vw, 18px);
+  border: 1px solid var(--color-border);
+  border-radius: 12px;
+  background: #fafcfc;
+  overflow-wrap: anywhere;
+}
+
+.journey-feedback-card h3 {
+  margin: 0 0 10px;
+  color: var(--color-primary-dark);
+  font-size: clamp(12px, 6cqi, 18px);
+  line-height: 1.35;
+}
+
+.journey-feedback-card > .journey-status-chip {
+  max-width: 100%;
+  box-sizing: border-box;
+  width: fit-content;
+  margin-bottom: 10px;
+  font-size: clamp(9px, 4cqi, 12px);
+}
+
+.journey-feedback-card p {
+  font-size: clamp(11px, 4.5cqi, 15px);
+  line-height: 1.5;
+}
+
+.journey-milestone .journey-absence-cards-row {
+  display: grid;
+  grid-template-columns: repeat(var(--journey-absence-columns), minmax(0, 1fr));
+  gap: clamp(6px, 1.2vw, 14px);
+  min-width: 0;
+}
+
+.journey-absence-card {
+  container-type: inline-size;
+  min-width: 0;
+  padding: clamp(8px, 1.5vw, 18px);
+  border: 1px solid var(--color-border);
+  border-radius: 12px;
+  background: #fafcfc;
+  overflow-wrap: anywhere;
+}
+
+.journey-absence-card h3 {
+  margin: 0 0 10px;
+  color: var(--color-primary-dark);
+  font-size: clamp(12px, 6cqi, 18px);
+  line-height: 1.35;
+}
+
+.journey-absence-card > .journey-status-chip {
+  max-width: 100%;
+  box-sizing: border-box;
+  width: fit-content;
+  margin-bottom: 10px;
+  font-size: clamp(9px, 4cqi, 12px);
+}
+
+.journey-absence-card p {
+  font-size: clamp(11px, 4.5cqi, 15px);
+  line-height: 1.5;
+}
+
+.journey-statement-dates {
+  display: grid;
+  gap: 10px;
+  margin: 0;
+  padding: 14px;
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+}
+
+.journey-statement-dates legend {
+  padding: 0 6px;
+  color: var(--color-primary-dark);
+  font-weight: 700;
+}
+
+.journey-attendance-request-form .journey-statement-dates label {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  font-weight: 400;
+}
+
+.journey-statement-dates input[type="checkbox"] {
+  flex: 0 0 auto;
+  width: 16px;
+  height: 16px;
+  margin-top: 3px;
+}
+
+.journey-candidate-dates-notice {
+  display: flex;
+  align-items: flex-start;
+  gap: 14px;
+  margin-top: 20px;
+  padding: 20px 22px;
+  border: 1px solid #ecd58b;
+  border-left: 5px solid #d6a72f;
+  border-radius: 12px;
+  background: #fff7df;
+  color: #51431e;
+}
+
+.journey-candidate-notice-icon {
+  flex: 0 0 26px;
+  width: 26px;
+  height: 26px;
+  margin-top: 2px;
+  color: #8a6413;
+}
+
+.journey-candidate-notice-copy {
+  min-width: 0;
+}
+
+.journey-candidate-notice-title {
+  display: block;
+  margin-bottom: 6px;
+  color: #654b13;
+  font-size: 18px;
+  font-weight: 700;
+}
+
+.journey-candidate-dates-note {
+  margin: 0;
+  color: #51431e;
+  font-size: 18px;
+  line-height: 1.55;
+}
+
+.journey-entry-slip-term {
+  font-style: italic;
+  font-weight: 600;
+}
+
+.journey-session-resource-date {
+  display: block;
+  margin-bottom: 10px;
+  color: var(--color-muted);
+  font-size: 14px;
+  font-weight: 600;
+  line-height: 1.4;
+}
+
+.journey-stage-heading .journey-session-resource-date {
+  margin-bottom: 0;
+}
+
+.journey-public-access-form {
+  display: grid;
+  gap: 10px;
+  margin-top: 12px;
+}
+
+.journey-public-access-form label {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  color: var(--color-muted);
+  font-size: 15px;
+  font-weight: 400;
+  line-height: 1.5;
+}
+
+.journey-public-access-form input[type="checkbox"] {
+  flex: 0 0 auto;
+  width: 17px;
+  height: 17px;
+  margin-top: 3px;
+}
+
+.journey-public-access-feedback:empty {
+  display: none;
+}
+
+.exam-session-search-field {
+  position: relative;
+  min-width: 0;
+}
+
+.exam-session-search-field input[name="q"] {
+  width: 100%;
+  box-sizing: border-box;
+  padding-right: 44px;
+}
+
+.exam-session-concat-filter {
+  position: absolute;
+  top: 50%;
+  right: 5px;
+  width: 30px;
+  height: 30px;
+  transform: translateY(-50%);
+  cursor: pointer;
+}
+
+.exam-session-concat-filter input[type="checkbox"] {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  opacity: 0;
+  cursor: pointer;
+}
+
+.exam-session-concat-filter span {
+  display: grid;
+  place-items: center;
+  width: 100%;
+  height: 100%;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  color: var(--color-muted);
+  pointer-events: none;
+}
+
+.exam-session-concat-filter svg {
+  width: 21px;
+  height: 21px;
+}
+
+.exam-session-concat-filter input:checked + span {
+  border-color: #90bdca;
+  background: #d9edf4;
+  color: #075d75;
+}
+
+.exam-session-concat-filter input:focus-visible + span {
+  outline: 2px solid #075d75;
+  outline-offset: 2px;
+}
+
+.schedule-concat-upload-notice {
+  margin: 14px 0;
+  padding: 16px 18px;
+  border: 1px solid #ead18a;
+  border-left: 4px solid #d2a72e;
+  border-radius: 10px;
+  background: #fff7df;
+  color: #654d16;
+  line-height: 1.65;
+}
+
+.schedule-concat-upload-notice a {
+  color: #765513;
+  font-weight: 700;
+  text-decoration: underline;
+}
+
+.schedule-concat-upload-notice .badge {
+  vertical-align: middle;
 }

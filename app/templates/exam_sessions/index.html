@@ -787,7 +787,13 @@
   <form method="get" class="filters exam-session-planner-filters" data-auto-filter>
     <input type="hidden" name="session_year" value="{{ selected_session_year }}">
     <input type="hidden" name="page_size" value="{{ pagination.page_size if pagination else '10' }}">
-    <input name="q" value="{{ filters.q }}" placeholder="Session name">
+    <div class="exam-session-search-field">
+      <input name="q" value="{{ filters.q }}" placeholder="Session name">
+      <label class="exam-session-concat-filter" title="Show concatenated sessions only">
+        <input type="checkbox" name="concatenated" value="1" aria-label="Show concatenated sessions only"{% if filters.concatenated %} checked{% endif %}>
+        <span aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 12h16M8 8l-4 4 4 4m8-8 4 4-4 4"/></svg></span>
+      </label>
+    </div>
     <select name="date_status" aria-label="Filter by date status">
       <option value="">Date status</option>
       <option value="Pending" {% if filters.date_status == 'Pending' %}selected{% endif %}>Pending</option>

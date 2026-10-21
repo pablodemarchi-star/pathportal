@@ -704,6 +704,8 @@ class ExamSession(db.Model):
     format = db.Column(db.String(20), nullable=False, index=True)
     location_url = db.Column(db.String(500), nullable=True)
     details_url = db.Column(db.String(500), nullable=True)
+    public_journey_schedule_access = db.Column(db.Boolean, nullable=False, default=False)
+    public_journey_entry_slips_access = db.Column(db.Boolean, nullable=False, default=False)
     schedule_folder_url = db.Column(db.String(500), nullable=True)
     exam_entry_slips_url = db.Column(db.String(500), nullable=True)
     session_pictures_folder_url = db.Column(db.String(500), nullable=True)
@@ -923,6 +925,7 @@ class ExamSessionAttendanceRequest(db.Model):
     exam_session_id = db.Column(db.Integer, db.ForeignKey("exam_session.id"), nullable=False, index=True)
     candidate_number = db.Column(db.String(80), nullable=False)
     candidate_full_name = db.Column(db.String(200), nullable=False)
+    included_sessions_json = db.Column(db.Text, nullable=False, default="[]")
     created_at = db.Column(db.DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))
     exam_session = db.relationship("ExamSession", backref=db.backref("attendance_requests", lazy=True, cascade="all, delete-orphan"))
 

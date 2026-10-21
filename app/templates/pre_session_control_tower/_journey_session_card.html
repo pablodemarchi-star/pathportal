@@ -1,0 +1,25 @@
+<section class="journey-session-card journey-session-card-compact" data-session-summary-id="{{ item.session_id }}" aria-label="{{ ts('Session summary') }}: {{ item.session_name }}">
+  {% set copy_text = '- ' ~ ts('Session') ~ ': ' ~ item.session_name ~ '\n- ' ~ ts('Date') ~ ': ' ~ item.session_date.strftime('%d/%m/%Y') ~ '\n- ' ~ ts('Format') ~ ': ' ~ ts(item.format or 'To be confirmed') ~ '\n- ' ~ ts('Venue address') ~ ': ' ~ (item.venue or ts('To be confirmed')) %}
+  <button class="copy-icon-button journey-summary-copy" type="button" data-copy-text="{{ copy_text }}" data-copy-bold-labels="true" data-view-only-allowed="true" aria-label="{{ ts('Copy session information') }}: {{ item.session_name }}" title="{{ ts('Copy session information') }}">
+    <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="9" y="9" width="10" height="10" rx="2"></rect><path d="M5 15V7a2 2 0 0 1 2-2h8"></path></svg>
+    <span class="copy-button-feedback">{{ ts('Copied') }}</span>
+  </button>
+  <div class="journey-session-card-name">
+    <span>{{ ts('Session') }}</span>
+    <strong>{{ item.session_name }}</strong>
+  </div>
+  <div>
+    <span>{{ ts('Date') }}</span>
+    <strong>{{ item.session_date.strftime('%d/%m/%Y') }}</strong>
+  </div>
+  <div>
+    <span>{{ ts('Format') }}</span>
+    <strong>{{ ts(item.format or 'To be confirmed') }}</strong>
+  </div>
+  {% if item.venue %}
+    <div class="journey-venue-field">
+      <span>{{ ts('Venue address') }}</span>
+      <a class="journey-venue-chip" href="https://www.google.com/maps/search/?api=1&amp;query={{ item.venue|urlencode }}" target="_blank" rel="noopener noreferrer">{{ item.venue }}</a>
+    </div>
+  {% endif %}
+</section>

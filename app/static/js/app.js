@@ -3394,17 +3394,53 @@ document.querySelectorAll("[data-exam-session-form]").forEach((form) => {
 
   form.addEventListener("input", syncExamSessionForm);
   form.addEventListener("change", syncExamSessionForm);
-  form.addEventListener("submit", (event) => {
-    if (form.dataset.yearChangeConfirmed === "true") {
-      delete form.dataset.yearChangeConfirmed;
-      return;
-    }
+  form.addEventListener("submit", async (event) => {
+    const yearConfirmed = form.dataset.yearChangeConfirmed === "true";
+    delete form.dataset.yearChangeConfirmed;
     const originalYear = form.dataset.originalSessionYear || "";
     const currentYear = sessionDateYear(dateInput?.value || "");
-    if (!originalYear || !currentYear || originalYear === currentYear) return;
+    if (!yearConfirmed && originalYear && currentYear && originalYear !== currentYear) {
+      event.preventDefault();
+      pendingYearChangeForm = form;
+      openModal("year-change-confirmation");
+      return;
+    }
+    if (!form.querySelector('[name="concat_session_ids"]:checked, input[type="hidden"][name="concat_session_ids"]')) return;
     event.preventDefault();
-    pendingYearChangeForm = form;
-    openModal("year-change-confirmation");
+    if (form.dataset.checkingSharedFolders === "true") return;
+    form.dataset.checkingSharedFolders = "true";
+    const body = new FormData(form);
+    const snapshot = JSON.stringify(Array.from(body.entries()));
+    body.set("check_concat_folder_changes", "1");
+    if (submitButton) submitButton.disabled = true;
+    try {
+      const response = await fetch(form.action, {
+        method: "POST", body, credentials: "same-origin",
+        headers: { "X-Requested-With": "XMLHttpRequest" },
+      });
+      if (!response.ok || !response.headers.get("content-type")?.includes("application/json")) {
+        throw new Error("Unable to check shared folder links. Please review the form and try again.");
+      }
+      const result = await response.json();
+      if (snapshot !== JSON.stringify(Array.from(new FormData(form).entries()))) {
+        throw new Error("The form changed while checking shared links. Please save again.");
+      }
+      if (result.requires_confirmation && !window.confirm(result.message)) return;
+      let confirmation = form.querySelector('[name="confirm_concat_folder_changes"]');
+      if (!confirmation) {
+        confirmation = document.createElement("input");
+        confirmation.type = "hidden";
+        confirmation.name = "confirm_concat_folder_changes";
+        form.appendChild(confirmation);
+      }
+      confirmation.value = "1";
+      HTMLFormElement.prototype.submit.call(form);
+    } catch (error) {
+      window.alert(error.message);
+    } finally {
+      delete form.dataset.checkingSharedFolders;
+      syncExamSessionForm();
+    }
   });
   if (dateInput) {
     dateInput.addEventListener("keydown", (event) => {
@@ -8892,7 +8928,7 @@ const initCopyTextButtons = (root = document) => {
         if (button.dataset.copyBoldLabels === "true") {
           const html = copyText.split("\n").map((line) => {
             const row = document.createElement("div");
-            const match = line.match(/^- (Session|Date|Format|Venue address|Sesión|Fecha|Modalidad|Dirección de la sede): (.*)$/);
+            const match = line.match(/^- (Session|Sessions|Date|Dates|Format|Venue address|Sesión|Sesiones|Fecha|Fechas|Modalidad|Dirección de la sede): (.*)$/);
             if (match) {
               const label = document.createElement("strong");
               label.textContent = `${match[1]}:`;
@@ -13828,8 +13864,9 @@ document.addEventListener("click", async (event) => {
   } finally { button.disabled = false; }
 });
 
-// Keep the Spanish journey title at the largest size that fits its column.
-document.querySelectorAll("[data-fit-single-line-title]").forEach((title) => {
+// Keep journey headings and concatenated session names at the largest size that fits.
+document.querySelectorAll("[data-fit-single-line-title], [data-fit-single-line-text]").forEach((title) => {
+  if (title.closest(".journey-staff-cards-row, .journey-feedback-cards-row, .journey-absence-cards-row")) return;
   const fitTitle = () => {
     title.style.removeProperty("font-size");
     const preferredSize = parseFloat(getComputedStyle(title).fontSize);
@@ -13849,6 +13886,35 @@ document.querySelectorAll("[data-fit-single-line-title]").forEach((title) => {
   if (document.fonts?.ready) document.fonts.ready.then(fitTitle);
   if (window.ResizeObserver) new ResizeObserver(fitTitle).observe(title.parentElement);
   else window.addEventListener("resize", fitTitle);
+});
+
+// Staff and feedback titles share the largest font size that fits every card in their row.
+document.querySelectorAll(".journey-staff-cards-row, .journey-feedback-cards-row, .journey-absence-cards-row").forEach((row) => {
+  const titles = Array.from(row.querySelectorAll("[data-fit-single-line-text]"));
+  if (!titles.length) return;
+  const fitTitles = () => {
+    titles.forEach((title) => title.style.removeProperty("font-size"));
+    if (titles.some((title) => !title.clientWidth)) return;
+    let upper = Math.min(...titles.map((title) => parseFloat(getComputedStyle(title).fontSize)));
+    const fits = (size) => {
+      titles.forEach((title) => { title.style.fontSize = `${size}px`; });
+      return titles.every((title) => title.scrollWidth <= title.clientWidth);
+    };
+    if (fits(upper)) return;
+    let lower = 1;
+    while (upper - lower > 0.1) {
+      const size = (lower + upper) / 2;
+      if (fits(size)) lower = size;
+      else upper = size;
+    }
+    fits(lower);
+  };
+  fitTitles();
+  if (document.fonts?.ready) document.fonts.ready.then(fitTitles);
+  if (window.ResizeObserver) {
+    const observer = new ResizeObserver(fitTitles);
+    row.querySelectorAll(".journey-staff-card, .journey-feedback-card, .journey-absence-card").forEach((card) => observer.observe(card));
+  } else window.addEventListener("resize", fitTitles);
 });
 
 // Shrink the Spanish preparation message only as much as two lines require.
@@ -13896,6 +13962,15 @@ document.querySelectorAll("[data-absence-upload-window]").forEach((chip) => {
 });
 
 document.querySelectorAll(".journey-attendance-request-form").forEach((form) => {
+  const dates = form.querySelector("[data-statement-dates]");
+  if (dates) {
+    const choices = Array.from(dates.querySelectorAll('[name="statement_session_ids"]'));
+    const validateDates = () => {
+      choices[0]?.setCustomValidity(choices.some((choice) => choice.checked) ? "" : dates.dataset.requiredMessage);
+    };
+    dates.addEventListener("change", validateDates);
+    validateDates();
+  }
   form.addEventListener("submit", async (event) => {
     event.preventDefault();
     const submit = form.querySelector('[type="submit"]');
@@ -13916,5 +13991,40 @@ document.querySelectorAll(".journey-attendance-request-form").forEach((form) => 
       error.hidden = false;
       submit.disabled = false;
     }
+  });
+});
+
+document.querySelectorAll("[data-journey-public-access]").forEach((form) => {
+  const choices = Array.from(form.querySelectorAll('input[type="checkbox"]'));
+  const feedback = form.querySelector(".journey-public-access-feedback");
+  let saved = choices.map((choice) => choice.checked);
+  let saving = false;
+  let pending = false;
+  form.addEventListener("submit", (event) => event.preventDefault());
+  form.addEventListener("change", async () => {
+    pending = true;
+    if (saving) return;
+    saving = true;
+    while (pending) {
+      pending = false;
+      const snapshot = choices.map((choice) => choice.checked);
+      feedback.textContent = "";
+      try {
+        const response = await fetch(form.action, {
+          method: "POST", body: new FormData(form), credentials: "same-origin",
+          headers: { "X-Requested-With": "XMLHttpRequest" },
+        });
+        if (!response.ok) throw new Error();
+        const data = await response.json();
+        if (!data.ok) throw new Error();
+        saved = snapshot;
+        feedback.textContent = form.dataset.savedMessage;
+      } catch (_) {
+        choices.forEach((choice, index) => { choice.checked = saved[index]; });
+        pending = false;
+        feedback.textContent = form.dataset.errorMessage;
+      }
+    }
+    saving = false;
   });
 });

@@ -751,6 +751,382 @@ class ScheduleWorkflowTest(unittest.TestCase):
         self.assertIn('class="session-considerations-alert"', html)
         self.assertNotIn('class="session-considerations-chip"', html)
 
+    def create_concat_schedule_test_sessions(self):
+        linked = [ExamSession(exam_session_name=name, category="Path School", status="Pending", session_date=date(2026, 7, 25), shifts="Morning", modules="Speaking", format="Onsite") for name in ["Linked schedule", "Chained schedule", "Standalone schedule"]]
+        db.session.add_all(linked)
+        db.session.flush()
+        self.session_record.concat_session_ids = json.dumps([linked[0].id])
+        linked[0].concat_session_ids = json.dumps([linked[1].id])
+        db.session.commit()
+        return linked
+
+    def test_institution_journey_countdowns_include_each_concat_session_date(self):
+        from flask import render_template
+        other, chained, standalone = self.create_concat_schedule_test_sessions()
+        self.session_record.session_date = date(2026, 6, 25)
+        other.session_date = date(2026, 6, 30)
+        chained.session_date = date(2026, 6, 20)
+        db.session.commit()
+        for language in ["en", "es"]:
+            with self.app.test_request_context(query_string={"lang": language}):
+                journey = path_session_journey_contract(self.session_record, "institution", today=date(2026, 6, 20))
+                countdowns = journey["concatenated_countdowns"]
+                self.assertEqual([item["session_id"] for item in countdowns], [chained.id, self.session_record.id, other.id])
+                self.assertEqual([item["countdown"]["days_to_go"] for item in countdowns], [0, 5, 10])
+                html = render_template("pre_session_control_tower/session_journey.html", journey=journey, share=None)
+                self.assertIn('data-fit-single-line-text>Chained schedule<span class="journey-name-separator"> | </span>June exam session<span class="journey-name-separator"> | </span>Linked schedule</p>', html)
+                self.assertEqual(html.count('data-countdown-session-id='), 3)
+                self.assertIn('--journey-countdown-columns: 3;', html)
+                self.assertIn("Faltan 5 días" if language == "es" else "5 days to go", html)
+                self.assertIn(other.exam_session_name, html)
+                public = path_session_journey_contract(self.session_record, "public", today=date(2026, 6, 20))
+                self.assertEqual(len(public["concatenated_countdowns"]), 3)
+                single = path_session_journey_contract(standalone, "institution", today=date(2026, 6, 20))
+                self.assertEqual(single["concatenated_countdowns"], [])
+
+    def test_public_concat_journey_shows_group_cards_without_institution_controls(self):
+        from flask import render_template
+        other, chained, standalone = self.create_concat_schedule_test_sessions()
+        self.session_record.session_date = date(2026, 10, 19)
+        other.session_date = date(2026, 10, 23)
+        chained.session_date = date(2026, 10, 12)
+        for record in [self.session_record, other, chained]:
+            record.absence_documentation_folder_url = f"https://example.com/absence-{record.id}"
+        db.session.commit()
+        now = datetime(2026, 10, 20, 12, tzinfo=timezone(timedelta(hours=-3)))
+        for lang in ["en", "es"]:
+            with self.subTest(lang=lang), self.app.test_request_context(query_string={"lang": lang}):
+                journey = path_session_journey_contract(self.session_record, "public", now=now)
+                html = render_template("pre_session_control_tower/session_journey.html", journey=journey, share=None)
+                self.assertTrue(journey["is_concatenated"])
+                for attribute in ['data-countdown-session-id=', 'data-session-summary-id=', 'data-feedback-session-id=', 'data-absence-session-id=']:
+                    self.assertEqual(html.count(attribute), 3)
+                for forbidden in ["journey-admin-card", "journey-schedule-review", "journey-entry-slip-modal", "data-staff-session-id", "journey-attendance-request-modal", "Exam centre readiness checklist", "Checklist de preparación del centro de examen", "tus candidatos", "for absent candidates"]:
+                    self.assertNotIn(forbidden, html)
+                self.assertIn('<em class="journey-entry-slip-term">Exam entry slip</em>', html)
+                self.assertLess(html.index('class="journey-countdown-row"'), html.index('class="journey-candidate-dates-note"'))
+                self.assertLess(html.index('class="journey-candidate-dates-note"'), html.index('class="journey-session-cards-row"'))
+                if lang == "en":
+                    self.assertIn("The dates shown may include one or more exam sessions you are required to attend.", html)
+                    self.assertIn("Your Path exam days are getting closer 💙", html)
+                    self.assertIn("Path session journeys", html)
+                    self.assertIn("Information about the exam sessions", html)
+                    self.assertIn("to upload your supporting documentation for an exam absence", html)
+                    self.assertEqual(html.count("Only the following supporting documents will be accepted:"), 1)
+                else:
+                    self.assertIn("Las fechas indicadas pueden corresponder a una o varias sesiones a las que debas asistir.", html)
+                    self.assertIn("Tus sesiones de examen con Path", html)
+                    self.assertIn("¡Los días de tus exámenes Path se acercan! 💙", html)
+                    self.assertIn("para cargar tu justificativo de ausencia", html)
+                    self.assertEqual(html.count("Únicamente se aceptarán los siguientes justificativos:"), 1)
+                self.assertIn(f'href="https://example.com/absence-{self.session_record.id}"', html)
+                for record in [other, chained]:
+                    self.assertNotIn(f'href="https://example.com/absence-{record.id}"', html)
+
+    def test_institution_absence_cards_have_independent_windows_and_one_requirements_section(self):
+        from flask import render_template
+        other, chained, standalone = self.create_concat_schedule_test_sessions()
+        self.session_record.session_date = date(2026, 10, 19)
+        other.session_date = date(2026, 10, 23)
+        chained.session_date = date(2026, 10, 12)
+        for record in [self.session_record, other, chained]:
+            record.absence_documentation_folder_url = f"https://example.com/absence-{record.id}"
+        db.session.commit()
+        now = datetime(2026, 10, 20, 12, tzinfo=timezone(timedelta(hours=-3)))
+        for language in ["en", "es"]:
+            with self.subTest(language=language), self.app.test_request_context(query_string={"lang": language}):
+                journey = path_session_journey_contract(self.session_record, "institution", now=now)
+                cards = {card["session_id"]: card for card in journey["absence_cards"]}
+                self.assertEqual(cards[self.session_record.id]["window"]["state"], "open")
+                self.assertEqual(cards[other.id]["window"]["state"], "pending")
+                self.assertEqual(cards[chained.id]["window"]["state"], "expired")
+                html = render_template("pre_session_control_tower/session_journey.html", journey=journey, share=None)
+                self.assertEqual(html.count('data-absence-session-id='), 3)
+                self.assertIn('--journey-absence-columns: 3;', html)
+                heading = "Únicamente se aceptarán los siguientes justificativos:" if language == "es" else "Only the following supporting documents will be accepted:"
+                self.assertEqual(html.count(heading), 1)
+                for record in [self.session_record, other, chained]:
+                    start = html.index(f'data-absence-session-id="{record.id}"')
+                    block = html[start:html.index('</section>', start)]
+                    label = "Justificativos de ausencia a examen de" if language == "es" else "Exam absence documentation for"
+                    self.assertIn(f"{label} {record.exam_session_name}", block)
+                    self.assertIn(record.session_date.strftime('%d/%m/%Y'), block)
+                    self.assertIn(f'data-state="{cards[record.id]["window"]["state"]}"', block)
+                    self.assertEqual(f'href="https://example.com/absence-{record.id}"' in block, record.id == self.session_record.id)
+                public = path_session_journey_contract(self.session_record, "public", now=now)
+                public_html = render_template("pre_session_control_tower/session_journey.html", journey=public, share=None)
+                self.assertEqual(len(public["absence_cards"]), 3)
+                self.assertEqual(public_html.count(heading), 1)
+                self.assertEqual(public_html.count('data-absence-session-id='), 3)
+
+    def test_institution_journey_feedback_cards_are_separate_for_each_concat_session(self):
+        from flask import render_template
+        other, chained, standalone = self.create_concat_schedule_test_sessions()
+        for language in ["en", "es"]:
+            with self.subTest(language=language), self.app.test_request_context(query_string={"lang": language}):
+                journey = path_session_journey_contract(self.session_record, "institution")
+                html = render_template("pre_session_control_tower/session_journey.html", journey=journey, share=None)
+                self.assertEqual(html.count('data-feedback-session-id='), 3)
+                self.assertIn('--journey-feedback-columns: 3;', html)
+                for record in [self.session_record, other, chained]:
+                    start = html.index(f'data-feedback-session-id="{record.id}"')
+                    block = html[start:html.index('</section>', start)]
+                    label = "Encuesta sobre la sesión de examen de" if language == "es" else "Exam session feedback for"
+                    self.assertIn(f"{label} {record.exam_session_name}", block)
+                    self.assertIn(record.session_date.strftime('%d/%m/%Y'), block)
+                    self.assertIn('data-fit-single-line-text', block)
+                    self.assertIn('journey-disabled-link', block)
+                    for peer in [self.session_record, other, chained]:
+                        if peer.id != record.id:
+                            self.assertNotIn(peer.exam_session_name, block)
+                public = path_session_journey_contract(self.session_record, "public")
+                self.assertEqual(len(public["feedback_cards"]), 3)
+                single = path_session_journey_contract(standalone, "institution")
+                self.assertEqual(len(single["feedback_cards"]), 1)
+
+    def test_journey_staff_cards_use_each_sessions_own_staff_and_dietary_requirements(self):
+        from flask import render_template
+        other, chained, standalone = self.create_concat_schedule_test_sessions()
+        other.exam_session_name = "Colegio Nuestra Señora de La Salette"
+        members = [self.create_supervisor(staff_id=i, name=f"Member {i}") for i in range(1, 8)]
+        members[1].dietary_requirements = "Gluten-free"
+        other.emergency_contact_member_id = members[5].id
+        db.session.add_all([
+            ExamSessionSupervisorAssignment(exam_session_id=self.session_record.id, team_member_id=members[0].id),
+            ExamSessionSupervisorAssignment(exam_session_id=other.id, team_member_id=members[1].id),
+            ExamSessionExaminerAssignment(exam_session_id=other.id, team_member_id=members[2].id),
+            ExamSessionInternAssignment(exam_session_id=other.id, team_member_id=members[3].id),
+            ExamSessionSupervisorAssignment(exam_session_id=other.id, team_member_id=members[5].id),
+            ExamSessionSupervisorAssignment(exam_session_id=other.id, team_member_id=members[6].id, is_remote=True),
+            ExamSessionScheduleWorkflow(exam_session_id=other.id, status="Approved", approved_at=datetime.now(timezone.utc) - timedelta(days=5)),
+        ])
+        db.session.commit()
+        for language in ["en", "es"]:
+            with self.subTest(language=language), self.app.test_request_context(query_string={"lang": language}):
+                journey = path_session_journey_contract(self.session_record, "institution")
+                cards = {card["session_id"]: card for card in journey["staff_cards"]}
+                self.assertEqual(cards[self.session_record.id]["summary"]["count"], 1)
+                self.assertEqual(cards[other.id]["summary"]["count"], 3)
+                self.assertEqual(cards[chained.id]["summary"]["count"], 0)
+                self.assertEqual(cards[other.id]["status"]["status"], "Confirmed")
+                self.assertEqual(cards[self.session_record.id]["status"]["status"], "In progress")
+                self.assertEqual(cards[other.id]["summary"]["dietary_requirements"], ["Gluten-free"])
+                html = render_template("pre_session_control_tower/session_journey.html", journey=journey, share=None)
+                self.assertEqual(html.count('data-staff-session-id='), 3)
+                self.assertIn('--journey-staff-columns: 3;', html)
+                for record in [self.session_record, other, chained]:
+                    start = html.index(f'data-staff-session-id="{record.id}"')
+                    end = html.index('</section>', start)
+                    block = html[start:end]
+                    self.assertIn(record.exam_session_name, block)
+                    self.assertEqual("Gluten-free" in block, record.id == other.id)
+                    for peer in [self.session_record, other, chained]:
+                        if peer.id != record.id:
+                            self.assertNotIn(peer.exam_session_name, block)
+                public = path_session_journey_contract(self.session_record, "public")
+                self.assertEqual(public["staff_cards"], [])
+                single = path_session_journey_contract(standalone, "institution")
+                single_html = render_template("pre_session_control_tower/session_journey.html", journey=single, share=None)
+                self.assertEqual(single_html.count('data-staff-session-id='), 1)
+                self.assertIn(standalone.exam_session_name, single_html)
+
+    def test_concat_journey_renders_individual_compact_session_summary_cards(self):
+        from flask import render_template
+        other, chained, standalone = self.create_concat_schedule_test_sessions()
+        self.session_record.full_address_google_maps = "First venue 123"
+        other.full_address_google_maps = "Second venue 456"
+        other.format = "Online"
+        db.session.commit()
+        for language in ["en", "es"]:
+            with self.subTest(language=language), self.app.test_request_context(query_string={"lang": language}):
+                journey = path_session_journey_contract(self.session_record, "institution")
+                html = render_template("pre_session_control_tower/session_journey.html", journey=journey, share=None)
+                self.assertEqual(html.count('data-session-summary-id='), 3)
+                self.assertIn('--journey-session-columns: 3;', html)
+                for record in [self.session_record, other, chained]:
+                    marker = f'data-session-summary-id="{record.id}"'
+                    start = html.index(marker)
+                    card = html[start:html.index('</section>', start)]
+                    self.assertIn(record.exam_session_name, card)
+                    self.assertIn(record.session_date.strftime('%d/%m/%Y'), card)
+                    self.assertIn('data-copy-text=', card)
+                    self.assertNotIn(standalone.exam_session_name, card)
+                    for peer in [self.session_record, other, chained]:
+                        if peer.id != record.id:
+                            self.assertNotIn(peer.exam_session_name, card)
+                self.assertIn("Second venue 456", html)
+                self.assertIn("En línea" if language == "es" else "Online", html)
+                public = path_session_journey_contract(self.session_record, "public")
+                public_html = render_template("pre_session_control_tower/session_journey.html", journey=public, share=None)
+                self.assertIn("journey-session-cards-row", public_html)
+
+    def test_concat_journey_uses_plural_session_and_schedule_copy_in_both_languages(self):
+        from flask import render_template
+        other, chained, standalone = self.create_concat_schedule_test_sessions()
+        for language in ["en", "es"]:
+            with self.subTest(language=language), self.app.test_request_context(query_string={"lang": language}):
+                journey = path_session_journey_contract(self.session_record, "institution")
+                html = render_template("pre_session_control_tower/session_journey.html", journey=journey, share=None)
+                if language == "en":
+                    for phrase in ["Path session journeys", "your upcoming Path exam sessions", "Information about the exam sessions", "Exam session schedules", "View session schedules", "the exam session schedules are confirmed", "The exam sessions are awaiting confirmation", "within two business days after the exam session", "Exam session staff for"]:
+                        self.assertIn(phrase, html)
+                    self.assertNotIn("your upcoming Path exam session.", html)
+                    self.assertNotIn("<strong>Exam session schedule</strong>", html)
+                else:
+                    for phrase in ["Tus sesiones de examen con Path", "tus próximas sesiones de examen", "Información sobre las sesiones de examen", "Horarios de las sesiones de examen", "Ver horarios de las sesiones", "cuando se confirmen los horarios de las sesiones de examen", "Las sesiones de examen están pendientes de confirmación"]:
+                        self.assertIn(phrase, html)
+                for record in [self.session_record, other, chained]:
+                    self.assertIn(record.exam_session_name, html)
+                single = path_session_journey_contract(standalone, "institution")
+                single_html = render_template("pre_session_control_tower/session_journey.html", journey=single, share=None)
+                self.assertIn("Información sobre la sesión de examen" if language == "es" else "Information about the exam session", single_html)
+                self.assertNotIn("Tus sesiones de examen con Path" if language == "es" else "Path session journeys", single_html)
+
+    def test_concat_schedule_workflow_transitions_sync_chain_and_journey(self):
+        from app.routes import apply_schedule_workflow_transition, sync_concat_shared_folders
+        other, chained, standalone = self.create_concat_schedule_test_sessions()
+        sync_concat_shared_folders(self.session_record)
+        for action in ["start_preparation", "mark_ready", "send_for_review", "approve", "reopen"]:
+            workflow, error = apply_schedule_workflow_transition(self.session_record, action, note="Shared change", created_by="admin")
+            self.assertIsNone(error)
+            db.session.commit()
+            for record in [other, chained]:
+                linked = ExamSessionScheduleWorkflow.query.filter_by(exam_session_id=record.id).one()
+                self.assertEqual(linked.status, workflow.status)
+                self.assertEqual(linked.last_sent_at, workflow.last_sent_at)
+                self.assertEqual(linked.approved_at, workflow.approved_at)
+                self.assertEqual(linked.review_round, workflow.review_round)
+                self.assertEqual(len(linked.events), len(workflow.events))
+                with self.app.test_request_context():
+                    journey = path_session_journey_contract(record, "institution")
+                self.assertEqual(journey["entry_slips_confirmed"], action == "approve")
+            self.assertIsNone(ExamSessionScheduleWorkflow.query.filter_by(exam_session_id=standalone.id).first())
+
+    def test_bundle_schedule_actions_and_shared_journey_approval_sync_concat_sessions(self):
+        from app.routes import apply_schedule_workflow_transition, ensure_journey_share_token
+        other, chained, standalone = self.create_concat_schedule_test_sessions()
+        self.session_record.monthly_registrations_closed = True
+        self.session_record.date_confirmation_status = "Confirmed"
+        apply_schedule_workflow_transition(self.session_record, "start_preparation")
+        db.session.commit()
+        bundle = self.create_shipment_bundle_record(session_record=self.session_record)
+        client = self.login_client()
+        for action, status in [("mark_ready", "Ready to send"), ("send_for_review", "Sent for review")]:
+            response = client.post(f"/pre-session-control-tower/sessions/{self.session_record.id}/schedule", data={"csrf_token": "token", "view": "bundle", "bundle_id": str(bundle.id), "action_key": action, "schedule_uploaded_confirmation": "1", "entry_slips_uploaded_confirmation": "1"})
+            self.assertEqual(response.status_code, 302)
+            for record in [self.session_record, other, chained]:
+                self.assertEqual(ExamSessionScheduleWorkflow.query.filter_by(exam_session_id=record.id).one().status, status)
+        share = ensure_journey_share_token(chained, "institution")
+        response = self.app.test_client().post(f"/path-session-journey/{share.token}/institution/schedule/confirm")
+        self.assertEqual(response.status_code, 200)
+        for record in [self.session_record, other, chained]:
+            self.assertEqual(ExamSessionScheduleWorkflow.query.filter_by(exam_session_id=record.id).one().status, "Approved")
+            html = client.get(f"/path-session-journeys/sessions/{record.id}").get_data(as_text=True)
+            self.assertIn('href="https://example.com/entry-slips-folder"', html)
+        self.assertIsNone(ExamSessionScheduleWorkflow.query.filter_by(exam_session_id=standalone.id).first())
+
+    def test_concat_shared_folder_configuration_requires_confirmation_and_syncs_changes(self):
+        from app.routes import sync_concat_shared_folders
+        other, chained, standalone = self.create_concat_schedule_test_sessions()
+        self.session_record.session_pictures_folder_url = "https://example.com/photos"
+        sync_concat_shared_folders(self.session_record)
+        db.session.commit()
+        client = self.login_client()
+        data = {"csrf_token": "token", "session_year": "2026", "exam_session_name": "June exam session", "category": "Path School", "status": "Pending", "session_date": "25/06/2026", "minimum_candidates_required": "30", "shifts": "Morning", "modules": "Speaking", "format": "Onsite", "concat_session_ids": str(other.id), "schedule_folder_url": self.session_record.schedule_folder_url, "exam_entry_slips_url": self.session_record.exam_entry_slips_url, "session_pictures_folder_url": self.session_record.session_pictures_folder_url}
+        for field in ["schedule_folder_url", "exam_entry_slips_url", "session_pictures_folder_url"]:
+            for value in ["https://example.com/different", ""]:
+                changed = dict(data, **{field: value})
+                response = client.post(f"/exam-session-planner/sessions/{self.session_record.id}", data=changed, follow_redirects=True)
+                self.assertEqual(response.status_code, 200)
+                self.assertIn("Confirm shared folder changes", response.get_data(as_text=True))
+                self.assertIn(other.exam_session_name, response.get_data(as_text=True))
+                self.assertIn(chained.exam_session_name, response.get_data(as_text=True))
+                for record in [self.session_record, other, chained]:
+                    self.assertEqual(getattr(record, field), data[field])
+                check = client.post(f"/exam-session-planner/sessions/{self.session_record.id}", data=dict(changed, check_concat_folder_changes="1"))
+                self.assertEqual(check.status_code, 200)
+                self.assertTrue(check.json["requires_confirmation"])
+                self.assertIn("Changing these folder links will also update them", check.json["message"])
+                self.assertIn(chained.exam_session_name, check.json["message"])
+                self.assertEqual(getattr(chained, field), data[field])
+                confirmed = client.post(f"/exam-session-planner/sessions/{self.session_record.id}", data=dict(changed, confirm_concat_folder_changes="1"))
+                self.assertEqual(confirmed.status_code, 302)
+                for record in [self.session_record, other, chained]:
+                    self.assertEqual(getattr(record, field), value)
+                # Restore the initial shared value for the next case.
+                restored = client.post(f"/exam-session-planner/sessions/{self.session_record.id}", data=dict(data, confirm_concat_folder_changes="1"))
+                self.assertEqual(restored.status_code, 302)
+        self.assertIsNone(standalone.session_pictures_folder_url)
+        # A new linked session with empty fields inherits the existing component URLs.
+        payload = dict(data, exam_session_name="New linked", concat_session_ids=str(chained.id))
+        for field in ["schedule_folder_url", "exam_entry_slips_url", "session_pictures_folder_url"]:
+            payload[field] = ""
+        client.post("/exam-session-planner/sessions", data=payload)
+        new = ExamSession.query.filter_by(exam_session_name="New linked").one()
+        for field in ["schedule_folder_url", "exam_entry_slips_url", "session_pictures_folder_url"]:
+            self.assertEqual(getattr(new, field), data[field])
+
+    def test_concat_schedule_rejects_existing_different_folder_urls(self):
+        from app.routes import apply_schedule_workflow_transition
+        other, chained, standalone = self.create_concat_schedule_test_sessions()
+        other.schedule_folder_url = "https://example.com/conflict"
+        db.session.commit()
+        workflow, error = apply_schedule_workflow_transition(self.session_record, "start_preparation")
+        self.assertIsNone(workflow)
+        self.assertIn("same URL", error)
+        db.session.rollback()
+        self.assertEqual(ExamSessionScheduleWorkflow.query.count(), 0)
+
+    def test_bundle_schedule_warns_about_uploading_all_concatenated_sessions(self):
+        from app.routes import apply_schedule_workflow_transition
+        other, chained, standalone = self.create_concat_schedule_test_sessions()
+        self.session_record.monthly_registrations_closed = True
+        self.session_record.date_confirmation_status = "Confirmed"
+        _, error = apply_schedule_workflow_transition(self.session_record, "start_preparation")
+        self.assertIsNone(error)
+        db.session.commit()
+        bundle = self.create_shipment_bundle_record(session_record=self.session_record)
+        client = self.login_client()
+        def load():
+            response = client.get("/pre-session-control-tower", query_string={"session_year": "2026", "view": "bundle", "bundle_id": str(bundle.id), "open_schedule_modal": str(self.session_record.id), "schedule_only": "1"})
+            self.assertEqual(response.status_code, 200)
+            return response.get_data(as_text=True)
+        html = load()
+        start = html.index('<aside class="schedule-concat-upload-notice"')
+        notice = html[start:html.index('</aside>', start)]
+        self.assertIn(other.exam_session_name, notice)
+        self.assertIn(chained.exam_session_name, notice)
+        self.assertNotIn(standalone.exam_session_name, notice)
+        self.assertIn("All schedules and Exam entry slips for every concatenated session must be uploaded", notice)
+        self.assertIn('class="badge schedule-status-ready-to-send">Ready to send</span>', notice)
+        self.assertIn(f'open_schedule_modal={other.id}', notice)
+        self.assertIn(f'open_schedule_modal={chained.id}', notice)
+        self.assertLess(start, html.index('<article class="schedule-recommended-action">', start))
+        apply_schedule_workflow_transition(self.session_record, "mark_ready")
+        db.session.commit()
+        self.assertNotIn('class="schedule-concat-upload-notice"', load())
+
+    def test_exam_session_planner_search_toggles_concatenated_session_filter(self):
+        other, chained, standalone = self.create_concat_schedule_test_sessions()
+        client = self.login_client()
+        def rows(query):
+            response = client.get("/exam-session-planner", query_string=dict({"session_year": "2026", "page_size": "all"}, **query))
+            self.assertEqual(response.status_code, 200)
+            html = response.get_data(as_text=True)
+            return {int(value) for value in re.findall(r'<tr data-session-row data-session-id="(\d+)"', html)}, html
+        ids, html = rows({})
+        self.assertEqual(ids, {self.session_record.id, other.id, chained.id, standalone.id})
+        self.assertIn('aria-label="Show concatenated sessions only"', html)
+        ids, html = rows({"concatenated": "1"})
+        self.assertEqual(ids, {self.session_record.id, other.id, chained.id})
+        checkbox = re.search(r'<input[^>]*name="concatenated"[^>]*>', html).group(0)
+        self.assertIn('checked', checkbox)
+        self.assertIn('concatenated=1', html)
+        ids, _ = rows({"concatenated": "1", "q": "Linked schedule"})
+        self.assertEqual(ids, {other.id})
+        ids, _ = rows({"concatenated": "0"})
+        self.assertIn(standalone.id, ids)
+
     def test_exam_session_concat_selection_syncs_both_sessions(self):
         other_session = ExamSession(
             exam_session_name="July concat session",
@@ -775,6 +1151,7 @@ class ScheduleWorkflowTest(unittest.TestCase):
             f"/exam-session-planner/sessions/{self.session_record.id}",
             data={
                 "csrf_token": "token",
+                "confirm_concat_folder_changes": "1",
                 "session_year": "2026",
                 "exam_session_name": "June exam session",
                 "category": "Path School",
@@ -815,6 +1192,7 @@ class ScheduleWorkflowTest(unittest.TestCase):
             f"/exam-session-planner/sessions/{self.session_record.id}",
             data={
                 "csrf_token": "token",
+                "confirm_concat_folder_changes": "1",
                 "session_year": "2026",
                 "exam_session_name": "June exam session",
                 "category": "Path School",
@@ -18237,6 +18615,34 @@ assert.equal(storage.size, 0);
         for finance in [None, {}, {"block_label": "Overdue"}]:
             self.assertEqual(journey_finance_readiness(finance)["status"], "Finance approval and clearance pending")
 
+    def test_concat_airplane_arrives_fifteen_days_before_earliest_group_session(self):
+        other, chained, standalone = self.create_concat_schedule_test_sessions()
+        self.session_record.session_date = date(2026, 8, 10)
+        other.session_date = date(2026, 7, 20)
+        chained.session_date = date(2026, 7, 25)
+        standalone.session_date = date(2026, 6, 10)
+        for record in [self.session_record, other, chained, standalone]:
+            db.session.add(ExamSessionScheduleWorkflow(exam_session_id=record.id, status="Approved", approved_at=datetime(2026, 6, 1, tzinfo=timezone.utc)))
+        db.session.commit()
+        arrival = datetime(2026, 7, 5, 3, tzinfo=timezone.utc)  # July 5, 00:00 GMT-3.
+        for now, expected in [(arrival - timedelta(seconds=1), "In transit"), (arrival, "Dispatched")]:
+            results = []
+            for record in [self.session_record, other, chained]:
+                for audience in ["institution", "public"]:
+                    with self.subTest(session=record.id, audience=audience, now=now), self.app.test_request_context():
+                        shipment = path_session_journey_contract(record, audience, now=now)["material_shipment"]
+                        self.assertEqual(shipment["status"], expected)
+                        if expected == "In transit":
+                            self.assertLess(shipment["progress_percent"], 100)
+                        else:
+                            self.assertEqual(shipment["progress_percent"], 100)
+                        results.append(shipment)
+            self.assertTrue(all(result == results[0] for result in results))
+        # Unrelated sessions do not affect the group's arrival date.
+        with self.app.test_request_context():
+            shipment = path_session_journey_contract(self.session_record, "institution", now=datetime(2026, 6, 20, tzinfo=timezone.utc))["material_shipment"]
+            self.assertEqual(shipment["status"], "In transit")
+
     def test_journey_airplane_matches_institution_for_both_audiences(self):
         workflow = ExamSessionScheduleWorkflow.query.filter_by(exam_session_id=self.session_record.id).first()
         if workflow is None:
@@ -18246,16 +18652,28 @@ assert.equal(storage.size, 0);
         workflow.approved_at = datetime(2026, 6, 1, tzinfo=timezone.utc)
         self.session_record.session_date = date(2026, 7, 25)
         db.session.commit()
-        for name, expected in [("Colegio Nuestra Señora de La Salette", "Pending"), ("Other school", "In transit")]:
-            with self.subTest(name=name), self.app.test_request_context():
-                self.session_record.exam_session_name = name
-                now = datetime(2026, 6, 20, tzinfo=timezone.utc)
-                institution = path_session_journey_contract(self.session_record, "institution", now=now)
-                public = path_session_journey_contract(self.session_record, "public", now=now)
-                self.assertEqual(public["material_shipment"], institution["material_shipment"])
-                self.assertEqual(public["material_shipment"]["status"], expected)
-                if expected == "Pending":
-                    self.assertEqual(public["material_shipment"]["progress_percent"], 0)
+        cases = [
+            (datetime(2026, 6, 1, 23, tzinfo=timezone.utc), "Pending"),
+            (datetime(2026, 6, 20, tzinfo=timezone.utc), "In transit"),
+            (datetime(2026, 7, 10, 3, tzinfo=timezone.utc), "Dispatched"),
+        ]
+        for name in ["Colegio Nuestra Señora de La Salette", "Other school"]:
+            for now, expected in cases:
+                with self.subTest(name=name, state=expected), self.app.test_request_context():
+                    self.session_record.exam_session_name = name
+                    institution = path_session_journey_contract(self.session_record, "institution", now=now)
+                    public = path_session_journey_contract(self.session_record, "public", now=now)
+                    self.assertEqual(public["material_shipment"], institution["material_shipment"])
+                    self.assertEqual(public["material_shipment"]["status"], expected)
+                    self.assertTrue(institution["schedule_confirmed"])
+                    self.assertTrue(institution["entry_slips_confirmed"])
+                    if expected == "Dispatched":
+                        self.assertEqual(public["material_shipment"]["progress_percent"], 100)
+                    elif expected == "Pending":
+                        self.assertEqual(public["material_shipment"]["progress_percent"], 0)
+                    else:
+                        self.assertGreater(public["material_shipment"]["progress_percent"], 0)
+
 
     def test_absence_upload_window_boundaries_use_gmt_minus_three_and_business_hours(self):
         from app.routes import journey_absence_upload_window, argentina_add_business_hours
@@ -18281,7 +18699,7 @@ assert.equal(storage.size, 0);
                 response = client.get(path, query_string={"lang": "es"})
                 self.assertEqual(response.status_code, 200)
                 html = response.get_data(as_text=True)
-                for translated in ["Choose your language / Elige tu idioma", "Versión en español", "Sigue las etapas clave", "Estado administrativo y de pagos", "Cronograma de la sesión de examen", "Checklist de preparación del centro de examen", "Preparación de la sede de examen", "Constancia de examen para candidatos", "Número de candidato", "Nombre completo del candidato", "Justificativos de ausencia a examen", "Solicitar cambios en el cronograma", "Confirmar", "Cancelar", "Evolución en la evaluación de idiomas"]:
+                for translated in ["Choose your language / Elige tu idioma", "Versión en español", "Sigue las etapas clave", "Estado administrativo y de pagos", "Horarios de la sesión de examen", "Checklist de preparación del centro de examen", "Preparación de la sede de examen", "Constancia de examen para candidatos", "Número de candidato", "Nombre completo del candidato", "Justificativos de ausencia a examen", "Solicitar cambios en los horarios", "Confirmar", "Cancelar", "Evolución en la evaluación de idiomas"]:
                     self.assertIn(translated, html)
                 self.assertIn('<h2 id="journey-attendance-request-title">Constancia de examen para candidatos</h2>', html)
                 for english in [">Administrative &amp; payment readiness<", ">Candidate number<", ">View session schedule<", ">Session venue setup<", "the <strong>"]:
@@ -18313,13 +18731,202 @@ assert.equal(storage.size, 0);
                 start = '<li class="journey-milestone is-upcoming">'
                 title = "<strong>Exam absence documentation</strong>"
                 def block(html):
-                    begin = html.rfind(start, 0, html.index(title))
+                    heading = "Exam absence documentation for" if "data-absence-session-id" in html else title
+                    begin = html.rfind(start, 0, html.index(heading))
                     return html[begin:html.index("        </ol>", begin)].strip()
                 self.assertEqual(institution["absence_upload"], public["absence_upload"])
                 self.assertIn("to upload supporting documentation for absent candidates. You must submit them", block(institution_html))
                 self.assertIn("to upload your supporting documentation for an exam absence. You must submit it", block(public_html))
-                self.assertGreater(institution_html.index(title), institution_html.index("<strong>Exam session feedback</strong>"))
+                self.assertGreater(institution_html.index("Exam absence documentation for"), institution_html.index("Exam session feedback for"))
                 self.assertEqual('href="https://example.com/absence"' in block(institution_html), state == "open")
+
+    def test_journey_public_access_checkboxes_control_schedule_and_entry_slips_for_group(self):
+        from app.routes import apply_schedule_workflow_transition, ensure_journey_share_token
+        other, chained, standalone = self.create_concat_schedule_test_sessions()
+        for action in ["start_preparation", "mark_ready", "send_for_review", "approve"]:
+            _, error = apply_schedule_workflow_transition(self.session_record, action)
+            self.assertIsNone(error)
+        db.session.commit()
+        client = self.login_client()
+        institution = ensure_journey_share_token(self.session_record, "institution")
+        public = ensure_journey_share_token(chained, "public")
+        endpoint = f"/path-session-journeys/sessions/{self.session_record.id}/public-access"
+        public_path = f"/path-session-journey/{public.token}/public"
+        for schedule, entry in [(False, False), (True, False), (False, True), (True, True), (False, False)]:
+            response = client.post(endpoint, data={"csrf_token": "token", "allow_public_schedule": "1" if schedule else "0", "allow_public_entry_slips": "1" if entry else "0"})
+            self.assertEqual(response.status_code, 200)
+            for record in [self.session_record, other, chained]:
+                self.assertEqual(record.public_journey_schedule_access, schedule)
+                self.assertEqual(record.public_journey_entry_slips_access, entry)
+            html = self.app.test_client().get(public_path).get_data(as_text=True)
+            self.assertEqual('href="https://example.com/schedule-folder"' in html, schedule)
+            self.assertEqual('href="https://example.com/entry-slips-folder"' in html, entry)
+            self.assertNotIn("data-journey-schedule-review", html)
+            self.assertNotIn("data-journey-confirm-schedule", html)
+        self.assertFalse(standalone.public_journey_schedule_access)
+        self.assertFalse(standalone.public_journey_entry_slips_access)
+        shared_endpoint = f"/path-session-journey/{institution.token}/institution/public-access"
+        self.assertEqual(self.app.test_client().post(shared_endpoint, data={"allow_public_schedule": "1"}).status_code, 200)
+        self.assertEqual(self.app.test_client().post(f"/path-session-journey/{public.token}/public/public-access").status_code, 404)
+        institution.is_enabled = False
+        db.session.commit()
+        self.assertEqual(self.app.test_client().post(shared_endpoint).status_code, 410)
+
+    def test_public_schedule_permission_requires_confirmed_schedule(self):
+        from app.routes import apply_schedule_workflow_transition, ensure_journey_share_token
+        client = self.login_client()
+        endpoint = f"/path-session-journeys/sessions/{self.session_record.id}/public-access"
+        share = ensure_journey_share_token(self.session_record, "institution")
+        shared_endpoint = f"/path-session-journey/{share.token}/institution/public-access"
+        for status in ["Not started", "In progress", "Ready to send", "Sent for review", "Changes requested"]:
+            with self.subTest(status=status):
+                workflow = ExamSessionScheduleWorkflow.query.filter_by(exam_session_id=self.session_record.id).first()
+                if workflow is None:
+                    workflow = ExamSessionScheduleWorkflow(exam_session_id=self.session_record.id)
+                    db.session.add(workflow)
+                workflow.status = status
+                db.session.commit()
+                html = client.get(f"/path-session-journeys/sessions/{self.session_record.id}").get_data(as_text=True)
+                checkbox = re.search(r'<input[^>]*name="allow_public_schedule"[^>]*>', html).group(0)
+                self.assertIn('disabled', checkbox)
+                response = client.post(endpoint, data={"csrf_token": "token", "allow_public_schedule": "1"})
+                self.assertEqual(response.status_code, 409)
+                self.assertFalse(self.session_record.public_journey_schedule_access)
+                response = self.app.test_client().post(shared_endpoint, data={"allow_public_schedule": "1"})
+                self.assertEqual(response.status_code, 409)
+        workflow.status = "Approved"
+        workflow.approved_at = datetime.now(timezone.utc)
+        db.session.commit()
+        html = client.get(f"/path-session-journeys/sessions/{self.session_record.id}").get_data(as_text=True)
+        checkbox = re.search(r'<input[^>]*name="allow_public_schedule"[^>]*>', html).group(0)
+        self.assertNotIn('disabled', checkbox)
+        self.assertEqual(client.post(endpoint, data={"csrf_token": "token", "allow_public_schedule": "1"}).status_code, 200)
+        self.assertTrue(self.session_record.public_journey_schedule_access)
+
+    def test_institution_spanish_schedule_uses_horarios_and_aulas(self):
+        client = self.login_client()
+        db.session.add(ExamSessionScheduleWorkflow(exam_session_id=self.session_record.id, status="Approved", approved_at=datetime.now(timezone.utc)))
+        db.session.commit()
+        for concatenated in [False, True]:
+            if concatenated:
+                self.create_concat_schedule_test_sessions()
+            html = client.get(f"/path-session-journeys/sessions/{self.session_record.id}?lang=es").get_data(as_text=True)
+            noun = "las sesiones" if concatenated else "la sesión"
+            self.assertIn(f"Horarios de {noun} de examen", html)
+            self.assertIn(f"Los horarios de {noun} de examen están confirmados.", html)
+            self.assertIn(f"Verifica la siguiente información antes de aprobar los horarios de {noun}:", html)
+            for text in ["Solicitar cambios en los horarios", "número y nombres de las aulas de examen", "capacidad máxima de cada aula", "candidatos asignados a esa aula", f"de cada aula de examen de {noun}"]:
+                self.assertIn(text, html)
+
+    def test_public_schedule_block_uses_requested_link_copy_and_titles(self):
+        from app.routes import ensure_journey_share_token
+        client = self.login_client()
+        db.session.add(ExamSessionScheduleWorkflow(exam_session_id=self.session_record.id, status="Approved", approved_at=datetime.now(timezone.utc)))
+        db.session.commit()
+        public = ensure_journey_share_token(self.session_record, "public")
+        for concatenated in [False, True]:
+            if concatenated:
+                self.create_concat_schedule_test_sessions()
+            response = client.post(f"/path-session-journeys/sessions/{self.session_record.id}/public-access", data={"csrf_token": "token", "allow_public_schedule": "1"})
+            self.assertEqual(response.status_code, 200)
+            for lang in ["en", "es"]:
+                html = self.app.test_client().get(f"/path-session-journey/{public.token}/public?lang={lang}").get_data(as_text=True)
+                if lang == "es":
+                    title = "Horarios de las sesiones de examen" if concatenated else "Horarios de la sesión de examen"
+                    sentence = " para acceder a los horarios de las sesiones de examen" if concatenated else " para acceder a los horarios de la sesión de examen"
+                    label = "Haz clic aquí"
+                else:
+                    title = "Exam session schedules" if concatenated else "Exam session schedule"
+                    sentence = " to access the exam session schedules" if concatenated else " to access the exam session schedule"
+                    label = "Click here"
+                self.assertIn(f"<strong>{title}</strong>", html)
+                self.assertIn(f'href="https://example.com/schedule-folder" target="_blank" rel="noopener noreferrer">{label}</a>{sentence}.', html)
+                self.assertNotIn('data-journey-schedule-review', html)
+
+    def test_public_entry_slips_permission_requires_confirmed_entry_slips(self):
+        from app.routes import ensure_journey_share_token
+        client = self.login_client()
+        endpoint = f"/path-session-journeys/sessions/{self.session_record.id}/public-access"
+        share = ensure_journey_share_token(self.session_record, "institution")
+        shared_endpoint = f"/path-session-journey/{share.token}/institution/public-access"
+        workflow = ExamSessionScheduleWorkflow(exam_session_id=self.session_record.id, status="Not started")
+        db.session.add(workflow)
+        for status in ["Not started", "In progress", "Ready to send", "Sent for review", "Changes requested"]:
+            with self.subTest(status=status):
+                workflow.status = status
+                db.session.commit()
+                html = client.get(f"/path-session-journeys/sessions/{self.session_record.id}").get_data(as_text=True)
+                checkbox = re.search(r'<input[^>]*name="allow_public_entry_slips"[^>]*>', html).group(0)
+                self.assertIn('disabled', checkbox)
+                self.assertEqual(client.post(endpoint, data={"csrf_token": "token", "allow_public_entry_slips": "1"}).status_code, 409)
+                self.assertEqual(self.app.test_client().post(shared_endpoint, data={"allow_public_entry_slips": "1"}).status_code, 409)
+                self.assertFalse(self.session_record.public_journey_entry_slips_access)
+        workflow.status = "Approved"
+        workflow.approved_at = datetime.now(timezone.utc)
+        db.session.commit()
+        html = client.get(f"/path-session-journeys/sessions/{self.session_record.id}").get_data(as_text=True)
+        checkbox = re.search(r'<input[^>]*name="allow_public_entry_slips"[^>]*>', html).group(0)
+        self.assertNotIn('disabled', checkbox)
+        self.assertEqual(client.post(endpoint, data={"csrf_token": "token", "allow_public_entry_slips": "1"}).status_code, 200)
+        self.assertTrue(self.session_record.public_journey_entry_slips_access)
+
+    def test_public_access_option_texts_use_singular_plural_and_spanish(self):
+        client = self.login_client()
+        singular = client.get(f"/path-session-journeys/sessions/{self.session_record.id}").get_data(as_text=True)
+        self.assertIn("Allow candidates and their families to access the exam session schedule.", singular)
+        self.assertIn("Allow candidates and their families to access the Exam entry slips.", singular)
+        self.create_concat_schedule_test_sessions()
+        for lang in ["en", "es"]:
+            html = client.get(f"/path-session-journeys/sessions/{self.session_record.id}?lang={lang}").get_data(as_text=True)
+            if lang == "en":
+                self.assertIn("Allow candidates and their families to access the exam session schedules.", html)
+                self.assertIn("Allow candidates and their families to access the Exam entry slips.", html)
+            else:
+                self.assertIn("Permitir que los candidatos y sus familias accedan a los horarios de las sesiones de examen.", html)
+                self.assertIn("Permitir que los candidatos y sus familias accedan a los Exam entry slips.", html)
+        # The checkboxes cannot publish an unapproved schedule or entry slips.
+        client.post(f"/path-session-journeys/sessions/{self.session_record.id}/public-access", data={"csrf_token": "token", "allow_public_schedule": "1", "allow_public_entry_slips": "1"})
+        with self.app.test_request_context():
+            public = path_session_journey_contract(self.session_record, "public")
+            self.assertEqual(public["schedule_url"], "")
+            self.assertEqual(public["entry_slips_url"], "")
+
+    def test_concat_attendance_requests_require_and_save_selected_exam_dates(self):
+        from app.models import ExamSessionAttendanceRequest
+        from app.routes import ensure_journey_share_token
+        other, chained, standalone = self.create_concat_schedule_test_sessions()
+        client = self.login_client()
+        endpoint = f"/path-session-journeys/sessions/{self.session_record.id}/attendance-requests"
+        base = {"csrf_token": "token", "candidate_number": "001", "candidate_full_name": "Selected Dates Candidate"}
+        for invalid in [[], [str(standalone.id)], [str(other.id), str(standalone.id)], ["bad"]]:
+            response = client.post(endpoint, data=dict(base, statement_session_ids=invalid))
+            self.assertEqual(response.status_code, 400)
+            self.assertEqual(ExamSessionAttendanceRequest.query.count(), 0)
+        for selected in [[other.id], [self.session_record.id, other.id, chained.id]]:
+            response = client.post(endpoint, data=dict(base, statement_session_ids=[str(value) for value in selected]))
+            self.assertEqual(response.status_code, 201)
+            saved = db.session.get(ExamSessionAttendanceRequest, response.json["id"])
+            included = json.loads(saved.included_sessions_json)
+            self.assertEqual({item["session_id"] for item in included}, set(selected))
+            self.assertTrue(all(item["session_name"] and item["session_date"] for item in included))
+        share = ensure_journey_share_token(self.session_record, "institution")
+        anonymous = self.app.test_client()
+        shared_endpoint = f"/path-session-journey/{share.token}/institution/attendance-requests"
+        response = anonymous.post(shared_endpoint, data=dict(base, statement_session_ids=[str(chained.id)]))
+        self.assertEqual(response.status_code, 201)
+        for lang in ["en", "es"]:
+            html = anonymous.get(f"/path-session-journey/{share.token}/institution", query_string={"lang": lang}).get_data(as_text=True)
+            heading = "Selecciona las fechas de examen que se incluirán en la constancia" if lang == "es" else "Select exam dates to be included in the statement"
+            self.assertIn(heading, html)
+            self.assertEqual(html.count('name="statement_session_ids"'), 3)
+            for record in [self.session_record, other, chained]:
+                self.assertIn(f"{record.exam_session_name} - {record.session_date.strftime('%d/%m/%Y')}", html)
+            self.assertLess(html.index('name="candidate_full_name"'), html.index('data-statement-dates'))
+        # A standalone session keeps the original form and automatically uses its own date.
+        single = client.post(f"/path-session-journeys/sessions/{standalone.id}/attendance-requests", data=base)
+        self.assertEqual(single.status_code, 201)
+        saved = db.session.get(ExamSessionAttendanceRequest, single.json["id"])
+        self.assertEqual(json.loads(saved.included_sessions_json)[0]["session_id"], standalone.id)
 
     def test_institution_attendance_requests_persist_in_creation_order(self):
         from app.models import ExamSessionAttendanceRequest

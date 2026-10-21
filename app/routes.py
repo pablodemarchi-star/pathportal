@@ -23,7 +23,7 @@ from sqlalchemy.orm import joinedload
 from werkzeug.datastructures import MultiDict
 from werkzeug.utils import secure_filename
 
-from app.journey_translations import SPANISH_JOURNEY_TEXT
+from app.journey_translations import SPANISH_JOURNEY_TEXT, CONCAT_JOURNEY_TEXT
 from app import db, login_required, validate_csrf
 from app.models import (
     AcademicStaff,
@@ -2798,6 +2798,81 @@ def parse_exam_session_contact_points(form):
         if extra_has_values:
             errors.append("A maximum of 10 contact points can be added.")
     return contact_points, errors
+
+
+CONCAT_SHARED_FOLDER_FIELDS = {
+    "schedule_folder_url": "Schedule folder",
+    "exam_entry_slips_url": "Exam entry slips folder",
+    "session_pictures_folder_url": "Session pictures folder",
+}
+
+
+def prospective_concat_sessions(selected_ids, session_record=None):
+    """Resolve the component after replacing this session's direct links."""
+    records = ExamSession.query.all()
+    current_id = session_record.id if session_record else None
+    by_id = {record.id: record for record in records if record.id != current_id}
+    adjacency = {record_id: set() for record_id in by_id}
+    for record in by_id.values():
+        for other_id in record.concat_session_id_set():
+            if other_id in by_id and other_id != record.id:
+                adjacency[record.id].add(other_id)
+                adjacency[other_id].add(record.id)
+    pending = list(set(selected_ids) & set(by_id))
+    found = set()
+    while pending:
+        record_id = pending.pop()
+        if record_id in found:
+            continue
+        found.add(record_id)
+        pending.extend(adjacency[record_id] - found)
+    return [by_id[record_id] for record_id in sorted(found)]
+
+
+def prepare_concat_shared_folder_changes(data, session_record=None):
+    related = prospective_concat_sessions(data["concat_session_ids"], session_record)
+    if not related:
+        return [], []
+    changes = []
+    for field, label in CONCAT_SHARED_FOLDER_FIELDS.items():
+        existing = {(getattr(record, field) or "").strip() for record in related}
+        current = (getattr(session_record, field) or "").strip() if session_record else ""
+        submitted = data[field]
+        configured = (existing | {current}) - {""}
+        # Empty fields on a newly linked session inherit the configured group URL.
+        if not submitted and not current and len(configured) == 1:
+            submitted = data[field] = next(iter(configured))
+        if any(value != submitted for value in existing) or (session_record is not None and current != submitted):
+            changes.append({"label": label, "url": submitted})
+    return changes, related
+
+
+def confirm_concat_shared_folder_changes(data, session_record=None):
+    changes, related = prepare_concat_shared_folder_changes(data, session_record)
+    message = (
+        "Changing these folder links will also update them in the following concatenated sessions:\n\n"
+        + "\n".join(record.exam_session_name for record in related)
+        + "\n\nThe same folder links will be used for all sessions in the group. Do you want to continue?"
+    )
+    if request.form.get("check_concat_folder_changes") == "1":
+        return jsonify({"requires_confirmation": bool(changes), "message": message if changes else ""})
+    if changes and request.form.get("confirm_concat_folder_changes") != "1":
+        return render_template(
+            "exam_sessions/confirm_shared_folders.html",
+            changes=changes,
+            related_sessions=related,
+            submitted_fields=[(key, value) for key, value in request.form.items(multi=True) if key != "confirm_concat_folder_changes"],
+            submit_url=request.path,
+            cancel_url=url_for("staff.exam_session_planner", session_year=request.form.get("session_year", "")),
+        )
+    return None
+
+
+def sync_concat_shared_folders(session_record):
+    ids = monthly_unified_total_session_ids(session_record)
+    for related in ExamSession.query.filter(ExamSession.id.in_(ids)).all():
+        for field in CONCAT_SHARED_FOLDER_FIELDS:
+            setattr(related, field, getattr(session_record, field))
 
 
 def validate_exam_session_form(form):
@@ -13934,6 +14009,13 @@ def material_shipment_journey_contract(session_record, workflow, now=None):
     if not workflow or workflow.status != "Approved" or not approved_at or not session_date:
         return {"status": "Pending", "status_key": "pending", "progress_percent": 0}
 
+    concat_ids = monthly_unified_total_session_ids(session_record)
+    if len(concat_ids) > 1:
+        session_date = (
+            db.session.query(db.func.min(ExamSession.session_date))
+            .filter(ExamSession.id.in_(concat_ids))
+            .scalar()
+        ) or session_date
     movement_starts_at = approved_at + timedelta(hours=24)
     arrival_date = session_date - timedelta(days=15)
     arrival_at = datetime.combine(arrival_date, datetime.min.time()).replace(tzinfo=LOCAL_TZ)
@@ -13943,7 +14025,7 @@ def material_shipment_journey_contract(session_record, workflow, now=None):
     if now >= movement_starts_at:
         total_seconds = max((arrival_at - movement_starts_at).total_seconds(), 1)
         elapsed_seconds = max((now - movement_starts_at).total_seconds(), 0)
-        progress_percent = min(max(round((elapsed_seconds / total_seconds) * 100), 0), 100)
+        progress_percent = min(max(round((elapsed_seconds / total_seconds) * 100), 0), 99)
         return {"status": "In transit", "status_key": "in_transit", "progress_percent": progress_percent}
     return {"status": "Pending", "status_key": "pending", "progress_percent": 0}
 
@@ -14010,6 +14092,37 @@ def journey_staff_summary(session_record=None, supervisor_assignments=None, exam
         "dietary_requirements": dietary_requirements,
         "dietary_count": dietary_member_count,
     }
+
+
+def journey_staff_cards(session_record, session_ids, primary_summary, primary_status, now):
+    sessions = ExamSession.query.filter(ExamSession.id.in_(session_ids)).order_by(ExamSession.session_date, ExamSession.id).all()
+    other_ids = set(session_ids) - {session_record.id}
+    assignments = {}
+    for model in (ExamSessionSupervisorAssignment, ExamSessionExaminerAssignment, ExamSessionInternAssignment):
+        grouped = defaultdict(list)
+        if other_ids:
+            for assignment in model.query.filter(model.exam_session_id.in_(other_ids)).options(joinedload(model.team_member)).all():
+                grouped[assignment.exam_session_id].append(assignment)
+        assignments[model] = grouped
+    workflows = {
+        workflow.exam_session_id: workflow
+        for workflow in ExamSessionScheduleWorkflow.query.filter(ExamSessionScheduleWorkflow.exam_session_id.in_(other_ids)).all()
+    } if other_ids else {}
+    cards = []
+    for record in sessions:
+        if record.id == session_record.id:
+            summary, status = primary_summary, primary_status
+        else:
+            summary = journey_staff_summary(
+                session_record=record,
+                supervisor_assignments=assignments[ExamSessionSupervisorAssignment][record.id],
+                examiner_assignments=assignments[ExamSessionExaminerAssignment][record.id],
+                intern_assignments=assignments[ExamSessionInternAssignment][record.id],
+            )
+            workflow = workflows.get(record.id)
+            status = journey_staff_status_contract(workflow, now=now)
+        cards.append({"session_id": record.id, "session_name": record.exam_session_name, "summary": summary, "status": status})
+    return cards
 
 
 def mark_journey_milestone_progress(milestones):
@@ -14205,12 +14318,7 @@ def path_session_journey_contract(session_record, audience, today=None, sources=
         sources["workflow"] = workflow
     countdown = journey_countdown(session_record.session_date, today=today)
     schedule_ready = bool(schedule_gate_status(sources.get("workflow")).get("is_ready"))
-    session_journey_schedule_override_pending = (
-        "colegio nuestra señora de la salette" in (session_record.exam_session_name or "").casefold()
-    )
-    if session_journey_schedule_override_pending:
-        schedule_ready = False
-    journey_workflow = None if session_journey_schedule_override_pending else sources.get("workflow")
+    journey_workflow = sources.get("workflow")
     staffing_ready = bool((sources.get("staffing") or {}).get("ready"))
     logistics = sources.get("logistics") or {}
     logistics_ready = bool(logistics.get("final_email_ready")) or logistics.get("status") == "not_applicable"
@@ -14268,8 +14376,19 @@ def path_session_journey_contract(session_record, audience, today=None, sources=
     hero_message = "Follow the key stages as we prepare your upcoming Path exam session."
     final_message = "Path International Examinations"
     next_steps = [] if session_ready else ["Path International Examinations"]
+    concat_ids = monthly_unified_total_session_ids(session_record)
+    public_access_rows = ExamSession.query.with_entities(
+        ExamSession.public_journey_schedule_access, ExamSession.public_journey_entry_slips_access,
+    ).filter(ExamSession.id.in_(concat_ids)).all()
+    public_schedule_access = bool(public_access_rows) and all(row[0] for row in public_access_rows)
+    public_entry_slips_access = bool(public_access_rows) and all(row[1] for row in public_access_rows)
     if audience == "public":
-        milestones = [milestone for milestone in milestones if milestone["key"] not in {"schedule", "entry_slips", "staffing"}]
+        hidden_milestones = {"staffing"}
+        if not public_schedule_access:
+            hidden_milestones.add("schedule")
+        if not public_entry_slips_access:
+            hidden_milestones.add("entry_slips")
+        milestones = [milestone for milestone in milestones if milestone["key"] not in hidden_milestones]
         next_steps = []
     milestones = finalize_journey_milestones(milestones, audience)
     last_updated = journey_last_updated(
@@ -14292,12 +14411,55 @@ def path_session_journey_contract(session_record, audience, today=None, sources=
         else ""
     )
     absence_upload = journey_absence_upload_window(session_record, now=now)
+    concatenated_countdowns = []
+    if len(concat_ids) > 1:
+        concatenated_countdowns = [
+            {"session_id": related.id, "session_name": related.exam_session_name,
+             "session_date": related.session_date,
+             "format": related.format,
+             "venue": journey_safe_location(related),
+             "countdown": journey_countdown(related.session_date, today=today)}
+            for related in ExamSession.query.filter(ExamSession.id.in_(concat_ids))
+            .order_by(ExamSession.session_date.asc(), ExamSession.id.asc()).all()
+        ]
+    staff_cards = journey_staff_cards(
+        session_record,
+        [item["session_id"] for item in concatenated_countdowns] or [session_record.id],
+        staff_summary, staff_status, now,
+    ) if audience == "institution" else []
+    absence_cards = []
+    if audience == "institution" or concatenated_countdowns:
+        summary_ids = [item["session_id"] for item in concatenated_countdowns] or [session_record.id]
+        for related in ExamSession.query.filter(ExamSession.id.in_(summary_ids)).order_by(ExamSession.session_date, ExamSession.id).all():
+            window = journey_absence_upload_window(related, now=now)
+            absence_cards.append({
+                "session_id": related.id,
+                "session_name": related.exam_session_name,
+                "session_date": related.session_date,
+                "window": window,
+                "url": (related.absence_documentation_folder_url or "").strip() if window["state"] == "open" else "",
+            })
+    if staff_cards:
+        for milestone in milestones:
+            if milestone["key"] == "staffing":
+                milestone["status"] = "completed" if all(card["status"]["status"] == "Confirmed" for card in staff_cards) else "upcoming"
+        milestones = finalize_journey_milestones(milestones, audience)
     return {
         "audience": audience,
+        "public_schedule_access": public_schedule_access,
+        "public_entry_slips_access": public_entry_slips_access,
+        "staff_cards": staff_cards,
+        "absence_cards": absence_cards,
+        "feedback_cards": [
+            {"session_id": card["session_id"], "session_name": card["session_name"], "session_date": card["session_date"]}
+            for card in absence_cards
+        ],
         "absence_upload": absence_upload,
         "attendance_requests": ExamSessionAttendanceRequest.query.filter_by(exam_session_id=session_record.id).order_by(ExamSessionAttendanceRequest.id.asc()).all() if audience == "institution" else [],
         "language": "es" if has_request_context() and request.args.get("lang") == "es" else "en",
         "translations": SPANISH_JOURNEY_TEXT,
+        "plural_text": CONCAT_JOURNEY_TEXT,
+        "is_concatenated": bool(concatenated_countdowns),
         "title": JOURNEY_TITLES["institution"],
         "session_name": session_record.exam_session_name,
         "session_date": session_record.session_date,
@@ -14308,9 +14470,9 @@ def path_session_journey_contract(session_record, audience, today=None, sources=
         "schedule_confirmation_class": schedule_confirmation_class,
         "schedule_confirmed": schedule_ready,
         "schedule_review_countdown": schedule_review_countdown,
-        "schedule_url": (session_record.schedule_folder_url or "").strip(),
+        "schedule_url": (session_record.schedule_folder_url or "").strip() if audience == "institution" or (public_schedule_access and schedule_ready) else "",
         "schedule_link_enabled": schedule_link_enabled,
-        "entry_slips_url": (session_record.exam_entry_slips_url or "").strip(),
+        "entry_slips_url": (session_record.exam_entry_slips_url or "").strip() if audience == "institution" or (public_entry_slips_access and entry_slips_ready) else "",
         "entry_slips_confirmation_label": "Confirmed" if entry_slips_ready else "In progress",
         "entry_slips_confirmed": entry_slips_ready,
         "public_journey_url": public_journey_url,
@@ -14323,6 +14485,7 @@ def path_session_journey_contract(session_record, audience, today=None, sources=
         "format": session_record.format,
         "venue": journey_safe_location(session_record),
         "countdown": countdown,
+        "concatenated_countdowns": concatenated_countdowns,
         "hero_message": "Your Path exam day is getting closer 💙" if audience == "public" else hero_message,
         "supporting_message": "We’re getting everything ready to make this a meaningful, organised and memorable experience for students and the school team! 💪" if audience == "public" else "",
         "overall_label": "Everything ready" if session_ready else "Getting ready",
@@ -15221,6 +15384,20 @@ def apply_schedule_workflow_transition(session_record, action_key, due_at=None, 
     if action.get("note_required") and not clean_note:
         return None, "Please add a note for this schedule workflow action."
 
+    component_ids = monthly_unified_total_session_ids(session_record)
+    component_sessions = ExamSession.query.filter(ExamSession.id.in_(component_ids)).all()
+    if len(component_sessions) > 1:
+        shared_urls = {}
+        for field, label in CONCAT_SHARED_FOLDER_FIELDS.items():
+            values = {(getattr(record, field) or "").strip() for record in component_sessions}
+            values.discard("")
+            if len(values) > 1:
+                return None, f"{label} must use the same URL for all concatenated sessions. Please check the session configuration."
+            shared_urls[field] = next(iter(values), "")
+        for record in component_sessions:
+            for field, value in shared_urls.items():
+                setattr(record, field, value)
+
     now = datetime.now(timezone.utc)
     workflow.status = previous_status if action.get("same_status") else action["to"]
     workflow.next_action_due_at = None if action["to"] == "Approved" else due_at
@@ -15245,6 +15422,22 @@ def apply_schedule_workflow_transition(session_record, action_key, due_at=None, 
         created_by=created_by,
     )
     db.session.add(event)
+    for related in component_sessions:
+        if related.id == session_record.id:
+            continue
+        linked_workflow = get_or_create_schedule_workflow(related)
+        linked_previous_status = linked_workflow.status
+        for field in ("status", "next_action_due_at", "review_round", "last_sent_at", "changes_requested_at", "approved_at", "updated_at"):
+            setattr(linked_workflow, field, getattr(workflow, field))
+        sync_staffing_assignment_deadlines_for_session(related, workflow=linked_workflow, today=now)
+        db.session.add(ExamSessionScheduleEvent(
+            workflow=linked_workflow,
+            previous_status=linked_previous_status,
+            new_status=linked_workflow.status,
+            note=clean_note or None,
+            due_at=linked_workflow.next_action_due_at,
+            created_by=created_by,
+        ))
     return workflow, None
 
 
@@ -18526,6 +18719,19 @@ def pre_session_control_tower():
         view["session"].exam_session_name.lower(),
     ))
     modal_views = list(all_schedule_views if selected_view == "sessions" else schedule_views)
+    concat_components = exam_session_concat_component_map()
+    concat_ids = set().union(*(concat_components.get(view["session"].id, set()) for view in modal_views)) if modal_views else set()
+    concat_sessions = {
+        record.id: record for record in ExamSession.query.filter(ExamSession.id.in_(concat_ids)).all()
+    } if concat_ids else {}
+    for view in modal_views:
+        related_sessions = [concat_sessions[record_id] for record_id in concat_components.get(view["session"].id, set()) if record_id != view["session"].id and record_id in concat_sessions]
+        view["schedule_concat_sessions"] = []
+        for related in sorted(related_sessions, key=lambda record: (record.session_date, record.id)):
+            link_args = {"session_year": related.session_date.year, "view": "sessions", "open_schedule_modal": related.id, "schedule_only": "1", "open_modal_target": "schedule-actions"}
+            if selected_view == "bundle" and selected_bundle_view and related.id in selected_bundle_view["included_session_ids"]:
+                link_args.update(view="bundle", bundle_id=selected_bundle_view["id"])
+            view["schedule_concat_sessions"].append({"name": related.exam_session_name, "url": url_for("staff.pre_session_control_tower", **link_args)})
     ensure_default_finance_concepts()
     finance_contacts = FinanceContact.query.order_by(FinanceContact.is_active.desc(), FinanceContact.display_name.asc()).all()
     finance_concepts = FinanceConcept.query.order_by(FinanceConcept.name.asc()).all()
@@ -18657,12 +18863,60 @@ def shared_path_session_journey(token, audience):
     return render_template("pre_session_control_tower/session_journey.html", journey=journey, share=share, is_preview=False, csrf_token="")
 
 
+def save_journey_public_access(session_record):
+    schedule_access = request.form.get("allow_public_schedule") == "1"
+    entry_slips_access = request.form.get("allow_public_entry_slips") == "1"
+    if schedule_access or entry_slips_access:
+        workflow = ExamSessionScheduleWorkflow.query.filter_by(exam_session_id=session_record.id).first()
+        if not schedule_gate_status(workflow).get("is_ready"):
+            message = "Schedule access can only be enabled after the exam session schedule is confirmed." if schedule_access else "Exam entry slips access can only be enabled after Entry slips for candidates is confirmed."
+            return jsonify({"ok": False, "message": message}), 409
+    component_ids = monthly_unified_total_session_ids(session_record)
+    for related in ExamSession.query.filter(ExamSession.id.in_(component_ids)).all():
+        related.public_journey_schedule_access = schedule_access
+        related.public_journey_entry_slips_access = entry_slips_access
+    db.session.commit()
+    return jsonify({"ok": True, "schedule_access": schedule_access, "entry_slips_access": entry_slips_access})
+
+
+@staff_bp.route("/path-session-journeys/sessions/<int:session_id>/public-access", methods=["POST"])
+@login_required
+def update_journey_public_access(session_id):
+    if not validate_csrf():
+        return jsonify({"ok": False, "message": "Security token expired. Please refresh and try again."}), 400
+    return save_journey_public_access(ExamSession.query.get_or_404(session_id))
+
+
+@staff_bp.route("/path-session-journey/<token>/<audience>/public-access", methods=["POST"])
+def update_shared_journey_public_access(token, audience):
+    if audience != "institution":
+        abort(404)
+    share = ExamSessionJourneyShare.query.filter_by(token=token, audience="institution").first_or_404()
+    if not share.is_enabled or share.revoked_at:
+        abort(410)
+    return save_journey_public_access(share.exam_session)
+
+
 def create_journey_attendance_request(session_record):
     candidate_number = request.form.get("candidate_number", "").strip()
     candidate_name = request.form.get("candidate_full_name", "").strip()
     if not candidate_number or not candidate_name or len(candidate_number) > 80 or len(candidate_name) > 200:
         return jsonify({"ok": False, "message": "Enter a candidate number and full name (maximum 80 and 200 characters)."}), 400
+    component_ids = monthly_unified_total_session_ids(session_record)
+    selected_values = request.form.getlist("statement_session_ids")
+    if not selected_values and len(component_ids) == 1:
+        selected_values = [str(session_record.id)]
+    if not selected_values or any(not value.isdigit() for value in selected_values):
+        return jsonify({"ok": False, "message": "Select at least one exam date to include in the statement."}), 400
+    selected_ids = {int(value) for value in selected_values}
+    if not selected_ids.issubset(component_ids):
+        return jsonify({"ok": False, "message": "Select only exam dates belonging to these concatenated sessions."}), 400
+    included_sessions = [
+        {"session_id": record.id, "session_name": record.exam_session_name, "session_date": record.session_date.isoformat()}
+        for record in ExamSession.query.filter(ExamSession.id.in_(selected_ids)).order_by(ExamSession.session_date, ExamSession.id).all()
+    ]
     record = ExamSessionAttendanceRequest(
+        included_sessions_json=json.dumps(included_sessions, ensure_ascii=False),
         exam_session_id=session_record.id,
         candidate_number=candidate_number,
         candidate_full_name=candidate_name,
@@ -21897,6 +22151,7 @@ def exam_session_planner():
     session_fullscreen = request.args.get("session_fullscreen") == "1"
     fullscreen_session_id = request.args.get("open_session_modal", "").strip()
     session_name_filter = request.args.get("q", "").strip()
+    concatenated_filter = request.args.get("concatenated") == "1"
     date_status_filter = request.args.get("date_status", "").strip()
     selected_shifts_filter = [shift for shift in request.args.getlist("shifts") if shift in EXAM_SESSION_SHIFT_OPTIONS]
     module_filter_options = [*EXAM_SESSION_MODULE_OPTIONS, "RSG", "PEN"]
@@ -21978,6 +22233,9 @@ def exam_session_planner():
             )
 
         query = ExamSession.query.filter(db.extract("year", ExamSession.session_date) == selected_year)
+        if concatenated_filter:
+            concatenated_ids = [session_id for session_id, component in exam_session_concat_component_map().items() if len(component) > 1]
+            query = query.filter(ExamSession.id.in_(concatenated_ids))
         if session_name_filter:
             query = query.filter(ExamSession.exam_session_name.ilike(f"%{session_name_filter}%"))
         if date_status_filter:
@@ -22652,6 +22910,7 @@ def exam_session_planner():
         consideration_recipient_options=note_to_user_options(),
         filters={
             "q": session_name_filter,
+            "concatenated": concatenated_filter,
             "date_status": date_status_filter,
             "shifts": selected_shifts_filter,
             "modules": selected_modules_filter,
@@ -23100,6 +23359,9 @@ def create_exam_session():
             flash(error, "error")
         return redirect(url_for("staff.exam_session_planner", session_year=selected_year))
 
+    confirmation = confirm_concat_shared_folder_changes(data)
+    if confirmation is not None:
+        return confirmation
     session_record = ExamSession()
     apply_exam_session_form(session_record, data)
     ensure_exam_session_year(data["session_date"].year)
@@ -23109,6 +23371,8 @@ def create_exam_session():
         db.session.rollback()
         return redirect(url_for("staff.exam_session_planner", session_year=selected_year))
     sync_exam_session_concat_sessions(session_record, data["concat_session_ids"])
+    db.session.flush()
+    sync_concat_shared_folders(session_record)
     db.session.commit()
     flash("Exam session created successfully.", "success")
     return redirect(url_for("staff.exam_session_planner", session_year=data["session_date"].year))
@@ -23129,12 +23393,17 @@ def update_exam_session(session_id):
             flash(error, "error")
         return redirect(url_for("staff.exam_session_planner", session_year=selected_year))
 
+    confirmation = confirm_concat_shared_folder_changes(data, session_record)
+    if confirmation is not None:
+        return confirmation
     apply_exam_session_form(session_record, data)
     ensure_exam_session_year(data["session_date"].year)
     if not sync_path_exam_session_logistics(session_record):
         db.session.rollback()
         return redirect(url_for("staff.exam_session_planner", session_year=selected_year))
     sync_exam_session_concat_sessions(session_record, data["concat_session_ids"])
+    db.session.flush()
+    sync_concat_shared_folders(session_record)
     db.session.commit()
     flash("Exam session updated successfully.", "success")
     return redirect(url_for("staff.exam_session_planner", session_year=data["session_date"].year))

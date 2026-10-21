@@ -226,6 +226,13 @@ def create_app():
 
     with app.app_context():
         db.create_all()
+        journey_session_columns = {row[1] for row in db.session.execute(text("PRAGMA table_info(exam_session)"))}
+        for field in ("public_journey_schedule_access", "public_journey_entry_slips_access"):
+            if field not in journey_session_columns:
+                db.session.execute(text(f"ALTER TABLE exam_session ADD COLUMN {field} BOOLEAN NOT NULL DEFAULT 0"))
+        attendance_request_columns = {row[1] for row in db.session.execute(text("PRAGMA table_info(exam_session_attendance_request)"))}
+        if "included_sessions_json" not in attendance_request_columns:
+            db.session.execute(text("ALTER TABLE exam_session_attendance_request ADD COLUMN included_sessions_json TEXT NOT NULL DEFAULT '[]'"))
         sinapsis_control_columns = {row[1] for row in db.session.execute(text("PRAGMA table_info(exam_session_sinapsis_control)"))}
         if "return_materials_method" not in sinapsis_control_columns:
             db.session.execute(text("ALTER TABLE exam_session_sinapsis_control ADD COLUMN return_materials_method VARCHAR(60)"))
