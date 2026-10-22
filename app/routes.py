@@ -4531,7 +4531,7 @@ def current_year():
 
 
 def fee_role_options():
-    default_role_names = ("Examiner", "RSG", "Supervisor", "Intern", "Emergency contact")
+    default_role_names = ("Examiner", "RSG", "Supervisor", "Remote supervisor", "Intern", "Emergency contact")
     existing_names = {
         name for (name,) in Role.query.with_entities(Role.name).filter(Role.name.in_(default_role_names)).all()
     }
@@ -5768,7 +5768,7 @@ def fee_data_is_for_role(data, role_name):
 
 
 def apply_device_dep_calculation(assignment, device_dep_fee, now, *, recalculated=False):
-    result = calculate_timed_fee_from_ranges(assignment.time_ranges_list(), device_dep_fee)
+    result = None if getattr(assignment, "is_remote", False) else calculate_timed_fee_from_ranges(assignment.time_ranges_list(), device_dep_fee)
     if not result:
         assignment.device_dep = ""
         assignment.device_dep_currency = ""
@@ -22523,6 +22523,7 @@ def exam_session_planner():
     examiner_assignment_options = examiner_members + potential_entry_members
     intern_assignment_options = intern_members + potential_entry_members
     supervisor_fee = role_fee_for_role("Supervisor")
+    remote_supervisor_fee = role_fee_for_role("Remote supervisor")
     examiner_fee = role_fee_for_role("Examiner")
     intern_fee = role_fee_for_role("Intern")
     emergency_contact_fee = role_fee_for_role("Emergency contact")
@@ -22901,6 +22902,7 @@ def exam_session_planner():
         pagination=pagination,
         supervisor_members=supervisor_members,
         supervisor_fee=supervisor_fee,
+        remote_supervisor_fee=remote_supervisor_fee,
         examiner_fee=examiner_fee,
         intern_fee=intern_fee,
         emergency_contact_fee=emergency_contact_fee,
@@ -23633,6 +23635,7 @@ def save_exam_session_assignment_section(
         for assignment in assignment_model.query.filter_by(exam_session_id=session_record.id).all()
     }
     supervisor_fee = role_fee_for_role("Supervisor")
+    remote_supervisor_fee = role_fee_for_role("Remote supervisor")
     examiner_fee = role_fee_for_role("Examiner")
     intern_fee = role_fee_for_role("Intern")
     device_dep_fee = fee_by_exact_description("Device dep.")
@@ -23801,7 +23804,7 @@ def save_exam_session_assignment_section(
                 role_fee_unit = ""
 
         if has_live_calculation and not manual_fee_override:
-            role_fee_source = supervisor_fee if section_key == "supervisor" else examiner_fee if section_key == "examiner" else None
+            role_fee_source = (remote_supervisor_fee if is_remote else supervisor_fee) if section_key == "supervisor" else examiner_fee if section_key == "examiner" else None
             if role_fee_source:
                 role_fee_result = calculate_role_fee_from_ranges(time_ranges, role_fee_source)
                 if role_fee_result:
@@ -23814,6 +23817,8 @@ def save_exam_session_assignment_section(
                     role_fee_currency = ""
                     role_fee_base_value = ""
                     role_fee_unit = ""
+            elif section_key == "supervisor":
+                role_fee = role_fee_currency = role_fee_base_value = role_fee_unit = ""
             if km is not None:
                 commuting_result = calculate_km_fee(km, commuting_fee)
                 if commuting_result:
@@ -23826,7 +23831,7 @@ def save_exam_session_assignment_section(
                     commuting_currency = ""
                     commuting_base_value = ""
                     commuting_unit = ""
-            device_dep_result = calculate_timed_fee_from_ranges(time_ranges, device_dep_fee)
+            device_dep_result = None if is_remote else calculate_timed_fee_from_ranges(time_ranges, device_dep_fee)
             if device_dep_result:
                 device_dep = device_dep_result["value"]
                 device_dep_currency = device_dep_result["currency"]
@@ -23873,6 +23878,8 @@ def save_exam_session_assignment_section(
             seniority_percentage = request.form.get(f"{section_key}_seniority_percentage_{row_key}", "").strip()
             seniority_currency = request.form.get(f"{section_key}_seniority_currency_{row_key}", "").strip()
 
+        if is_remote:
+            device_dep = device_dep_currency = device_dep_base_value = device_dep_unit = ""
         role_fee = normalize_money_display_value(role_fee)
         device_dep = normalize_money_display_value(device_dep)
         commuting = normalize_money_display_value(commuting)

@@ -3641,6 +3641,7 @@ document.addEventListener("change", (event) => {
     resetKmFieldToCheckbox(row);
   }
   syncRemoteKmMutualExclusion(row);
+  syncLiveFeeCalculations(row);
 });
 
 const syncKmDisableButton = (input) => {
@@ -5509,7 +5510,29 @@ const syncCalculatedFieldLocks = (row) => {
   });
 };
 
+const rowIsRemoteSupervisor = (row) => row?.dataset.sectionKey === "supervisor" && Boolean(row.querySelector("[data-supervisor-remote-checkbox]")?.checked);
+
+const roleFeeSettings = (row) => {
+  const data = row.closest(".session-member-section")?.dataset || {};
+  return rowIsRemoteSupervisor(row) ? {
+    roleFeeLabel: "remote supervisor", roleFeeCurrency: data.remoteRoleFeeCurrency,
+    roleFeeValue: data.remoteRoleFeeValue, roleFeeUnit: data.remoteRoleFeeUnit,
+  } : data;
+};
+
+const clearRemoteDeviceDep = (row) => {
+  if (!rowIsRemoteSupervisor(row)) return false;
+  for (const field of ["input", "currency-input", "base-input", "unit-input"]) {
+    const input = row.querySelector(`[data-device-dep-${field}]`);
+    if (input) input.value = "";
+  }
+  const display = row.querySelector("[data-device-dep-display]");
+  if (display) { display.textContent = "-"; display.title = ""; }
+  return true;
+};
+
 const syncLiveFeeCalculations = (row, { forceEmpty = true } = {}) => {
+  clearRemoteDeviceDep(row);
   if (!row || rowFeesAreLocked(row)) {
     syncAssignmentTotalFee(row);
     return;
@@ -5532,18 +5555,18 @@ const syncSupervisorRoleFee = (row, { forceEmpty = false } = {}) => {
   if (!row || !["supervisor", "examiner", "intern"].includes(row.dataset.sectionKey || "")) return;
   if (rowFeesAreLocked(row)) return;
   if (rowHasManualFeeOverride(row)) return;
-  const section = row.closest(".session-member-section");
+  const feeData = roleFeeSettings(row);
   const display = row.querySelector("[data-role-fee-display]");
   const input = row.querySelector("[data-role-fee-input]");
   const currencyInput = row.querySelector("[data-role-fee-currency-input]");
   const baseInput = row.querySelector("[data-role-fee-base-input]");
   const unitInput = row.querySelector("[data-role-fee-unit-input]");
   if (!display || !input) return;
-  const label = section?.dataset.roleFeeLabel || row.dataset.sectionKey || "role";
+  const label = feeData.roleFeeLabel || row.dataset.sectionKey || "role";
   const configuredMessage = `No ${label} fee configured`;
-  const currency = section?.dataset.roleFeeCurrency || "";
-  const base = parseRoleFeeBase(section?.dataset.roleFeeValue || "");
-  const unit = section?.dataset.roleFeeUnit || "";
+  const currency = feeData.roleFeeCurrency || "";
+  const base = parseRoleFeeBase(feeData.roleFeeValue || "");
+  const unit = feeData.roleFeeUnit || "";
   if (!currency || base === null || !["per hour", "per minute"].includes(unit)) {
     if (forceEmpty || !input.value) {
       input.value = "";
@@ -5574,10 +5597,10 @@ const syncSupervisorRoleFee = (row, { forceEmpty = false } = {}) => {
   const durationLabel = unit === "per hour" ? `${formatDecimalNumber(minutes / 60)} hours` : `${minutes} minutes`;
   input.value = formatted;
   currencyInput.value = currency;
-  baseInput.value = section.dataset.roleFeeValue || "";
+  baseInput.value = feeData.roleFeeValue || "";
   unitInput.value = unit;
   display.textContent = formatted;
-  display.title = `Calculation: ${durationLabel} × ${currency} ${section.dataset.roleFeeValue || ""} = ${formatted}`;
+  display.title = `Calculation: ${durationLabel} × ${currency} ${feeData.roleFeeValue || ""} = ${formatted}`;
   syncSeniority(row);
   syncAssignmentTotalFee(row);
 };
@@ -5587,13 +5610,13 @@ const syncSupervisorRoleFeePlaceholder = (row) => {
   const input = row.querySelector("[data-role-fee-input]");
   const display = row.querySelector("[data-role-fee-display]");
   if (!input || !display || input.value) return;
-  const section = row.closest(".session-member-section");
-  const label = section?.dataset.roleFeeLabel || row.dataset.sectionKey || "role";
+  const feeData = roleFeeSettings(row);
+  const label = feeData.roleFeeLabel || row.dataset.sectionKey || "role";
   const configuredMessage = `No ${label} fee configured`;
   const hasFee = Boolean(
-    section?.dataset.roleFeeCurrency &&
-    section?.dataset.roleFeeValue &&
-    ["per hour", "per minute"].includes(section?.dataset.roleFeeUnit || "")
+    feeData.roleFeeCurrency &&
+    feeData.roleFeeValue &&
+    ["per hour", "per minute"].includes(feeData.roleFeeUnit || "")
   );
   display.textContent = hasFee ? "-" : configuredMessage;
   display.title = hasFee ? "" : configuredMessage;
@@ -5601,6 +5624,7 @@ const syncSupervisorRoleFeePlaceholder = (row) => {
 
 const syncDeviceDep = (row, { forceEmpty = false } = {}) => {
   if (!row) return;
+  if (clearRemoteDeviceDep(row)) { syncAssignmentTotalFee(row); return; }
   if (rowFeesAreLocked(row)) return;
   if (rowHasManualFeeOverride(row)) return;
   const form = row.closest("[data-session-members-form]");
@@ -5650,6 +5674,7 @@ const syncDeviceDep = (row, { forceEmpty = false } = {}) => {
 
 const syncDeviceDepPlaceholder = (row) => {
   if (!row) return;
+  if (clearRemoteDeviceDep(row)) return;
   const input = row.querySelector("[data-device-dep-input]");
   const display = row.querySelector("[data-device-dep-display]");
   if (!input || !display || input.value) return;
@@ -10578,6 +10603,7 @@ const initSessionMemberRows = (root = document) => {
   initTimeInputs(root);
   root.querySelectorAll("[data-km-input]").forEach(syncKmDisableButton);
   if (root.matches?.("[data-supervisor-row]")) {
+    if (rowIsRemoteSupervisor(root)) syncSupervisorRoleFee(root, { forceEmpty: true });
     syncSupervisorRoleFeePlaceholder(root);
     syncDeviceDepPlaceholder(root);
     syncCommutingPlaceholder(root);
@@ -10595,6 +10621,7 @@ const initSessionMemberRows = (root = document) => {
     syncAssignmentTotalFee(root);
   }
   root.querySelectorAll("[data-supervisor-row]").forEach((row) => {
+    if (rowIsRemoteSupervisor(row)) syncSupervisorRoleFee(row, { forceEmpty: true });
     syncSupervisorRoleFeePlaceholder(row);
     syncDeviceDepPlaceholder(row);
     syncCommutingPlaceholder(row);

@@ -1498,6 +1498,60 @@ class ScheduleWorkflowTest(unittest.TestCase):
         self.assertNotIn("Member duplication", cells[9])
         self.assertNotIn("Member duplication", cells[10])
 
+    def test_remote_supervisor_fee_option_can_be_created_and_edited(self):
+        client = self.login_client()
+        html = client.get("/fees").get_data(as_text=True)
+        self.assertIn(">Remote supervisor</option>", html)
+        role = Role.query.filter_by(name="Remote supervisor").one()
+        data = {"csrf_token": "token", "fee_description": "Remote supervision", "currency": "ARS",
+            "fee_value": "2500", "unit_of_measure": "per hour", "role_id": str(role.id)}
+        self.assertEqual(client.post("/fees", data=data).status_code, 302)
+        fee = Fee.query.filter_by(fee_description="Remote supervision").one()
+        self.assertEqual(fee.role_id, role.id)
+        data["fee_value"] = "3000"
+        self.assertEqual(client.post(f"/fees/{fee.id}", data=data).status_code, 302)
+        self.assertEqual(fee.fee_value, "3000")
+
+    def test_remote_supervisor_assignment_uses_remote_fee_and_never_device_dep(self):
+        from app.routes import fee_role_options
+        fee_role_options()
+        for role_name, amount in [("Supervisor", "1000"), ("Remote supervisor", "2500")]:
+            db.session.add(Fee(fee_description=role_name, currency="ARS", fee_value=amount,
+                unit_of_measure="per hour", role=Role.query.filter_by(name=role_name).one()))
+        db.session.add(Fee(fee_description="Device dep.", currency="ARS", fee_value="100", unit_of_measure="per hour"))
+        supervisor = self.create_supervisor()
+        db.session.commit()
+        client = self.login_client()
+        data = {"csrf_token": "token", "session_year": "2026", "supervisor_row_keys": "new-1",
+            "supervisor_team_member_id_new-1": str(supervisor.id), "supervisor_participation_status_new-1": "Pending",
+            "supervisor_start_time_new-1": "09:00", "supervisor_end_time_new-1": "11:00"}
+        url = f"/exam-session-planner/sessions/{self.session_record.id}/members"
+        self.assertEqual(client.post(url, data=data).status_code, 302)
+        assignment = ExamSessionSupervisorAssignment.query.filter_by(exam_session_id=self.session_record.id).one()
+        self.assertEqual(assignment.role_fee, "ARS 2.000")
+        self.assertEqual(assignment.device_dep, "ARS 200")
+        data["supervisor_assignment_id_new-1"] = str(assignment.id)
+        data["supervisor_remote_new-1"] = "1"
+        data["supervisor_device_dep_new-1"] = "ARS 999"
+        self.assertEqual(client.post(url, data=data).status_code, 302)
+        self.assertEqual(assignment.role_fee, "ARS 5.000")
+        self.assertEqual(assignment.device_dep, "")
+        self.assertEqual(assignment.device_dep_currency, "")
+        html = client.get("/exam-session-planner?session_year=2026").get_data(as_text=True)
+        self.assertIn('data-remote-role-fee-value="2500"', html)
+        data["supervisor_manual_fee_override_new-1"] = "1"
+        self.assertEqual(client.post(url, data=data).status_code, 302)
+        self.assertEqual(assignment.device_dep, "")
+        data.pop("supervisor_manual_fee_override_new-1")
+        db.session.delete(Fee.query.join(Role).filter(Role.name == "Remote supervisor").one())
+        db.session.commit()
+        self.assertEqual(client.post(url, data=data).status_code, 302)
+        self.assertEqual(assignment.role_fee, "")
+        data.pop("supervisor_remote_new-1")
+        self.assertEqual(client.post(url, data=data).status_code, 302)
+        self.assertEqual(assignment.role_fee, "ARS 2.000")
+        self.assertEqual(assignment.device_dep, "ARS 200")
+
     def test_exam_session_supervisor_assignment_supports_remote_checkbox(self):
         supervisor = self.create_supervisor()
         client = self.login_client()

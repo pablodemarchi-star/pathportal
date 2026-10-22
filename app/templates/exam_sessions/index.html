@@ -495,11 +495,11 @@
       </div>
       <div class="staff-card-field">
       <span class="staff-card-field-label">Device dep.</span>
-      <input type="hidden" name="{{ section_key }}_device_dep_{{ row_key }}" value="{{ assignment.device_dep if assignment and assignment.device_dep else '' }}" data-device-dep-input>
-      <input type="hidden" name="{{ section_key }}_device_dep_currency_{{ row_key }}" value="{{ assignment.device_dep_currency if assignment and assignment.device_dep_currency else '' }}" data-device-dep-currency-input>
-      <input type="hidden" name="{{ section_key }}_device_dep_base_value_{{ row_key }}" value="{{ assignment.device_dep_base_value if assignment and assignment.device_dep_base_value else '' }}" data-device-dep-base-input>
-      <input type="hidden" name="{{ section_key }}_device_dep_unit_{{ row_key }}" value="{{ assignment.device_dep_unit if assignment and assignment.device_dep_unit else '' }}" data-device-dep-unit-input>
-      <span class="calculated-role-fee" data-device-dep-display title="{{ assignment.device_dep if assignment and assignment.device_dep else '' }}">{{ assignment.device_dep if assignment and assignment.device_dep else 'No Device dep. fee configured' }}</span>
+      <input type="hidden" name="{{ section_key }}_device_dep_{{ row_key }}" value="{{ assignment.device_dep if assignment and not (section_key == 'supervisor' and assignment.is_remote) and assignment.device_dep else '' }}" data-device-dep-input>
+      <input type="hidden" name="{{ section_key }}_device_dep_currency_{{ row_key }}" value="{{ assignment.device_dep_currency if assignment and not (section_key == 'supervisor' and assignment.is_remote) and assignment.device_dep_currency else '' }}" data-device-dep-currency-input>
+      <input type="hidden" name="{{ section_key }}_device_dep_base_value_{{ row_key }}" value="{{ assignment.device_dep_base_value if assignment and not (section_key == 'supervisor' and assignment.is_remote) and assignment.device_dep_base_value else '' }}" data-device-dep-base-input>
+      <input type="hidden" name="{{ section_key }}_device_dep_unit_{{ row_key }}" value="{{ assignment.device_dep_unit if assignment and not (section_key == 'supervisor' and assignment.is_remote) and assignment.device_dep_unit else '' }}" data-device-dep-unit-input>
+      <span class="calculated-role-fee" data-device-dep-display title="{{ assignment.device_dep if assignment and not (section_key == 'supervisor' and assignment.is_remote) and assignment.device_dep else '' }}">{{ assignment.device_dep if assignment and not (section_key == 'supervisor' and assignment.is_remote) and assignment.device_dep else ('-' if assignment and section_key == 'supervisor' and assignment.is_remote else 'No Device dep. fee configured') }}</span>
       </div>
       <div class="staff-card-field" data-commuting-cell>
       <span class="staff-card-field-label">Commuting</span>
@@ -1496,7 +1496,7 @@
         <input type="hidden" name="session_non_available_member_ids" value="">
         <input type="hidden" name="logistics_confirmation_password" value="" data-logistics-confirmation-password>
         <div data-deleted-assignments></div>
-        <section class="session-member-section" data-role-fee-label="supervisor" data-role-fee-currency="{{ supervisor_fee.currency if supervisor_fee else '' }}" data-role-fee-value="{{ supervisor_fee.fee_value if supervisor_fee else '' }}" data-role-fee-unit="{{ supervisor_fee.unit_of_measure if supervisor_fee else '' }}" data-supervisor-fee-currency="{{ supervisor_fee.currency if supervisor_fee else '' }}" data-supervisor-fee-value="{{ supervisor_fee.fee_value if supervisor_fee else '' }}" data-supervisor-fee-unit="{{ supervisor_fee.unit_of_measure if supervisor_fee else '' }}">
+        <section class="session-member-section" data-role-fee-label="supervisor" data-remote-role-fee-currency="{{ remote_supervisor_fee.currency if remote_supervisor_fee else '' }}" data-remote-role-fee-value="{{ remote_supervisor_fee.fee_value if remote_supervisor_fee else '' }}" data-remote-role-fee-unit="{{ remote_supervisor_fee.unit_of_measure if remote_supervisor_fee else '' }}" data-role-fee-currency="{{ supervisor_fee.currency if supervisor_fee else '' }}" data-role-fee-value="{{ supervisor_fee.fee_value if supervisor_fee else '' }}" data-role-fee-unit="{{ supervisor_fee.unit_of_measure if supervisor_fee else '' }}" data-supervisor-fee-currency="{{ supervisor_fee.currency if supervisor_fee else '' }}" data-supervisor-fee-value="{{ supervisor_fee.fee_value if supervisor_fee else '' }}" data-supervisor-fee-unit="{{ supervisor_fee.unit_of_measure if supervisor_fee else '' }}">
           {% set session_supervisors = session_supervisor_members.get(session.id, supervisor_members) %}
           <div class="session-member-section-header">
             <div>
