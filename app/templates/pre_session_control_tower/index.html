@@ -2,8 +2,13 @@
 {% from "staff/_badges.html" import role_badge %}
 {% from "finance_requests/_payment_form_fields.html" import payment_form_fields with context %}
 
+{% macro session_concat_indicator(session_id) -%}
+  {% set names = concat_session_names_by_session.get(session_id, []) %}
+  {% if names %}<span class="session-concat-indicator" title="Concatenated with: {{ names|join(', ') }}">&lt;concat&gt;</span>{% endif %}
+{%- endmacro %}
+
 {% macro schedule_status_badge(status) -%}
-  <span class="badge schedule-status-{{ status|lower|replace(' ', '-') }}">{{ status }}</span>
+  <span class="badge schedule-status-{{ 'not-started' if status == 'Concatenated' else status|lower|replace(' ', '-') }}">{{ status }}</span>
 {%- endmacro %}
 
 {% macro schedule_health_badge(health) -%}
@@ -79,9 +84,9 @@
   </span>
 {%- endmacro %}
 
-{% macro contextual_cell_trigger(session, target, label, schedule_only=false, staffing_only=false, packages_only=false, shipments_only=false, logistics_only=false, finance_only=false, sinapsis_only=false, communications_only=false) -%}
+{% macro contextual_cell_trigger(session, target, label, schedule_only=false, staffing_only=false, packages_only=false, shipments_only=false, logistics_only=false, finance_only=false, sinapsis_only=false, communications_only=false, interactive=true) -%}
   {% set scroll_target = 'schedule-notes' if schedule_only and target == 'schedule-actions' else target %}
-  <button class="contextual-cell-trigger" type="button" data-open-modal="schedule-workflow-{{ session.id }}" data-modal-scroll-target="{{ scroll_target }}-{{ session.id }}" data-modal-target-label="{{ label }}"{% if schedule_only %} data-modal-schedule-only="true"{% endif %}{% if staffing_only %} data-modal-staffing-only="true"{% endif %}{% if packages_only %} data-modal-packages-only="true"{% endif %}{% if shipments_only %} data-modal-shipments-only="true"{% endif %}{% if logistics_only %} data-modal-logistics-only="true"{% endif %}{% if finance_only %} data-modal-finance-only="true"{% endif %}{% if sinapsis_only %} data-modal-sinapsis-only="true"{% endif %}{% if communications_only %} data-modal-communications-only="true"{% endif %} aria-label="{{ label }} for {{ session.exam_session_name }}">
+  <button class="contextual-cell-trigger" type="button"{% if interactive %} data-open-modal="schedule-workflow-{{ session.id }}"{% else %} aria-disabled="true" tabindex="-1"{% endif %} data-modal-scroll-target="{{ scroll_target }}-{{ session.id }}" data-modal-target-label="{{ label }}"{% if schedule_only %} data-modal-schedule-only="true"{% endif %}{% if staffing_only %} data-modal-staffing-only="true"{% endif %}{% if packages_only %} data-modal-packages-only="true"{% endif %}{% if shipments_only %} data-modal-shipments-only="true"{% endif %}{% if logistics_only %} data-modal-logistics-only="true"{% endif %}{% if finance_only %} data-modal-finance-only="true"{% endif %}{% if sinapsis_only %} data-modal-sinapsis-only="true"{% endif %}{% if communications_only %} data-modal-communications-only="true"{% endif %} aria-label="{{ label }} for {{ session.exam_session_name }}">
     {{ caller() }}
   </button>
 {%- endmacro %}
@@ -1661,7 +1666,7 @@
           <td>
             <div class="bundle-session-chip-list">
               {% for chip in pending_shipment_bundle.session_chips %}
-                <span class="bundle-session-chip">{{ chip.date|session_date }} {{ chip.name }}</span>
+                <span class="bundle-session-concat-name"><span class="bundle-session-chip">{{ chip.date|session_date }} {{ chip.name }}</span>{{ session_concat_indicator(chip.id) }}</span>
               {% endfor %}
             </div>
           </td>
@@ -1727,7 +1732,7 @@
           <td>
             <div class="bundle-session-chip-list">
               {% for chip in bundle.session_chips %}
-                <span class="bundle-session-chip">{{ chip.date|session_date }} {{ chip.name }}</span>
+                <span class="bundle-session-concat-name"><span class="bundle-session-chip">{{ chip.date|session_date }} {{ chip.name }}</span>{{ session_concat_indicator(chip.id) }}</span>
               {% endfor %}
             </div>
           </td>
@@ -1871,6 +1876,7 @@
           <td>
             <span class="shipment-summary-cell bundle-session-name-cell control-tower-session-name-cell">
               <strong>{{ session.exam_session_name }}</strong>
+              {{ session_concat_indicator(session.id) }}
               <small class="bundle-session-date">{{ session.session_date|session_date }}</small>
               {% if selected_view != 'bundle' and view.shipments.bundle_view %}
                 {% set session_shipment_status = view.shipments.bundle_view.status %}
@@ -1890,8 +1896,8 @@
             <td>{{ bundle_detail_departments_cell(view.bundle_detail_actions) }}</td>
             <td>{{ bundle_detail_action_descriptions_cell(view.bundle_detail_actions) }}</td>
             <td>
-              {% call contextual_cell_trigger(session, 'schedule-actions', 'Review schedule', true) %}
-                {{ schedule_table_cell(view.status, view.schedule_gate, view.review_round, view.schedule_preparation_unlocked, view.deadline_badge, view.schedule_auto_confirmed) }}
+              {% call contextual_cell_trigger(session, 'schedule-actions', 'Review schedule', true, interactive=not view.bundle_schedule.is_secondary) %}
+                {{ schedule_table_cell(view.bundle_schedule.status, view.schedule_gate, view.review_round, view.schedule_preparation_unlocked, view.deadline_badge, view.schedule_auto_confirmed) }}
               {% endcall %}
             </td>
             <td>

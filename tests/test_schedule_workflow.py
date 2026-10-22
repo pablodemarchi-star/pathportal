@@ -1238,6 +1238,79 @@ class ScheduleWorkflowTest(unittest.TestCase):
             self.assertIn('href="https://example.com/entry-slips-folder"', html)
         self.assertIsNone(ExamSessionScheduleWorkflow.query.filter_by(exam_session_id=standalone.id).first())
 
+    def test_control_tower_concat_indicator_lists_whole_group_in_sessions_and_bundles(self):
+        other, chained, standalone = self.create_concat_schedule_test_sessions()
+        bundle = self.create_shipment_bundle_record(session_record=self.session_record)
+        for record in [other, chained, standalone]:
+            db.session.add(ExamSessionShipmentBundleSession(bundle_id=bundle.id, exam_session_id=record.id))
+        db.session.commit()
+        client = self.login_client()
+        for view in ["sessions", "bundles", "bundle"]:
+            with self.subTest(view=view):
+                response = client.get(f"/pre-session-control-tower?session_year=2026&view={view}&bundle_id={bundle.id}")
+                self.assertEqual(response.status_code, 200)
+                html = response.get_data(as_text=True)
+                indicators = re.findall(r'<span class="session-concat-indicator" title="([^"]*)">&lt;concat&gt;</span>', html)
+                self.assertEqual(len(indicators), 3)
+                for record in [self.session_record, other, chained]:
+                    names = [item.exam_session_name for item in [self.session_record, other, chained] if item.id != record.id]
+                    self.assertIn("Concatenated with: " + ", ".join(names), [html_lib.unescape(value) for value in indicators])
+                self.assertFalse(any(standalone.exam_session_name in value for value in indicators))
+
+    def test_bundle_concatenated_schedule_states_and_modal_access_follow_earliest_session(self):
+        from app.routes import bundle_schedule_presentations
+        other, chained, standalone = self.create_concat_schedule_test_sessions()
+        self.session_record.session_date = date(2026, 12, 10)
+        other.session_date = date(2026, 12, 12)
+        chained.session_date = date(2026, 12, 15)
+        workflows = []
+        for record in [self.session_record, other, chained, standalone]:
+            workflow = ExamSessionScheduleWorkflow(exam_session_id=record.id, status="Not started")
+            db.session.add(workflow)
+            workflows.append(workflow)
+        db.session.commit()
+        bundle = self.create_shipment_bundle_record(session_record=self.session_record)
+        for record in [other, chained, standalone]:
+            db.session.add(ExamSessionShipmentBundleSession(bundle_id=bundle.id, exam_session_id=record.id))
+        db.session.commit()
+        client = self.login_client()
+        for status in ["Not started", "In progress", "Ready to send", "Sent for review", "Changes requested", "Approved"]:
+            with self.subTest(status=status):
+                for workflow in workflows[:3]:
+                    workflow.status = status
+                db.session.commit()
+                states = bundle_schedule_presentations([self.session_record, other, chained, standalone])
+                self.assertFalse(states[self.session_record.id]["is_secondary"])
+                self.assertEqual(states[self.session_record.id]["status"], status)
+                expected = "Concatenated" if status in {"Not started", "Ready to send"} else status
+                for record in [other, chained]:
+                    self.assertTrue(states[record.id]["is_secondary"])
+                    self.assertEqual(states[record.id]["status"], expected)
+                self.assertFalse(states[standalone.id]["is_secondary"])
+                html = client.get(f"/pre-session-control-tower?session_year=2026&view=bundle&bundle_id={bundle.id}").get_data(as_text=True)
+                buttons = re.findall(r'<button class="contextual-cell-trigger"[^>]*data-modal-target-label="Review schedule"[^>]*>.*?</button>', html, re.S)
+                self.assertEqual(len(buttons), 4)
+                for record in [self.session_record, other, chained, standalone]:
+                    button = next(value for value in buttons if f'aria-label="Review schedule for {record.exam_session_name}"' in value)
+                    if record.id in [other.id, chained.id]:
+                        self.assertNotIn('data-open-modal=', button)
+                        self.assertIn('aria-disabled="true"', button)
+                        self.assertIn(f'>{expected}</span>', button)
+                        if expected == "Concatenated":
+                            self.assertIn('schedule-status-not-started', button)
+                    else:
+                        self.assertIn(f'data-open-modal="schedule-workflow-{record.id}"', button)
+                self.assertEqual([workflow.status for workflow in workflows[:3]], [status] * 3)
+        # Group leadership is independent of the currently visible rows and insertion order.
+        chained.session_date = date(2026, 12, 1)
+        db.session.commit()
+        states = bundle_schedule_presentations([other])
+        self.assertTrue(states[other.id]["is_secondary"])
+        # The Sessions view does not use the bundle-only presentation.
+        response = client.get("/pre-session-control-tower?session_year=2026&view=sessions")
+        self.assertEqual(response.status_code, 200)
+        self.assertNotIn('>Concatenated</span>', response.get_data(as_text=True))
+
     def test_concat_contact_points_add_edit_remove_require_confirmation_and_sync_entire_group(self):
         other, chained, standalone = self.create_concat_schedule_test_sessions()
         client = self.login_client()

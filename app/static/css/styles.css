@@ -8171,6 +8171,17 @@ span.session-marker-chip {
   font-weight: 900;
 }
 
+.contextual-cell-trigger[aria-disabled="true"],
+.contextual-cell-trigger[aria-disabled="true"]:hover {
+  cursor: default;
+  border-color: transparent;
+  background: transparent;
+}
+
+.contextual-cell-trigger[aria-disabled="true"] .badge::after {
+  content: none;
+}
+
 .my-actions-table {
   min-width: 1180px;
 }
@@ -17522,3 +17533,5 @@ span.session-marker-chip {
 .modal.is-finance-only .staffing-session-considerations,
 .modal.is-sinapsis-only .staffing-session-considerations { display: inline-flex; }
 .staffing-session-considerations .session-considerations-popover { z-index: 10; max-width: calc(100vw - 48px); }
+
+.bundle-session-concat-name { display: inline-flex; align-items: center; gap: 3px; flex-wrap: nowrap; }

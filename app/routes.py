@@ -6505,6 +6505,24 @@ def schedule_status_deadline(status, entered_at, session_record=None):
     return argentina_add_business_hours(entered_at, schedule_review_business_days(session_record) * 24).date()
 
 
+def bundle_schedule_presentations(session_records):
+    """Only the earliest session in each concatenated group opens Schedule."""
+    components = exam_session_concat_component_map()
+    dates = dict(db.session.query(ExamSession.id, ExamSession.session_date).all())
+    statuses = dict(db.session.query(ExamSessionScheduleWorkflow.exam_session_id, ExamSessionScheduleWorkflow.status).all())
+    result = {}
+    for record in session_records:
+        ids = components.get(record.id, {record.id})
+        primary_id = min(ids, key=lambda session_id: (dates.get(session_id) or date.max, session_id))
+        secondary = len(ids) > 1 and record.id != primary_id
+        status = statuses.get(primary_id, "Not started")
+        result[record.id] = {
+            "is_secondary": secondary,
+            "status": "Concatenated" if secondary and status in {"Not started", "Ready to send"} else status,
+        }
+    return result
+
+
 def schedule_workflow_current_deadline(workflow):
     if not workflow:
         return None
@@ -18672,6 +18690,19 @@ def pre_session_control_tower():
             ),
         ))
     all_schedule_views = list(schedule_views)
+    concat_components = exam_session_concat_component_map()
+    concat_names = dict(db.session.query(ExamSession.id, ExamSession.exam_session_name).all())
+    concat_session_names_by_session = {
+        session_id: [concat_names[other_id] for other_id in sorted(component_ids)
+                     if other_id != session_id and other_id in concat_names]
+        for session_id, component_ids in concat_components.items()
+    }
+
+    if selected_view == "bundle":
+        bundle_schedules = bundle_schedule_presentations([view["session"] for view in all_schedule_views])
+        for view in all_schedule_views:
+            view["bundle_schedule"] = bundle_schedules[view["session"].id]
+
     def session_view_departments(view):
         return {
             (action.get("department") or "").upper()
@@ -18867,6 +18898,7 @@ def pre_session_control_tower():
 
     return render_template(
         "pre_session_control_tower/index.html",
+        concat_session_names_by_session=concat_session_names_by_session,
         consideration_recipient_options=note_to_user_options(),
         schedule_views=schedule_views,
         modal_views=modal_views,
