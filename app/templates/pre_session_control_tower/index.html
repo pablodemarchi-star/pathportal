@@ -22,8 +22,8 @@
   <span class="finance-status-chip status-{{ status|lower|replace(' ', '-') }}">{{ 'Scheduled' if status == 'Management approved' else 'Processing payment' if status == 'Payment scheduled' else status }}</span>
 {%- endmacro %}
 
-{% macro provider_copy_button(value, label) -%}
-  <button class="copy-icon-button provider-detail-copy-button" type="button" data-copy-text="{{ value }}" aria-label="Copy {{ label }}" title="Copy {{ label }}">
+{% macro provider_copy_button(value, label, disabled=false) -%}
+  <button class="copy-icon-button provider-detail-copy-button" type="button"{% if disabled %} disabled aria-disabled="true"{% else %} data-copy-text="{{ value }}"{% endif %} aria-label="Copy {{ label }}" title="Copy {{ label }}">
     <svg viewBox="0 0 24 24" aria-hidden="true">
       <rect x="9" y="9" width="10" height="10" rx="2"></rect>
       <path d="M5 15V7a2 2 0 0 1 2-2h8"></path>
@@ -2245,6 +2245,17 @@
               <input type="checkbox" name="schedule_notification_confirmed" value="1" data-submit-on-change {% if view.staffing_control.schedule_notification_confirmed %}checked{% endif %}{% if staffing_actions_disabled %} disabled{% endif %}>
               <span>It has been verified that all institutions listed in the session have been notified of the schedule.</span>
             </label>
+            {% set external_journey = view.journey_shares.get('external') %}
+            {% if external_journey and external_journey.enabled %}
+              <span class="staffing-external-journey-actions">
+                {% if staffing_actions_disabled %}
+                  <span class="staffing-external-journey-chip is-disabled" aria-disabled="true">Journey for external institutions</span>
+                {% else %}
+                  <a class="staffing-external-journey-chip" href="{{ external_journey.url }}" target="_blank" rel="noopener noreferrer">Journey for external institutions</a>
+                {% endif %}
+                {{ provider_copy_button(external_journey.copy_message, 'external institutions journey message', disabled=staffing_actions_disabled) }}
+              </span>
+            {% endif %}
           </form>
           <div class="staffing-role-table-wrap">
             <table class="staffing-role-table">

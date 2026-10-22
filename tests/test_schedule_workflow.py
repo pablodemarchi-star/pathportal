@@ -884,6 +884,156 @@ class ScheduleWorkflowTest(unittest.TestCase):
                 single = path_session_journey_contract(standalone, "institution")
                 self.assertEqual(len(single["feedback_cards"]), 1)
 
+    def test_external_journey_migration_preserves_existing_links(self):
+        from sqlalchemy import text
+        from app import migrate_external_journey_audience
+        schema = db.session.execute(text("SELECT sql FROM sqlite_master WHERE name='exam_session_journey_share' AND type='table'")).scalar()
+        db.session.execute(text("DROP TABLE exam_session_journey_share"))
+        db.session.execute(text(schema.replace("'institution', 'public', 'external', 'external_public'", "'institution', 'public'")))
+        db.session.add(ExamSessionJourneyShare(exam_session_id=self.session_record.id,
+            audience="institution", token="original-institution-token"))
+        db.session.commit()
+        migrate_external_journey_audience()
+        migrate_external_journey_audience()
+        self.assertEqual(ExamSessionJourneyShare.query.filter_by(token="original-institution-token").one().audience, "institution")
+        db.session.add(ExamSessionJourneyShare(exam_session_id=self.session_record.id,
+            audience="external", token="new-external-token"))
+        db.session.commit()
+        self.assertEqual(ExamSessionJourneyShare.query.count(), 2)
+
+    def test_external_institutions_cannot_grant_candidate_schedule_access(self):
+        from app.routes import ensure_journey_share_token
+        self.session_record.public_journey_schedule_access = True
+        self.session_record.public_journey_entry_slips_access = True
+        db.session.add(ExamSessionScheduleWorkflow(exam_session_id=self.session_record.id, status="Approved"))
+        db.session.commit()
+        external = ensure_journey_share_token(self.session_record, "external")
+        public = ensure_journey_share_token(self.session_record, "public")
+        client = self.app.test_client()
+        html = client.get(f"/path-session-journey/{external.token}/external").get_data(as_text=True)
+        self.assertNotIn('name="allow_public_schedule"', html)
+        self.assertNotIn('name="allow_public_entry_slips"', html)
+        external_public = ExamSessionJourneyShare.query.filter_by(exam_session_id=self.session_record.id, audience="external_public").one()
+        self.assertIn(f"/path-session-journey/{external_public.token}/external_public", html)
+        for lang in ["en", "es"]:
+            response = client.get(f"/path-session-journey/{external_public.token}/external_public?lang={lang}")
+            self.assertEqual(response.status_code, 200)
+            html = response.get_data(as_text=True)
+            self.assertNotIn('href="https://example.com/schedule-folder"', html)
+            self.assertNotIn('href="https://example.com/entry-slips-folder"', html)
+        for audience in ["external", "institution"]:
+            response = client.post(f"/path-session-journey/{external.token}/{audience}/public-access", data={"allow_public_schedule": "1"})
+            self.assertEqual(response.status_code, 404)
+        self.assertTrue(self.session_record.public_journey_schedule_access)
+        self.assertTrue(self.session_record.public_journey_entry_slips_access)
+        original = client.get(f"/path-session-journey/{public.token}/public").get_data(as_text=True)
+        self.assertIn('href="https://example.com/schedule-folder"', original)
+        self.assertIn('href="https://example.com/entry-slips-folder"', original)
+        self.assertEqual(client.get(f"/path-session-journey/{external_public.token}/public").status_code, 404)
+
+    def test_external_journey_is_distinct_and_hides_review_venue_and_dietary(self):
+        from app.routes import ensure_journey_share_token
+        other, chained, standalone = self.create_concat_schedule_test_sessions()
+        member = self.create_supervisor()
+        member.dietary_requirements = "Secret dietary requirement"
+        db.session.add(ExamSessionSupervisorAssignment(exam_session_id=other.id, team_member_id=member.id))
+        db.session.add(ExamSessionScheduleWorkflow(exam_session_id=self.session_record.id, status="Approved"))
+        db.session.commit()
+        institution = ensure_journey_share_token(self.session_record, "institution")
+        external = ensure_journey_share_token(self.session_record, "external")
+        self.assertNotEqual(institution.token, external.token)
+        client = self.app.test_client()
+        for lang in ["en", "es"]:
+            response = client.get(f"/path-session-journey/{external.token}/external?lang={lang}")
+            self.assertEqual(response.status_code, 200)
+            html = response.get_data(as_text=True)
+            self.assertNotIn("Secret dietary requirement", html)
+            self.assertNotIn("journey-dietary-summary", html)
+            self.assertNotIn("data-journey-schedule-checkbox", html)
+            self.assertNotIn("data-journey-schedule-review ", html)
+            self.assertNotIn("1M-9bpmUddNKPh5eP_HJvUXt8MPIN6Xcd", html)
+            self.assertIn('href="https://example.com/schedule-folder"', html)
+            self.assertEqual(html.count('data-staff-session-id='), 3)
+        original = client.get(f"/path-session-journey/{institution.token}/institution").get_data(as_text=True)
+        self.assertIn("Secret dietary requirement", original)
+        self.assertIn("data-journey-schedule-checkbox", original)
+        self.assertIn("1M-9bpmUddNKPh5eP_HJvUXt8MPIN6Xcd", original)
+        for audience in ["external", "institution"]:
+            for action in ["confirm", "request-changes"]:
+                response = client.post(f"/path-session-journey/{external.token}/{audience}/schedule/{action}", data={"note": "Change"})
+                self.assertEqual(response.status_code, 404)
+        self.assertEqual(client.get(f"/path-session-journey/{external.token}/institution").status_code, 404)
+
+    def test_external_journey_only_links_confirmed_schedules_and_respects_disabled_token(self):
+        from app.routes import ensure_journey_share_token
+        db.session.add(ExamSessionScheduleWorkflow(exam_session_id=self.session_record.id, status="Sent for review"))
+        db.session.commit()
+        external = ensure_journey_share_token(self.session_record, "external")
+        client = self.app.test_client()
+        url = f"/path-session-journey/{external.token}/external"
+        html = client.get(url).get_data(as_text=True)
+        self.assertNotIn('href="https://example.com/schedule-folder"', html)
+        self.assertNotIn("data-journey-schedule-countdown", html)
+        self.assertNotIn("data-journey-schedule-checkbox", html)
+        external.is_enabled = False
+        db.session.commit()
+        self.assertEqual(client.get(url).status_code, 410)
+
+    def test_external_journey_copy_message_has_all_sessions_dates_and_exact_content(self):
+        from app.routes import external_journey_share_message
+        self.session_record.session_date = date(2026, 10, 22)
+        url = "https://example.com/external-journey"
+        message = external_journey_share_message(self.session_record, url)
+        self.assertTrue(message.startswith(f"*SESSION JOURNEY: {self.session_record.exam_session_name} (22/10/2026)*\n\n¡Hola! 👋"))
+        self.assertIn("*_Exam session journey_*", message)
+        self.assertIn("👉 " + url, message)
+        self.assertIn("los _Exam entry slips_ de sus candidatos", message)
+        self.assertTrue(message.endswith("Saludos,\nBrenda"))
+        other, chained, standalone = self.create_concat_schedule_test_sessions()
+        other.session_date = date(2026, 10, 23)
+        chained.session_date = date(2026, 10, 24)
+        db.session.flush()
+        message = external_journey_share_message(self.session_record, url)
+        header = message.splitlines()[0]
+        for record in [self.session_record, other, chained]:
+            self.assertIn(f"{record.exam_session_name} ({record.session_date.strftime('%d/%m/%Y')})", header)
+        self.assertEqual(header.count(" | "), 2)
+        self.assertEqual(message.count(url), 1)
+
+    def test_staffing_modal_has_persistent_external_journey_chip_and_copy(self):
+        member = self.create_supervisor()
+        db.session.add(ExamSessionSupervisorAssignment(exam_session_id=self.session_record.id, team_member_id=member.id))
+        db.session.commit()
+        bundle = self.create_shipment_bundle_record(session_record=self.session_record)
+        client = self.login_client()
+        url = f"/pre-session-control-tower?session_year=2026&view=bundle&bundle_id={bundle.id}"
+        response = client.get(url)
+        self.assertEqual(response.status_code, 200)
+        html = response.get_data(as_text=True)
+        external = ExamSessionJourneyShare.query.filter_by(exam_session_id=self.session_record.id, audience="external").one()
+        self.assertIn("Journey for external institutions", html)
+        self.assertIn('staffing-external-journey-chip is-disabled', html)
+        copy_start = html.index('aria-label="Copy external institutions journey message"')
+        copy_tag = html[html.rfind('<button', 0, copy_start):html.index('>', copy_start)]
+        self.assertIn(' disabled', copy_tag)
+        self.assertNotIn('data-copy-text=', copy_tag)
+        workflow = ExamSessionScheduleWorkflow(exam_session_id=self.session_record.id, status="Approved")
+        db.session.add(workflow)
+        db.session.commit()
+        html = client.get(url).get_data(as_text=True)
+        self.assertIn(f'href="http://localhost/path-session-journey/{external.token}/external"', html)
+        copy_start = html.index('aria-label="Copy external institutions journey message"')
+        copy_tag = html[html.rfind('<button', 0, copy_start):html.index('>', copy_start)]
+        self.assertNotIn(' disabled', copy_tag)
+        self.assertIn('data-copy-text=', copy_tag)
+        copied_message = html_lib.unescape(re.search(r'data-copy-text="([^"]*)"', copy_tag).group(1))
+        self.assertTrue(copied_message.startswith("*SESSION JOURNEY:"))
+        self.assertIn("¡Hola! 👋", copied_message)
+        self.assertIn(f"/path-session-journey/{external.token}/external", copied_message)
+        self.assertIn('aria-label="Copy external institutions journey message"', html)
+        client.get(url)
+        self.assertEqual(ExamSessionJourneyShare.query.filter_by(exam_session_id=self.session_record.id, audience="external").count(), 1)
+
     def test_journey_staff_cards_use_each_sessions_own_staff_and_dietary_requirements(self):
         from flask import render_template
         other, chained, standalone = self.create_concat_schedule_test_sessions()

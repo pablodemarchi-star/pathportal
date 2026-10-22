@@ -142,7 +142,7 @@
                   <span class="journey-status-chip {% if journey.date_confirmation_confirmed %}is-confirmed{% else %}is-in-progress{% endif %}">{{ t(journey.date_confirmation_label) }}</span>
                 {% elif milestone.key == 'schedule' %}
                   <span class="journey-status-chip {{ journey.schedule_confirmation_class }}" data-journey-schedule-status-chip>{{ t(journey.schedule_confirmation_label) }}</span>
-                  {% if journey.audience == 'institution' and journey.schedule_review_countdown.visible %}
+                  {% if journey.audience == 'institution' and not journey.is_external and journey.schedule_review_countdown.visible %}
                     <span class="journey-countdown-chip" data-journey-schedule-countdown data-deadline="{{ journey.schedule_review_countdown.due_at_iso }}">{{ (journey.schedule_review_countdown.remaining_seconds // 3600) }}:{{ '%02d'|format((journey.schedule_review_countdown.remaining_seconds % 3600) // 60) }}:{{ '%02d'|format(journey.schedule_review_countdown.remaining_seconds % 60) }} h</span>
                   {% endif %}
                 {% elif milestone.key == 'entry_slips' %}
@@ -190,7 +190,14 @@
               {% else %}
                 <p>{{ t(milestone.message) }}</p>
               {% endif %}
-              {% if milestone.key == 'schedule' and journey.audience == 'institution' %}
+              {% if milestone.key == 'schedule' and journey.is_external %}
+                {% if journey.schedule_confirmed and journey.schedule_url %}
+                  <a class="journey-schedule-link" href="{{ journey.schedule_url }}" target="_blank" rel="noopener noreferrer">{{ t('View session schedule') }}</a>
+                {% else %}
+                  <span class="journey-schedule-link is-disabled" aria-disabled="true">{{ t('View session schedule') }}</span>
+                {% endif %}
+              {% endif %}
+              {% if milestone.key == 'schedule' and journey.audience == 'institution' and not journey.is_external %}
                 {% set schedule_confirm_url = url_for('staff.shared_path_session_journey_schedule_action', token=share.token, audience=journey.audience, action='confirm') if share else url_for('staff.path_session_journey_schedule_action', session_id=journey.session_id, action='confirm') %}
                 {% set schedule_request_url = url_for('staff.shared_path_session_journey_schedule_action', token=share.token, audience=journey.audience, action='request-changes') if share else url_for('staff.path_session_journey_schedule_action', session_id=journey.session_id, action='request-changes') %}
                 <section class="journey-schedule-review" data-journey-schedule-review data-journey-review-key="journey-schedule-{{ journey.session_id }}" data-initial-schedule-confirmed="{{ 'true' if journey.schedule_confirmed else 'false' }}" data-confirm-url="{{ schedule_confirm_url }}" data-request-url="{{ schedule_request_url }}" data-csrf-token="{{ csrf_token or '' }}" aria-label="{{ t('Session schedule review') }}">
@@ -299,12 +306,14 @@
                   <span class="copy-button-feedback">{{ t('Copied') }}</span>
                 </button>
               </p>
-              <form class="journey-public-access-form" data-journey-public-access method="post" action="{{ url_for('staff.update_shared_journey_public_access', token=share.token, audience='institution') if share else url_for('staff.update_journey_public_access', session_id=journey.session_id) }}" data-saved-message="{{ 'Guardado' if spanish else 'Saved' }}" data-error-message="{{ 'No se pudieron guardar los permisos. Inténtalo de nuevo.' if spanish else 'Unable to save access settings. Please try again.' }}">
+              {% if not journey.is_external %}
+              <form class="journey-public-access-form" data-journey-public-access method="post" action="{{ url_for('staff.update_shared_journey_public_access', token=share.token, audience=share.audience) if share else url_for('staff.update_journey_public_access', session_id=journey.session_id) }}" data-saved-message="{{ 'Guardado' if spanish else 'Saved' }}" data-error-message="{{ 'No se pudieron guardar los permisos. Inténtalo de nuevo.' if spanish else 'Unable to save access settings. Please try again.' }}">
                 <input type="hidden" name="csrf_token" value="{{ csrf_token or '' }}">
                 <label><input type="checkbox" name="allow_public_schedule" value="1" data-view-only-allowed="true"{% if journey.public_schedule_access %} checked{% endif %}{% if not journey.schedule_confirmed %} disabled aria-disabled="true"{% endif %}><span>{{ t('Allow candidates and their families to access the exam session schedule.') }}</span></label>
                 <label><input type="checkbox" name="allow_public_entry_slips" value="1" data-view-only-allowed="true"{% if journey.public_entry_slips_access %} checked{% endif %}{% if not journey.entry_slips_confirmed %} disabled aria-disabled="true"{% endif %}><span>{{ ts('Allow candidates and their families to access the Exam entry slips.') }}</span></label>
                 <p class="journey-public-access-feedback" role="status" aria-live="polite"></p>
               </form>
+              {% endif %}
             </div>
           </li>
           <li class="journey-milestone is-upcoming">
@@ -316,6 +325,7 @@
               <p><a class="journey-inline-link" href="https://drive.google.com/file/d/1iJ-y1uYeVSSqrXDU8dSFSaXE_WQZWslx/view?usp=drive_link" target="_blank" rel="noopener noreferrer">{{ t('Click here') }}</a>{{ t(' to download the instructions for candidates') }}</p>
             </div>
           </li>
+          {% if not journey.is_external %}
           <li class="journey-milestone is-upcoming">
             <span class="journey-milestone-marker" aria-hidden="true">&gt;</span>
             <div>
@@ -325,6 +335,7 @@
               <p><a class="journey-inline-link" href="https://drive.google.com/file/d/1M-9bpmUddNKPh5eP_HJvUXt8MPIN6Xcd/view?usp=sharing" target="_blank" rel="noopener noreferrer">{{ t('Click here') }}</a>{{ t(' to download the checklist for exam centres') }}</p>
             </div>
           </li>
+          {% endif %}
           <li class="journey-milestone is-upcoming">
             <span class="journey-milestone-marker" aria-hidden="true">&gt;</span>
             <div>
@@ -376,7 +387,7 @@
           </div>
           <button class="icon-button" type="button" data-close-modal data-view-only-allowed="true">&times;</button>
         </div>
-        <form data-error-message="{{ 'No se pudo enviar la solicitud. Revisa los datos e inténtalo de nuevo.' if spanish else 'Unable to submit your request. Please try again.' }}" class="journey-attendance-request-form" method="post" action="{{ url_for('staff.request_shared_journey_attendance_statement', token=share.token, audience='institution') if share else url_for('staff.request_journey_attendance_statement', session_id=journey.session_id) }}">
+        <form data-error-message="{{ 'No se pudo enviar la solicitud. Revisa los datos e inténtalo de nuevo.' if spanish else 'Unable to submit your request. Please try again.' }}" class="journey-attendance-request-form" method="post" action="{{ url_for('staff.request_shared_journey_attendance_statement', token=share.token, audience=share.audience) if share else url_for('staff.request_journey_attendance_statement', session_id=journey.session_id) }}">
           <input type="hidden" name="csrf_token" value="{{ csrf_token or '' }}">
           <label>
             <span>{{ t('Candidate number') }}</span>

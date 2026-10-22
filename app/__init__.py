@@ -1,4 +1,5 @@
 import os
+import re
 import secrets
 from functools import wraps
 
@@ -12,6 +13,38 @@ db = SQLAlchemy()
 DEPLOY_SUPERADMIN_EMAIL = "pablo.demarchi@pathexaminations.com"
 REMEMBER_LOGIN_COOKIE = "path_remember_login_email"
 REMEMBER_LOGIN_MAX_AGE = 60 * 60 * 24 * 365
+
+
+def migrate_external_journey_audience():
+    """Expand the SQLite audience check without changing existing share tokens."""
+    schema = db.session.execute(text(
+        "SELECT sql FROM sqlite_master WHERE type='table' AND name='exam_session_journey_share'"
+    )).scalar()
+    if not schema:
+        return
+    updated_schema = re.sub(
+        r"audience\s+IN\s*\(\s*'institution'\s*,\s*'public'(?:\s*,\s*'external')?\s*\)",
+        "audience IN ('institution', 'public', 'external', 'external_public')", schema,
+    )
+    if schema == updated_schema:
+        return
+    indexes = db.session.execute(text(
+        "SELECT sql FROM sqlite_master WHERE tbl_name='exam_session_journey_share' "
+        "AND type IN ('index', 'trigger') AND sql IS NOT NULL"
+    )).scalars().all()
+    columns = [row[1] for row in db.session.execute(text("PRAGMA table_info(exam_session_journey_share)"))]
+    quoted_columns = ", ".join('"' + column + '"' for column in columns)
+    replacement_schema = updated_schema.replace("exam_session_journey_share", "external_journey_share_migration", 1)
+    db.session.execute(text(replacement_schema))
+    db.session.execute(text(
+        f"INSERT INTO external_journey_share_migration ({quoted_columns}) "
+        f"SELECT {quoted_columns} FROM exam_session_journey_share"
+    ))
+    db.session.execute(text("DROP TABLE exam_session_journey_share"))
+    db.session.execute(text("ALTER TABLE external_journey_share_migration RENAME TO exam_session_journey_share"))
+    for statement in indexes:
+        db.session.execute(text(statement))
+    db.session.commit()
 
 
 def create_app():
@@ -568,6 +601,7 @@ def create_app():
             row[1] for row in db.session.execute(text("PRAGMA table_info(exam_session_journey_share)"))
         }
         if journey_share_columns:
+            migrate_external_journey_audience()
             if "audience" not in journey_share_columns:
                 db.session.execute(text("ALTER TABLE exam_session_journey_share ADD COLUMN audience TEXT NOT NULL DEFAULT 'institution'"))
             if "revoked_by" not in journey_share_columns:

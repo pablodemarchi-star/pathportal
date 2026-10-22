@@ -13859,8 +13859,10 @@ def session_readiness_contract(operational_readiness, finance, sinapsis, communi
     }
 
 
-JOURNEY_AUDIENCES = {"institution", "public"}
+JOURNEY_AUDIENCES = {"institution", "public", "external", "external_public"}
 JOURNEY_TITLES = {
+    "external_public": "Journey for external candidates and families",
+    "external": "Journey for external institutions",
     "institution": "Path Session Journey",
     "public": "Path Session Journey \u2014 for families and candidates",
 }
@@ -14363,6 +14365,12 @@ def path_session_journey_sources(session_record, today=None):
 
 def path_session_journey_contract(session_record, audience, today=None, sources=None, now=None):
     audience = journey_clean_text(audience)
+    is_external_public = audience == "external_public"
+    if is_external_public:
+        audience = "public"
+    is_external = audience == "external"
+    if is_external:
+        audience = "institution"
     if audience not in JOURNEY_AUDIENCES:
         audience = "public"
     now = now or datetime.now(timezone.utc).astimezone(LOCAL_TZ)
@@ -14436,8 +14444,8 @@ def path_session_journey_contract(session_record, audience, today=None, sources=
     public_access_rows = ExamSession.query.with_entities(
         ExamSession.public_journey_schedule_access, ExamSession.public_journey_entry_slips_access,
     ).filter(ExamSession.id.in_(concat_ids)).all()
-    public_schedule_access = bool(public_access_rows) and all(row[0] for row in public_access_rows)
-    public_entry_slips_access = bool(public_access_rows) and all(row[1] for row in public_access_rows)
+    public_schedule_access = not is_external_public and bool(public_access_rows) and all(row[0] for row in public_access_rows)
+    public_entry_slips_access = not is_external_public and bool(public_access_rows) and all(row[1] for row in public_access_rows)
     if audience == "public":
         hidden_milestones = {"staffing"}
         if not public_schedule_access:
@@ -14458,11 +14466,12 @@ def path_session_journey_contract(session_record, audience, today=None, sources=
         sources.get("sinapsis_control"),
         sources.get("communications_control"),
     )
-    public_journey_share = journey_share_for_session(session_record.id, "public") if audience == "institution" else None
+    public_share_audience = "external_public" if is_external else "public"
+    public_journey_share = journey_share_for_session(session_record.id, public_share_audience) if audience == "institution" else None
     if audience == "institution" and has_request_context() and public_journey_share is None:
-        public_journey_share = ensure_journey_share_token(session_record, "public")
+        public_journey_share = ensure_journey_share_token(session_record, public_share_audience)
     public_journey_url = (
-        url_for("staff.shared_path_session_journey", token=public_journey_share.token, audience="public", _external=True)
+        url_for("staff.shared_path_session_journey", token=public_journey_share.token, audience=public_share_audience, _external=True)
         if has_request_context() and public_journey_share and public_journey_share.is_enabled and not public_journey_share.revoked_at
         else ""
     )
@@ -14483,6 +14492,10 @@ def path_session_journey_contract(session_record, audience, today=None, sources=
         [item["session_id"] for item in concatenated_countdowns] or [session_record.id],
         staff_summary, staff_status, now,
     ) if audience == "institution" else []
+    if is_external:
+        staff_summary = {**staff_summary, "dietary_count": 0, "dietary_requirements": []}
+        for card in staff_cards:
+            card["summary"] = {**card["summary"], "dietary_count": 0, "dietary_requirements": []}
     absence_cards = []
     if audience == "institution" or concatenated_countdowns:
         summary_ids = [item["session_id"] for item in concatenated_countdowns] or [session_record.id]
@@ -14502,6 +14515,7 @@ def path_session_journey_contract(session_record, audience, today=None, sources=
         milestones = finalize_journey_milestones(milestones, audience)
     return {
         "audience": audience,
+        "is_external": is_external,
         "public_schedule_access": public_schedule_access,
         "public_entry_slips_access": public_entry_slips_access,
         "staff_cards": staff_cards,
@@ -14637,6 +14651,37 @@ def journey_share_status(share):
     return "Disabled"
 
 
+def external_journey_share_message(session_record, journey_url):
+    session_ids = monthly_unified_total_session_ids(session_record)
+    records = ExamSession.query.filter(ExamSession.id.in_(session_ids)).order_by(
+        ExamSession.session_date.asc(), ExamSession.id.asc(),
+    ).all()
+    sessions = " | ".join(
+        f"{record.exam_session_name} ({display_session_date(record.session_date)})"
+        for record in records
+    )
+    return "\n".join([
+        f"*SESSION JOURNEY: {sessions}*",
+        "",
+        "¡Hola! 👋",
+        "",
+        "Esperamos que se encuentren muy bien. 😊",
+        "",
+        "Les contamos que ya se encuentra habilitado el *_Exam session journey_* de Path Examinations. 🚀 Pueden acceder a través del siguiente enlace:",
+        "",
+        f"👉 {journey_url}",
+        "",
+        "En este espacio, encontrarán toda la información necesaria para su próxima sesión de examen, incluyendo los horarios, la dirección, los _Exam entry slips_ de sus candidatos y otros recursos importantes para acompañarlos durante el proceso. 📋",
+        "",
+        "¡Esperamos que esta herramienta les resulte muy útil para facilitar la organización y el seguimiento de su sesión!",
+        "",
+        "Cualquier consulta, ¡quedamos a disposición! 💫",
+        "",
+        "Saludos,",
+        "Brenda",
+    ])
+
+
 def journey_share_view(session_record, audience, share=None):
     share = share if share is not None else journey_share_for_session(session_record.id, audience)
     share_url = ""
@@ -14649,6 +14694,7 @@ def journey_share_view(session_record, audience, share=None):
         "enabled": bool(share and share.is_enabled and not share.revoked_at),
         "exists": bool(share),
         "url": share_url,
+        "copy_message": external_journey_share_message(session_record, share_url) if audience == "external" and share_url else "",
         "last_copied_at": share.last_copied_at if share else None,
     }
 
@@ -14657,7 +14703,10 @@ def journey_share_views(session_record, shares_by_audience=None, ensure_institut
     shares_by_audience = shares_by_audience or {}
     if ensure_institution:
         institution_share = ensure_journey_share_token(session_record, "institution", created_by=created_by)
-        shares_by_audience = {**shares_by_audience, "institution": institution_share}
+        external_share = journey_share_for_session(session_record.id, "external")
+        if external_share is None:
+            external_share = ensure_journey_share_token(session_record, "external", created_by=created_by)
+        shares_by_audience = {**shares_by_audience, "institution": institution_share, "external": external_share}
     return {
         audience: journey_share_view(session_record, audience, shares_by_audience.get(audience))
         for audience in sorted(JOURNEY_AUDIENCES)
@@ -18951,7 +19000,7 @@ def update_journey_public_access(session_id):
 def update_shared_journey_public_access(token, audience):
     if audience != "institution":
         abort(404)
-    share = ExamSessionJourneyShare.query.filter_by(token=token, audience="institution").first_or_404()
+    share = ExamSessionJourneyShare.query.filter_by(token=token, audience=audience).first_or_404()
     if not share.is_enabled or share.revoked_at:
         abort(410)
     return save_journey_public_access(share.exam_session)
@@ -18996,9 +19045,9 @@ def request_journey_attendance_statement(session_id):
 
 @staff_bp.route("/path-session-journey/<token>/<audience>/attendance-requests", methods=["POST"])
 def request_shared_journey_attendance_statement(token, audience):
-    if audience != "institution":
+    if audience not in {"institution", "external"}:
         abort(404)
-    share = ExamSessionJourneyShare.query.filter_by(token=token, audience="institution").first_or_404()
+    share = ExamSessionJourneyShare.query.filter_by(token=token, audience=audience).first_or_404()
     if not share.is_enabled or share.revoked_at:
         abort(410)
     return create_journey_attendance_request(share.exam_session)

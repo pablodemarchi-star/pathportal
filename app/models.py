@@ -934,7 +934,7 @@ class ExamSessionJourneyShare(db.Model):
     __table_args__ = (
         db.UniqueConstraint("token", name="uq_exam_session_journey_share_token"),
         db.UniqueConstraint("exam_session_id", "audience", name="uq_exam_session_journey_share_audience"),
-        db.CheckConstraint("audience IN ('institution', 'public')", name="ck_exam_session_journey_share_audience"),
+        db.CheckConstraint("audience IN ('institution', 'public', 'external', 'external_public')", name="ck_exam_session_journey_share_audience"),
     )
 
     id = db.Column(db.Integer, primary_key=True)
