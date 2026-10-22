@@ -2849,10 +2849,21 @@ def prepare_concat_shared_folder_changes(data, session_record=None):
 
 def confirm_concat_shared_folder_changes(data, session_record=None):
     changes, related = prepare_concat_shared_folder_changes(data, session_record)
+    contact_points = data["contact_points"]
+    contacts_changed = bool(related) and (
+        any(record.contact_points_list() != contact_points for record in related)
+        or (session_record is not None and session_record.contact_points_list() != contact_points)
+    )
+    has_folder_changes = bool(changes)
+    if contacts_changed:
+        changes.append({"label": "Contact points", "value": contact_points})
+    change_description = "folder links and contact points" if contacts_changed and has_folder_changes else "contact points" if contacts_changed else "folder links"
     message = (
-        "Changing these folder links will also update them in the following concatenated sessions:\n\n"
+        f"Changing these {change_description} will also update them in the following concatenated sessions:\n\n"
         + "\n".join(record.exam_session_name for record in related)
-        + "\n\nThe same folder links will be used for all sessions in the group. Do you want to continue?"
+        + ("\n\nContact points added, edited or removed here will also be added, edited or removed in all sessions in the group." if contacts_changed else "")
+        + ("\n\nThe same folder links will be used for all sessions in the group." if has_folder_changes else "")
+        + " Do you want to continue?"
     )
     if request.form.get("check_concat_folder_changes") == "1":
         return jsonify({"requires_confirmation": bool(changes), "message": message if changes else ""})
@@ -2873,6 +2884,13 @@ def sync_concat_shared_folders(session_record):
     for related in ExamSession.query.filter(ExamSession.id.in_(ids)).all():
         for field in CONCAT_SHARED_FOLDER_FIELDS:
             setattr(related, field, getattr(session_record, field))
+
+
+def sync_concat_contact_points(session_record):
+    contact_points = json.dumps(session_record.contact_points_list(), ensure_ascii=False)
+    ids = monthly_unified_total_session_ids(session_record)
+    for related in ExamSession.query.filter(ExamSession.id.in_(ids)).all():
+        related.contact_points = contact_points
 
 
 def validate_exam_session_form(form):
@@ -23485,6 +23503,7 @@ def create_exam_session():
     sync_exam_session_concat_sessions(session_record, data["concat_session_ids"])
     db.session.flush()
     sync_concat_shared_folders(session_record)
+    sync_concat_contact_points(session_record)
     db.session.commit()
     flash("Exam session created successfully.", "success")
     return redirect(url_for("staff.exam_session_planner", session_year=data["session_date"].year))
@@ -23516,6 +23535,7 @@ def update_exam_session(session_id):
     sync_exam_session_concat_sessions(session_record, data["concat_session_ids"])
     db.session.flush()
     sync_concat_shared_folders(session_record)
+    sync_concat_contact_points(session_record)
     db.session.commit()
     flash("Exam session updated successfully.", "success")
     return redirect(url_for("staff.exam_session_planner", session_year=data["session_date"].year))

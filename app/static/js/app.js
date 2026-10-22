@@ -3419,11 +3419,11 @@ document.querySelectorAll("[data-exam-session-form]").forEach((form) => {
         headers: { "X-Requested-With": "XMLHttpRequest" },
       });
       if (!response.ok || !response.headers.get("content-type")?.includes("application/json")) {
-        throw new Error("Unable to check shared folder links. Please review the form and try again.");
+        throw new Error("Unable to check shared folder links and contact points. Please review the form and try again.");
       }
       const result = await response.json();
       if (snapshot !== JSON.stringify(Array.from(new FormData(form).entries()))) {
-        throw new Error("The form changed while checking shared links. Please save again.");
+        throw new Error("The form changed while checking shared information. Please save again.");
       }
       if (result.requires_confirmation && !window.confirm(result.message)) return;
       let confirmation = form.querySelector('[name="confirm_concat_folder_changes"]');

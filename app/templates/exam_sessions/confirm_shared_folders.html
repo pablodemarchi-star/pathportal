@@ -1,15 +1,15 @@
 {% extends "base.html" %}
-{% block title %}Confirm shared folder changes | Path Examinations{% endblock %}
+{% block title %}Confirm changes to concatenated sessions | Path Examinations{% endblock %}
 {% block content %}
 <section class="panel">
-  <h1>Confirm shared folder changes</h1>
-  <p>Changing these folder links will also update them in the following concatenated sessions:</p>
+  <h1>Confirm changes to concatenated sessions</h1>
+  <p>Saving these changes will also update the same information in the following concatenated sessions:</p>
   <ul>
     {% for linked in related_sessions %}<li>{{ linked.exam_session_name }}</li>{% endfor %}
   </ul>
-  <p>The following links will be the same for all sessions in the group:</p>
+  <p>The following information will be the same for all sessions in the group:</p>
   <ul>
-    {% for change in changes %}<li><strong>{{ change.label }}:</strong> {{ change.url or 'No link (the current link will be removed)' }}</li>{% endfor %}
+    {% for change in changes %}<li><strong>{{ change.label }}:</strong> {% if change.label == 'Contact points' %}{% if change.value %}{% for contact in change.value %}{{ contact.full_name }}{% if contact.phone %} — {{ contact.phone }}{% endif %}{% if contact.email %} — {{ contact.email }}{% endif %}{% if not loop.last %}; {% endif %}{% endfor %}{% else %}All contact points will be removed{% endif %}{% else %}{{ change.url or 'No link (the current link will be removed)' }}{% endif %}</li>{% endfor %}
   </ul>
   <form method="post" action="{{ submit_url }}">
     {% for name, value in submitted_fields %}<input type="hidden" name="{{ name }}" value="{{ value }}">{% endfor %}

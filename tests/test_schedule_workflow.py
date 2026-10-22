@@ -1238,6 +1238,62 @@ class ScheduleWorkflowTest(unittest.TestCase):
             self.assertIn('href="https://example.com/entry-slips-folder"', html)
         self.assertIsNone(ExamSessionScheduleWorkflow.query.filter_by(exam_session_id=standalone.id).first())
 
+    def test_concat_contact_points_add_edit_remove_require_confirmation_and_sync_entire_group(self):
+        other, chained, standalone = self.create_concat_schedule_test_sessions()
+        client = self.login_client()
+        original_standalone = standalone.contact_points
+        url = f"/exam-session-planner/sessions/{self.session_record.id}"
+        base = {"csrf_token": "token", "session_year": "2026", "exam_session_name": "June exam session",
+            "category": "Path School", "status": "Pending", "session_date": "25/06/2026",
+            "minimum_candidates_required": "30", "shifts": "Morning", "modules": "Speaking", "format": "Onsite",
+            "concat_session_ids": str(other.id), "schedule_folder_url": self.session_record.schedule_folder_url,
+            "exam_entry_slips_url": self.session_record.exam_entry_slips_url}
+        for contacts in [
+            [{"full_name": "Contact One", "phone": "1234", "email": "one@example.com"}],
+            [{"full_name": "Contact One updated", "phone": "5678", "email": "updated@example.com"},
+             {"full_name": "Contact Two", "phone": "9999", "email": "two@example.com"}],
+            [],
+        ]:
+            data = {**base, "contact_point_full_name": [row["full_name"] for row in contacts],
+                "contact_point_phone": [row["phone"] for row in contacts], "contact_point_email": [row["email"] for row in contacts]}
+            before = [record.contact_points for record in [self.session_record, other, chained]]
+            response = client.post(url, data={**data, "check_concat_folder_changes": "1"})
+            self.assertEqual(response.status_code, 200)
+            self.assertTrue(response.get_json()["requires_confirmation"])
+            self.assertIn("contact points", response.get_json()["message"])
+            self.assertIn(other.exam_session_name, response.get_json()["message"])
+            self.assertIn(chained.exam_session_name, response.get_json()["message"])
+            self.assertEqual([record.contact_points for record in [self.session_record, other, chained]], before)
+            response = client.post(url, data=data)
+            self.assertEqual(response.status_code, 200)
+            self.assertIn("Contact points", response.get_data(as_text=True))
+            self.assertEqual([record.contact_points for record in [self.session_record, other, chained]], before)
+            response = client.post(url, data={**data, "confirm_concat_folder_changes": "1"})
+            self.assertEqual(response.status_code, 302)
+            for record in [self.session_record, other, chained]:
+                self.assertEqual(record.contact_points_list(), contacts)
+            self.assertEqual(standalone.contact_points, original_standalone)
+            unchanged = client.post(url, data={**data, "check_concat_folder_changes": "1"}).get_json()
+            self.assertFalse(unchanged["requires_confirmation"])
+
+    def test_new_concatenated_session_syncs_contact_points_after_confirmation(self):
+        other, chained, standalone = self.create_concat_schedule_test_sessions()
+        client = self.login_client()
+        data = {"csrf_token": "token", "session_year": "2026", "exam_session_name": "New concatenated exam",
+            "category": "Path School", "status": "Pending", "session_date": "25/06/2026",
+            "minimum_candidates_required": "30", "shifts": "Morning", "modules": "Speaking", "format": "Onsite",
+            "concat_session_ids": str(other.id), "contact_point_full_name": "New contact",
+            "contact_point_phone": "12345", "contact_point_email": "new@example.com"}
+        response = client.post("/exam-session-planner/sessions", data={**data, "check_concat_folder_changes": "1"})
+        self.assertTrue(response.get_json()["requires_confirmation"])
+        self.assertIsNone(ExamSession.query.filter_by(exam_session_name="New concatenated exam").first())
+        response = client.post("/exam-session-planner/sessions", data={**data, "confirm_concat_folder_changes": "1"})
+        self.assertEqual(response.status_code, 302)
+        created = ExamSession.query.filter_by(exam_session_name="New concatenated exam").one()
+        for record in [created, self.session_record, other, chained]:
+            self.assertEqual(record.contact_points_list(), [{"full_name": "New contact", "phone": "12345", "email": "new@example.com"}])
+        self.assertEqual(standalone.contact_points_list(), [])
+
     def test_concat_shared_folder_configuration_requires_confirmation_and_syncs_changes(self):
         from app.routes import sync_concat_shared_folders
         other, chained, standalone = self.create_concat_schedule_test_sessions()
@@ -1251,7 +1307,7 @@ class ScheduleWorkflowTest(unittest.TestCase):
                 changed = dict(data, **{field: value})
                 response = client.post(f"/exam-session-planner/sessions/{self.session_record.id}", data=changed, follow_redirects=True)
                 self.assertEqual(response.status_code, 200)
-                self.assertIn("Confirm shared folder changes", response.get_data(as_text=True))
+                self.assertIn("Confirm changes to concatenated sessions", response.get_data(as_text=True))
                 self.assertIn(other.exam_session_name, response.get_data(as_text=True))
                 self.assertIn(chained.exam_session_name, response.get_data(as_text=True))
                 for record in [self.session_record, other, chained]:
