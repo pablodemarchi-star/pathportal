@@ -1,0 +1,104 @@
+<details class="session-considerations-entry">
+                  <summary class="{% if session_considerations %}session-considerations-chip{% else %}session-considerations-alert{% endif %}" title="{% if session_considerations %}Edit considerations{% else %}Add session considerations{% endif %}" aria-label="{% if session_considerations %}Edit session considerations{% else %}Add session considerations{% endif %}">
+                    {% if session_considerations %}Considerations ({{ session_considerations|length }}){% else %}!{% endif %}
+                  </summary>
+                  <div class="session-considerations-popover">
+                    <div class="session-considerations-thread" aria-label="Session considerations conversation">
+                      {% if session_considerations %}
+                        {% for consideration in session_considerations %}
+                          <article class="session-consideration-message">
+                            <div class="session-consideration-message-header">
+                              <span>{{ consideration.author or 'Path team' }}</span>
+                              <form method="post" action="{{ url_for('staff.update_exam_session_considerations', session_id=session.id) }}" data-disable-on-submit>
+                                <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                    {% if considerations_control_tower|default(false) %}
+                      <input type="hidden" name="considerations_control_tower" value="1">
+                      <input type="hidden" name="considerations_modal" value="staffing">
+                      {{ pre_session_return_fields(selected_view, selected_bundle) }}
+                    {% endif %}
+                                <input type="hidden" name="session_year" value="{{ selected_session_year }}">
+                                <input type="hidden" name="action" value="delete_comment">
+                                <input type="hidden" name="comment_id" value="{{ consideration.id }}">
+                                <button class="session-consideration-delete" type="submit">Delete</button>
+                              </form>
+                            </div>
+                            {% if consideration.to_full_name %}<p><strong>To:</strong> {{ consideration.to_full_name }}{% if consideration.to_department %}, {{ consideration.to_department }}{% endif %}</p>{% endif %}
+                            <p>{{ consideration.text }}</p>
+                            {% if consideration.replies %}
+                              <div class="session-consideration-replies">
+                                {% for reply in consideration.replies %}
+                                  <article class="session-consideration-reply">
+                                    <div class="session-consideration-message-header">
+                                      <span>{{ reply.author or 'Path team' }}</span>
+                                      <form method="post" action="{{ url_for('staff.update_exam_session_considerations', session_id=session.id) }}" data-disable-on-submit>
+                                        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                    {% if considerations_control_tower|default(false) %}
+                      <input type="hidden" name="considerations_control_tower" value="1">
+                      <input type="hidden" name="considerations_modal" value="staffing">
+                      {{ pre_session_return_fields(selected_view, selected_bundle) }}
+                    {% endif %}
+                                        <input type="hidden" name="session_year" value="{{ selected_session_year }}">
+                                        <input type="hidden" name="action" value="delete_reply">
+                                        <input type="hidden" name="comment_id" value="{{ consideration.id }}">
+                                        <input type="hidden" name="reply_id" value="{{ reply.id }}">
+                                        <button class="session-consideration-delete" type="submit">Delete</button>
+                                      </form>
+                                    </div>
+                                    <p>{{ reply.text }}</p>
+                                  </article>
+                                {% endfor %}
+                              </div>
+                            {% endif %}
+                            <details class="session-consideration-reply-entry">
+                              <summary>Reply</summary>
+                              <form class="session-considerations-form session-consideration-reply-form" method="post" action="{{ url_for('staff.update_exam_session_considerations', session_id=session.id) }}" data-disable-on-submit>
+                                <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                    {% if considerations_control_tower|default(false) %}
+                      <input type="hidden" name="considerations_control_tower" value="1">
+                      <input type="hidden" name="considerations_modal" value="staffing">
+                      {{ pre_session_return_fields(selected_view, selected_bundle) }}
+                    {% endif %}
+                                <input type="hidden" name="session_year" value="{{ selected_session_year }}">
+                                <input type="hidden" name="action" value="add_reply">
+                                <input type="hidden" name="comment_id" value="{{ consideration.id }}">
+                                <textarea name="reply_text" rows="2" maxlength="4000" placeholder="Reply" required></textarea>
+                                <div class="session-considerations-actions">
+                                  <button class="primary-button compact-action" type="submit">Reply</button>
+                                </div>
+                              </form>
+                            </details>
+                          </article>
+                        {% endfor %}
+                      {% else %}
+                        <p class="session-considerations-empty">No considerations yet.</p>
+                      {% endif %}
+                    </div>
+                    <form class="session-considerations-form" method="post" action="{{ url_for('staff.update_exam_session_considerations', session_id=session.id) }}" data-disable-on-submit>
+                      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                    {% if considerations_control_tower|default(false) %}
+                      <input type="hidden" name="considerations_control_tower" value="1">
+                      <input type="hidden" name="considerations_modal" value="staffing">
+                      {{ pre_session_return_fields(selected_view, selected_bundle) }}
+                    {% endif %}
+                      <input type="hidden" name="session_year" value="{{ selected_session_year }}">
+                      <input type="hidden" name="action" value="add_comment">
+                      <label>
+                        <span>To:</span>
+                        <select name="note_to_user_id">
+                          <option value="">Select a user</option>
+                          {% for user_option in consideration_recipient_options %}
+                            <option value="{{ user_option.id }}">{{ user_option.full_name }}, {{ user_option.department }}</option>
+                          {% endfor %}
+                        </select>
+                      </label>
+                      <label>
+                        <span>New consideration</span>
+                        <textarea name="comment_text" rows="3" maxlength="4000" required></textarea>
+                      </label>
+                      <div class="session-considerations-actions">
+                        <button class="secondary-button compact-action" type="button" data-session-considerations-cancel>Cancel</button>
+                        <button class="primary-button compact-action" type="submit">Save and close</button>
+                      </div>
+                    </form>
+                  </div>
+                </details>

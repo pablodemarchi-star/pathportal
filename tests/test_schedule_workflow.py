@@ -637,6 +637,69 @@ class ScheduleWorkflowTest(unittest.TestCase):
         self.assertLess(html.index('name="format" value="Online"'), html.index('name="format" value="Online at exam centre"'))
         self.assertNotIn("Minimum number of candidates required", table_head)
 
+    def test_sessions_logistics_finance_final_checks_considerations_preserve_modal(self):
+        client = self.login_client()
+        for modal in ["logistics", "finance", "sinapsis"]:
+            with self.subTest(modal=modal):
+                response = client.post(f"/exam-session-planner/sessions/{self.session_record.id}/considerations",
+                    data={"csrf_token": "token", "considerations_control_tower": "1", "considerations_modal": modal,
+                        "view": "sessions", "action": "add_comment", "comment_text": modal + " consideration"})
+                self.assertEqual(response.status_code, 302)
+                query = parse_qs(urlparse(response.headers["Location"]).query)
+                self.assertEqual(query["view"], ["sessions"])
+                self.assertEqual(query[modal + "_only"], ["1"])
+                self.assertEqual(query["open_modal_target"], [modal])
+                self.assertEqual(query["open_schedule_modal"], [str(self.session_record.id)])
+                html = client.get(response.headers["Location"]).get_data(as_text=True)
+                self.assertIn(modal + " consideration", html)
+                self.assertIn("staffing-session-considerations", html)
+        self.assertEqual(len(self.session_record.considerations_thread()), 3)
+
+    def test_schedule_and_package_considerations_preserve_modal_and_bundle(self):
+        bundle = self.create_shipment_bundle_record(session_record=self.session_record)
+        client = self.login_client()
+        for modal, flag, target in [("schedule", "schedule_only", "schedule-actions"), ("packages", "packages_only", "packages")]:
+            response = client.post(f"/exam-session-planner/sessions/{self.session_record.id}/considerations",
+                data={"csrf_token": "token", "considerations_control_tower": "1", "considerations_modal": modal,
+                    "view": "bundle", "bundle_id": str(bundle.id), "action": "add_comment", "comment_text": modal + " note"})
+            self.assertEqual(response.status_code, 302)
+            query = parse_qs(urlparse(response.headers["Location"]).query)
+            self.assertEqual(query[flag], ["1"])
+            self.assertEqual(query["open_modal_target"], [target])
+            self.assertEqual(query["bundle_id"], [str(bundle.id)])
+            html = client.get(response.headers["Location"]).get_data(as_text=True)
+            self.assertIn(modal + " note", html)
+        self.assertEqual(len(self.session_record.considerations_thread()), 2)
+
+    def test_staffing_header_considerations_can_be_added_replied_and_deleted_in_bundle(self):
+        bundle = self.create_shipment_bundle_record(session_record=self.session_record)
+        client = self.login_client()
+        page = f"/pre-session-control-tower?session_year=2026&view=bundle&bundle_id={bundle.id}"
+        html = client.get(page).get_data(as_text=True)
+        header_start = html.index('class="staffing-session-title-row"')
+        header = html[header_start:html.index('class="modal-session-header-actions"', header_start)]
+        self.assertIn('class="session-considerations-alert"', header)
+        self.assertIn('name="considerations_control_tower" value="1"', header)
+        self.assertIn('name="bundle_id"', header)
+        url = f"/exam-session-planner/sessions/{self.session_record.id}/considerations"
+        data = {"csrf_token": "token", "session_year": "2026", "considerations_control_tower": "1",
+            "view": "bundle", "bundle_id": str(bundle.id), "action": "add_comment", "comment_text": "Staffing arrangements"}
+        response = client.post(url, data=data)
+        location = response.headers["Location"]
+        self.assertIn("/pre-session-control-tower?", location)
+        self.assertIn(f"bundle_id={bundle.id}", location)
+        self.assertIn("staffing_only=1", location)
+        html = client.get(location).get_data(as_text=True)
+        self.assertIn("Considerations (1)", html)
+        self.assertIn("Staffing arrangements", html)
+        comment = self.session_record.considerations_thread()[0]
+        data.update(action="add_reply", comment_id=comment["id"], reply_text="Noted")
+        self.assertEqual(client.post(url, data=data).status_code, 302)
+        self.assertEqual(self.session_record.considerations_thread()[0]["replies"][0]["text"], "Noted")
+        data.update(action="delete_comment")
+        self.assertEqual(client.post(url, data=data).status_code, 302)
+        self.assertEqual(self.session_record.considerations_thread(), [])
+
     def test_consideration_recipient_is_saved_displayed_and_preserved_on_reply(self):
         recipient = User(full_name="Consideration Reviewer", email="consideration@example.com", department="Management", is_active=True)
         recipient.set_password("test-password")

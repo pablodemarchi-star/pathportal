@@ -17511,3 +17511,14 @@ span.session-marker-chip {
 
 .staffing-external-journey-chip.is-disabled { background: #edf0f2; color: #8a949b; cursor: not-allowed; }
 .staffing-external-journey-actions .copy-icon-button:disabled { background: #edf0f2; color: #8a949b; opacity: 1; cursor: not-allowed; }
+
+.staffing-session-title-row { display: flex; align-items: center; gap: 7px; flex-wrap: wrap; }
+.staffing-session-title-row h2 { margin: 0; }
+.staffing-session-considerations { display: none; }
+.modal.is-staffing-only .staffing-session-considerations,
+.modal.is-schedule-only .staffing-session-considerations,
+.modal.is-packages-only .staffing-session-considerations,
+.modal.is-logistics-only .staffing-session-considerations,
+.modal.is-finance-only .staffing-session-considerations,
+.modal.is-sinapsis-only .staffing-session-considerations { display: inline-flex; }
+.staffing-session-considerations .session-considerations-popover { z-index: 10; max-width: calc(100vw - 48px); }

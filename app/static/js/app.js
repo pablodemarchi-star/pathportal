@@ -14060,3 +14060,13 @@ document.querySelectorAll("[data-journey-public-access]").forEach((form) => {
     saving = false;
   });
 });
+
+// Preserve the active Control Tower modal when saving session considerations.
+document.addEventListener("submit", (event) => {
+  const form = event.target;
+  const context = form.querySelector?.('input[name="considerations_modal"]');
+  if (!context) return;
+  const modal = form.closest(".modal");
+  context.value = ["schedule", "packages", "logistics", "finance", "sinapsis"]
+    .find((section) => modal?.classList.contains(`is-${section}-only`)) || "staffing";
+}, true);

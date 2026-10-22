@@ -1990,7 +1990,14 @@
             <span class="modal-title-sinapsis">FINAL CHECKS</span>
             <span class="modal-title-communications">COMMUNICATIONS</span>
           </p>
-          <h2 id="schedule-workflow-title-{{ session.id }}" tabindex="-1">{{ session.exam_session_name }}</h2>
+          <div class="staffing-session-title-row">
+            <h2 id="schedule-workflow-title-{{ session.id }}" tabindex="-1">{{ session.exam_session_name }}</h2>
+            <span class="staffing-session-considerations">
+              {% with session_considerations=session.considerations_thread(), considerations_control_tower=true %}
+                {% include 'exam_sessions/_considerations.html' %}
+              {% endwith %}
+            </span>
+          </div>
           <div class="modal-session-header-actions" aria-label="Session quick links">
             <a class="secondary-button compact-action link-button" href="{{ url_for('staff.exam_session_planner', session_year=session.session_date.year if session.session_date else selected_session_year, open_session_modal=session.id, session_fullscreen=1) }}" target="_blank" rel="noopener noreferrer">View session planner</a>
             <a class="secondary-button compact-action link-button{% if not view.sinapsis_available %} is-disabled{% endif %}" href="{{ view.sinapsis_url if view.sinapsis_available else '#' }}" target="_blank" rel="noopener noreferrer"{% if not view.sinapsis_available %} aria-disabled="true" tabindex="-1"{% endif %}>View in Sinapsis</a>

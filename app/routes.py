@@ -18849,6 +18849,7 @@ def pre_session_control_tower():
 
     return render_template(
         "pre_session_control_tower/index.html",
+        consideration_recipient_options=note_to_user_options(),
         schedule_views=schedule_views,
         modal_views=modal_views,
         show_session_package_column=show_session_package_column,
@@ -23571,11 +23572,28 @@ def serialize_exam_session_considerations(comments):
 @login_required
 def update_exam_session_considerations(session_id):
     selected_year = request.form.get("session_year", "").strip()
+    session_record = ExamSession.query.get_or_404(session_id)
+
+    def return_to_considerations():
+        if request.form.get("considerations_control_tower") == "1":
+            modal = request.form.get("considerations_modal", "staffing")
+            if modal == "schedule":
+                return schedule_workflow_redirect(session_record, schedule_only=True)
+            if modal == "packages":
+                return package_control_redirect(session_record)
+            if modal == "logistics":
+                return logistics_control_redirect(session_record)
+            if modal == "finance":
+                return finance_control_redirect(session_record)
+            if modal == "sinapsis":
+                return sinapsis_control_redirect(session_record)
+            return staffing_control_redirect(session_record)
+        return redirect(url_for("staff.exam_session_planner", session_year=selected_year or (session_record.session_date.year if session_record.session_date else "")))
+
     if not validate_csrf():
         flash("Security token expired. Please try again.", "error")
-        return redirect(url_for("staff.exam_session_planner", session_year=selected_year))
+        return return_to_considerations()
 
-    session_record = ExamSession.query.get_or_404(session_id)
     comments = session_record.considerations_thread()
     action = request.form.get("action", "add_comment").strip()
     comment_id = request.form.get("comment_id", "").strip()
@@ -23587,7 +23605,7 @@ def update_exam_session_considerations(session_id):
             recipient = selected_note_recipient(request.form)
             if request.form.get("note_to_user_id", "").strip() and not recipient["user_id"]:
                 flash("Please select an active recipient.", "error")
-                return redirect(url_for("staff.exam_session_planner", session_year=selected_year or session_record.session_date.year))
+                return return_to_considerations()
             comment = build_exam_session_consideration(text)
             comment.update(to_user_id=recipient["user_id"], to_full_name=recipient["full_name"], to_department=recipient["department"])
             comments.append(comment)
@@ -23612,12 +23630,12 @@ def update_exam_session_considerations(session_id):
                 break
     else:
         flash("Invalid considerations action.", "error")
-        return redirect(url_for("staff.exam_session_planner", session_year=selected_year or session_record.session_date.year))
+        return return_to_considerations()
 
     session_record.considerations = serialize_exam_session_considerations(comments)
     db.session.commit()
     flash("Session considerations updated successfully.", "success")
-    return redirect(url_for("staff.exam_session_planner", session_year=selected_year or session_record.session_date.year))
+    return return_to_considerations()
 
 
 @staff_bp.route("/exam-session-planner/sessions/<int:session_id>/date-confirmation-status", methods=["POST"])
