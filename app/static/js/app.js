@@ -13013,7 +13013,10 @@ document.addEventListener("change", (event) => {
   });
 })();
 
-const buildSessionJourneyWhatsappMessage = ({ sessionName, sessionDate, contactName, journeyLink }) => {
+const sessionJourneyReviewDays = (value) => [2, 3, 4].includes(Number(value)) ? Number(value) : 2;
+
+const buildSessionJourneyWhatsappMessage = ({ sessionName, sessionDate, contactName, journeyLink, reviewBusinessDays }) => {
+  const reviewDays = sessionJourneyReviewDays(reviewBusinessDays);
   const EMOJI_SPARKLES = "\u{1F4AB}";
   const EMOJI_ROCKET = "\u{1F680}";
   const EMOJI_POINT = "\u{1F449}";
@@ -13033,7 +13036,7 @@ const buildSessionJourneyWhatsappMessage = ({ sessionName, sessionDate, contactN
     "",
     "Para continuar con los próximos pasos logísticos y administrativos, necesitamos que revisen y confirmen los horarios de la sesión. Los encontrarán dentro del *_Journey_*, en la etapa *_Exam session schedule_*.",
     "",
-    `Recuerden que cuentan con *48 horas hábiles* ${EMOJI_HOURGLASS} para confirmar los horarios. Pasado ese plazo, se confirmarán automáticamente por sistema. ${EMOJI_EXCLAMATION} En esa misma etapa, podrán ver cuánto tiempo les queda disponible para realizar la confirmación.`,
+    `Recuerden que cuentan con *${reviewDays} días hábiles* ${EMOJI_HOURGLASS} para confirmar los horarios. Pasado ese plazo, se confirmarán automáticamente por sistema. ${EMOJI_EXCLAMATION} En esa misma etapa, podrán ver cuánto tiempo les queda disponible para realizar la confirmación.`,
     "",
     "¡Quedamos atentos para lo que necesiten!",
     "",
@@ -13049,7 +13052,8 @@ const SESSION_JOURNEY_EMAIL_EMOJIS = {
   exclamation: "\u{2757}",
 };
 
-const buildSessionJourneyEmail = ({ sessionName, sessionDate, contactName, contactEmail, journeyLink }) => {
+const buildSessionJourneyEmail = ({ sessionName, sessionDate, contactName, contactEmail, journeyLink, reviewBusinessDays }) => {
+  const reviewDays = sessionJourneyReviewDays(reviewBusinessDays);
   const cleanSessionName = cleanEmailValue(sessionName);
   const cleanSessionDate = cleanEmailValue(sessionDate);
   const cleanContactName = cleanEmailValue(contactName);
@@ -13086,7 +13090,7 @@ const buildSessionJourneyEmail = ({ sessionName, sessionDate, contactName, conta
         <div style="margin:0 0 18px;padding:16px 18px;background:#f1f7f9;border-left:4px solid #00506b;border-radius:12px;">
           <p style="margin:0;color:#111115;font:400 15px/1.6 Arial, Helvetica, sans-serif;">Para continuar con los próximos pasos logísticos y administrativos, necesitamos que revisen y confirmen los horarios de la sesión. Los encontrarán dentro del <strong><em>Journey</em></strong>, en la etapa <strong><em>Exam session schedule</em></strong>.</p>
         </div>
-        <p style="margin:0 0 14px;color:#111115;font:400 15px/1.6 Arial, Helvetica, sans-serif;">Recuerden que cuentan con <strong>48 horas hábiles</strong> ${hourglass} para confirmar los horarios. Pasado ese plazo, se confirmarán automáticamente por sistema. ${exclamation} En esa misma etapa, podrán ver cuánto tiempo les queda disponible para realizar la confirmación.</p>
+        <p style="margin:0 0 14px;color:#111115;font:400 15px/1.6 Arial, Helvetica, sans-serif;">Recuerden que cuentan con <strong>${reviewDays} días hábiles</strong> ${hourglass} para confirmar los horarios. Pasado ese plazo, se confirmarán automáticamente por sistema. ${exclamation} En esa misma etapa, podrán ver cuánto tiempo les queda disponible para realizar la confirmación.</p>
         <p style="margin:0 0 22px;color:#111115;font:400 15px/1.6 Arial, Helvetica, sans-serif;">¡Quedamos atentos para lo que necesiten!</p>
         <p style="margin:0;color:#111115;font:400 15px/1.6 Arial, Helvetica, sans-serif;">Muchas gracias,</p>
         <p style="margin:4px 0 0;color:#00506b;font:700 15px/1.6 Arial, Helvetica, sans-serif;">Path International Examinations</p>
@@ -13106,7 +13110,7 @@ const buildSessionJourneyEmail = ({ sessionName, sessionDate, contactName, conta
     "",
     "Para continuar con los próximos pasos logísticos y administrativos, necesitamos que revisen y confirmen los horarios de la sesión. Los encontrarán dentro del Journey, en la etapa Exam session schedule.",
     "",
-    `Recuerden que cuentan con 48 horas hábiles ${hourglass} para confirmar los horarios. Pasado ese plazo, se confirmarán automáticamente por sistema. ${exclamation} En esa misma etapa, podrán ver cuánto tiempo les queda disponible para realizar la confirmación.`,
+    `Recuerden que cuentan con ${reviewDays} días hábiles ${hourglass} para confirmar los horarios. Pasado ese plazo, se confirmarán automáticamente por sistema. ${exclamation} En esa misma etapa, podrán ver cuánto tiempo les queda disponible para realizar la confirmación.`,
     "",
     "¡Quedamos atentos para lo que necesiten!",
     "",
@@ -13143,6 +13147,7 @@ const sessionJourneyEmailPayloadFromButton = (button) => buildSessionJourneyEmai
   contactName: button.dataset.contactName,
   contactEmail: button.dataset.contactEmail,
   journeyLink: button.dataset.journeyLink,
+  reviewBusinessDays: button.dataset.reviewBusinessDays,
 });
 
 (() => {
@@ -13164,7 +13169,7 @@ const sessionJourneyEmailPayloadFromButton = (button) => buildSessionJourneyEmai
       return;
     }
 
-    const message = buildSessionJourneyWhatsappMessage({ sessionName, sessionDate, contactName, journeyLink });
+    const message = buildSessionJourneyWhatsappMessage({ sessionName, sessionDate, contactName, journeyLink, reviewBusinessDays: button.dataset.reviewBusinessDays });
     const encodedMessage = encodeURIComponent(message);
     const decodedMessage = decodeURIComponent(encodedMessage);
     if (

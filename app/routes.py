@@ -3986,6 +3986,7 @@ def schedule_journey_whatsapp_link(session_record, contact_point, institution_jo
             "contact_name": contact_name,
             "phone": phone,
             "journey_link": journey_link,
+            "review_business_days": schedule_review_business_days(session_record),
             "error": " ".join(missing),
             "enabled": False,
         }
@@ -3996,6 +3997,7 @@ def schedule_journey_whatsapp_link(session_record, contact_point, institution_jo
         "contact_name": contact_name,
         "phone": phone,
         "journey_link": journey_link,
+        "review_business_days": schedule_review_business_days(session_record),
         "error": "",
         "enabled": True,
     }
@@ -6463,7 +6465,18 @@ def schedule_workflow_review_round(workflow):
     return workflow.review_round if workflow else 0
 
 
-def schedule_status_deadline(status, entered_at):
+def schedule_review_business_days(session_record):
+    total = monthly_registration_close_requirement(session_record)["current"] or 0
+    return 2 if total <= 150 else 3 if total <= 300 else 4
+
+
+def schedule_review_due_at(workflow, sent_at):
+    return argentina_add_business_hours(
+        sent_at, schedule_review_business_days(workflow.exam_session) * 24,
+    )
+
+
+def schedule_status_deadline(status, entered_at, session_record=None):
     if not entered_at or status not in {"Ready to send", "Sent for review"}:
         return None
     if entered_at.tzinfo is None:
@@ -6471,7 +6484,7 @@ def schedule_status_deadline(status, entered_at):
     entered_at = entered_at.astimezone(LOCAL_TZ)
     if status == "Ready to send":
         return argentina_next_business_day(entered_at.date())
-    return argentina_add_business_hours(entered_at, 48).date()
+    return argentina_add_business_hours(entered_at, schedule_review_business_days(session_record) * 24).date()
 
 
 def schedule_workflow_current_deadline(workflow):
@@ -6490,7 +6503,7 @@ def schedule_workflow_current_deadline(workflow):
         entered_at = max(entries, key=event_key).created_at if entries else None
         if not entered_at and workflow.status == "Sent for review":
             entered_at = workflow.last_sent_at
-        expected = schedule_status_deadline(workflow.status, entered_at)
+        expected = schedule_status_deadline(workflow.status, entered_at, workflow.exam_session)
         if expected:
             workflow.next_action_due_at = expected
     return workflow.next_action_due_at
@@ -13998,7 +14011,7 @@ def auto_approve_expired_schedule_review(session_record, workflow=None, now=None
     if not workflow or workflow.status != "Sent for review" or not sent_at:
         return workflow, False
     now = now or datetime.now(timezone.utc).astimezone(LOCAL_TZ)
-    due_at = argentina_add_business_hours(sent_at, 48)
+    due_at = schedule_review_due_at(workflow, sent_at)
     if now < due_at:
         return workflow, False
     workflow, error = apply_schedule_workflow_transition(
@@ -14022,7 +14035,7 @@ def journey_schedule_review_countdown(workflow, now=None):
     if not workflow or workflow.status != "Sent for review" or not sent_at:
         return {"visible": False}
     now = now or datetime.now(timezone.utc).astimezone(LOCAL_TZ)
-    due_at = argentina_add_business_hours(sent_at, 48)
+    due_at = schedule_review_due_at(workflow, sent_at)
     remaining_seconds = max(int((due_at - now).total_seconds()), 0)
     return {
         "visible": True,
@@ -15443,7 +15456,7 @@ def apply_schedule_workflow_transition(session_record, action_key, due_at=None, 
 
     now = datetime.now(timezone.utc)
     if not action.get("same_status") and action["to"] in {"Ready to send", "Sent for review"}:
-        due_at = schedule_status_deadline(action["to"], now)
+        due_at = schedule_status_deadline(action["to"], now, session_record)
     workflow.status = previous_status if action.get("same_status") else action["to"]
     workflow.next_action_due_at = None if action["to"] == "Approved" else due_at
     if action.get("sent"):
@@ -19001,7 +19014,7 @@ def journey_schedule_action_response(session_record, action, note="", created_by
         return jsonify({"ok": False, "message": "Please describe the requested schedule changes."}), 400
     if action_key == "approve" and auto_confirm:
         sent_at = schedule_workflow_sent_for_review_datetime(workflow)
-        due_at = argentina_add_business_hours(sent_at, 48) if sent_at else None
+        due_at = schedule_review_due_at(workflow, sent_at) if sent_at else None
         if not due_at or datetime.now(timezone.utc).astimezone(LOCAL_TZ) < due_at:
             return jsonify({"ok": False, "message": "The automatic confirmation countdown has not ended yet."}), 409
         clean_note = SCHEDULE_AUTO_CONFIRMATION_NOTE
@@ -19146,7 +19159,7 @@ def update_schedule_workflow(session_id):
             return schedule_workflow_redirect(session_record, status_filter, action_key)
         due_at = argentina_next_business_day(datetime.now(LOCAL_TZ).date())
     if action_key == "send_for_review":
-        due_at = argentina_add_business_hours(datetime.now(LOCAL_TZ), 48).date()
+        due_at = schedule_status_deadline("Sent for review", datetime.now(LOCAL_TZ), session_record)
     if action_key == "record_changes":
         due_at = argentina_add_business_days(datetime.now(LOCAL_TZ).date(), 2)
     if action_key == "continue_editing":

@@ -4439,8 +4439,8 @@ class ScheduleWorkflowTest(unittest.TestCase):
         self.assertIn("Could not copy the Session Journey email. Please try again.", handler_source)
         self.assertIn("Institution Journey link is required.", handler_source)
         self.assertIn("Point of contact is required.", handler_source)
-        self.assertIn("<strong>48 horas hábiles</strong>", handler_source)
-        self.assertIn("48 horas hábiles", handler_source)
+        self.assertIn("<strong>${reviewDays} días hábiles</strong>", handler_source)
+        self.assertIn("${reviewDays} días hábiles", handler_source)
         self.assertIn('href="${safeJourneyLink}"', handler_source)
         self.assertNotIn(">*_Exam session journey_*<", handler_source)
         self.assertNotIn(">*_Journey_*<", handler_source)
@@ -5914,6 +5914,68 @@ class ScheduleWorkflowTest(unittest.TestCase):
         self.assertIn("open_schedule_action=mark_ready", response.headers["Location"])
         workflow = ExamSessionScheduleWorkflow.query.filter_by(exam_session_id=self.session_record.id).one()
         self.assertEqual(workflow.status, "In progress")
+
+    def test_schedule_review_tiers_drive_deadline_countdown_and_auto_approval(self):
+        from app.routes import (schedule_review_business_days, schedule_status_deadline,
+            journey_schedule_review_countdown, auto_approve_expired_schedule_review,
+            schedule_workflow_current_deadline, schedule_journey_whatsapp_link)
+        total = ExamSessionMonthlyCandidateTotal(exam_session_id=self.session_record.id, month=6, total_candidates=150)
+        workflow = ExamSessionScheduleWorkflow(exam_session_id=self.session_record.id,
+            status="Sent for review", last_sent_at=datetime(2026, 11, 20, 15, tzinfo=LOCAL_TZ))
+        db.session.add_all([total, workflow])
+        db.session.flush()
+        sent_at = workflow.last_sent_at
+        for candidates, days in [(0, 2), (150, 2), (151, 3), (300, 3), (301, 4), (800, 4)]:
+            with self.subTest(candidates=candidates):
+                total.total_candidates = candidates
+                db.session.flush()
+                self.assertEqual(schedule_review_business_days(self.session_record), days)
+                expected = argentina_add_business_hours(sent_at, days * 24)
+                self.assertEqual(schedule_status_deadline("Sent for review", sent_at, self.session_record), expected.date())
+                self.assertEqual(schedule_workflow_current_deadline(workflow), expected.date())
+                countdown = journey_schedule_review_countdown(workflow, now=sent_at)
+                self.assertEqual(countdown["due_at"], expected)
+                payload = schedule_journey_whatsapp_link(self.session_record,
+                    {"full_name": "Contact", "phone": "123456"}, {"url": "https://example.com/journey", "enabled": True})
+                self.assertEqual(payload["review_business_days"], days)
+                _, approved = auto_approve_expired_schedule_review(self.session_record, workflow,
+                    now=expected - timedelta(seconds=1))
+                self.assertFalse(approved)
+        _, approved = auto_approve_expired_schedule_review(self.session_record, workflow, now=expected)
+        self.assertTrue(approved)
+        self.assertEqual(workflow.status, "Approved")
+
+    def test_concatenated_schedule_review_uses_unified_total(self):
+        from app.routes import schedule_review_business_days, sync_monthly_unified_total, schedule_status_deadline
+        other, chained, standalone = self.create_concat_schedule_test_sessions()
+        db.session.add(ExamSessionMonthlyCandidateTotal(exam_session_id=self.session_record.id, month=6, total_candidates=10))
+        for candidates, days in [(150, 2), (151, 3), (300, 3), (301, 4)]:
+            sync_monthly_unified_total(self.session_record, candidates)
+            db.session.flush()
+            for record in [self.session_record, other, chained]:
+                self.assertEqual(schedule_review_business_days(record), days)
+                entered_at = datetime(2026, 10, 21, 12, tzinfo=LOCAL_TZ)
+                self.assertEqual(schedule_status_deadline("Sent for review", entered_at, record),
+                    argentina_add_business_hours(entered_at, days * 24).date())
+        self.assertEqual(schedule_review_business_days(standalone), 2)
+
+    def test_journey_share_messages_use_selected_review_days(self):
+        script = r'''const fs = require("fs");
+const source = fs.readFileSync("app/static/js/app.js", "utf8");
+const cleanEmailValue = (v) => String(v || "").trim();
+const emailLinkIsUsable = (v) => v.startsWith("https://");
+const escapeEmailHtml = (v) => v;
+const escapeEmailAttribute = (v) => v;
+eval(source.slice(source.indexOf("const sessionJourneyReviewDays"), source.indexOf("const buildSessionJourneyGmailUrl")) + `
+for (const days of [2, 3, 4]) {
+  const args = {sessionName:"Exam", sessionDate:"21/10/2026", contactName:"Contact", contactEmail:"contact@example.com", journeyLink:"https://example.com/journey", reviewBusinessDays:days};
+  const whatsapp = buildSessionJourneyWhatsappMessage(args);
+  const email = buildSessionJourneyEmail(args);
+  if (!whatsapp.includes(days + " días hábiles") || !email.html.includes(days + " días hábiles") || !email.text.includes(days + " días hábiles")) throw new Error("Wrong review period");
+}`);
+'''
+        result = subprocess.run(["node", "-e", script], capture_output=True, text=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
 
     def test_schedule_state_deadlines_start_at_local_transition_time(self):
         from app.routes import schedule_status_deadline
