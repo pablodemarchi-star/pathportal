@@ -6480,7 +6480,15 @@ def schedule_workflow_responsible(status):
 
 
 def schedule_workflow_review_round(workflow):
-    return workflow.review_round if workflow else 0
+    if not workflow:
+        return 0
+    events = workflow.events
+    revisions = sum(event.previous_status == "Changes requested" and event.new_status == "Ready to send" for event in events)
+    review_started = workflow.status in {"Ready to send", "Sent for review", "Changes requested", "Approved"} or any(
+        event.new_status in {"Ready to send", "Sent for review"} for event in events
+    )
+    # Recover revised schedules saved before rounds started at Ready to send.
+    return max(workflow.review_round or 0, 1 + revisions if review_started else 0)
 
 
 def schedule_review_business_days(session_record):
@@ -15665,10 +15673,15 @@ def apply_schedule_workflow_transition(session_record, action_key, due_at=None, 
     now = datetime.now(timezone.utc)
     if not action.get("same_status") and action["to"] in {"Ready to send", "Sent for review"}:
         due_at = schedule_status_deadline(action["to"], now, session_record)
+    review_round = schedule_workflow_review_round(workflow)
     workflow.status = previous_status if action.get("same_status") else action["to"]
     workflow.next_action_due_at = None if action["to"] == "Approved" else due_at
+    if action_key == "mark_revised_ready":
+        review_round = max(review_round, 1) + 1
+    elif action_key in {"mark_ready", "send_for_review"}:
+        review_round = max(review_round, 1)
+    workflow.review_round = review_round
     if action.get("sent"):
-        workflow.review_round = (workflow.review_round or 0) + 1
         workflow.last_sent_at = now
     if action.get("changes_requested"):
         workflow.changes_requested_at = now

@@ -2689,6 +2689,45 @@ class ScheduleWorkflowTest(unittest.TestCase):
         self.assertEqual(error, "This schedule workflow action is not allowed from the current status.")
         self.assertEqual(ExamSessionScheduleEvent.query.count(), 0)
 
+    def test_schedule_round_increases_when_revised_ready_and_not_when_resent_for_concat_group(self):
+        other, chained, standalone = self.create_concat_schedule_test_sessions()
+        bundle = self.create_shipment_bundle_record(session_record=self.session_record)
+        for action, expected in [("start_preparation", 0), ("mark_ready", 1), ("send_for_review", 1),
+            ("record_changes", 1), ("mark_revised_ready", 2), ("send_for_review", 2),
+            ("record_changes", 2), ("mark_revised_ready", 3), ("send_for_review", 3)]:
+            with self.subTest(action=action, expected=expected):
+                workflow, error = apply_schedule_workflow_transition(self.session_record, action,
+                    note="Please update schedules" if action == "record_changes" else "")
+                self.assertIsNone(error)
+                db.session.commit()
+                for record in [self.session_record, other, chained]:
+                    linked = ExamSessionScheduleWorkflow.query.filter_by(exam_session_id=record.id).one()
+                    self.assertEqual(linked.review_round, expected)
+                if action == "mark_revised_ready":
+                    html = self.login_client().get(f"/pre-session-control-tower?session_year=2026&view=bundle&bundle_id={bundle.id}").get_data(as_text=True)
+                    self.assertIn(f"Rounds: {expected}", html)
+        self.assertIsNone(ExamSessionScheduleWorkflow.query.filter_by(exam_session_id=standalone.id).first())
+
+    def test_existing_revised_ready_schedule_round_is_recovered_from_history(self):
+        from app.routes import schedule_workflow_review_round
+        workflow = ExamSessionScheduleWorkflow(exam_session_id=self.session_record.id, status="Ready to send", review_round=1)
+        db.session.add(workflow)
+        db.session.flush()
+        db.session.add_all([
+            ExamSessionScheduleEvent(workflow=workflow, previous_status="In progress", new_status="Ready to send"),
+            ExamSessionScheduleEvent(workflow=workflow, previous_status="Ready to send", new_status="Sent for review"),
+            ExamSessionScheduleEvent(workflow=workflow, previous_status="Sent for review", new_status="Changes requested"),
+            ExamSessionScheduleEvent(workflow=workflow, previous_status="Changes requested", new_status="Ready to send"),
+        ])
+        db.session.commit()
+        self.assertEqual(schedule_workflow_review_round(workflow), 2)
+        bundle = self.create_shipment_bundle_record(session_record=self.session_record)
+        html = self.login_client().get(f"/pre-session-control-tower?session_year=2026&view=bundle&bundle_id={bundle.id}").get_data(as_text=True)
+        self.assertIn("Rounds: 2", html)
+        workflow, error = apply_schedule_workflow_transition(self.session_record, "send_for_review")
+        self.assertIsNone(error)
+        self.assertEqual(workflow.review_round, 2)
+
     def test_valid_send_for_review_increments_review_round_and_records_event(self):
         due_at = date(2026, 6, 20)
         workflow, error = apply_schedule_workflow_transition(
