@@ -2771,7 +2771,7 @@ document.querySelectorAll("[data-auto-filter]").forEach((form) => {
     });
   });
 
-  const search = form.querySelector("input[name='q'], input[name='bundle_q'], input[name='session_q'], input[name='bundle_session_q']");
+  const search = form.querySelector("input[name='q'], input[name='bundle_q'], input[name='session_q'], input[name='bundle_session_q'], input[name='actions_q']");
   if (search) {
     search.addEventListener("input", () => {
       window.clearTimeout(searchTimer);

@@ -5,7 +5,7 @@
 {% macro department_actions_sort_header(column, label) -%}
   {% set active = department_actions_sort == column %}
   <th aria-sort="{{ ('ascending' if department_actions_order == 'asc' else 'descending') if active else 'none' }}">
-    <a class="table-sort{% if active %} is-active{% endif %}" href="{{ url_for('staff.my_actions', session_year=selected_session_year, actions_sort=column, actions_order='desc' if active and department_actions_order == 'asc' else 'asc') }}">
+    <a class="table-sort{% if active %} is-active{% endif %}" href="{{ url_for('staff.my_actions', session_year=selected_session_year, actions_sort=column, actions_order='desc' if active and department_actions_order == 'asc' else 'asc', actions_q=department_actions_query, actions_section=department_actions_section, actions_overdue='1' if department_actions_overdue else '') }}">
       {{ label }} <span aria-hidden="true">{{ ('↑' if department_actions_order == 'asc' else '↓') if active else '↕' }}</span>
     </a>
   </th>
@@ -1534,6 +1534,20 @@
   </div>
 </section>
 {% elif is_my_actions_page %}
+<section class="toolbar">
+  <form method="get" action="{{ url_for('staff.my_actions') }}" class="filters my-actions-filters" data-auto-filter>
+    <input type="hidden" name="session_year" value="{{ selected_session_year }}">
+    <input type="hidden" name="actions_sort" value="{{ department_actions_sort }}">
+    <input type="hidden" name="actions_order" value="{{ department_actions_order }}">
+    <input type="search" name="actions_q" value="{{ department_actions_query }}" placeholder="Search by session name…" aria-label="Search by session name">
+    <select name="actions_section" aria-label="Filter by Section">
+      <option value="">Section</option>
+      {% for key, label in department_actions_sections %}<option value="{{ key }}"{% if department_actions_section == key %} selected{% endif %}>{{ label }}</option>{% endfor %}
+    </select>
+    <label class="monthly-marker-filter"><input type="checkbox" name="actions_overdue" value="1"{% if department_actions_overdue %} checked{% endif %}><span>Overdue</span></label>
+    <a class="text-link" href="{{ url_for('staff.my_actions', session_year=selected_session_year, actions_sort=department_actions_sort, actions_order=department_actions_order) }}">Reset</a>
+  </form>
+</section>
 <div data-my-actions-page data-signature="{{ department_actions_signature }}" data-count="{{ department_actions_count }}" data-session-year="{{ selected_session_year }}"></div>
 {% elif selected_view == 'my-actions' %}
 <section class="toolbar pre-session-my-actions-filters-toolbar">
@@ -1808,7 +1822,7 @@
           </td>
         </tr>
       {% else %}
-        <tr><td colspan="4" class="empty-state">No pending actions for your department.</td></tr>
+        <tr><td colspan="4" class="empty-state">{{ 'No matching actions.' if department_actions_query or department_actions_section or department_actions_overdue else 'No pending actions for your department.' }}</td></tr>
       {% endfor %}
     </tbody>
   </table>

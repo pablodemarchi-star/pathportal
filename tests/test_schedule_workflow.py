@@ -1273,6 +1273,50 @@ class ScheduleWorkflowTest(unittest.TestCase):
         schedule_actions = [action for action in actions if action["section"] == "schedule"]
         self.assertEqual(schedule_actions, [{"department": "", "description": "Awaiting exam centre approval", "section": "schedule"}])
 
+    def test_my_actions_overdue_filter_checks_all_grouped_actions_and_combines_with_filters(self):
+        from app.routes import filter_department_my_actions
+        record = self.session_record
+        expired = {"session": record, "section": "staffing", "actions": [{"overdue": False}, {"overdue": True}]}
+        current = {"session": record, "section": "schedule", "actions": [{"overdue": False}]}
+        self.assertEqual(filter_department_my_actions([expired, current], overdue=True), [expired])
+        self.assertEqual(filter_department_my_actions([expired], section="schedule", overdue=True), [])
+        self.assertEqual(filter_department_my_actions([expired], query="missing name", overdue=True), [])
+        self.assertEqual(len(expired["actions"]), 2)
+        self.session_record.monthly_registrations_closed = True
+        self.session_record.date_confirmation_status = "Confirmed"
+        db.session.add(ExamSessionScheduleWorkflow(exam_session_id=record.id, status="In progress", next_action_due_at=date(2000, 1, 1)))
+        db.session.commit()
+        client = self.login_client_for_user(self.create_my_actions_user("Management"))
+        html = client.get("/my-actions?session_year=2026&actions_overdue=1&actions_section=schedule&actions_q=June").get_data(as_text=True)
+        self.assertIn('name="actions_overdue" value="1" checked', html)
+        self.assertIn('actions_overdue=1', html)
+        table = html.split('<table class="control-tower-table my-actions-table">')[1].split('</table>')[0]
+        self.assertIn('data-my-action-section="schedule"', table)
+        self.assertIn('>Overdue</span>', table)
+        self.assertNotIn('data-my-action-section="shipments"', table)
+
+    def test_my_actions_search_by_session_and_filter_by_section_preserve_sort_and_total(self):
+        other, chained, standalone = self.create_concat_schedule_test_sessions()
+        db.session.add_all([ExamSessionSupervisorAssignment(exam_session_id=record.id, participation_status="Pending")
+            for record in [self.session_record, other]])
+        db.session.commit()
+        client = self.login_client_for_user(self.create_my_actions_user("Management"))
+        total = client.get("/my-actions/count?session_year=2026").get_json()["count"]
+        response = client.get("/my-actions?session_year=2026&actions_q=LINKED&actions_section=staffing&actions_sort=session&actions_order=desc")
+        self.assertEqual(response.status_code, 200)
+        html = response.get_data(as_text=True)
+        table = html.split('<table class="control-tower-table my-actions-table">')[1].split('</table>')[0]
+        self.assertEqual(table.count('data-my-action-section='), 1)
+        self.assertIn(f'data-my-action-session="{other.id}"', table)
+        self.assertIn('data-my-action-section="staffing"', table)
+        self.assertIn('actions_q=LINKED&amp;actions_section=staffing', html)
+        self.assertIn(f'data-my-actions-count>{total}</span>', html)
+        for label in ["Schedule", "Staffing", "Package", "Shipment", "Logistics", "Finance", "Final checks"]:
+            self.assertIn('>' + label + '</option>', html)
+        empty = client.get("/my-actions?session_year=2026&actions_q=not-a-session&actions_section=finance").get_data(as_text=True)
+        self.assertIn("No matching actions.", empty)
+        self.assertNotIn('data-my-action-section=', empty)
+
     def test_my_actions_sortable_columns_toggle_and_keep_count_signature_stable(self):
         from app.routes import sort_department_my_actions, department_my_actions_signature
         view = {"status": "In progress"}

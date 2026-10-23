@@ -17564,3 +17564,15 @@ span.session-marker-chip {
   white-space: normal;
   overflow-wrap: anywhere;
 }
+
+.my-actions-filters {
+  grid-template-columns: minmax(160px, 1.5fr) minmax(120px, 1fr) calc(290px - 40mm) auto;
+}
+.my-actions-filters .monthly-marker-filter {
+  min-width: 0;
+  white-space: nowrap;
+}
+@media (max-width: 700px) {
+  .my-actions-filters { grid-template-columns: minmax(0, 1fr); }
+  .my-actions-filters .monthly-marker-filter { width: calc(290px - 40mm); box-sizing: border-box; }
+}

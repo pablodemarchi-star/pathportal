@@ -13675,6 +13675,15 @@ def department_my_actions(schedule_views, bundle_views, pending_bundle, staffing
                   row["session"].exam_session_name.lower(), row["section_label"]))
 
 
+def filter_department_my_actions(rows, query="", section="", overdue=False):
+    query = query.strip().casefold()
+    return [row for row in rows
+            if (not section or row["section"] == section)
+            and (not overdue or any(action.get("overdue") for action in row.get("actions", [row])))
+            and (not query or any(query in record.exam_session_name.casefold()
+                                 for record in row.get("sessions", [row["session"]])))]
+
+
 def sort_department_my_actions(rows, column, direction):
     if column not in {"session", "description", "section"}:
         return rows
@@ -17814,6 +17823,11 @@ def pre_session_control_tower(_count_only=False):
     selected_year, session_years = selected_exam_session_year()
     staff_payment_next_payment_date = staff_payment_settings_values(staff_payment_settings())["next_payment_date"]
     is_my_actions_page = request.endpoint in {"staff.my_actions", "staff.my_actions_count"} or request.args.get("view") == "department-actions"
+    department_actions_query = request.args.get("actions_q", "").strip()
+    department_actions_overdue = request.args.get("actions_overdue") == "1"
+    department_actions_section = request.args.get("actions_section", "")
+    if department_actions_section not in MY_ACTION_SECTIONS:
+        department_actions_section = ""
     department_actions_sort = request.args.get("actions_sort", "")
     if department_actions_sort not in {"session", "description", "section"}:
         department_actions_sort = ""
@@ -18849,6 +18863,8 @@ def pre_session_control_tower(_count_only=False):
             response = jsonify({"count": department_my_actions_count(department_rows), "signature": department_my_actions_signature(department_rows)})
             response.headers["Cache-Control"] = "no-store"
             return response
+        department_all_rows = department_rows
+        department_rows = filter_department_my_actions(department_rows, department_actions_query, department_actions_section, department_actions_overdue)
 
     concat_components = exam_session_concat_component_map()
     concat_names = dict(db.session.query(ExamSession.id, ExamSession.exam_session_name).all())
@@ -19075,10 +19091,14 @@ def pre_session_control_tower(_count_only=False):
         selected_view=selected_view,
         my_actions=department_rows if is_my_actions_page else filtered_my_actions,
         is_my_actions_page=is_my_actions_page,
+        department_actions_query=department_actions_query,
+        department_actions_overdue=department_actions_overdue,
+        department_actions_section=department_actions_section,
+        department_actions_sections=[(key, MY_ACTION_SECTIONS[key]) for key in ("schedule", "staffing", "packages", "shipments", "logistics", "finance", "sinapsis")],
         department_actions_sort=department_actions_sort,
         department_actions_order=department_actions_order,
-        department_actions_count=department_my_actions_count(department_rows) if is_my_actions_page else None,
-        department_actions_signature=department_my_actions_signature(department_rows) if is_my_actions_page else "",
+        department_actions_count=department_my_actions_count(department_all_rows) if is_my_actions_page else None,
+        department_actions_signature=department_my_actions_signature(department_all_rows) if is_my_actions_page else "",
         my_actions_summary=my_actions_summary_counts,
         my_action_source_options=my_action_source_options,
         my_action_responsible_options=my_action_responsible_filter_options,
