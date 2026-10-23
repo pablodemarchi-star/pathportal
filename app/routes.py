@@ -13667,6 +13667,20 @@ def department_my_actions(schedule_views, bundle_views, pending_bundle, staffing
                   row["session"].exam_session_name.lower(), row["section_label"]))
 
 
+def sort_department_my_actions(rows, column, direction):
+    if column not in {"session", "description", "section"}:
+        return rows
+
+    def value(row):
+        if column == "session":
+            return " | ".join(record.exam_session_name for record in row.get("sessions", [row["session"]])).casefold()
+        if column == "description":
+            return " | ".join(action["description"] for action in row.get("actions", [row])).casefold()
+        return row["section_label"].casefold()
+
+    return sorted(rows, key=value, reverse=direction == "desc")
+
+
 def department_my_actions_count(rows):
     return sum(len(row.get("actions", [row])) for row in rows)
 
@@ -13682,7 +13696,7 @@ def department_my_actions_signature(rows):
         (row["view"].get("sinapsis") or {}).get("status"),
         ((row["view"].get("shipments") or {}).get("operational_status") or {}).get("status"),
     ) for row in rows]
-    return hashlib.sha256(json.dumps(payload, ensure_ascii=False).encode()).hexdigest()
+    return hashlib.sha256(json.dumps(sorted(payload, key=lambda item: item[0]), ensure_ascii=False).encode()).hexdigest()
 
 
 def my_actions_summary(actions):
@@ -17787,6 +17801,11 @@ def pre_session_control_tower(_count_only=False):
     selected_year, session_years = selected_exam_session_year()
     staff_payment_next_payment_date = staff_payment_settings_values(staff_payment_settings())["next_payment_date"]
     is_my_actions_page = request.endpoint in {"staff.my_actions", "staff.my_actions_count"} or request.args.get("view") == "department-actions"
+    department_actions_sort = request.args.get("actions_sort", "")
+    if department_actions_sort not in {"session", "description", "section"}:
+        department_actions_sort = ""
+    department_actions_order = "desc" if request.args.get("actions_order") == "desc" else "asc"
+
     selected_view = "department-actions" if is_my_actions_page else request.args.get("view", "bundles").strip()
     if selected_view not in {"bundles", "sessions", "bundle", "my-actions", "department-actions"}:
         selected_view = "bundles"
@@ -18811,6 +18830,8 @@ def pre_session_control_tower(_count_only=False):
     if is_my_actions_page:
         department_rows = department_my_actions(all_schedule_views, all_bundle_views, pending_shipment_bundle,
             staffing_contracts_by_session, today=today)
+        department_rows = sort_department_my_actions(department_rows, department_actions_sort, department_actions_order)
+
         if _count_only:
             response = jsonify({"count": department_my_actions_count(department_rows), "signature": department_my_actions_signature(department_rows)})
             response.headers["Cache-Control"] = "no-store"
@@ -19041,6 +19062,8 @@ def pre_session_control_tower(_count_only=False):
         selected_view=selected_view,
         my_actions=department_rows if is_my_actions_page else filtered_my_actions,
         is_my_actions_page=is_my_actions_page,
+        department_actions_sort=department_actions_sort,
+        department_actions_order=department_actions_order,
         department_actions_count=department_my_actions_count(department_rows) if is_my_actions_page else None,
         department_actions_signature=department_my_actions_signature(department_rows) if is_my_actions_page else "",
         my_actions_summary=my_actions_summary_counts,

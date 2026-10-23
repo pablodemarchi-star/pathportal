@@ -2,6 +2,15 @@
 {% from "staff/_badges.html" import role_badge %}
 {% from "finance_requests/_payment_form_fields.html" import payment_form_fields with context %}
 
+{% macro department_actions_sort_header(column, label) -%}
+  {% set active = department_actions_sort == column %}
+  <th aria-sort="{{ ('ascending' if department_actions_order == 'asc' else 'descending') if active else 'none' }}">
+    <a class="table-sort{% if active %} is-active{% endif %}" href="{{ url_for('staff.my_actions', session_year=selected_session_year, actions_sort=column, actions_order='desc' if active and department_actions_order == 'asc' else 'asc') }}">
+      {{ label }} <span aria-hidden="true">{{ ('↑' if department_actions_order == 'asc' else '↓') if active else '↕' }}</span>
+    </a>
+  </th>
+{%- endmacro %}
+
 {% macro session_concat_indicator(session_id) -%}
   {% set names = concat_session_names_by_session.get(session_id, []) %}
   {% if names %}<span class="session-concat-indicator" title="Concatenated with: {{ names|join(', ') }}">&lt;concat&gt;</span>{% endif %}
@@ -1760,7 +1769,7 @@
 {% elif is_my_actions_page %}
 <section class="table-wrap control-tower-table-wrap my-actions-workspace" aria-label="My actions">
   <table class="control-tower-table my-actions-table">
-    <thead><tr><th>Exam session</th><th>Department</th><th>Action description</th><th>Section</th></tr></thead>
+    <thead><tr>{{ department_actions_sort_header('session', 'Exam session') }}<th>Department</th>{{ department_actions_sort_header('description', 'Action description') }}{{ department_actions_sort_header('section', 'Section') }}</tr></thead>
     <tbody>
       {% for action in my_actions %}
         {% set view = action.view %}

@@ -1273,6 +1273,34 @@ class ScheduleWorkflowTest(unittest.TestCase):
         schedule_actions = [action for action in actions if action["section"] == "schedule"]
         self.assertEqual(schedule_actions, [{"department": "", "description": "Awaiting exam centre approval", "section": "schedule"}])
 
+    def test_my_actions_sortable_columns_toggle_and_keep_count_signature_stable(self):
+        from app.routes import sort_department_my_actions, department_my_actions_signature
+        view = {"status": "In progress"}
+        records = [ExamSession(id=9001, exam_session_name="Zulu exam"), ExamSession(id=9002, exam_session_name="Alpha exam")]
+        rows = [{"id": str(index), "session": record, "sessions": [record], "section": section,
+                 "section_label": label, "description": description, "actions": [{"description": description}], "view": view}
+                for index, (record, section, label, description) in enumerate([
+                    (records[0], "staffing", "Staffing", "Assign examiners"),
+                    (records[1], "finance", "Finance", "Verify payment")])]
+        for column, expected in [("session", ["1", "0"]), ("description", ["0", "1"]), ("section", ["1", "0"])]:
+            asc = sort_department_my_actions(rows, column, "asc")
+            desc = sort_department_my_actions(rows, column, "desc")
+            self.assertEqual([row["id"] for row in asc], expected)
+            self.assertEqual([row["id"] for row in desc], list(reversed(expected)))
+            self.assertEqual(department_my_actions_signature(asc), department_my_actions_signature(desc))
+        self.assertEqual(sort_department_my_actions(rows, "invalid", "desc"), rows)
+        self.session_record.monthly_registrations_closed = True
+        self.session_record.date_confirmation_status = "Confirmed"
+        db.session.commit()
+        client = self.login_client_for_user(self.create_my_actions_user("Management"))
+        for column in ["session", "description", "section"]:
+            for direction, aria in [("asc", "ascending"), ("desc", "descending")]:
+                response = client.get(f"/my-actions?session_year=2026&actions_sort={column}&actions_order={direction}")
+                self.assertEqual(response.status_code, 200)
+                html = response.get_data(as_text=True)
+                self.assertIn(f'aria-sort="{aria}"', html)
+                self.assertIn(f'actions_sort={column}&amp;actions_order=' + ("desc" if direction == "asc" else "asc"), html)
+
     def test_my_actions_groups_staffing_descriptions_and_department_tags_in_one_row(self):
         self.session_record.exam_session_name = "Connect Inglés Online 2026"
         self.session_record.monthly_registrations_closed = True
@@ -1316,7 +1344,10 @@ class ScheduleWorkflowTest(unittest.TestCase):
         response = management.get("/my-actions?session_year=2026&action_responsible=ADMIN")
         self.assertEqual(response.status_code, 200)
         html = response.get_data(as_text=True)
-        self.assertIn("<th>Exam session</th><th>Department</th><th>Action description</th><th>Section</th>", html)
+        self.assertIn("Exam session", html)
+        self.assertIn("<th>Department</th>", html)
+        self.assertIn("Action description", html)
+        self.assertIn("Section", html)
         self.assertIn('data-my-action-section="schedule"', html)
         self.assertIn('data-modal-schedule-only="true"', html)
         self.assertIn('name="view" value="department-actions"', html)
