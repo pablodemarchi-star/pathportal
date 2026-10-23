@@ -17535,3 +17535,32 @@ span.session-marker-chip {
 .staffing-session-considerations .session-considerations-popover { z-index: 10; max-width: calc(100vw - 48px); }
 
 .bundle-session-concat-name { display: inline-flex; align-items: center; gap: 3px; flex-wrap: nowrap; }
+
+.my-actions-table .my-action-section-label { display: block; margin-bottom: 5px; font-size: 12px; color: var(--text-main); }
+.my-actions-table td { vertical-align: top; }
+.my-actions-table th:nth-child(1) { width: 30%; }
+.my-actions-table th:nth-child(3) { width: 35%; }
+
+.my-actions-workspace .my-actions-table {
+  width: 100%;
+  min-width: 0;
+  max-width: 100%;
+  table-layout: fixed;
+}
+.my-actions-workspace .my-actions-table th:nth-child(1) { width: 26%; }
+.my-actions-workspace .my-actions-table th:nth-child(2) { width: 15%; }
+.my-actions-workspace .my-actions-table th:nth-child(3) { width: 34%; }
+.my-actions-workspace .my-actions-table th:nth-child(4) { width: 25%; }
+.my-actions-workspace .my-actions-table th,
+.my-actions-workspace .my-actions-table td {
+  min-width: 0;
+  padding: 10px 8px;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+.my-actions-workspace .my-actions-table td * {
+  min-width: 0;
+  max-width: 100%;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}

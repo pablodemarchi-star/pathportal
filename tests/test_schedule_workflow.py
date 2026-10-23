@@ -1238,6 +1238,136 @@ class ScheduleWorkflowTest(unittest.TestCase):
             self.assertIn('href="https://example.com/entry-slips-folder"', html)
         self.assertIsNone(ExamSessionScheduleWorkflow.query.filter_by(exam_session_id=standalone.id).first())
 
+    def create_my_actions_user(self, department, can_edit=True, can_view=True):
+        user = User(full_name=department + " Actions", email=department.lower() + "-actions@example.com",
+            department=department, is_active=True)
+        user.set_password("password")
+        db.session.add(user)
+        db.session.flush()
+        db.session.add(UserMenuPermission(user_id=user.id, menu_key="pre_session_control_tower", can_view=can_view, can_edit=can_edit))
+        db.session.commit()
+        return user
+
+    def test_department_my_actions_filters_count_and_shared_schedule_handoff(self):
+        self.session_record.monthly_registrations_closed = True
+        self.session_record.date_confirmation_status = "Confirmed"
+        db.session.add(ExamSessionScheduleWorkflow(exam_session_id=self.session_record.id, status="In progress"))
+        db.session.commit()
+        management = self.login_client_for_user(self.create_my_actions_user("Management"))
+        admin = self.login_client_for_user(self.create_my_actions_user("Admin"))
+        response = management.get("/my-actions?session_year=2026&action_responsible=ADMIN")
+        self.assertEqual(response.status_code, 200)
+        html = response.get_data(as_text=True)
+        self.assertIn("<th>Exam session</th><th>Department</th><th>Action description</th><th>Section</th>", html)
+        self.assertIn('data-my-action-section="schedule"', html)
+        self.assertIn('data-modal-schedule-only="true"', html)
+        self.assertIn('name="view" value="department-actions"', html)
+        self.assertLess(html.index('data-my-actions-nav'), html.index('>Potential entries<') if '>Potential entries<' in html else html.index('>Pre onsite session control tower<'))
+        table = html.split('<table class="control-tower-table my-actions-table">')[1].split('</table>')[0]
+        self.assertNotIn('>ADMIN</span>', table)
+        count = management.get("/my-actions/count?session_year=2026").get_json()
+        self.assertEqual(count["count"], table.count('data-my-action-section='))
+        response = management.post(f"/pre-session-control-tower/sessions/{self.session_record.id}/schedule", data={
+            "csrf_token": "token", "view": "department-actions", "action_key": "mark_ready",
+            "schedule_uploaded_confirmation": "1", "entry_slips_uploaded_confirmation": "1"})
+        self.assertEqual(response.status_code, 302)
+        self.assertIn("view=department-actions", response.headers["Location"])
+        workflow = ExamSessionScheduleWorkflow.query.filter_by(exam_session_id=self.session_record.id).one()
+        self.assertEqual(workflow.status, "Ready to send")
+        html = management.get("/my-actions?session_year=2026").get_data(as_text=True)
+        self.assertNotIn('data-my-action-section="schedule"', html)
+        html = admin.get("/my-actions?session_year=2026").get_data(as_text=True)
+        self.assertIn('data-my-action-section="schedule"', html)
+        self.assertIn('>Ready to send</span>', html)
+        self.assertIn('>Ready to send</span>', admin.get("/pre-session-control-tower?session_year=2026&view=sessions").get_data(as_text=True))
+        self.assertNotEqual(count["signature"], management.get("/my-actions/count?session_year=2026").get_json()["signature"])
+
+    def test_department_actions_cover_only_seven_sections_and_deduplicate_shipments(self):
+        from unittest.mock import patch
+        from flask import g
+        from app.routes import department_my_actions
+        record = self.session_record
+        view = {"session": record, "status": "In progress", "schedule_gate": {}, "next_action": "Prepare schedules",
+            "responsible": "ADMIN", "monthly_registrations_closed": True, "date_confirmation_confirmed": True,
+            "schedule_preparation_unlocked": True, "final_checks_gate": {"status": "unblocked"},
+            "finance": {}, "sinapsis": {"requires_action": True, "message": "Complete final checks"},
+            "bundle_detail_actions": [
+                {"department": "ADMIN", "description": "Prepare schedules", "section": "schedule"},
+                {"department": "ADMIN", "description": "Notify staff", "section": "staffing"},
+                {"department": "ADMIN", "description": "Verify package", "section": "packages"},
+                {"department": "FINANCE", "description": "Other department", "section": "finance"},
+                {"department": "ADMIN", "description": "Not in scope", "section": "communications"}]}
+        supplemental = [{"department": "ADMIN", "description": "Verify travel", "section": "logistics"},
+                        {"department": "ADMIN", "description": "Verify finance", "section": "finance"}]
+        bundle = {"id": 100, "included_sessions": [record], "action_items": [
+            {"department": "ADMIN", "description": "Prepare shipment"}]}
+        with self.app.test_request_context("/my-actions?department=FINANCE"), patch("app.routes.bundle_detail_action_items", return_value=supplemental):
+            g.current_user = None
+            from flask import session as request_session
+            request_session["user_department"] = "Admin"
+            rows = department_my_actions([view], [bundle, bundle], None, {})
+            self.assertEqual({row["section"] for row in rows}, {"schedule", "staffing", "packages", "logistics", "finance", "sinapsis", "shipments"})
+            self.assertEqual(len(rows), 7)
+            self.assertTrue(all(row["department"] == "ADMIN" for row in rows))
+            self.assertEqual(sum(row["section"] == "shipments" for row in rows), 1)
+            request_session["user_department"] = "Admissions"
+            self.assertEqual(department_my_actions([view], [bundle], None, {}), [])
+
+    def test_my_actions_renders_all_seven_section_blocks_using_control_tower_modals(self):
+        from unittest.mock import patch
+        from app.routes import MY_ACTION_SECTIONS
+        self.create_shipment_bundle_record(session_record=self.session_record)
+        client = self.login_client_for_user(self.create_my_actions_user("Management"))
+        def section_rows(views, *args, **kwargs):
+            view = next(view for view in views if view["session"].id == self.session_record.id)
+            return [{"id": section, "session": view["session"], "sessions": [view["session"]], "view": view,
+                "department": "MANAGEMENT", "description": "Pending " + label, "section": section, "section_label": label}
+                for section, label in MY_ACTION_SECTIONS.items()]
+        with patch("app.routes.department_my_actions", side_effect=section_rows):
+            response = client.get("/my-actions?session_year=2026")
+        self.assertEqual(response.status_code, 200)
+        html = response.get_data(as_text=True)
+        for section, label in MY_ACTION_SECTIONS.items():
+            self.assertIn(f'data-my-action-section="{section}"', html)
+            self.assertIn(f'<strong class="my-action-section-label">{label}</strong>', html)
+            flag = "sinapsis" if section == "sinapsis" else section
+            self.assertIn(f'data-modal-{flag}-only="true"', html)
+        self.assertIn(f'id="schedule-workflow-{self.session_record.id}"', html)
+        self.assertIn('data-my-actions-count>7</span>', html)
+
+    def test_my_actions_count_uses_current_profile_and_does_not_enable_journey_links(self):
+        self.session_record.monthly_registrations_closed = True
+        self.session_record.date_confirmation_status = "Confirmed"
+        share = ExamSessionJourneyShare(exam_session_id=self.session_record.id, audience="institution", token="disabled-for-count", is_enabled=False)
+        db.session.add(share)
+        db.session.commit()
+        client = self.login_client_for_user(self.create_my_actions_user("Finance"))
+        with client.session_transaction() as user_session:
+            user_session["user_department"] = "Management"
+        before = ExamSessionJourneyShare.query.count()
+        response = client.get("/my-actions/count?session_year=2026&department=Management")
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.headers["Cache-Control"], "no-store")
+        self.assertFalse(share.is_enabled)
+        self.assertEqual(ExamSessionJourneyShare.query.count(), before)
+        html = client.get("/my-actions?session_year=2026&department=Management").get_data(as_text=True)
+        table = html.split('<table class="control-tower-table my-actions-table">')[1].split('</table>')[0]
+        self.assertIn('>FINANCE</span>', table)
+        self.assertNotIn('>MANAGEMENT</span>', table)
+        self.assertEqual(response.get_json()["count"], table.count('data-my-action-section='))
+
+    def test_my_actions_requires_control_tower_permissions_and_respects_view_only(self):
+        denied = self.login_client_for_user(self.create_my_actions_user("Finance", can_edit=False, can_view=False))
+        self.assertEqual(denied.get("/my-actions").status_code, 403)
+        self.assertEqual(denied.get("/my-actions/count").status_code, 403)
+        readonly = self.login_client_for_user(self.create_my_actions_user("Logistics", can_edit=False))
+        self.assertEqual(readonly.get("/my-actions").status_code, 200)
+        self.assertEqual(readonly.post(f"/pre-session-control-tower/sessions/{self.session_record.id}/schedule",
+            data={"csrf_token": "token", "action_key": "start_preparation"}).status_code, 403)
+        public = self.app.test_client()
+        self.assertEqual(public.get("/my-actions").status_code, 302)
+        self.assertEqual(public.get("/my-actions/count").status_code, 302)
+
     def test_control_tower_concat_indicator_lists_whole_group_in_sessions_and_bundles(self):
         other, chained, standalone = self.create_concat_schedule_test_sessions()
         bundle = self.create_shipment_bundle_record(session_record=self.session_record)

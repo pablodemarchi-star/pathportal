@@ -272,7 +272,7 @@ MENU_PERMISSION_PATHS = (
     ("supervisor_certification", ("/supervisor-certification",)),
     ("internship_stages", ("/intern-stages",)),
     ("exam_session_planner", ("/exam-session-planner",)),
-    ("pre_session_control_tower", ("/pre-session-control-tower",)),
+    ("pre_session_control_tower", ("/pre-session-control-tower", "/my-actions")),
     ("path_session_journey", ("/path-session-journeys",)),
     ("monthly_exam_session_registrations", ("/monthly-exam-session-registrations",)),
     ("staff_payments", ("/staff-payments",)),
@@ -9992,8 +9992,13 @@ def bundle_detail_action_items(
     package_deadline_badge=None,
     sessions_logistics_action_mode=False,
     finance=None,
+    include_sections=False,
 ):
     actions = []
+
+    def tag(rows, section):
+        return [{**row, "section": section} for row in rows] if include_sections else rows
+
     schedule_overdue = deadline_badge_is_red(schedule_deadline_badge)
     staffing_overdue = deadline_badge_is_red(staffing_deadline_badge)
     logistics_overdue = deadline_badge_is_red(logistics_deadline_badge)
@@ -10017,6 +10022,7 @@ def bundle_detail_action_items(
             "overdue": schedule_overdue,
         })
 
+    actions = tag(actions, "schedule")
     staffing_contract = staffing_contract or {}
     open_position_actions = staffing_open_position_action_items(staffing_contract, overdue=staffing_overdue)
     actions.extend(open_position_actions)
@@ -10041,6 +10047,7 @@ def bundle_detail_action_items(
                 "overdue": staffing_overdue,
             })
 
+    actions = [row if "section" in row else {**row, "section": "staffing"} for row in actions] if include_sections else actions
     logistics = logistics or {}
     if sessions_logistics_action_mode:
         finance = finance or {}
@@ -10054,36 +10061,37 @@ def bundle_detail_action_items(
         finance_description = finance_descriptions.get(finance_state)
         finance_actions = [{"department": "FINANCE", "description": finance_description,
                             "preserve_period": True, "overdue": bool(finance.get("is_overdue"))}] if finance_description and schedule_preparation_unlocked else []
+        finance_actions = tag(finance_actions, "finance")
         logistics_status = logistics.get("status")
         logistics_unblocked = (logistics_gate or {}).get("is_unblocked")
         if logistics_status == "not_applicable":
-            return [{
+            return tag([{
                 "department": "",
                 "description": "Logistics is not needed for this session",
-            }] + finance_actions
+            }], "logistics") + finance_actions
         if not logistics_unblocked:
-            return [{
+            return tag([{
                 "department": "",
                 "description": "Staffing must be confirmed before proceeding with Logistics planning.",
                 "preserve_period": True,
-            }] + finance_actions
+            }], "logistics") + finance_actions
         if logistics_status == "not_started":
-            return [{
+            return tag([{
                 "department": "LOGISTICS",
                 "description": "Start Logistics planning",
                 "overdue": logistics_overdue,
-            }] + finance_actions
+            }], "logistics") + finance_actions
         if logistics_status == "in_progress":
-            return [{
+            return tag([{
                 "department": "LOGISTICS",
                 "description": "Continue with Logistics planning",
                 "overdue": logistics_overdue,
-            }] + finance_actions
+            }], "logistics") + finance_actions
         if logistics_status == "completed":
-            return [{
+            return tag([{
                 "department": "",
                 "description": "Logistics planning has been finalised",
-            }] + finance_actions
+            }], "logistics") + finance_actions
 
         actions.extend(finance_actions)
 
@@ -10101,7 +10109,7 @@ def bundle_detail_action_items(
             "description": "Session preparation finalised",
         })
 
-    return actions
+    return [row if "section" in row else {**row, "section": "packages"} for row in actions] if include_sections else actions
 
 
 def package_unit_view(package_unit, today=None):
@@ -13576,6 +13584,90 @@ def visible_department_chip_action_rows(bundle_views, pending_shipment_bundle, s
     return rows
 
 
+MY_ACTION_SECTIONS = {"shipments": "Shipment", "schedule": "Schedule", "staffing": "Staffing",
+                      "packages": "Package", "logistics": "Logistics", "finance": "Finance", "sinapsis": "Final checks"}
+
+
+def current_action_department():
+    user = getattr(g, "current_user", None)
+    return str(getattr(user, "department", None) or session.get("user_department") or "").strip().upper()
+
+
+def department_my_actions(schedule_views, bundle_views, pending_bundle, staffing_contracts, today=None):
+    department = current_action_department()
+    if department not in {"ADMIN", "FINANCE", "LOGISTICS", "MANAGEMENT"}:
+        return []
+    rows = []
+    seen = set()
+    views = {view["session"].id: view for view in schedule_views}
+    bundle_schedules = bundle_schedule_presentations([view["session"] for view in schedule_views])
+
+    def add(view, action, section, identity=None, sessions=None):
+        if section not in MY_ACTION_SECTIONS or str(action.get("department") or "").upper() != department:
+            return
+        if section == "schedule" and bundle_schedules[view["session"].id]["is_secondary"]:
+            return
+        description = action.get("description") or ""
+        key = identity or (view["session"].id, section, department, description)
+        if key in seen:
+            return
+        seen.add(key)
+        rows.append({"id": str(key), "session": view["session"], "sessions": sessions or [view["session"]], "view": view, "department": department,
+                     "description": description, "section": section, "section_label": MY_ACTION_SECTIONS[section],
+                     "overdue": bool(action.get("overdue")), "risk": bool(action.get("risk")),
+                     "preserve_period": bool(action.get("preserve_period"))})
+
+    for view in schedule_views:
+        record = view["session"]
+        for action in view.get("bundle_detail_actions", []):
+            add(view, action, action.get("section"))
+        session_actions = bundle_detail_action_items(view["status"], view["schedule_gate"], view["next_action"], view["responsible"],
+            monthly_registrations_closed=view["monthly_registrations_closed"], date_confirmation_confirmed=view["date_confirmation_confirmed"],
+            staffing_contract=staffing_contracts.get(record.id), staffing_control=view.get("staffing_control"),
+            logistics=view.get("logistics"), logistics_gate=view.get("logistics_gate"),
+            logistics_deadline_badge=view.get("logistics_deadline_badge"), finance=view.get("finance"),
+            sessions_logistics_action_mode=True, include_sections=True)
+        for action in session_actions:
+            if action.get("section") in {"logistics", "finance"}:
+                add(view, action, action["section"])
+        if not any(row["session"].id == record.id and row["section"] == "finance" for row in rows) and view["schedule_preparation_unlocked"]:
+            action = finance_action_contract(view.get("finance"))
+            if action:
+                add(view, {"department": action["responsible"], "description": action.get("description") or action["label"]}, "finance")
+        if (view.get("final_checks_gate") or {}).get("status") in {"unblocked", "semi_unblocked"}:
+            action = sinapsis_action_contract(view.get("sinapsis"))
+            if action:
+                add(view, {"department": action["responsible"], "description": action.get("description") or action["label"]}, "sinapsis")
+
+    # Shipment actions belong to the bundle: show each pending step once.
+    for bundle in bundle_views:
+        records = bundle.get("included_sessions") or []
+        view = next((views[record.id] for record in records if record.id in views), None)
+        if view:
+            for index, action in enumerate(bundle.get("action_items", [])):
+                add(view, action, "shipments", identity=("bundle", bundle["id"], index, department), sessions=records)
+    if pending_bundle:
+        for record in pending_bundle.get("session_records") or []:
+            if record.id in views:
+                add(views[record.id], {"department": "MANAGEMENT", "description": "Assign recipient to these exam sessions"}, "shipments")
+    return sorted(rows, key=lambda row: (row["session"].session_date or date.max,
+                  row["session"].exam_session_name.lower(), row["section_label"], row["description"]))
+
+
+def department_my_actions_signature(rows):
+    import hashlib
+    payload = [(
+        row["id"], row["description"], row["section"], row.get("overdue"), row.get("risk"), row["view"].get("status"),
+        (row["view"].get("staffing") or {}).get("status"),
+        ((row["view"].get("packages") or {}).get("preparation_status") or {}).get("status"),
+        (row["view"].get("logistics") or {}).get("status"),
+        (row["view"].get("finance") or {}).get("raw_status"),
+        (row["view"].get("sinapsis") or {}).get("status"),
+        ((row["view"].get("shipments") or {}).get("operational_status") or {}).get("status"),
+    ) for row in rows]
+    return hashlib.sha256(json.dumps(payload, ensure_ascii=False).encode()).hexdigest()
+
+
 def my_actions_summary(actions):
     summary = {
         "Needs review": 0,
@@ -15266,7 +15358,7 @@ def parse_schedule_deadline(value):
 
 def pre_session_control_tower_return_args(session_record, default_view="sessions"):
     requested_view = request.form.get("view", default_view) or default_view
-    if requested_view not in {"bundles", "sessions", "bundle"}:
+    if requested_view not in {"bundles", "sessions", "bundle", "my-actions", "department-actions"}:
         requested_view = default_view
     args = {
         "session_year": session_record.session_date.year,
@@ -15476,7 +15568,7 @@ def session_box_sealing_prerequisites_completed(session_record):
 
 def shipment_control_redirect(session_record, status_filter="", bundle_id=None, assisted_action_key=""):
     requested_view = request.form.get("view", "sessions") or "sessions"
-    if requested_view not in {"bundles", "sessions", "bundle"}:
+    if requested_view not in {"bundles", "sessions", "bundle", "my-actions", "department-actions"}:
         requested_view = "sessions"
     args = {
         "session_year": session_record.session_date.year,
@@ -17665,13 +17757,21 @@ def update_staff_payment(member_id, payment_year):
     })
 
 
+@staff_bp.route("/my-actions/count")
+@login_required
+def my_actions_count():
+    return pre_session_control_tower(_count_only=True)
+
+
+@staff_bp.route("/my-actions", endpoint="my_actions")
 @staff_bp.route("/pre-session-control-tower")
 @login_required
-def pre_session_control_tower():
+def pre_session_control_tower(_count_only=False):
     selected_year, session_years = selected_exam_session_year()
     staff_payment_next_payment_date = staff_payment_settings_values(staff_payment_settings())["next_payment_date"]
-    selected_view = request.args.get("view", "bundles").strip()
-    if selected_view not in {"bundles", "sessions", "bundle", "my-actions"}:
+    is_my_actions_page = request.endpoint in {"staff.my_actions", "staff.my_actions_count"} or request.args.get("view") == "department-actions"
+    selected_view = "department-actions" if is_my_actions_page else request.args.get("view", "bundles").strip()
+    if selected_view not in {"bundles", "sessions", "bundle", "my-actions", "department-actions"}:
         selected_view = "bundles"
     bundle_search_filter = request.args.get("bundle_q", "").strip()
     bundle_department_filter = request.args.get("bundle_department", "").strip().upper()
@@ -17727,7 +17827,7 @@ def pre_session_control_tower():
     status_filter = request.args.get("schedule_status", "").strip()
     if status_filter not in SCHEDULE_WORKFLOW_STATUSES:
         status_filter = ""
-    if selected_view in {"sessions", "bundle"}:
+    if selected_view in {"sessions", "bundle", "department-actions"}:
         status_filter = ""
     my_action_source_filter = request.args.get("action_source", "").strip()
     my_action_responsible_filter = request.args.get("action_responsible", "").strip()
@@ -17739,7 +17839,7 @@ def pre_session_control_tower():
     )
     today = pre_session_control_tower_today()
     now = pre_session_control_tower_now()
-    if selected_view in {"bundles", "sessions", "bundle"} and not request.args.get("open_schedule_modal"):
+    if selected_view in {"bundles", "sessions", "bundle", "my-actions", "department-actions"} and not request.args.get("open_schedule_modal"):
         reconcile_auto_shipment_bundles(sessions, today=today)
     session_ids = [session_record.id for session_record in sessions]
     sessions_by_id = {session_record.id: session_record for session_record in sessions}
@@ -18651,7 +18751,7 @@ def pre_session_control_tower():
             journey_shares=journey_share_views(
                 session_record,
                 journey_shares_by_session.get(session_record.id, {}),
-                ensure_institution=True,
+                ensure_institution=not _count_only,
                 created_by=session.get("user") if has_request_context() else None,
             ),
             staffing_rows=staffing_assignment_rows(
@@ -18661,7 +18761,7 @@ def pre_session_control_tower():
                 intern_assignments,
                 logistics_config=logistics_by_session.get(session_record.id),
                 next_payment_date=staff_payment_next_payment_date,
-            ),
+            ) if not _count_only else [],
             staffing_events=staffing_events_by_session.get(session_record.id, []),
             bundle_detail_actions=bundle_detail_action_items(
                 schedule_status,
@@ -18683,6 +18783,7 @@ def pre_session_control_tower():
                 package_deadline_badge=package_deadline_badge,
                 sessions_logistics_action_mode=selected_view == "sessions",
                 finance=finance_contract,
+                include_sections=True,
             ),
             schedule_locked_by_staffing=schedule_status == "Approved" and any(
                 normalize_participation_status(assignment.participation_status) != "Pending"
@@ -18690,6 +18791,14 @@ def pre_session_control_tower():
             ),
         ))
     all_schedule_views = list(schedule_views)
+    if is_my_actions_page:
+        department_rows = department_my_actions(all_schedule_views, all_bundle_views, pending_shipment_bundle,
+            staffing_contracts_by_session, today=today)
+        if _count_only:
+            response = jsonify({"count": len(department_rows), "signature": department_my_actions_signature(department_rows)})
+            response.headers["Cache-Control"] = "no-store"
+            return response
+
     concat_components = exam_session_concat_component_map()
     concat_names = dict(db.session.query(ExamSession.id, ExamSession.exam_session_name).all())
     concat_session_names_by_session = {
@@ -18877,6 +18986,10 @@ def pre_session_control_tower():
         view["session"].exam_session_name.lower(),
     ))
     modal_views = list(all_schedule_views if selected_view == "sessions" else schedule_views)
+    if is_my_actions_page:
+        action_session_ids = {row["session"].id for row in department_rows}
+        modal_views = [view for view in all_schedule_views if view["session"].id in action_session_ids]
+
     concat_components = exam_session_concat_component_map()
     concat_ids = set().union(*(concat_components.get(view["session"].id, set()) for view in modal_views)) if modal_views else set()
     concat_sessions = {
@@ -18909,7 +19022,10 @@ def pre_session_control_tower():
         selected_bundle=selected_bundle_view,
         summary=summary,
         selected_view=selected_view,
-        my_actions=filtered_my_actions,
+        my_actions=department_rows if is_my_actions_page else filtered_my_actions,
+        is_my_actions_page=is_my_actions_page,
+        department_actions_count=len(department_rows) if is_my_actions_page else None,
+        department_actions_signature=department_my_actions_signature(department_rows) if is_my_actions_page else "",
         my_actions_summary=my_actions_summary_counts,
         my_action_source_options=my_action_source_options,
         my_action_responsible_options=my_action_responsible_filter_options,

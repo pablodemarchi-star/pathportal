@@ -14070,3 +14070,31 @@ document.addEventListener("submit", (event) => {
   context.value = ["schedule", "packages", "logistics", "finance", "sinapsis"]
     .find((section) => modal?.classList.contains(`is-${section}-only`)) || "staffing";
 }, true);
+
+(() => {
+  const nav = document.querySelector("[data-my-actions-nav]");
+  if (!nav) return;
+  const page = document.querySelector("[data-my-actions-page]");
+  let busy = false;
+  const refresh = async () => {
+    if (busy || document.hidden) return;
+    busy = true;
+    try {
+      const url = new URL(nav.dataset.countUrl, window.location.origin);
+      const year = page?.dataset.sessionYear || new URLSearchParams(window.location.search).get("session_year");
+      if (year) url.searchParams.set("session_year", year);
+      const response = await fetch(url, {credentials: "same-origin", headers: {Accept: "application/json"}, cache: "no-store"});
+      if (!response.ok) return;
+      const result = await response.json();
+      nav.querySelector("[data-my-actions-count]").textContent = String(result.count);
+      if (page && page.dataset.signature !== result.signature && !document.querySelector('.modal[aria-hidden="false"]') && !document.activeElement?.matches("input, textarea, select")) {
+        window.location.reload();
+      }
+    } catch (_) {
+      // Keep the last displayed count until the next successful refresh.
+    } finally { busy = false; }
+  };
+  if (!page) refresh();
+  window.setInterval(refresh, 45000);
+  window.addEventListener("focus", refresh);
+})();

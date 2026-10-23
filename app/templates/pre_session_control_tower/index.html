@@ -280,6 +280,43 @@
   {% endif %}
 {%- endmacro %}
 
+{% macro shipment_bundle_table_cell(bundle) -%}
+                <span class="shipment-summary-cell">
+                  {% if bundle.blocked %}
+                    <span class="shipment-gate-chip shipment-gate-blocked" aria-label="Shipment bundle blocked">
+                      <svg viewBox="0 0 24 24" aria-hidden="true">
+                        <rect x="5" y="10" width="14" height="10" rx="2"></rect>
+                        <path d="M8 10V7a4 4 0 0 1 8 0v3"></path>
+                      </svg>
+                      BLOCKED
+                    </span>
+                  {% elif bundle.semi_unblocked %}
+                    <span class="shipment-gate-chip shipment-gate-semi-unblocked" aria-label="Shipment bundle semi-unblocked">
+                      <svg viewBox="0 0 24 24" aria-hidden="true">
+                        <rect x="5" y="10" width="14" height="10" rx="2"></rect>
+                        <path d="M8 10V7a4 4 0 0 1 7.4-2.1"></path>
+                      </svg>
+                      SEMI-UNBLOCKED
+                    </span>
+                  {% elif bundle.completed %}
+                    <span class="badge shipment-status-{{ bundle.display_status|lower|replace(' ', '-')|replace('_', '-') }}">{{ bundle.display_status }}</span>
+	                  {% else %}
+	                    <span class="shipment-gate-chip shipment-gate-unblocked" aria-label="Shipment bundle unblocked">
+	                      <svg viewBox="0 0 24 24" aria-hidden="true">
+	                        <rect x="5" y="10" width="14" height="10" rx="2"></rect>
+	                        <path d="M8 10V7a4 4 0 0 1 8 0"></path>
+	                      </svg>
+	                      UNBLOCKED
+	                    </span>
+	                  {% endif %}
+	                  {{ shipment_status_badge(bundle.operational_status) }}
+                  <strong>{{ bundle.packages_label }}</strong>
+                  {% if bundle.deadline_badge %}
+                    <span class="shipment-deadline-chip shipment-deadline-{{ bundle.deadline_badge.status }}" title="{{ bundle.deadline_badge.label }}" aria-label="{{ bundle.deadline_badge.label }}: {{ bundle.deadline_badge.date|session_date }}">Deadline {{ bundle.deadline_badge.date|session_date }}</span>
+                  {% endif %}
+                </span>
+{%- endmacro %}
+
 {% macro shipment_table_cell(shipment, planning=None) -%}
   <span class="shipment-summary-cell">
     {{ shipment_status_badge(shipment) }}
@@ -1344,14 +1381,14 @@
   </section>
 {%- endmacro %}
 
-{% block title %}Pre onsite session control tower | Path Examinations{% endblock %}
+{% block title %}{{ 'My actions' if is_my_actions_page else 'Pre onsite session control tower' }} | Path Examinations{% endblock %}
 
 {% block content %}
 <header class="page-header">
   <div>
     <p class="eyebrow">Pre onsite session control tower</p>
-    <h1>Pre onsite session control tower</h1>
-    <p>Control schedule preparation, review and approval for each exam session.</p>
+    <h1>{{ 'My actions (' ~ department_actions_count ~ ')' if is_my_actions_page else 'Pre onsite session control tower' }}</h1>
+    <p>{{ 'Pending actions for your department: ' ~ current_user_department if is_my_actions_page else 'Control schedule preparation, review and approval for each exam session.' }}</p>
   </div>
 </header>
 
@@ -1487,6 +1524,8 @@
     </details>
   </div>
 </section>
+{% elif is_my_actions_page %}
+<div data-my-actions-page data-signature="{{ department_actions_signature }}" data-count="{{ department_actions_count }}" data-session-year="{{ selected_session_year }}"></div>
 {% elif selected_view == 'my-actions' %}
 <section class="toolbar pre-session-my-actions-filters-toolbar">
   <form method="get" class="filters pre-session-my-actions-filters" data-auto-filter>
@@ -1621,7 +1660,7 @@
 <section class="year-toolbar" aria-label="Pre onsite session control tower years">
   <div class="year-tabs">
     {% for year_item in session_years %}
-      <a class="year-tab {% if year_item.year == selected_session_year %}active{% endif %}" href="{{ url_for('staff.pre_session_control_tower', session_year=year_item.year, view=selected_view, schedule_status=selected_schedule_status, action_source=selected_my_action_source, action_responsible=selected_my_action_responsible, action_status=selected_my_action_status) }}">{{ year_item.year }}</a>
+      <a class="year-tab {% if year_item.year == selected_session_year %}active{% endif %}" href="{{ url_for('staff.my_actions' if is_my_actions_page else 'staff.pre_session_control_tower', session_year=year_item.year, view=selected_view, schedule_status=selected_schedule_status, action_source=selected_my_action_source, action_responsible=selected_my_action_responsible, action_status=selected_my_action_status) }}">{{ year_item.year }}</a>
     {% endfor %}
   </div>
   <form method="post" action="{{ url_for('staff.archive_exam_session_year', year=selected_session_year) }}" data-confirm-submit="Archive {{ selected_session_year }}? This year will be hidden but its information will be preserved.">
@@ -1632,10 +1671,12 @@
 </section>
 {% endif %}
 
+{% if not is_my_actions_page %}
 <nav class="control-tower-view-tabs" aria-label="Pre onsite session control tower views">
   <a class="control-tower-view-tab {% if selected_view == 'bundles' %}active{% endif %}" href="{{ url_for('staff.pre_session_control_tower', session_year=selected_session_year, view='bundles') }}">Bundles</a>
   <a class="control-tower-view-tab {% if selected_view == 'sessions' %}active{% endif %}" href="{{ url_for('staff.pre_session_control_tower', session_year=selected_session_year, view='sessions', schedule_status=selected_schedule_status) }}">Sessions</a>
 </nav>
+{% endif %}
 
 {% if selected_view == 'bundles' %}
 <section class="table-wrap control-tower-table-wrap bundles-table-wrap" aria-label="Shipment bundles">
@@ -1686,40 +1727,7 @@
             {% set bundle_modal_session = bundle.included_sessions[0] if bundle.included_sessions else none %}
             {% if bundle_modal_session %}
               <button class="contextual-cell-trigger" type="button" data-open-modal="schedule-workflow-{{ bundle_modal_session.id }}" data-modal-scroll-target="shipments-{{ bundle_modal_session.id }}" data-modal-target-label="Track shipment" data-modal-shipments-only="true" aria-label="Track shipment for Bundle {{ bundle.number }}">
-                <span class="shipment-summary-cell">
-                  {% if bundle.blocked %}
-                    <span class="shipment-gate-chip shipment-gate-blocked" aria-label="Shipment bundle blocked">
-                      <svg viewBox="0 0 24 24" aria-hidden="true">
-                        <rect x="5" y="10" width="14" height="10" rx="2"></rect>
-                        <path d="M8 10V7a4 4 0 0 1 8 0v3"></path>
-                      </svg>
-                      BLOCKED
-                    </span>
-                  {% elif bundle.semi_unblocked %}
-                    <span class="shipment-gate-chip shipment-gate-semi-unblocked" aria-label="Shipment bundle semi-unblocked">
-                      <svg viewBox="0 0 24 24" aria-hidden="true">
-                        <rect x="5" y="10" width="14" height="10" rx="2"></rect>
-                        <path d="M8 10V7a4 4 0 0 1 7.4-2.1"></path>
-                      </svg>
-                      SEMI-UNBLOCKED
-                    </span>
-                  {% elif bundle.completed %}
-                    <span class="badge shipment-status-{{ bundle.display_status|lower|replace(' ', '-')|replace('_', '-') }}">{{ bundle.display_status }}</span>
-	                  {% else %}
-	                    <span class="shipment-gate-chip shipment-gate-unblocked" aria-label="Shipment bundle unblocked">
-	                      <svg viewBox="0 0 24 24" aria-hidden="true">
-	                        <rect x="5" y="10" width="14" height="10" rx="2"></rect>
-	                        <path d="M8 10V7a4 4 0 0 1 8 0"></path>
-	                      </svg>
-	                      UNBLOCKED
-	                    </span>
-	                  {% endif %}
-	                  {{ shipment_status_badge(bundle.operational_status) }}
-                  <strong>{{ bundle.packages_label }}</strong>
-                  {% if bundle.deadline_badge %}
-                    <span class="shipment-deadline-chip shipment-deadline-{{ bundle.deadline_badge.status }}" title="{{ bundle.deadline_badge.label }}" aria-label="{{ bundle.deadline_badge.label }}: {{ bundle.deadline_badge.date|session_date }}">Deadline {{ bundle.deadline_badge.date|session_date }}</span>
-                  {% endif %}
-                </span>
+                {{ shipment_bundle_table_cell(bundle) }}
               </button>
             {% else %}
               <span class="shipment-summary-cell">
@@ -1749,7 +1757,53 @@
     </tbody>
   </table>
 </section>
-{% elif selected_view == 'my-actions' %}
+{% elif is_my_actions_page %}
+<section class="table-wrap control-tower-table-wrap my-actions-workspace" aria-label="My actions">
+  <table class="control-tower-table my-actions-table">
+    <thead><tr><th>Exam session</th><th>Department</th><th>Action description</th><th>Section</th></tr></thead>
+    <tbody>
+      {% for action in my_actions %}
+        {% set view = action.view %}
+        {% set session = action.session %}
+        <tr data-my-action-section="{{ action.section }}" data-my-action-session="{{ session.id }}">
+          <td>{% for row_session in action.sessions %}<span class="shipment-summary-cell bundle-session-name-cell control-tower-session-name-cell">
+            <strong>{{ row_session.exam_session_name }}</strong>
+            {{ session_concat_indicator(row_session.id) }}
+            <small class="bundle-session-date">{{ row_session.session_date|session_date }}</small>
+          </span>{% endfor %}</td>
+          <td>{{ bundle_detail_departments_cell([action]) }}</td>
+          <td>{{ bundle_detail_action_descriptions_cell([action]) }}</td>
+          <td>
+            {% set target = 'schedule-actions' if action.section == 'schedule' else action.section %}
+            {% call contextual_cell_trigger(session, target, 'Manage ' ~ action.section_label,
+                schedule_only=action.section == 'schedule', staffing_only=action.section == 'staffing',
+                packages_only=action.section == 'packages', shipments_only=action.section == 'shipments',
+                logistics_only=action.section == 'logistics', finance_only=action.section == 'finance', sinapsis_only=action.section == 'sinapsis') %}
+              <strong class="my-action-section-label">{{ action.section_label }}</strong>
+              {% if action.section == 'schedule' %}
+                {{ schedule_table_cell(view.status, view.schedule_gate, view.review_round, view.schedule_preparation_unlocked, view.deadline_badge, view.schedule_auto_confirmed) }}
+              {% elif action.section == 'staffing' %}
+                {{ staffing_table_cell(view.staffing, view.schedule_gate, false, view.staffing_deadline_badge, true) }}
+              {% elif action.section == 'packages' %}
+                {{ packages_table_cell(view.packages.contract, view.packages.schedule_ready, view.packages.staffing_ready, false, view.packages.preparation_status, view.packages.deadline_badge) }}
+              {% elif action.section == 'shipments' %}
+                {% if view.shipments.bundle_view %}{{ shipment_bundle_table_cell(view.shipments.bundle_view) }}{% else %}{{ shipment_table_cell(view.shipments.contract, view.shipments.planning) }}{% endif %}
+              {% elif action.section == 'logistics' %}
+                {{ logistics_table_cell(view.logistics, view.logistics_gate, false, view.logistics_deadline_badge) }}
+              {% elif action.section == 'finance' %}
+                {{ finance_table_cell(view.finance, false, view.schedule_preparation_unlocked) }}
+              {% elif action.section == 'sinapsis' %}
+                {{ final_checks_table_cell(view, false) }}
+              {% endif %}
+            {% endcall %}
+          </td>
+        </tr>
+      {% else %}
+        <tr><td colspan="4" class="empty-state">No pending actions for your department.</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</section>{% elif selected_view == 'my-actions' %}
 <section class="table-wrap control-tower-table-wrap" aria-label="My actions">
   <table class="control-tower-table my-actions-table">
     <thead>

@@ -4,7 +4,7 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>{% block title %}Path Examinations Internal App{% endblock %}</title>
-    <link rel="stylesheet" href="{{ url_for('static', filename='css/styles.css', v='20261022-control-tower-concat-indicator-2') }}">
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/styles.css', v='20261023-my-actions-2') }}">
   </head>
   <body>
     <div class="app-shell {% if request.args.get('session_fullscreen') == '1' %}session-fullscreen-shell{% endif %}">
@@ -22,6 +22,12 @@
             </svg>
             <span>Dashboard</span>
           </a>
+          {% if user_can_view('pre_session_control_tower') %}
+          <a class="nav-link standalone-nav-link {% if request.endpoint == 'staff.my_actions' or is_my_actions_page %}active{% endif %}" href="{{ url_for('staff.my_actions') }}" data-my-actions-nav data-count-url="{{ url_for('staff.my_actions_count') }}">
+            <svg class="nav-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M8 4h12v17H4V4h4M9 2h6v4H9z"/><path d="m8 12 2 2 5-5M8 18h8"/></svg>
+            <span>My actions (<span data-my-actions-count>{{ department_actions_count if department_actions_count is defined and department_actions_count is not none else '…' }}</span>)</span>
+          </a>
+          {% endif %}
             {% if user_can_view('potential_entries') %}
             <a class="nav-link standalone-nav-link {% if request.endpoint in ['staff.potential_entries', 'staff.create_potential_entry', 'staff.update_potential_entry', 'staff.update_potential_interview_invitation_sent', 'staff.add_potential_cv_review_note', 'staff.save_potential_cv_review', 'staff.delete_potential_cv_review_note', 'staff.reject_potential_cv_review', 'staff.proceed_potential_cv_review', 'staff.reject_potential_entry', 'staff.delete_rejected_potential_entry', 'staff.accept_potential_entry', 'staff.save_potential_acceptance_draft', 'staff.add_potential_note'] %}active{% endif %}" href="{{ url_for('staff.potential_entries') }}">
               <svg class="nav-icon" viewBox="0 0 24 24" aria-hidden="true">
@@ -105,7 +111,7 @@
           </a>
           {% endif %}
           {% if user_can_view('pre_session_control_tower') %}
-          <a class="nav-link standalone-nav-link {% if request.endpoint in ['staff.pre_session_control_tower', 'staff.update_schedule_workflow'] %}active{% endif %}" href="{{ url_for('staff.pre_session_control_tower') }}">
+          <a class="nav-link standalone-nav-link {% if request.endpoint in ['staff.pre_session_control_tower', 'staff.update_schedule_workflow'] and not is_my_actions_page %}active{% endif %}" href="{{ url_for('staff.pre_session_control_tower') }}">
             <svg class="nav-icon" viewBox="0 0 24 24" aria-hidden="true">
               <path d="M4 5h16v14H4z" />
               <path d="M8 9h8" />
@@ -218,6 +224,6 @@
         {% block content %}{% endblock %}
       </main>
     </div>
-    <script src="{{ url_for('static', filename='js/app.js', v='20261022-control-tower-concat-indicator-2') }}"></script>
+    <script src="{{ url_for('static', filename='js/app.js', v='20261023-my-actions-2') }}"></script>
   </body>
 </html>
