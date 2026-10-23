@@ -1248,6 +1248,64 @@ class ScheduleWorkflowTest(unittest.TestCase):
         db.session.commit()
         return user
 
+    def test_sent_for_review_has_no_internal_department_and_is_not_a_my_actions_task(self):
+        self.session_record.monthly_registrations_closed = True
+        self.session_record.date_confirmation_status = "Confirmed"
+        db.session.add_all([
+            ExamSessionScheduleWorkflow(exam_session_id=self.session_record.id, status="Sent for review"),
+            ExamSessionSupervisorAssignment(exam_session_id=self.session_record.id, participation_status="Pending"),
+        ])
+        db.session.commit()
+        bundle = self.create_shipment_bundle_record(session_record=self.session_record)
+        client = self.login_client_for_user(self.create_my_actions_user("Admin"))
+        html = client.get(f"/pre-session-control-tower?session_year=2026&view=bundle&bundle_id={bundle.id}").get_data(as_text=True)
+        table = html.split('<tbody>')[1].split('</tbody>')[0]
+        self.assertIn("Awaiting exam centre approval", table)
+        self.assertIn('<span class="muted">-</span>', table)
+        for department in ["Admin", "Management"]:
+            user_client = client if department == "Admin" else self.login_client_for_user(self.create_my_actions_user(department))
+            html = user_client.get("/my-actions?session_year=2026").get_data(as_text=True)
+            self.assertNotIn('data-my-action-section="schedule"', html)
+            if department == "Management":
+                self.assertIn('data-my-action-section="staffing"', html)
+        actions = bundle_detail_action_items("Sent for review", {"is_ready": False}, "Review manually", "ADMIN",
+            monthly_registrations_closed=False, date_confirmation_confirmed=True, include_sections=True)
+        schedule_actions = [action for action in actions if action["section"] == "schedule"]
+        self.assertEqual(schedule_actions, [{"department": "", "description": "Awaiting exam centre approval", "section": "schedule"}])
+
+    def test_my_actions_groups_staffing_descriptions_and_department_tags_in_one_row(self):
+        self.session_record.exam_session_name = "Connect Inglés Online 2026"
+        self.session_record.monthly_registrations_closed = True
+        self.session_record.date_confirmation_status = "Confirmed"
+        supervisor = ExamSessionSupervisorAssignment(exam_session_id=self.session_record.id, participation_status="Pending")
+        examiner = ExamSessionExaminerAssignment(exam_session_id=self.session_record.id, participation_status="Pending")
+        db.session.add_all([supervisor, examiner, ExamSessionScheduleWorkflow(exam_session_id=self.session_record.id, status="In progress")])
+        db.session.commit()
+        client = self.login_client_for_user(self.create_my_actions_user("Management"))
+        url = "/my-actions?session_year=2026"
+        html = client.get(url).get_data(as_text=True)
+        rows = re.findall(r'<tr data-my-action-section="staffing"[^>]*>.*?</tr>', html, re.S)
+        self.assertEqual(len(rows), 1)
+        row = rows[0]
+        self.assertEqual(row.count("Connect Inglés Online 2026"), 2)  # Session name and button accessible label.
+        self.assertEqual(row.count('>MANAGEMENT</span>'), 2)
+        self.assertEqual(row.count("1 Examiner position still needs to be filled"), 1)
+        self.assertEqual(row.count("1 Supervisor position still needs to be filled"), 1)
+        self.assertEqual(row.count('class="my-action-section-label">Staffing</strong>'), 1)
+        self.assertIn('data-my-action-section="schedule"', html)
+        before = client.get("/my-actions/count?session_year=2026").get_json()
+        db.session.delete(supervisor)
+        db.session.commit()
+        after = client.get("/my-actions/count?session_year=2026").get_json()
+        self.assertEqual(after["count"], before["count"] - 1)
+        self.assertNotEqual(before["signature"], after["signature"])
+        html = client.get(url).get_data(as_text=True)
+        rows = re.findall(r'<tr data-my-action-section="staffing"[^>]*>.*?</tr>', html, re.S)
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0].count('>MANAGEMENT</span>'), 1)
+        self.assertIn("1 Examiner position still needs to be filled", rows[0])
+        self.assertNotIn("1 Supervisor position still needs to be filled", rows[0])
+
     def test_department_my_actions_filters_count_and_shared_schedule_handoff(self):
         self.session_record.monthly_registrations_closed = True
         self.session_record.date_confirmation_status = "Confirmed"

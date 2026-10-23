@@ -1771,8 +1771,8 @@
             {{ session_concat_indicator(row_session.id) }}
             <small class="bundle-session-date">{{ row_session.session_date|session_date }}</small>
           </span>{% endfor %}</td>
-          <td>{{ bundle_detail_departments_cell([action]) }}</td>
-          <td>{{ bundle_detail_action_descriptions_cell([action]) }}</td>
+          <td>{{ bundle_detail_departments_cell(action.actions|default([action])) }}</td>
+          <td>{{ bundle_detail_action_descriptions_cell(action.actions|default([action])) }}</td>
           <td>
             {% set target = 'schedule-actions' if action.section == 'schedule' else action.section %}
             {% call contextual_cell_trigger(session, target, 'Manage ' ~ action.section_label,

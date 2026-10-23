@@ -10009,18 +10009,24 @@ def bundle_detail_action_items(
         monthly_registrations_closed,
         date_confirmation_confirmed or schedule_workflow_started,
     )
-    if blocker_message:
+    if schedule_status == "Sent for review":
         actions.append({
-            "department": "ADMIN",
-            "description": blocker_message,
+            "department": "",
+            "description": "Awaiting exam centre approval",
         })
+    else:
+        if blocker_message:
+            actions.append({
+                "department": "ADMIN",
+                "description": blocker_message,
+            })
 
-    if schedule_preparation_unlocked and not (schedule_gate or {}).get("is_ready"):
-        actions.append({
-            "department": schedule_responsible or "MANAGEMENT",
-            "description": schedule_next_action or "Complete schedule preparation and approval.",
-            "overdue": schedule_overdue,
-        })
+        if schedule_preparation_unlocked and not (schedule_gate or {}).get("is_ready"):
+            actions.append({
+                "department": schedule_responsible or "MANAGEMENT",
+                "description": schedule_next_action or "Complete schedule preparation and approval.",
+                "overdue": schedule_overdue,
+            })
 
     actions = tag(actions, "schedule")
     staffing_contract = staffing_contract or {}
@@ -13650,14 +13656,25 @@ def department_my_actions(schedule_views, bundle_views, pending_bundle, staffing
         for record in pending_bundle.get("session_records") or []:
             if record.id in views:
                 add(views[record.id], {"department": "MANAGEMENT", "description": "Assign recipient to these exam sessions"}, "shipments")
-    return sorted(rows, key=lambda row: (row["session"].session_date or date.max,
-                  row["session"].exam_session_name.lower(), row["section_label"], row["description"]))
+    grouped = {}
+    for row in rows:
+        key = (row["session"].id, row["department"], row["section"])
+        action = {field: row[field] for field in ("description", "department", "overdue", "risk", "preserve_period")}
+        if key not in grouped:
+            grouped[key] = {**row, "id": str(key), "actions": []}
+        grouped[key]["actions"].append(action)
+    return sorted(grouped.values(), key=lambda row: (row["session"].session_date or date.max,
+                  row["session"].exam_session_name.lower(), row["section_label"]))
+
+
+def department_my_actions_count(rows):
+    return sum(len(row.get("actions", [row])) for row in rows)
 
 
 def department_my_actions_signature(rows):
     import hashlib
     payload = [(
-        row["id"], row["description"], row["section"], row.get("overdue"), row.get("risk"), row["view"].get("status"),
+        row["id"], row.get("actions", [row["description"]]), row["section"], row.get("overdue"), row.get("risk"), row["view"].get("status"),
         (row["view"].get("staffing") or {}).get("status"),
         ((row["view"].get("packages") or {}).get("preparation_status") or {}).get("status"),
         (row["view"].get("logistics") or {}).get("status"),
@@ -18795,7 +18812,7 @@ def pre_session_control_tower(_count_only=False):
         department_rows = department_my_actions(all_schedule_views, all_bundle_views, pending_shipment_bundle,
             staffing_contracts_by_session, today=today)
         if _count_only:
-            response = jsonify({"count": len(department_rows), "signature": department_my_actions_signature(department_rows)})
+            response = jsonify({"count": department_my_actions_count(department_rows), "signature": department_my_actions_signature(department_rows)})
             response.headers["Cache-Control"] = "no-store"
             return response
 
@@ -19024,7 +19041,7 @@ def pre_session_control_tower(_count_only=False):
         selected_view=selected_view,
         my_actions=department_rows if is_my_actions_page else filtered_my_actions,
         is_my_actions_page=is_my_actions_page,
-        department_actions_count=len(department_rows) if is_my_actions_page else None,
+        department_actions_count=department_my_actions_count(department_rows) if is_my_actions_page else None,
         department_actions_signature=department_my_actions_signature(department_rows) if is_my_actions_page else "",
         my_actions_summary=my_actions_summary_counts,
         my_action_source_options=my_action_source_options,
