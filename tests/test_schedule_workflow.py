@@ -1103,6 +1103,8 @@ class ScheduleWorkflowTest(unittest.TestCase):
         other.exam_session_name = "Colegio Nuestra Señora de La Salette"
         members = [self.create_supervisor(staff_id=i, name=f"Member {i}") for i in range(1, 8)]
         members[1].dietary_requirements = "Gluten-free"
+        members[5].dietary_requirements = "Emergency contact dietary requirement"
+        members[6].dietary_requirements = "Remote supervisor dietary requirement"
         other.emergency_contact_member_id = members[5].id
         db.session.add_all([
             ExamSessionSupervisorAssignment(exam_session_id=self.session_record.id, team_member_id=members[0].id),
@@ -1124,7 +1126,10 @@ class ScheduleWorkflowTest(unittest.TestCase):
                 self.assertEqual(cards[other.id]["status"]["status"], "Confirmed")
                 self.assertEqual(cards[self.session_record.id]["status"]["status"], "In progress")
                 self.assertEqual(cards[other.id]["summary"]["dietary_requirements"], ["Gluten-free"])
+                self.assertEqual(cards[other.id]["summary"]["dietary_count"], 1)
                 html = render_template("pre_session_control_tower/session_journey.html", journey=journey, share=None)
+                self.assertNotIn("Emergency contact dietary requirement", html)
+                self.assertNotIn("Remote supervisor dietary requirement", html)
                 self.assertEqual(html.count('data-staff-session-id='), 3)
                 self.assertIn('--journey-staff-columns: 3;', html)
                 for record in [self.session_record, other, chained]:

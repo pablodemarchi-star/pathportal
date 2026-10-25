@@ -14365,14 +14365,7 @@ def journey_staff_summary(session_record=None, supervisor_assignments=None, exam
         if not emergency_contact_member_id
         or getattr(assignment, "team_member_id", None) != emergency_contact_member_id
     )
-    dietary_assignments = [
-        assignment
-        for assignment in (
-            list(supervisor_assignments or [])
-            + list(examiner_assignments or [])
-            + list(intern_assignments or [])
-        )
-    ]
+    dietary_assignments = counted_assignments
     dietary_requirements = []
     dietary_member_count = 0
     seen_requirements = set()
