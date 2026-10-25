@@ -9933,6 +9933,22 @@ assert.equal(portal.closed,true);
         result = subprocess.run(['node', '-e', prefix + shared + suffix], capture_output=True, text=True)
         self.assertEqual(result.returncode, 0, result.stderr)
 
+    def test_staff_official_confirmation_accepts_configured_zero_remote_supervisor_fee(self):
+        from app.routes import staffing_official_confirmation_email_payload
+        assignment = ExamSessionSupervisorAssignment(is_remote=True, role_fee='ARS 0', role_fee_currency='ARS')
+        payload = staffing_official_confirmation_email_payload(self.session_record, 'Supervisor (remote)', assignment=assignment)
+        self.assertEqual(payload['total_fee'], 'ARS 0')
+        self.assertTrue(payload['is_remote'])
+        result = self.build_staff_official_confirmation_email(self.official_confirmation_base_payload(
+            total_fee=payload['total_fee'], is_remote=True))
+        self.assertNotIn('error', result)
+        self.assertIn('ARS 0', result['html'])
+        assignment.role_fee = None
+        missing = staffing_official_confirmation_email_payload(self.session_record, 'Supervisor (remote)', assignment=assignment)
+        self.assertEqual(missing['total_fee'], '-')
+        result = self.build_staff_official_confirmation_email(self.official_confirmation_base_payload(total_fee=missing['total_fee']))
+        self.assertEqual(result['error'], 'Total fee is required for official confirmation emails.')
+
     def test_staff_official_confirmation_email_validations(self):
         online = self.build_staff_official_confirmation_email(self.official_confirmation_base_payload(format="Online"))
         missing_time = self.build_staff_official_confirmation_email(self.official_confirmation_base_payload(time_ranges=[]))
@@ -21562,6 +21578,37 @@ assert.equal(storage.size, 0);
         self.assertEqual(unrelated.team_member_id, other.id)
         self.assertNotIn('data-staff-session-payload', client.get('/my-exam-sessions/decline-staff-token').get_data(as_text=True))
 
+    def test_confirmed_remote_supervisor_moves_to_remote_supervision_section(self):
+        from app.models import StaffExamSessionsShare, StaffExamSessionSubmission
+        member = AcademicStaff(id=934, status='Active', full_name='Remote Supervisor', roles='Supervisor')
+        db.session.add(member)
+        db.session.flush()
+        share = StaffExamSessionsShare(person_ref=str(member.id), token='remote-confirmation-test')
+        assignment = ExamSessionSupervisorAssignment(exam_session_id=self.session_record.id, team_member_id=member.id,
+                                                     is_remote=True, participation_status='Official confirmation sent')
+        db.session.add_all([share, assignment])
+        db.session.flush()
+        db.session.add(StaffExamSessionSubmission(share_id=share.id, exam_session_id=self.session_record.id,
+                       assignment_type='supervisor', assignment_id=assignment.id))
+        db.session.commit()
+        client = self.app.test_client()
+        url = '/my-exam-sessions/remote-confirmation-test'
+        html = client.get(url).get_data(as_text=True)
+        self.assertNotIn('id="remote-sessions-title"', html)
+        payload = json.loads(re.search(r"data-staff-session-payload='([^']+)'", html).group(1))
+        response = client.post(payload['confirmation_url'], data={'csrf_token': payload['confirmation_csrf']})
+        self.assertEqual(response.status_code, 303)
+        html = client.get(response.headers['Location']).get_data(as_text=True)
+        regular = html.split('aria-labelledby="submitted-sessions-title"', 1)[1].split('</section>', 1)[0]
+        remote = html.split('aria-labelledby="remote-sessions-title"', 1)[1].split('</section>', 1)[0]
+        self.assertNotIn(self.session_record.exam_session_name, regular)
+        self.assertIn('Your exam sessions as Remote supervisor', remote)
+        self.assertIn(self.session_record.exam_session_name, remote)
+        self.assertIn('Remote supervisor', remote)
+        self.assertIn('Access session details', remote)
+        self.assertLess(html.index('id="submitted-sessions-title"'), html.index('id="remote-sessions-title"'))
+        self.assertIn('Your exam session fees', html)
+
     def test_staff_page_confirmation_updates_staffing_and_moves_chip_to_confirmed(self):
         from app.models import StaffExamSessionsShare, StaffExamSessionSubmission
         person = AcademicStaff(id=821, status="Active", full_name="Confirming Staff", roles="Examiner, Supervisor, Intern")
@@ -21616,7 +21663,14 @@ assert.equal(storage.size, 0);
         self.assertIn('role-examiner', confirmed)
         self.assertIn('role-supervisor', confirmed)
         self.assertIn('role-intern', confirmed)
-        self.assertIn('role-emergency_contact', confirmed)
+        self.assertNotIn('role-emergency_contact', confirmed)
+        emergency_section = html.split('aria-labelledby="emergency-sessions-title"', 1)[1].split('</section>', 1)[0]
+        self.assertIn('Your exam sessions as Emergency contact', emergency_section)
+        self.assertIn(self.session_record.exam_session_name, emergency_section)
+        self.assertIn('role-emergency_contact', emergency_section)
+        self.assertNotIn('role-examiner', emergency_section)
+        self.assertIn('Access session details', emergency_section)
+        self.assertLess(html.index('id="submitted-sessions-title"'), html.index('id="emergency-sessions-title"'))
         self.assertNotIn('staff-exam-session-chip', confirmed)
         self.assertNotIn('data-staff-response-actions', html)
         self.assertIn('Participation confirmed', html)

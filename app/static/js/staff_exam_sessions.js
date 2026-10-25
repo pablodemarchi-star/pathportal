@@ -44,7 +44,9 @@
         : officialMaterialRows(role, data).filter(([title]) =>
           (!title.includes("Back-up material for examiners")
             || (role === "Supervisor" && data.participation_confirmed))
-          && !(role === "Examiner" && title.includes("Material for examiners")));
+          && !(role === "Examiner" && title.includes("Material for examiners"))
+          && !(role === "Supervisor" && data.is_remote
+            && (title.includes("Supervisor guidelines") || title.includes("Exam box shipment"))));
       rows.forEach(([title, description, url]) => {
         const item = make("div", "staff-detail-material");
         item.append(make("h4", "", title), make("p", "", description));
@@ -56,6 +58,7 @@
       const duties = role === "Emergency contact" ? {
         title: "Your responsibilities",
         items: ["Remain available and monitor your phone throughout the session, particularly at the beginning and end.",
+          "You may receive a call from the Supervisor, or the Exam centre may contact Path via the official Path WhatsApp number.",
           "Be reachable from 50 minutes before the scheduled start, when the Supervisor arrives at the venue.",
           "Respond to, assess and help resolve operational situations using sound judgement and providing appropriate justification for your decisions or guidance."]
       } : ["Supervisor", "Examiner"].includes(role) ? null : officialFinalInstructions(role);

@@ -6,7 +6,7 @@
   <div class="staff-detail-content">
     {% for detail in session_details[exam_session.id] %}
     <article class="staff-detail-assignment" data-staff-session-payload='{{ detail|tojson }}'>
-      <div class="staff-detail-intro"><div class="staff-detail-invited-role"><span>You have been assigned as</span><strong>{{ detail.role }}{% if detail.is_remote %} (remote){% endif %}</strong></div><span class="staff-detail-pending{% if detail.participation_confirmed %} is-confirmed{% endif %}">{{ 'Participation confirmed' if detail.participation_confirmed else 'Awaiting your confirmation' }}</span></div>
+      <div class="staff-detail-intro"><div class="staff-detail-invited-role"><span>You have been assigned as</span><strong>{% if detail.role == 'Supervisor' and detail.is_remote %}Remote supervisor{% else %}{{ detail.role }}{% endif %}</strong></div><span class="staff-detail-pending{% if detail.participation_confirmed %} is-confirmed{% endif %}">{{ 'Participation confirmed' if detail.participation_confirmed else 'Awaiting your confirmation' }}</span></div>
       <section class="staff-detail-summary" aria-label="Session at a glance">
         <div><span>Date</span><strong>{{ detail.session_date }}</strong></div>
         <div><span>Your time range · GMT-3</span><strong>{{ detail.time_ranges|join(' / ') or 'To be confirmed' }}</strong><small data-staff-arrival></small></div>
@@ -28,11 +28,12 @@
         <section class="staff-detail-section staff-detail-travel-section" data-staff-travel-section><h3>Travel and logistics</h3><span class="staff-detail-role">{{ detail.logistics_status or 'Does not apply' }}</span><div class="staff-detail-travel" data-staff-travel></div><div data-staff-logistics-link></div></section>
       </div>
       <section class="staff-detail-section"><h3>Your session team</h3><p class="staff-detail-muted">The people working with you on this exam session.</p><div class="staff-detail-contacts">
-        {% for contact in detail.contacts %}<div class="staff-detail-contact"><span class="staff-detail-eyebrow">{{ contact.label }}</span>{% if contact.assigned %}<strong>{{ contact.title }} {{ contact.name }}</strong><span class="staff-detail-contact-status is-{{ contact.statusTone }}">{{ contact.status }}</span>{% if contact.seniority %}<small>Senior</small>{% endif %}{% if contact.dietaryRequirements %}<small>{{ contact.dietaryRequirements }}</small>{% endif %}<span data-staff-phone="{{ contact.phone }}">{{ contact.phone or 'Phone number not available' }}</span>{% else %}<span class="staff-detail-muted">{{ contact.emptyMessage }}</span>{% endif %}</div>{% else %}<p class="staff-detail-muted">Team details will appear here once staff members are assigned.</p>{% endfor %}
+        {% for contact in detail.contacts %}<div class="staff-detail-contact"><span class="staff-detail-eyebrow">{{ contact.label|replace('Supervisor', 'Remote supervisor') if contact.is_remote else contact.label }}</span>{% if contact.assigned %}<strong>{{ contact.title }} {{ contact.name }}</strong><span class="staff-detail-contact-status is-{{ contact.statusTone }}">{{ contact.status }}</span>{% if contact.seniority %}<small>Senior</small>{% endif %}{% if contact.dietaryRequirements %}<small>{{ contact.dietaryRequirements }}</small>{% endif %}<span data-staff-phone="{{ contact.phone }}">{{ contact.phone or 'Phone number not available' }}</span>{% else %}<span class="staff-detail-muted">{{ contact.emptyMessage }}</span>{% endif %}</div>{% else %}<p class="staff-detail-muted">Team details will appear here once staff members are assigned.</p>{% endfor %}
       </div>
-      {% if detail.emergency_contacts and not (detail.role == 'Supervisor' and detail.participation_confirmed) %}<div class="staff-detail-emergency"><h4>Emergency line</h4>{% if detail.role in ['Examiner', 'Intern'] %}<p>Please contact your Supervisor first before using this emergency line.</p>{% endif %}{% for contact in detail.emergency_contacts %}<p><strong>{{ contact.displayName }}</strong> <span data-staff-phone="{{ contact.phone }}">{{ contact.phone or 'Phone number not available' }}</span></p>{% endfor %}</div>{% endif %}
+      {% if detail.emergency_contacts and detail.role != 'Emergency contact' and not (detail.role == 'Supervisor' and detail.participation_confirmed) %}<div class="staff-detail-emergency"><h4>Emergency line</h4>{% if detail.role in ['Examiner', 'Intern'] %}<p>Please contact your Supervisor first before using this emergency line.</p>{% endif %}{% for contact in detail.emergency_contacts %}<p><strong>{{ contact.displayName }}</strong> <span data-staff-phone="{{ contact.phone }}">{{ contact.phone or 'Phone number not available' }}</span></p>{% endfor %}</div>{% endif %}
       </section>
       {% if detail.role == 'Supervisor' and detail.participation_confirmed %}
+      {% if not detail.is_remote %}
       <section class="staff-detail-section staff-supervisor-emergency" aria-label="Emergency contact">
         <h3>Emergency contact</h3>
         {% if detail.emergency_contact_required %}
@@ -48,6 +49,7 @@
           <p>No emergency contact has been assigned to this exam session, as a permanent Path Examinations staff member will be present on-site.</p>
         {% endif %}
       </section>
+      {% endif %}
       {% include 'pre_session_control_tower/_staff_session_end_checks.html' %}
       {% endif %}
       {% if not detail.participation_confirmed %}

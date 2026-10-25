@@ -7145,7 +7145,15 @@ def staffing_email_total_fee(assignment):
     if not assignment:
         return ""
     totals = assignment_currency_totals(assignment)
-    return format_currency_totals(totals)
+    formatted = format_currency_totals(totals)
+    if formatted != "-":
+        return formatted
+    # A configured zero role fee is valid; an unset fee must remain missing.
+    role_value = getattr(assignment, "role_fee", "") or ""
+    currency = getattr(assignment, "role_fee_currency", "") or currency_from_display_value(role_value)
+    if amount_from_display_value(role_value) == Decimal("0") and currency in FEE_CURRENCY_OPTIONS:
+        return f"{currency} 0"
+    return formatted
 
 
 def staffing_email_emergency_contact_fee(session_record):
@@ -7175,6 +7183,7 @@ def staffing_email_contact_payload(label, role, assignment, assigned=True, empty
     return {
         "label": label,
         "role": role,
+        "is_remote": role == "Supervisor" and bool(getattr(assignment, "is_remote", False)),
         "assigned": bool(assigned and member),
         "name": getattr(member, "full_name", "") if member else "",
         "title": getattr(member, "title", "") if member else "",
@@ -20196,7 +20205,16 @@ def staff_exam_sessions(token):
         fee_rows=fee_rows, total_session_fees=format_currency_totals(session_fee_totals),
         next_payment_date=next_payment,
         awaiting_sessions=[item for item in ordered_sessions if item.id in awaiting_ids],
-        confirmed_sessions=[item for item in ordered_sessions if item.id not in awaiting_ids]))
+        confirmed_sessions=[item for item in ordered_sessions if item.id not in awaiting_ids],
+        confirmed_regular_sessions=[item for item in ordered_sessions if item.id not in awaiting_ids
+                                    and any(detail["assignment_type"] != "emergency_contact" and not detail["is_remote"]
+                                            for detail in session_details[item.id])],
+        confirmed_remote_sessions=[item for item in ordered_sessions
+                                   if any(detail["assignment_type"] == "supervisor" and detail["is_remote"]
+                                          and detail["participation_confirmed"] for detail in session_details[item.id])],
+        confirmed_emergency_sessions=[item for item in ordered_sessions
+                                      if any(detail["assignment_type"] == "emergency_contact" and detail["participation_confirmed"]
+                                             for detail in session_details[item.id])]))
     response.headers["Cache-Control"] = "private, no-store"
     response.headers["Referrer-Policy"] = "no-referrer"
     response.headers["X-Robots-Tag"] = "noindex, nofollow"

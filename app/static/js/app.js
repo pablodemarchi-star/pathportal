@@ -8193,7 +8193,7 @@ const validateStaffOfficialConfirmationEmailPayload = (payload) => {
       return "Supervisor guidelines link is required for official confirmation emails.";
     }
   }
-  const totalFee = cleanEmailValue(payload?.total_fee || payload?.totalFee);
+  const totalFee = cleanEmailValue(payload?.total_fee ?? payload?.totalFee);
   if (!totalFee || totalFee === "-" || totalFee.toLowerCase().includes("total fee -")) {
     return "Total fee is required for official confirmation emails.";
   }
@@ -8576,7 +8576,7 @@ const buildStaffOfficialConfirmationEmail = (button) => {
   const timeLabel = timeRanges.join(" / ");
   const address = cleanEmailValue(payload.address);
   const scheduleFolderUrl = cleanEmailValue(payload.schedule_folder_url || payload.scheduleFolderUrl);
-  const totalFee = cleanEmailValue(payload.total_fee || payload.totalFee);
+  const totalFee = cleanEmailValue(payload.total_fee ?? payload.totalFee);
   const feeLines = Array.isArray(payload.fee_lines || payload.feeLines) ? (payload.fee_lines || payload.feeLines) : [];
 	  const logisticsStatus = cleanEmailValue(payload.logistics_status || payload.logisticsStatus);
 	  const logisticsUrl = cleanEmailValue(payload.logistics_url || payload.logisticsUrl);
