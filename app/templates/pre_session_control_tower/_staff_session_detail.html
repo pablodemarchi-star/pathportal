@@ -1,0 +1,60 @@
+<dialog class="staff-session-detail" id="staff-session-detail-{{ exam_session.id }}" aria-labelledby="staff-session-detail-title-{{ exam_session.id }}">
+  <header class="staff-detail-header">
+    <div><span class="staff-detail-eyebrow">YOUR EXAM SESSION</span><h2 id="staff-session-detail-title-{{ exam_session.id }}">{{ exam_session.exam_session_name }}</h2><p>{{ exam_session.session_date.strftime('%d/%m/%Y') if exam_session.session_date else 'Date to be confirmed' }}</p></div>
+    <button class="staff-detail-close" type="button" data-staff-session-close aria-label="Close session details">&times;</button>
+  </header>
+  <div class="staff-detail-content">
+    {% for detail in session_details[exam_session.id] %}
+    <article class="staff-detail-assignment" data-staff-session-payload='{{ detail|tojson }}'>
+      <div class="staff-detail-intro"><div class="staff-detail-invited-role"><span>You have been assigned as</span><strong>{{ detail.role }}{% if detail.is_remote %} (remote){% endif %}</strong></div><span class="staff-detail-pending{% if detail.participation_confirmed %} is-confirmed{% endif %}">{{ 'Participation confirmed' if detail.participation_confirmed else 'Awaiting your confirmation' }}</span></div>
+      <section class="staff-detail-summary" aria-label="Session at a glance">
+        <div><span>Date</span><strong>{{ detail.session_date }}</strong></div>
+        <div><span>Your time range · GMT-3</span><strong>{{ detail.time_ranges|join(' / ') or 'To be confirmed' }}</strong><small data-staff-arrival></small></div>
+        <div><span>Format</span><strong>{{ detail.format or 'To be confirmed' }}</strong></div>
+        <div class="staff-detail-venue"><span>Venue address</span>{% if detail.address %}<a class="staff-detail-address" href="https://www.google.com/maps/search/?api=1&amp;query={{ detail.address|urlencode }}" target="_blank" rel="noopener noreferrer">{{ detail.address }} <span aria-hidden="true">↗</span></a>{% else %}<strong>To be confirmed</strong>{% endif %}</div>
+      </section>
+      <div class="staff-detail-grid">
+        <div class="staff-detail-main">
+          <section class="staff-detail-section" data-staff-materials-section><h3>Exam session information</h3><p class="staff-detail-muted">Review the schedule and materials before confirming</p><div class="staff-detail-materials" data-staff-materials></div></section>
+          <section class="staff-detail-section" data-staff-responsibilities-section><h3 data-staff-responsibilities-title>Your responsibilities</h3><ul class="staff-detail-checklist" data-staff-responsibilities></ul></section>
+        </div>
+        <aside class="staff-detail-fees staff-detail-section" aria-label="Your fees and invoice">
+          <h3>Your fees</h3>
+          <dl class="staff-detail-fee-lines">{% for line in detail.fee_lines %}<div><dt>{{ line.label }}</dt><dd>{{ line.value }}</dd></div>{% endfor %}</dl>
+          <div class="staff-detail-total"><span>Total fee</span><strong>{{ detail.total_fee or 'To be confirmed' }}</strong></div>
+          <div class="staff-detail-payment"><span>Next payment</span><strong>{{ detail.next_payment_date or 'To be confirmed' }}</strong><small>5:00 pm · GMT-3</small></div>
+          <details class="staff-detail-invoice"><summary>Invoice &amp; payment information</summary><p>Once all your exam sessions are over, send <strong>one consolidated invoice</strong> to <a href="https://mail.google.com/mail/?view=cm&amp;fs=1&amp;to=finance%40pathexaminations.com&amp;su={{ ('Exam session invoice - ' ~ detail.full_name)|urlencode }}" target="_blank" rel="noopener noreferrer">finance@pathexaminations.com</a>, including only the sum of your total session fees.</p><p>Do not include additional expenses. Only invoices matching the system amount will be processed. The invoice may be issued in your name or someone else’s name.</p><a class="staff-detail-link" href="https://drive.google.com/drive/u/0/my-drive" target="_blank" rel="noopener noreferrer">View sample invoice ↗</a><p>Payment will appear as Bellis Ignis Group SRL. First-time payments may take up to 72 working hours after processing; previous recipients should receive payment immediately.</p></details>
+        </aside>
+        <section class="staff-detail-section staff-detail-travel-section" data-staff-travel-section><h3>Travel and logistics</h3><span class="staff-detail-role">{{ detail.logistics_status or 'Does not apply' }}</span><div class="staff-detail-travel" data-staff-travel></div><div data-staff-logistics-link></div></section>
+      </div>
+      <section class="staff-detail-section"><h3>Your session team</h3><p class="staff-detail-muted">The people working with you on this exam session.</p><div class="staff-detail-contacts">
+        {% for contact in detail.contacts %}<div class="staff-detail-contact"><span class="staff-detail-eyebrow">{{ contact.label }}</span>{% if contact.assigned %}<strong>{{ contact.title }} {{ contact.name }}</strong><span class="staff-detail-contact-status is-{{ contact.statusTone }}">{{ contact.status }}</span>{% if contact.seniority %}<small>Senior</small>{% endif %}{% if contact.dietaryRequirements %}<small>{{ contact.dietaryRequirements }}</small>{% endif %}<span data-staff-phone="{{ contact.phone }}">{{ contact.phone or 'Phone number not available' }}</span>{% else %}<span class="staff-detail-muted">{{ contact.emptyMessage }}</span>{% endif %}</div>{% else %}<p class="staff-detail-muted">Team details will appear here once staff members are assigned.</p>{% endfor %}
+      </div>
+      {% if detail.emergency_contacts and not (detail.role == 'Supervisor' and detail.participation_confirmed) %}<div class="staff-detail-emergency"><h4>Emergency line</h4>{% if detail.role in ['Examiner', 'Intern'] %}<p>Please contact your Supervisor first before using this emergency line.</p>{% endif %}{% for contact in detail.emergency_contacts %}<p><strong>{{ contact.displayName }}</strong> <span data-staff-phone="{{ contact.phone }}">{{ contact.phone or 'Phone number not available' }}</span></p>{% endfor %}</div>{% endif %}
+      </section>
+      {% if detail.role == 'Supervisor' and detail.participation_confirmed %}
+      <section class="staff-detail-section staff-supervisor-emergency" aria-label="Emergency contact">
+        <h3>Emergency contact</h3>
+        {% if detail.emergency_contact_required %}
+          <p>For urgent matters, please use the <strong>Path emergency contact</strong> provided below. <strong>Always call rather than send a message.</strong></p>
+          <ul class="staff-detail-checklist">
+            {% for contact in detail.emergency_contacts %}
+              <li><strong>Emergency contact:</strong> {{ contact.displayName }} at {% if contact.phone %}<a class="staff-detail-emergency-call" href="tel:{{ contact.phone|replace(' ', '')|replace('-', '')|replace('(', '')|replace(')', '') }}">{{ contact.phone }}</a>{% else %}Phone number not available{% endif %}</li>
+            {% else %}
+              <li>Emergency contact details will be available once assigned.</li>
+            {% endfor %}
+          </ul>
+        {% else %}
+          <p>No emergency contact has been assigned to this exam session, as a permanent Path Examinations staff member will be present on-site.</p>
+        {% endif %}
+      </section>
+      {% include 'pre_session_control_tower/_staff_session_end_checks.html' %}
+      {% endif %}
+      {% if not detail.participation_confirmed %}
+      <section class="staff-detail-response"><h3>Update your participation status</h3><p>Please ensure you can access all the materials listed above, then confirm your participation, contact us if you have any questions, or decline the session.</p><div class="staff-detail-response-actions" data-staff-response-actions></div><small>Confirm your participation here to update your status immediately.</small></section>
+      {% endif %}
+    </article>
+    {% endfor %}
+  </div>
+  <footer class="staff-detail-footer"><span>Path International Examinations</span><button class="secondary-button" type="button" data-staff-session-close>Back to your sessions</button></footer>
+</dialog>

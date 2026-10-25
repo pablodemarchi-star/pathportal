@@ -959,6 +959,39 @@ class ExamSessionJourneyShare(db.Model):
     exam_session = db.relationship("ExamSession", backref=db.backref("journey_shares", lazy=True, cascade="all, delete-orphan"))
 
 
+class StaffExamSessionsShare(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    person_ref = db.Column(db.String(80), nullable=False, unique=True, index=True)
+    token = db.Column(db.String(96), nullable=False, unique=True, index=True)
+    created_at = db.Column(db.DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))
+    submissions = db.relationship("StaffExamSessionSubmission", backref="share", cascade="all, delete-orphan")
+
+
+class StaffExamSessionSubmission(db.Model):
+    __table_args__ = (db.UniqueConstraint("share_id", "exam_session_id", "assignment_type", "assignment_id",
+                                         name="uq_staff_exam_session_submission"),)
+    id = db.Column(db.Integer, primary_key=True)
+    share_id = db.Column(db.Integer, db.ForeignKey("staff_exam_sessions_share.id"), nullable=False, index=True)
+    exam_session_id = db.Column(db.Integer, db.ForeignKey("exam_session.id"), nullable=False, index=True)
+    assignment_type = db.Column(db.String(40), nullable=False)
+    assignment_id = db.Column(db.Integer, nullable=False)
+    submitted_at = db.Column(db.DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))
+    exam_session = db.relationship("ExamSession", backref=db.backref("staff_submissions", cascade="all, delete-orphan"))
+
+
+class StaffExamSessionEndChecks(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    submission_id = db.Column(db.Integer, db.ForeignKey("staff_exam_session_submission.id"), nullable=False, unique=True, index=True)
+    attendance = db.Column(db.Boolean, nullable=False, default=False)
+    return_papers = db.Column(db.Boolean, nullable=False, default=False)
+    recordings = db.Column(db.Boolean, nullable=False, default=False)
+    audiovisual = db.Column(db.Boolean, nullable=False, default=False)
+    end_report = db.Column(db.Boolean, nullable=False, default=False)
+    centre_feedback = db.Column(db.Boolean, nullable=False, default=False)
+    updated_at = db.Column(db.DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
+    submission = db.relationship("StaffExamSessionSubmission", backref=db.backref("end_checks", uselist=False, cascade="all, delete-orphan"))
+
+
 class ExamSessionYear(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     year = db.Column(db.Integer, nullable=False, unique=True, index=True)

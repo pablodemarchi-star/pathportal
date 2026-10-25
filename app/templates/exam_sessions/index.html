@@ -290,7 +290,7 @@
   {% set raw_logistics_type = assignment.logistics_type if assignment and assignment.logistics_type else '' %}
   {% set logistics_type = raw_logistics_type if raw_logistics_type in logistics_type_options else ('Uber' if assignment and assignment.logistics_enabled else 'Does not apply') %}
   {% set logistics_type_class = logistics_type|lower|replace(' ', '-') %}
-  <article class="staff-assignment-card" data-supervisor-row data-section-key="{{ section_key }}" data-saved-team-member-id="{{ selected_value }}" data-saved-participation-status="{{ assignment.participation_status if assignment else '' }}" {% if is_shipment_recipient %}data-shipment-recipient-row="true"{% endif %}>
+  <article class="staff-assignment-card" data-supervisor-row data-assignment-id="{{ assignment.id if assignment else '' }}" data-section-key="{{ section_key }}" data-saved-team-member-id="{{ selected_value }}" data-saved-participation-status="{{ assignment.participation_status if assignment else '' }}" {% if is_shipment_recipient %}data-shipment-recipient-row="true"{% endif %}>
     <div class="staff-card-header">
       <div class="staff-card-title-stack">
         <span class="staff-card-role-label">{{ 'Supervisor' if section_key == 'supervisor' else 'Examiner' if section_key == 'examiner' else 'Intern' }}</span>
@@ -1219,7 +1219,7 @@
         <div>
           {% set modal_session_considerations = session.considerations_thread() %}
           <h2>
-            Exam session staff members for
+            {% if not request.args.get('staff_card') %}Exam session staff members for{% endif %}
             {% if session.details_url %}
               <a class="exam-session-title-link" href="{{ session.details_url }}" target="_blank" rel="noopener noreferrer">{{ session.exam_session_name }}</a>
             {% else %}

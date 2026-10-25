@@ -164,8 +164,12 @@ def create_app():
     @app.after_request
     def set_security_headers(response):
         response.headers["X-Content-Type-Options"] = "nosniff"
-        response.headers["X-Frame-Options"] = "DENY"
-        response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+        response.headers["X-Frame-Options"] = (
+            "SAMEORIGIN" if request.endpoint == "staff.exam_session_planner"
+            and request.args.get("session_fullscreen") == "1" and request.args.get("staff_card")
+            else "DENY"
+        )
+        response.headers["Referrer-Policy"] = "no-referrer" if request.endpoint == "staff.staff_exam_sessions" else "strict-origin-when-cross-origin"
         response.headers["Permissions-Policy"] = "camera=(), microphone=(), geolocation=()"
         return response
 
@@ -259,6 +263,11 @@ def create_app():
 
     with app.app_context():
         db.create_all()
+        end_check_columns = {row[1] for row in db.session.execute(text("PRAGMA table_info(staff_exam_session_end_checks)"))}
+        for column in ("end_report", "centre_feedback"):
+            if column not in end_check_columns:
+                db.session.execute(text(f"ALTER TABLE staff_exam_session_end_checks ADD COLUMN {column} BOOLEAN NOT NULL DEFAULT 0"))
+
         journey_session_columns = {row[1] for row in db.session.execute(text("PRAGMA table_info(exam_session)"))}
         for field in ("public_journey_schedule_access", "public_journey_entry_slips_access"):
             if field not in journey_session_columns:

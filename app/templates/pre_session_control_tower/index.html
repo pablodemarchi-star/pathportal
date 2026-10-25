@@ -2367,7 +2367,7 @@
                   {% set role_check_checked = row.role_check_verified or role_is_confirmed %}
                   {% set role_check_input_disabled = staffing_actions_disabled or not row.has_staff_member or role_confirmation_was_sent or role_is_confirmed %}
                   {% set role_check_actions_disabled = staffing_actions_disabled or role_is_confirmed or not row.role_check_verified %}
-                  <tr>
+                  <tr data-staffing-assignment-key="{{ session.id }}:{{ row.assignment_type }}:{{ row.assignment_id }}">
                     <th scope="row">{{ row.role }}</th>
                     <td>
                       {% if row.has_staff_member %}
@@ -2394,31 +2394,34 @@
                           <input type="checkbox" name="role_check_verified" value="1" data-role-check {% if role_check_checked %}checked{% endif %}{% if role_check_input_disabled %} disabled{% endif %}>
                           <span>verified</span>
                         </label>
+                        {% if user_can_view('exam_session_planner') %}
+                          <button type="button" class="copy-icon-button staffing-member-card-button" data-staffing-member-card="{{ url_for('staff.exam_session_planner', session_year=session.session_date.year, open_session_modal=session.id, session_fullscreen=1, staff_card=row.assignment_type ~ ':' ~ row.assignment_id) }}" data-staffing-member-card-title="{{ row.role }} - {{ row.staff_name if row.has_staff_member else 'Role to cover' }}" aria-label="Open card for {{ row.staff_name if row.has_staff_member else row.role ~ ' - Role to cover' }}" title="Open staff member card">
+                            <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2"/><circle cx="9" cy="10" r="2"/><path d="M5 17c0-4 8-4 8 0M15 9h3m-3 4h3"/></svg>
+                          </button>
+                        {% endif %}
                       </form>
                     </td>
                     <td>
                       <div class="staffing-inline-actions">
-                        <a class="staffing-action-chip {% if role_check_actions_disabled or not row.staff_email %}staffing-action-chip-grey is-disabled{% else %}staffing-action-chip-blue{% endif %}" href="{% if role_check_actions_disabled or not row.staff_email %}#{% else %}{{ row.official_confirmation_email_url }}{% endif %}" data-role-check-dependent data-role-check-href="{{ row.official_confirmation_email_url }}" data-role-check-kind="link" target="_blank" rel="noopener noreferrer"{% if role_check_actions_disabled or not row.staff_email %} aria-disabled="true" tabindex="-1"{% endif %}>Send email</a>
-                        <button class="copy-icon-button email-invitation-copy-button" type="button" data-staff-confirmation-email data-staff-official-confirmation-email-payload='{{ row.official_confirmation_email_payload|tojson }}' data-role-check-dependent data-role-check-kind="button" aria-label="Copy official confirmation email" title="Copy official confirmation email"{% if role_check_actions_disabled or not row.staff_email %} disabled{% endif %}>
-                          <svg class="copy-icon" viewBox="0 0 24 24" aria-hidden="true">
-                            <rect x="9" y="9" width="10" height="10" rx="2"></rect>
-                            <path d="M5 15V7a2 2 0 0 1 2-2h8"></path>
-                          </svg>
-                          <svg class="check-icon" viewBox="0 0 24 24" aria-hidden="true">
-                            <path d="m5 12 4 4 10-10"></path>
-                          </svg>
-                          <span class="copy-button-feedback">Copied!</span>
-                        </button>
+                        {% if row.staff_portal_url %}
+                          <span class="staffing-added-actions">
+                            <a class="staffing-added-link" href="{{ row.staff_portal_url }}" target="_blank" rel="noopener noreferrer">Added</a>
+                            {% set invitation_actions = row.staff_invitation_actions %}
+                            {% include 'pre_session_control_tower/_staff_invitation_icons.html' %}
+                          </span>
+                        {% else %}
+                        <form method="post" action="{{ url_for('staff.submit_staff_exam_session', session_id=session.id, assignment_type=row.assignment_type, assignment_id=row.assignment_id) }}" target="_blank" rel="noopener noreferrer" data-staff-session-submit data-staff-official-confirmation-email-payload='{{ row.official_confirmation_email_payload|tojson }}'>
+                          <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                          <button class="staffing-action-chip {% if role_check_actions_disabled %}staffing-action-chip-grey is-disabled{% else %}staffing-action-chip-blue{% endif %}" type="submit" data-role-check-dependent data-role-check-kind="button"{% if role_check_actions_disabled %} disabled{% endif %}>Add</button>
+                        </form>
+                        {% endif %}
                       </div>
                     </td>
                     <td>
-                      {% if staffing_actions_disabled %}
-                        {% if row.status == 'Official confirmation sent' %}
-                          <div class="staffing-inline-actions">
-                            <button class="staffing-action-chip staffing-action-chip-grey is-disabled" type="button" disabled>Mark as confirmed</button>
-                            <button class="staffing-action-chip staffing-action-chip-grey is-disabled" type="button" disabled>Mark as declined</button>
-                          </div>
-                        {% elif row.status == 'Confirmed' %}
+                      {% if row.status == 'Official confirmation sent' %}
+                        <span class="staffing-action-chip staffing-awaiting-confirmation">Awaiting confirmation</span>
+                      {% elif staffing_actions_disabled %}
+                        {% if row.status == 'Confirmed' %}
                           <div class="staffing-inline-actions">
                             <button class="staffing-action-chip staffing-action-chip-grey is-disabled" type="button" disabled>Force Pending</button>
                             <button class="staffing-action-chip staffing-action-chip-grey is-disabled" type="button" disabled>Cancelled</button>
@@ -2428,23 +2431,6 @@
                         {% endif %}
                       {% elif not row.has_staff_member %}
                         <button class="staffing-action-chip staffing-action-chip-grey is-disabled" type="button" disabled>Mark as sent</button>
-                      {% elif row.updatable and row.status == 'Official confirmation sent' %}
-                        <div class="staffing-inline-actions">
-                          <form method="post" action="{{ url_for('staff.update_staffing_assignment_status', session_id=session.id, assignment_type=row.assignment_type, assignment_id=row.assignment_id) }}" data-disable-on-submit>
-                            <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-                            <input type="hidden" name="schedule_status" value="{{ selected_schedule_status }}">
-                            <input type="hidden" name="participation_status" value="Confirmed">
-                            {{ pre_session_return_fields(selected_view, selected_bundle) }}
-                            <button class="staffing-action-chip staffing-action-chip-green" type="submit">Mark as confirmed</button>
-                          </form>
-                          <form method="post" action="{{ url_for('staff.update_staffing_assignment_status', session_id=session.id, assignment_type=row.assignment_type, assignment_id=row.assignment_id) }}" data-disable-on-submit>
-                            <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-                            <input type="hidden" name="schedule_status" value="{{ selected_schedule_status }}">
-                            <input type="hidden" name="participation_status" value="Declined">
-                            {{ pre_session_return_fields(selected_view, selected_bundle) }}
-                            <button class="staffing-action-chip staffing-action-chip-red" type="submit">Mark as declined</button>
-                          </form>
-                        </div>
                       {% elif row.updatable and row.status == 'Confirmed' %}
                         <div class="staffing-inline-actions">
                           <form method="post" action="{{ url_for('staff.update_staffing_assignment_status', session_id=session.id, assignment_type=row.assignment_type, assignment_id=row.assignment_id) }}"{% if view.staffing_status_change_affects_packages %} data-confirm-password-submit="Editing the staff and staff satus may affect the Package stage, as package preparation has started. Password authorisation is required to continue." data-confirm-password-value="EditOK"{% endif %} data-disable-on-submit>
@@ -5391,4 +5377,11 @@ This stage has already been marked as complete. Reopening it may affect package 
     </div>
   </div>
 {% endif %}
+<div class="modal nested-modal staffing-member-card-modal" id="staffing-member-card-modal" aria-hidden="true">
+  <div class="modal-panel extra-large">
+    <div class="modal-header"><h2 data-staffing-member-card-title>Staff member</h2><button type="button" class="modal-close" data-close-modal aria-label="Close staff member card">&times;</button></div>
+    <p data-staffing-card-loading>Loading staff member card…</p>
+    <iframe title="Staff member card" data-staffing-card-frame hidden></iframe>
+  </div>
+</div>
 {% endblock %}

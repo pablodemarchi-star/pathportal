@@ -1317,6 +1317,32 @@ class ScheduleWorkflowTest(unittest.TestCase):
         self.assertIn("No matching actions.", empty)
         self.assertNotIn('data-my-action-section=', empty)
 
+    def test_my_actions_default_order_follows_bundle_priority(self):
+        from unittest.mock import patch
+        from flask import session as request_session
+        from app.routes import department_my_actions, shipment_bundle_priority_key, sort_department_my_actions
+        records = [ExamSession(id=9100 + index, exam_session_name=f"Session {index}",
+                               session_date=date(2026, 6, 1 + index)) for index in range(6)]
+        # Earlier dates must not put blocked or delivered bundles before actionable ones.
+        bundles = [{"id": index, "included_sessions": [record], "unblocked": index in {2, 3, 4},
+                    "semi_unblocked": index == 1,
+                    "action_items": [{"description": "Bundle shipment delivered"}] if index == 0 else []}
+                   for index, record in enumerate(records[:5])]
+        bundles[2]["included_sessions"].append(records[5])
+        views = [{"session": record, "status": "In progress", "schedule_gate": {}, "next_action": "",
+                  "responsible": "ADMIN", "monthly_registrations_closed": True,
+                  "date_confirmation_confirmed": True, "schedule_preparation_unlocked": False,
+                  "bundle_detail_actions": [{"department": "ADMIN", "description": "Notify staff", "section": "staffing"}]}
+                 for record in records]
+        with self.app.test_request_context("/my-actions"), patch("app.routes.bundle_detail_action_items", return_value=[]), patch(
+                "app.routes.bundle_schedule_presentations", return_value={record.id: {"is_secondary": False} for record in records}):
+            request_session["user_department"] = "ADMIN"
+            rows = department_my_actions(views, bundles, None, {})
+        self.assertEqual([row["session"].id for row in rows], [9102, 9105, 9103, 9104, 9101, 9100])
+        self.assertEqual([bundle["id"] for bundle in sorted(bundles, key=shipment_bundle_priority_key)], [2, 3, 4, 1, 0])
+        self.assertEqual([row["session"].id for row in sort_department_my_actions(rows, "session", "asc")],
+                         [record.id for record in records])
+
     def test_my_actions_sortable_columns_toggle_and_keep_count_signature_stable(self):
         from app.routes import sort_department_my_actions, department_my_actions_signature
         view = {"status": "In progress"}
@@ -2993,6 +3019,30 @@ class ScheduleWorkflowTest(unittest.TestCase):
             core_readiness_contract(schedule_ready, None, logistics_ready)["status"],
             "needs_review",
         )
+
+    def test_staffing_sent_confirmation_only_becomes_admin_action_after_deadline(self):
+        today = datetime.now(LOCAL_TZ).date()
+        member = AcademicStaff(id=913, status='Active', full_name='Awaiting Staff', roles='Examiner')
+        db.session.add(member)
+        db.session.flush()
+        assignments = [ExamSessionExaminerAssignment(exam_session_id=self.session_record.id, team_member_id=member.id,
+                        participation_status='Official confirmation sent', staffing_status_due_at=deadline)
+                       for deadline in (today - timedelta(days=1), today, today + timedelta(days=1))]
+        db.session.add_all(assignments)
+        db.session.flush()
+        contract = staffing_readiness_contract([], assignments, [])
+        actions = bundle_detail_action_items('Approved', {'is_ready': True}, '', 'MANAGEMENT',
+                                            staffing_contract=contract, include_sections=True)
+        updates = [row for row in actions if 'to be updated' in row['description']]
+        self.assertEqual(updates, [
+            {'department': 'ADMIN', 'description': '1 confirmation to be updated.', 'overdue': True, 'section': 'staffing'},
+            {'department': '', 'description': '2 confirmations to be updated.', 'overdue': False, 'section': 'staffing'}])
+        assignments[0].participation_status = 'Confirmed'
+        contract = staffing_readiness_contract([], assignments, [])
+        actions = bundle_detail_action_items('Approved', {'is_ready': True}, '', 'MANAGEMENT',
+                                            staffing_contract=contract, include_sections=True)
+        self.assertFalse(any(row['department'] == 'ADMIN' for row in actions))
+        self.assertTrue(any(row['description'] == '2 confirmations to be updated.' for row in actions))
 
     def test_bundle_detail_action_description_excludes_logistics_actions(self):
         actions = bundle_detail_action_items(
@@ -9815,6 +9865,74 @@ for (const days of [2, 3, 4]) {
         self.assertNotIn("Emergency lines", result["text"])
         self.assertNotIn("Click here to confirm participation and material reception", result["html"])
 
+    def test_staffing_submit_uses_copy_email_validation_and_blocks_incomplete_payloads(self):
+        from pathlib import Path
+        shared = Path('app/static/js/app.js').read_text()
+        shared = shared[shared.index('const cleanEmailValue'):shared.index('const initInvitationEmailCopyButtons')]
+        cases = [self.official_confirmation_base_payload(**change) for change in [
+            {'time_ranges': []}, {'total_fee': '-'}, {'schedule_folder_url': ''},
+            {'backup_material_for_examiners_url': ''}, {'supervisor_guideline_url': ''},
+            {'logistics_url': ''}, {'next_payment_date': ''}, {'address': ''},
+            {'role': 'Examiner', 'examiner_guideline_url': ''},
+            {'role': 'Examiner', 'material_for_examiners_url': ''},
+        ]]
+        prefix = r'''
+const assert=require("node:assert/strict");
+let submitHandler;
+global.document={querySelectorAll:()=>[],addEventListener:(kind,handler)=>{if(kind==="submit") submitHandler=handler;}};
+global.window={setTimeout:()=>1};
+'''
+        suffix = r'''
+for(const payload of CASES) {
+  const classes=new Set();
+  const button={textContent:"Submit",dataset:{},classList:{toggle:(name,on)=>on?classes.add(name):classes.delete(name),remove:()=>{}}};
+  const form={dataset:{staffOfficialConfirmationEmailPayload:JSON.stringify(payload)},querySelector:()=>button,closest:()=>form};
+  const event={target:form,submitter:button,defaultPrevented:false,preventDefault(){this.defaultPrevented=true;}};
+  submitHandler(event);
+  assert.equal(event.defaultPrevented,true);
+  assert.equal(classes.has("is-error"),true);
+  assert.equal(button.textContent,validateStaffOfficialConfirmationEmailPayload(payload));
+}
+(async () => {
+const valid=VALID;
+const portal={opener:true,location:{replace:(url)=>portal.openedUrl=url},close:()=>portal.closed=true};
+window.open=()=>portal;
+document.createElement=()=>({children:[],append(...items){this.children.push(...items);}});
+global.FormData=class {};
+global.fetch=async()=>({ok:true,json:async()=>({ok:true,url:"/my-exam-sessions/added-token",invitation_actions:{whatsapp_url:"https://wa.me/5491111111111",show_email:true,email_url:"https://mail.google.com/mail/?view=cm"}})});
+const button={textContent:"Add"};
+const form={action:"/add",dataset:{staffOfficialConfirmationEmailPayload:JSON.stringify(valid)},querySelector:()=>button,closest:()=>form,replaceWith:(link)=>form.replacement=link};
+const event={target:form,submitter:button,defaultPrevented:false,preventDefault(){this.defaultPrevented=true;}};
+submitHandler(event);
+assert.equal(event.defaultPrevented,true);
+await new Promise(setImmediate);
+assert.equal(form.replacement.className,"staffing-added-actions");
+assert.equal(form.replacement.children[0].textContent,"Added");
+assert.equal(form.replacement.children[0].className,"staffing-added-link");
+assert.equal(form.replacement.children[0].href,"/my-exam-sessions/added-token");
+assert.equal(form.replacement.children[0].target,"_blank");
+assert.equal(form.replacement.children[1].className,"staffing-invitation-icon is-whatsapp");
+assert.equal(form.replacement.children.length,2);
+const later=document.createElement("span");
+appendStaffInvitationIcons(later,{whatsapp_url:"https://wa.me/5491111111111",show_email:false,email_url:"https://mail.google.com/mail/"});
+assert.equal(later.children.length,1);
+assert.equal(later.children[0].className,"staffing-invitation-icon is-whatsapp");
+assert.equal(portal.opener,null);
+assert.equal(portal.openedUrl,"/my-exam-sessions/added-token");
+const errors=new Set();
+const failedButton={textContent:"Add",dataset:{},classList:{toggle:(name,on)=>on?errors.add(name):errors.delete(name),remove:()=>{}}};
+const failedForm={action:"/add",querySelector:()=>failedButton,replaceWith:()=>{throw new Error("Must not mark failed additions as Added");}};
+global.fetch=async()=>({ok:false,json:async()=>({ok:false,error:"Could not add session"})});
+await addStaffSessionToPortal(failedForm,failedButton);
+assert.equal(failedButton.disabled,false);
+assert.equal(failedButton.textContent,"Could not add session");
+assert.equal(errors.has("is-error"),true);
+assert.equal(portal.closed,true);
+})().catch((error)=>{console.error(error);process.exitCode=1;});
+'''.replace('CASES', json.dumps(cases)).replace('VALID', json.dumps(self.official_confirmation_base_payload()))
+        result = subprocess.run(['node', '-e', prefix + shared + suffix], capture_output=True, text=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+
     def test_staff_official_confirmation_email_validations(self):
         online = self.build_staff_official_confirmation_email(self.official_confirmation_base_payload(format="Online"))
         missing_time = self.build_staff_official_confirmation_email(self.official_confirmation_base_payload(time_ranges=[]))
@@ -9829,7 +9947,7 @@ for (const days of [2, 3, 4]) {
         missing_next_payment_date = self.build_staff_official_confirmation_email(self.official_confirmation_base_payload(next_payment_date=""))
 
         self.assertEqual(online["error"], "Official confirmation email is only available for onsite sessions.")
-        self.assertEqual(missing_time["error"], "Staff member time range is required for official confirmation emails.")
+        self.assertEqual(missing_time["error"], "Staff member time range is required for official confirmation.")
         self.assertEqual(missing_total["error"], "Total fee is required for official confirmation emails.")
         self.assertEqual(missing_schedule["error"], "Exam session schedule link is required for official confirmation emails.")
         self.assertEqual(examiner_missing_schedule["error"], "Exam session schedule link is required for official confirmation emails.")
@@ -11969,7 +12087,7 @@ for (const days of [2, 3, 4]) {
         script = r'''
 const assert = require("node:assert/strict");
 const vm = require("node:vm");
-let handler, requests = 0, closes = 0, failSave = false;
+let handler, requests = 0, closes = 0, failSave = false, messages = [];
 const action = {value: "save"};
 const feedback = {};
 const button = {value: "save", dataset: {}, textContent: "Save", matches: () => true};
@@ -11992,7 +12110,7 @@ const context = {
   roundLogisticsFeeInput: () => {},
   syncInvitationEmailCopyButtons: () => {},
   savePlannerReturnState: () => {},
-  window: {clearTimeout: () => {}, setTimeout: () => 1},
+  window: {clearTimeout: () => {}, setTimeout: () => 1, location: {origin: "https://portal.test"}, parent: {postMessage: (message) => messages.push(message)}},
   refreshPlannerSessionRow: async () => {},
   closeModal: () => {closes++;},
   showTransientFlash: (message, category) => {feedback.textContent = message; feedback.category = category;},
@@ -12023,6 +12141,16 @@ vm.runInNewContext(SOURCE, context);
   assert.equal(feedback.textContent, "Save failed");
   assert.equal(feedback.category, "error");
   assert.equal(button.disabled, false);
+  // Embedded fullscreen cards must save asynchronously and close only their parent overlay.
+  failSave = false;
+  form.dataset.embeddedStaffCard = "true";
+  form.elements.namedItem = () => ({value: "1"});
+  event.defaultPrevented = false;
+  await handler(event);
+  assert.equal(event.defaultPrevented, true);
+  assert.equal(closes, 1);
+  assert.equal(messages.length, 1);
+  assert.equal(messages[0].type, "staffing-member-card-saved");
 })().catch((error) => {console.error(error); process.exitCode = 1;});
 '''.replace("SOURCE", json.dumps(source[start:end]))
         subprocess.run(["node", "-e", script], check=True, capture_output=True, text=True)
@@ -20891,7 +21019,7 @@ assert.equal(storage.size, 0);
         self.assertIn("Eli Examiner", staffing)
         self.assertIn("Intern", staffing)
         self.assertIn("Ian Intern", staffing)
-        self.assertIn("Send email", staffing)
+        self.assertIn(">Add</button>", staffing)
         self.assertIn("verified", staffing)
         self.assertIn("data-role-check", staffing)
         self.assertIn("data-role-check-dependent", staffing)
@@ -20906,18 +21034,17 @@ assert.equal(storage.size, 0);
         self.assertIn("Mark as sent", role_to_cover_row)
         self.assertIn("disabled", role_to_cover_row)
         self.assertIn("is-disabled", role_to_cover_row)
-        self.assertIn("copy-icon-button email-invitation-copy-button", staffing)
+        self.assertNotIn("data-staff-confirmation-email", staffing)
         self.assertIn("copy-icon", staffing)
-        self.assertIn("check-icon", staffing)
-        self.assertIn("Copied!", staffing)
         self.assertIn("Mark as sent", staffing)
-        self.assertIn("Mark as confirmed", staffing)
-        self.assertIn("Mark as declined", staffing)
+        self.assertNotIn("Mark as confirmed", staffing)
+        self.assertNotIn("Mark as declined", staffing)
         examiner_index = staffing.index('<span class="staffing-member-name">Eli Examiner</span>')
         examiner_row = staffing[staffing.rfind("<tr", 0, examiner_index):staffing.index("</tr>", examiner_index)]
         self.assertIn("participation-official-confirmation-sent", examiner_row)
-        self.assertIn("Mark as confirmed", examiner_row)
-        self.assertIn("Mark as declined", examiner_row)
+        self.assertIn('class="staffing-action-chip staffing-awaiting-confirmation">Awaiting confirmation</span>', examiner_row)
+        self.assertNotIn("Mark as confirmed", examiner_row)
+        self.assertNotIn("Mark as declined", examiner_row)
         self.assertIn("data-role-check", examiner_row)
         self.assertIn("disabled>", examiner_row)
         self.assertIn("Force Pending", staffing)
@@ -20925,9 +21052,9 @@ assert.equal(storage.size, 0);
         intern_row = staffing[staffing.rfind("<tr", 0, intern_index):staffing.index("</tr>", intern_index)]
         self.assertIn("participation-confirmed", intern_row)
         self.assertIn("data-role-check checked disabled", " ".join(intern_row.split()))
-        self.assertIn("Send email</a>", intern_row)
+        self.assertIn(">Add</button>", intern_row)
         self.assertIn("staffing-action-chip-grey is-disabled", intern_row)
-        self.assertIn("data-staff-confirmation-email", intern_row)
+        self.assertNotIn("data-staff-confirmation-email", intern_row)
         self.assertIn("data-staff-official-confirmation-email-payload", intern_row)
         self.assertNotIn("data-copy-text=\"ian@example.com\"", intern_row)
         self.assertIn("disabled>", intern_row)
@@ -20948,7 +21075,7 @@ assert.equal(storage.size, 0);
         self.assertIn(".staffing-status-confirmations-to-be-updated", css)
         self.assertIn(".staffing-status-confirmed-staff", css)
 
-    def test_staffing_send_email_opens_gmail_with_official_confirmation_subject(self):
+    def test_staffing_submit_opens_personal_sessions_and_keeps_official_confirmation_payload(self):
         self.session_record.exam_session_name = "Pauu"
         self.session_record.session_date = date(2026, 8, 7)
         self.session_record.format = "Online"
@@ -21049,14 +21176,15 @@ assert.equal(storage.size, 0);
             f"/pre-session-control-tower?session_year=2026&view=bundle&bundle_id={bundle.id}"
         ).get_data(as_text=True)
 
-        def gmail_params_for_staff(session_id, staff_name):
+        def submit_url_for_staff(session_id, staff_name):
             modal_start = html.index(f'id="staffing-{session_id}"')
             modal_end = html.index(f'id="logistics-{session_id}"')
             staffing = html[modal_start:modal_end]
             staff_index = staffing.index(f'<span class="staffing-member-name">{staff_name}</span>')
             row = staffing[staffing.rfind("<tr", 0, staff_index):staffing.index("</tr>", staff_index)]
-            href = re.search(r'<a class="staffing-action-chip [^"]*staffing-action-chip-blue[^"]*" href="([^"]+)"', row).group(1)
-            return parse_qs(urlparse(href.replace("&amp;", "&")).query)
+            action = re.search(r'<form method="post" action="([^"]+/submit)" target="_blank"', row).group(1)
+            self.assertIn('>Add</button>', row)
+            return html_lib.unescape(action)
 
         def copy_payload_for_staff(session_id, staff_name):
             modal_start = html.index(f'id="staffing-{session_id}"')
@@ -21067,25 +21195,24 @@ assert.equal(storage.size, 0);
             payload = re.search(r"data-staff-official-confirmation-email-payload='([^']+)'", row).group(1)
             return json.loads(html_lib.unescape(payload))
 
-        emergency_params = gmail_params_for_staff(self.session_record.id, "Eva Emergency")
-        self.assertEqual(emergency_params["to"], ["eva@example.com"])
-        self.assertEqual(emergency_params["su"], ["EMERGENCY CONTACT – On demand (7th August) - Pauu"])
+        emergency_url = submit_url_for_staff(self.session_record.id, "Eva Emergency")
+        response = self.login_client().post(emergency_url, data={"csrf_token": "token"})
+        self.assertEqual(response.status_code, 303)
+        detail_html = self.app.test_client().get(response.headers["Location"]).get_data(as_text=True)
+        self.assertIn('data-staff-session-payload=', detail_html)
+        self.assertIn('Emergency contact', detail_html)
         emergency_payload = copy_payload_for_staff(self.session_record.id, "Eva Emergency")
         self.assertEqual(emergency_payload["role"], "Emergency contact")
         self.assertEqual(emergency_payload["time_ranges"], ["10.00 to 14.00 h"])
         self.assertEqual(emergency_payload["total_fee"], "ARS 15.000")
         self.assertEqual([contact["name"] for contact in emergency_payload["emergency_contacts"]], ["Eva Emergency", "Ben Backup"])
         self.assertEqual([contact["phone"] for contact in emergency_payload["emergency_contacts"]], ["+5491111111111", "+5491122222222"])
-        examiner_params = gmail_params_for_staff(self.session_record.id, "Eli Examiner")
-        self.assertEqual(examiner_params["to"], ["eli@example.com"])
-        self.assertEqual(examiner_params["su"], ["EXAMINER – Online (7th August) - Pauu"])
+        self.assertIn('/staffing-assignments/examiner/', submit_url_for_staff(self.session_record.id, "Eli Examiner"))
         examiner_payload = copy_payload_for_staff(self.session_record.id, "Eli Examiner")
         self.assertEqual(examiner_payload["schedule_folder_url"], "https://example.com/schedule-folder")
         self.assertEqual(examiner_payload["examiner_guideline_url"], "https://example.com/examiner-guidelines-2026")
         self.assertEqual(examiner_payload["material_for_examiners_url"], "https://example.com/material-for-examiners-2026")
-        supervisor_params = gmail_params_for_staff(onsite_session.id, "Sue Supervisor")
-        self.assertEqual(supervisor_params["to"], ["sue@example.com"])
-        self.assertEqual(supervisor_params["su"], ["SUPERVISOR – Onsite (7th August) - Pauu"])
+        self.assertIn('/staffing-assignments/supervisor/', submit_url_for_staff(onsite_session.id, "Sue Supervisor"))
         supervisor_payload = copy_payload_for_staff(onsite_session.id, "Sue Supervisor")
         self.assertEqual(supervisor_payload["full_name"], "Sue Supervisor")
         self.assertEqual(supervisor_payload["role"], "Supervisor")
@@ -21249,6 +21376,877 @@ assert.equal(storage.size, 0);
         self.assertEqual(self.session_record.emergency_contact_participation_status, "Pending")
         self.assertFalse(self.session_record.emergency_contact_role_check_verified)
         self.assertEqual(self.session_record.non_available_refs(), ["10"])
+
+    def test_staff_session_year_tabs_filter_pending_confirmed_fees_and_keep_confirmation_year(self):
+        from app.models import StaffExamSessionsShare, StaffExamSessionSubmission
+        linked, pending, unsubmitted = self.create_concat_schedule_test_sessions()
+        linked.session_date = date(2027, 7, 25)
+        pending.session_date = date(2027, 8, 25)
+        unsubmitted.session_date = date(2028, 7, 25)
+        member = AcademicStaff(id=841, status="Active", full_name="Year Filter Staff", roles="Examiner")
+        db.session.add(member)
+        db.session.flush()
+        share = StaffExamSessionsShare(person_ref=str(member.id), token="year-filter-staff")
+        db.session.add(share)
+        for record, status, fee in [(self.session_record, "Confirmed", "ARS 100"),
+                                    (linked, "Confirmed", "ARS 200"), (pending, "Pending", "ARS 300")]:
+            assignment = ExamSessionExaminerAssignment(exam_session_id=record.id, team_member_id=member.id,
+                participation_status=status, role_fee=fee)
+            db.session.add(assignment)
+            db.session.flush()
+            db.session.add(StaffExamSessionSubmission(share_id=share.id, exam_session_id=record.id,
+                assignment_type="examiner", assignment_id=assignment.id))
+        db.session.commit()
+        client = self.app.test_client()
+        url = "/my-exam-sessions/year-filter-staff"
+        html = client.get(url + "?session_year=2026").get_data(as_text=True)
+        self.assertIn('session_year=2026', html)
+        self.assertIn('session_year=2027', html)
+        self.assertNotIn('session_year=2028', html)
+        self.assertLess(html.index('</header>'), html.index('staff-session-year-toolbar'))
+        self.assertLess(html.index('staff-session-year-toolbar'), html.index('id="awaiting-sessions-title"'))
+        self.assertIn(self.session_record.exam_session_name, html)
+        self.assertNotIn(linked.exam_session_name, html)
+        self.assertNotIn(pending.exam_session_name, html)
+        self.assertIn('No exam sessions awaiting your confirmation', html)
+        html = client.get(url + "?session_year=2027").get_data(as_text=True)
+        self.assertNotIn(self.session_record.exam_session_name, html)
+        self.assertIn(linked.exam_session_name, html)
+        self.assertIn(pending.exam_session_name, html)
+        self.assertIn('1 exam session awaiting your confirmation', html)
+        fees = html.split('aria-labelledby="session-fees-title"', 1)[1].split('</section>', 1)[0]
+        self.assertIn('ARS 200', fees)
+        self.assertNotIn('ARS 100', fees)
+        self.assertNotIn('ARS 300', fees)
+        payloads = [json.loads(item) for item in re.findall(r"data-staff-session-payload='([^']+)'", html)]
+        payload = next(item for item in payloads if item['session_name'] == pending.exam_session_name)
+        response = client.post(payload['confirmation_url'], data={'csrf_token': payload['confirmation_csrf']})
+        self.assertEqual(parse_qs(urlparse(response.headers['Location']).query)['session_year'], ['2027'])
+        updated = client.get(response.headers['Location']).get_data(as_text=True)
+        fees = updated.split('aria-labelledby="session-fees-title"', 1)[1].split('</section>', 1)[0]
+        self.assertIn('ARS 500', fees)
+        self.assertNotIn(self.session_record.exam_session_name, updated)
+
+    def test_staff_session_fees_only_include_confirmed_sessions_and_sum_each_currency(self):
+        from app.models import StaffExamSessionsShare, StaffExamSessionSubmission
+        linked, pending_session, unsubmitted_session = self.create_concat_schedule_test_sessions()
+        linked.session_date = date(2026, 6, 20)
+        person = AcademicStaff(id=831, status="Active", full_name="Fee Recipient", roles="Examiner, Supervisor, Intern")
+        colleague = AcademicStaff(id=832, status="Active", full_name="Private Colleague", roles="Examiner")
+        db.session.add_all([person, colleague])
+        db.session.flush()
+        share = StaffExamSessionsShare(person_ref=str(person.id), token="session-fees-token")
+        db.session.add(share)
+        db.session.add(StaffPaymentSettings(next_payment_date=date(2026, 12, 27)))
+        assignments = [
+            (self.session_record, "examiner", ExamSessionExaminerAssignment(exam_session_id=self.session_record.id,
+                team_member_id=person.id, participation_status="Pending", role_fee="ARS 10.000", device_dep="ARS 500")),
+            (self.session_record, "intern", ExamSessionInternAssignment(exam_session_id=self.session_record.id,
+                team_member_id=person.id, participation_status="Pending", role_fee="USD 30")),
+            (linked, "supervisor", ExamSessionSupervisorAssignment(exam_session_id=linked.id,
+                team_member_id=person.id, participation_status="Pending", role_fee="ARS 20.000")),
+            (pending_session, "examiner", ExamSessionExaminerAssignment(exam_session_id=pending_session.id,
+                team_member_id=person.id, participation_status="Pending", role_fee="ARS 999.999")),
+        ]
+        for _, _, assignment in assignments:
+            db.session.add(assignment)
+        db.session.add_all([
+            ExamSessionExaminerAssignment(exam_session_id=self.session_record.id, team_member_id=colleague.id,
+                participation_status="Confirmed", role_fee="ARS 777.777"),
+            ExamSessionExaminerAssignment(exam_session_id=unsubmitted_session.id, team_member_id=person.id,
+                participation_status="Confirmed", role_fee="ARS 444.444"),
+        ])
+        db.session.flush()
+        for record, role, assignment in assignments:
+            db.session.add(StaffExamSessionSubmission(share_id=share.id, exam_session_id=record.id,
+                assignment_type=role, assignment_id=assignment.id))
+        db.session.commit()
+        client = self.app.test_client()
+        url = "/my-exam-sessions/session-fees-token"
+        self.assertNotIn('id="session-fees-title"', client.get(url).get_data(as_text=True))
+        for _, _, assignment in assignments[:3]:
+            assignment.participation_status = "Confirmed"
+        db.session.commit()
+        html = client.get(url).get_data(as_text=True)
+        confirmed = html.split('aria-labelledby="submitted-sessions-title"', 1)[1].split('</section>', 1)[0]
+        self.assertLess(confirmed.index(f'data-confirmed-session="{linked.id}"'),
+                        confirmed.index(f'data-confirmed-session="{self.session_record.id}"'))
+        fees = html.split('aria-labelledby="session-fees-title"', 1)[1].split('</section>', 1)[0]
+        self.assertIn('Your exam session fees', fees)
+        for label in ["Exam session", "Date", "Role", "Fee"]:
+            self.assertIn(f'<th>{label}</th>', fees)
+        self.assertIn('ARS 10.500', fees)
+        self.assertIn('ARS 20.000', fees)
+        self.assertIn('USD 30', fees)
+        self.assertIn('Total session fees', fees)
+        self.assertIn('Invoice information', fees)
+        self.assertIn('one consolidated invoice', fees)
+        self.assertIn('Bellis Ignis Group S.R.L.', fees)
+        self.assertIn('30-71601631-1', fees)
+        self.assertIn('Av. Corrientes 1383 (1043), CABA', fees)
+        self.assertIn('Responsable Inscripto (VAT-Registered)', fees)
+        invoice_href = html_lib.unescape(re.search(r'<a href="([^"]+)"[^>]*>finance@pathexaminations.com</a>', fees).group(1))
+        invoice_url = urlparse(invoice_href)
+        self.assertEqual(invoice_url.netloc, 'mail.google.com')
+        invoice_params = parse_qs(invoice_url.query)
+        self.assertEqual(invoice_params['to'], ['finance@pathexaminations.com'])
+        self.assertEqual(invoice_params['su'], ['Exam session invoice - Fee Recipient'])
+        self.assertIn('27/12/2026 -', fees)
+        self.assertIn('5:00 pm · GMT-3', fees)
+        self.assertIn('ARS 30.500 / USD 30', fees)
+        self.assertEqual(fees.count('data-label="Fee"'), 3)
+        self.assertNotIn(pending_session.exam_session_name, fees)
+        self.assertNotIn(unsubmitted_session.exam_session_name, fees)
+        self.assertNotIn('999.999', fees)
+        self.assertNotIn('777.777', fees)
+        self.assertNotIn('444.444', fees)
+        self.assertLess(html.index('id="submitted-sessions-title"'), html.index('id="session-fees-title"'))
+
+    def test_staff_decline_requires_reconfirmation_and_releases_only_submitted_role(self):
+        from app.models import StaffExamSessionsShare, StaffExamSessionSubmission
+        person = AcademicStaff(id=871, status="Active", full_name="Declining Staff", roles="Supervisor, Examiner, Intern")
+        other = AcademicStaff(id=872, status="Active", full_name="Other Assignment", roles="Examiner")
+        db.session.add_all([person, other])
+        db.session.flush()
+        share = StaffExamSessionsShare(person_ref=str(person.id), token="decline-staff-token")
+        db.session.add(share)
+        assignment_rows = []
+        for role, model in [('supervisor', ExamSessionSupervisorAssignment), ('examiner', ExamSessionExaminerAssignment), ('intern', ExamSessionInternAssignment)]:
+            assignment = model(exam_session_id=self.session_record.id, team_member_id=person.id,
+                participation_status='Official confirmation sent', staffing_role_check_verified=True,
+                role_fee='ARS 100', start_time='09:00', end_time='12:00')
+            db.session.add(assignment)
+            assignment_rows.append((role, assignment))
+        unrelated = ExamSessionExaminerAssignment(exam_session_id=self.session_record.id, team_member_id=other.id, participation_status='Pending')
+        db.session.add(unrelated)
+        self.session_record.emergency_contact_member_id = person.id
+        self.session_record.emergency_contact_required = True
+        self.session_record.emergency_contact_participation_status = 'Official confirmation sent'
+        db.session.flush()
+        for role, assignment in assignment_rows + [('emergency_contact', self.session_record)]:
+            db.session.add(StaffExamSessionSubmission(share_id=share.id, exam_session_id=self.session_record.id,
+                assignment_type=role, assignment_id=assignment.id))
+        db.session.commit()
+        client = self.app.test_client()
+        page = client.get('/my-exam-sessions/decline-staff-token').get_data(as_text=True)
+        payloads = [json.loads(item) for item in re.findall(r"data-staff-session-payload='([^']+)'", page)]
+        csrf = payloads[0]['confirmation_csrf']
+        first_url = payloads[0]['decline_url']
+        self.assertEqual(client.get(first_url).status_code, 405)
+        self.assertEqual(client.post(first_url, data={'csrf_token': csrf}).status_code, 400)
+        self.assertEqual(client.post(first_url, data={'csrf_token': 'invalid', 'reconfirmed': '1'}).status_code, 400)
+        self.assertEqual(client.post(first_url.replace('decline-staff-token', 'wrong-token'), data={'csrf_token': csrf, 'reconfirmed': '1'}).status_code, 404)
+        unrelated_url = f'/my-exam-sessions/decline-staff-token/sessions/{self.session_record.id}/assignments/examiner/{unrelated.id}/decline'
+        self.assertEqual(client.post(unrelated_url, data={'csrf_token': csrf, 'reconfirmed': '1'}).status_code, 404)
+        for payload in payloads:
+            response = client.post(payload['decline_url'], data={'csrf_token': csrf, 'reconfirmed': '1'})
+            self.assertEqual(response.status_code, 303)
+            self.assertEqual(parse_qs(urlparse(response.headers['Location']).query)['session_year'], ['2026'])
+        for _, assignment in assignment_rows:
+            db.session.refresh(assignment)
+            self.assertIsNone(assignment.team_member_id)
+            self.assertIsNone(assignment.potential_entry_id)
+            self.assertEqual(assignment.participation_status, 'Pending')
+            self.assertFalse(assignment.staffing_role_check_verified)
+            self.assertIsNone(assignment.role_fee)
+            self.assertIsNone(assignment.staffing_status_due_at)
+        db.session.refresh(self.session_record)
+        self.assertIn(str(person.id), self.session_record.non_available_refs())
+        self.assertIsNone(self.session_record.emergency_contact_member_id)
+        self.assertEqual(self.session_record.emergency_contact_participation_status, 'Pending')
+        events = ExamSessionStaffingEvent.query.filter_by(exam_session_id=self.session_record.id, new_status='Declined').all()
+        self.assertEqual(len(events), 4)
+        self.assertTrue(all(item.staff_member_name == 'Declining Staff' for item in events))
+        self.assertEqual(client.post(first_url, data={'csrf_token': csrf, 'reconfirmed': '1'}).status_code, 404)
+        db.session.refresh(unrelated)
+        self.assertEqual(unrelated.team_member_id, other.id)
+        self.assertNotIn('data-staff-session-payload', client.get('/my-exam-sessions/decline-staff-token').get_data(as_text=True))
+
+    def test_staff_page_confirmation_updates_staffing_and_moves_chip_to_confirmed(self):
+        from app.models import StaffExamSessionsShare, StaffExamSessionSubmission
+        person = AcademicStaff(id=821, status="Active", full_name="Confirming Staff", roles="Examiner, Supervisor, Intern")
+        other = AcademicStaff(id=822, status="Active", full_name="Other Staff", roles="Examiner")
+        db.session.add_all([person, other])
+        db.session.flush()
+        share = StaffExamSessionsShare(person_ref=str(person.id), token="confirm-staff-token")
+        db.session.add(share)
+        self.session_record.emergency_contact_member_id = person.id
+        self.session_record.emergency_contact_required = True
+        self.session_record.emergency_contact_participation_status = "Official confirmation sent"
+        assignments = []
+        for role, model in [("examiner", ExamSessionExaminerAssignment), ("supervisor", ExamSessionSupervisorAssignment), ("intern", ExamSessionInternAssignment)]:
+            assignment = model(exam_session_id=self.session_record.id, team_member_id=person.id,
+                               participation_status="Official confirmation sent")
+            db.session.add(assignment)
+            assignments.append((role, assignment))
+        unsubmitted = ExamSessionExaminerAssignment(exam_session_id=self.session_record.id, team_member_id=other.id,
+                                                   participation_status="Pending")
+        db.session.add(unsubmitted)
+        db.session.flush()
+        for role, assignment in assignments + [("emergency_contact", self.session_record)]:
+            db.session.add(StaffExamSessionSubmission(share_id=share.id, exam_session_id=self.session_record.id,
+                assignment_type=role, assignment_id=assignment.id))
+        db.session.commit()
+        client = self.app.test_client()
+        page_url = "/my-exam-sessions/confirm-staff-token"
+        html = client.get(page_url).get_data(as_text=True)
+        payloads = [json.loads(item) for item in re.findall(r"data-staff-session-payload='([^']+)'", html)]
+        self.assertEqual(len(payloads), 4)
+        self.assertIn("1 exam session awaiting your confirmation", html)
+        first = payloads[0]
+        self.assertEqual(client.get(first["confirmation_url"]).status_code, 405)
+        self.assertEqual(client.post(first["confirmation_url"], data={"csrf_token": "invalid"}).status_code, 400)
+        tampered = first["confirmation_url"].replace("confirm-staff-token", "unknown-token")
+        self.assertEqual(client.post(tampered, data={"csrf_token": first["confirmation_csrf"]}).status_code, 404)
+        unsubmitted_url = f"{page_url}/sessions/{self.session_record.id}/assignments/examiner/{unsubmitted.id}/confirm"
+        self.assertEqual(client.post(unsubmitted_url, data={"csrf_token": first["confirmation_csrf"]}).status_code, 404)
+        for index, payload in enumerate(payloads):
+            response = client.post(payload["confirmation_url"], data={"csrf_token": payload["confirmation_csrf"]})
+            self.assertEqual(response.status_code, 303)
+            html = client.get(response.headers["Location"]).get_data(as_text=True)
+            if index < len(payloads) - 1:
+                self.assertIn("1 exam session awaiting your confirmation", html)
+        self.assertIn("No exam sessions awaiting your confirmation", html)
+        awaiting = html.split('aria-labelledby="awaiting-sessions-title"', 1)[1].split('</section>', 1)[0]
+        confirmed = html.split('aria-labelledby="submitted-sessions-title"', 1)[1].split('</section>', 1)[0]
+        self.assertNotIn(self.session_record.exam_session_name, awaiting)
+        self.assertIn(self.session_record.exam_session_name, confirmed)
+        self.assertIn(f'data-confirmed-session="{self.session_record.id}"', confirmed)
+        self.assertIn('Access session details', confirmed)
+        self.assertIn('role-examiner', confirmed)
+        self.assertIn('role-supervisor', confirmed)
+        self.assertIn('role-intern', confirmed)
+        self.assertIn('role-emergency_contact', confirmed)
+        self.assertNotIn('staff-exam-session-chip', confirmed)
+        self.assertNotIn('data-staff-response-actions', html)
+        self.assertIn('Participation confirmed', html)
+        self.assertIn(f'aria-controls="staff-session-detail-{self.session_record.id}"', confirmed)
+        for _, assignment in assignments:
+            db.session.refresh(assignment)
+            self.assertEqual(assignment.participation_status, "Confirmed")
+            self.assertTrue(assignment.staffing_role_check_verified)
+        db.session.refresh(self.session_record)
+        self.assertEqual(self.session_record.emergency_contact_participation_status, "Confirmed")
+        events = ExamSessionStaffingEvent.query.filter_by(exam_session_id=self.session_record.id, new_status="Confirmed").all()
+        self.assertEqual(len(events), 4)
+        self.assertTrue(all(event.created_by == f"Staff member: {person.id}" for event in events))
+        client.post(first["confirmation_url"], data={"csrf_token": first["confirmation_csrf"]})
+        self.assertEqual(ExamSessionStaffingEvent.query.filter_by(exam_session_id=self.session_record.id, new_status="Confirmed").count(), 4)
+        db.session.refresh(unsubmitted)
+        self.assertEqual(unsubmitted.participation_status, "Pending")
+        # A stale link must not confirm an assignment that was cancelled or reassigned.
+        assignments[0][1].participation_status = "Cancelled"
+        db.session.commit()
+        self.assertEqual(client.post(first["confirmation_url"], data={"csrf_token": first["confirmation_csrf"]}).status_code, 409)
+        assignments[0][1].team_member_id = other.id
+        db.session.commit()
+        self.assertEqual(client.post(first["confirmation_url"], data={"csrf_token": first["confirmation_csrf"]}).status_code, 404)
+
+    def test_supervisor_end_checks_unlock_at_gmt_minus_three_midnight_and_persist(self):
+        from unittest.mock import patch
+        from app.models import StaffExamSessionsShare, StaffExamSessionSubmission, StaffExamSessionEndChecks
+        from app.routes import staff_end_checks_available
+        self.app.config['STAFF_END_OF_SESSION_REPORT_URL'] = 'https://example.com/end-report'
+        self.session_record.session_date = date(2026, 12, 10)
+        self.session_record.session_pictures_folder_url = "https://example.com/session-pictures"
+        self.assertFalse(staff_end_checks_available(self.session_record, datetime(2026, 12, 10, 2, 59, 59, tzinfo=timezone.utc)))
+        self.assertTrue(staff_end_checks_available(self.session_record, datetime(2026, 12, 10, 3, 0, tzinfo=timezone.utc)))
+        self.assertTrue(staff_end_checks_available(self.session_record, datetime(2026, 12, 11, 3, 0, tzinfo=timezone.utc)))
+        person = AcademicStaff(id=861, status="Active", full_name="End Checks Supervisor", roles="Supervisor")
+        db.session.add(person)
+        db.session.flush()
+        assignment = ExamSessionSupervisorAssignment(exam_session_id=self.session_record.id,
+            team_member_id=person.id, participation_status="Confirmed")
+        share = StaffExamSessionsShare(person_ref=str(person.id), token="end-checks-supervisor")
+        db.session.add_all([assignment, share])
+        db.session.flush()
+        submission = StaffExamSessionSubmission(share_id=share.id, exam_session_id=self.session_record.id,
+            assignment_type="supervisor", assignment_id=assignment.id)
+        db.session.add(submission)
+        db.session.commit()
+        client = self.app.test_client()
+        page_url = "/my-exam-sessions/end-checks-supervisor?session_year=2026"
+        with patch('app.routes.staff_end_checks_available', return_value=False):
+            html = client.get(page_url).get_data(as_text=True)
+            payload = json.loads(re.search(r"data-staff-session-payload='([^']+)'", html).group(1))
+            end_url = payload['end_checks']['url']
+            csrf = payload['confirmation_csrf']
+            block = html.split('aria-label="End-of-session checks"', 1)[1].split('</section>', 1)[0]
+            self.assertIn('Available on exam day', block)
+            self.assertEqual(block.count(' disabled'), 6)
+            self.assertIn('href="#"', block)
+            self.assertIn('2026-12-10T00:00:00-03:00', block)
+            self.assertLess(html.index('<h3>Emergency contact</h3>'), html.index('End-of-session checks (0/6)'))
+            response = client.post(end_url, data={'csrf_token': csrf, 'check': 'attendance', 'checked': '1'})
+            self.assertEqual(response.status_code, 403)
+            self.assertEqual(StaffExamSessionEndChecks.query.count(), 0)
+        with patch('app.routes.staff_end_checks_available', return_value=True):
+            html = client.get(page_url).get_data(as_text=True)
+            block = html.split('aria-label="End-of-session checks"', 1)[1].split('</section>', 1)[0]
+            self.assertIn('>Available</span>', block)
+            self.assertIn('href="https://example.com/session-pictures"', block)
+            self.assertIn('href="https://example.com/end-report"', block)
+            self.assertIn('staff-end-checks-final-items', block)
+            self.assertIn('Session feedback pending', block)
+            self.assertNotIn(' disabled', block)
+            self.assertEqual(client.post(end_url, data={'csrf_token': 'invalid', 'check': 'attendance', 'checked': '1'}).status_code, 400)
+            self.assertEqual(client.post(end_url, data={'csrf_token': csrf, 'check': 'unknown', 'checked': '1'}).status_code, 400)
+            self.assertEqual(client.post(end_url.replace('end-checks-supervisor', 'invalid-token'), data={'csrf_token': csrf, 'check': 'attendance', 'checked': '1'}).status_code, 404)
+            for key in ['attendance', 'return_papers', 'recordings', 'audiovisual', 'end_report', 'centre_feedback']:
+                response = client.post(end_url, data={'csrf_token': csrf, 'check': key, 'checked': '1'})
+                self.assertEqual(response.status_code, 200)
+                self.assertTrue(response.json['checked'])
+            saved = StaffExamSessionEndChecks.query.filter_by(submission_id=submission.id).one()
+            self.assertTrue(saved.attendance and saved.return_papers and saved.recordings and saved.audiovisual and saved.end_report and saved.centre_feedback)
+            html = client.get(page_url).get_data(as_text=True)
+            block = html.split('aria-label="End-of-session checks"', 1)[1].split('</section>', 1)[0]
+            self.assertEqual(block.count(' checked'), 6)
+            self.assertIn('End-of-session checks (6/6)', block)
+            client.post(end_url, data={'csrf_token': csrf, 'check': 'attendance', 'checked': '0'})
+            db.session.refresh(saved)
+            self.assertFalse(saved.attendance)
+            self.assertTrue(saved.return_papers)
+            assignment.participation_status = 'Pending'
+            db.session.commit()
+            self.assertEqual(client.post(end_url, data={'csrf_token': csrf, 'check': 'attendance', 'checked': '1'}).status_code, 403)
+            self.assertNotIn('aria-label="End-of-session checks"', client.get(page_url).get_data(as_text=True))
+            assignment.team_member_id = None
+            db.session.commit()
+            self.assertEqual(client.post(end_url, data={'csrf_token': csrf, 'check': 'attendance', 'checked': '1'}).status_code, 404)
+
+    def test_confirmed_supervisor_emergency_section_uses_session_requirement_and_call_links(self):
+        from app.models import StaffExamSessionsShare, StaffExamSessionSubmission
+        supervisor = AcademicStaff(id=851, status="Active", full_name="Confirmed Supervisor", roles="Supervisor")
+        emergency = AcademicStaff(id=852, status="Active", full_name="Emergency Person", title="Ms", roles="Supervisor", phone="+54 911 1234 5678")
+        db.session.add_all([supervisor, emergency])
+        db.session.flush()
+        assignment = ExamSessionSupervisorAssignment(exam_session_id=self.session_record.id,
+            team_member_id=supervisor.id, participation_status="Confirmed")
+        share = StaffExamSessionsShare(person_ref=str(supervisor.id), token="supervisor-emergency-token")
+        db.session.add_all([assignment, share])
+        db.session.flush()
+        db.session.add(StaffExamSessionSubmission(share_id=share.id, exam_session_id=self.session_record.id,
+            assignment_type="supervisor", assignment_id=assignment.id))
+        self.session_record.emergency_contact_required = False
+        db.session.commit()
+        client = self.app.test_client()
+        url = "/my-exam-sessions/supervisor-emergency-token"
+        html = client.get(url).get_data(as_text=True)
+        fallback = "No emergency contact has been assigned to this exam session, as a permanent Path Examinations staff member will be present on-site."
+        self.assertIn(fallback, html)
+        self.assertLess(html.index('Your session team'), html.index('<h3>Emergency contact</h3>'))
+        self.session_record.emergency_contact_required = True
+        self.session_record.emergency_contact_not_required = False
+        self.session_record.emergency_contact_member_id = emergency.id
+        db.session.commit()
+        html = client.get(url).get_data(as_text=True)
+        section = html.split('aria-label="Emergency contact"', 1)[1].split('</section>', 1)[0]
+        self.assertIn('Always call rather than send a message.', section)
+        self.assertIn('<strong>Path emergency contact</strong>', section)
+        self.assertIn('Ms Emergency Person', section)
+        self.assertIn('href="tel:+5491112345678"', section)
+        self.assertNotIn('data-staff-phone', section)
+        self.assertNotIn(fallback, html)
+        self.assertNotIn('<h4>Emergency line</h4>', html)
+        assignment.participation_status = "Pending"
+        db.session.commit()
+        self.assertNotIn('staff-supervisor-emergency', client.get(url).get_data(as_text=True))
+
+    def test_staff_session_details_reuse_official_payload_and_keep_other_fees_private(self):
+        from app.models import StaffExamSessionsShare, StaffExamSessionSubmission
+        member = AcademicStaff(id=811, status="Active", full_name="Recipient Examiner", roles="Examiner")
+        colleague = AcademicStaff(id=812, status="Active", full_name="Team Supervisor", roles="Supervisor", phone="+54 911 1234 5678")
+        db.session.add_all([member, colleague])
+        own = ExamSessionExaminerAssignment(exam_session_id=self.session_record.id, team_member_id=member.id,
+            participation_status="Pending", start_time="09:00", end_time="12:30", role_fee="ARS 12.345",
+            logistics_type="Uber")
+        other = ExamSessionSupervisorAssignment(exam_session_id=self.session_record.id, team_member_id=colleague.id,
+            participation_status="Confirmed", role_fee="ARS 98.765")
+        share = StaffExamSessionsShare(person_ref=str(member.id), token="detail-recipient-token")
+        db.session.add_all([own, other, share])
+        db.session.flush()
+        db.session.add(StaffExamSessionSubmission(share_id=share.id, exam_session_id=self.session_record.id,
+                                                assignment_type="examiner", assignment_id=own.id))
+        db.session.add(ExamSessionLogistics(exam_session_id=self.session_record.id, logistics_files_url="https://example.com/travel"))
+        db.session.add(CertificationYearConfiguration(module_key="examiner_certification", year=2026,
+            examiner_guideline_url="https://example.com/guidelines", material_for_examiners_url="https://example.com/materials"))
+        db.session.commit()
+        client = self.app.test_client()
+        html = client.get("/my-exam-sessions/detail-recipient-token").get_data(as_text=True)
+        self.assertIn(f'data-staff-session-open="staff-session-detail-{self.session_record.id}"', html)
+        self.assertIn(f'<dialog class="staff-session-detail" id="staff-session-detail-{self.session_record.id}"', html)
+        payload = json.loads(re.search(r"data-staff-session-payload='([^']+)'", html).group(1))
+        self.assertEqual(payload["full_name"], member.full_name)
+        self.assertEqual(payload["role"], "Examiner")
+        self.assertEqual(payload["time_ranges"], ["09.00 to 12.30 h"])
+        self.assertEqual(payload["fee_lines"], [{"label": "Role fee", "value": "ARS 12.345"}])
+        self.assertEqual(payload["logistics_url"], "https://example.com/travel")
+        self.assertEqual(payload["examiner_guideline_url"], "https://example.com/guidelines")
+        self.assertEqual(payload["material_for_examiners_url"], "https://example.com/materials")
+        self.assertIn(colleague.full_name, html)
+        self.assertNotIn("98.765", html)
+        self.assertIn("Your fees", html)
+        self.assertIn("Invoice &amp; payment information", html)
+        own.role_fee = "ARS 23.456"
+        db.session.commit()
+        html = client.get("/my-exam-sessions/detail-recipient-token").get_data(as_text=True)
+        self.assertIn("23.456", html)
+        self.assertNotIn("12.345", html)
+        own.team_member_id = colleague.id
+        db.session.commit()
+        html = client.get("/my-exam-sessions/detail-recipient-token").get_data(as_text=True)
+        self.assertNotIn("data-staff-session-payload", html)
+
+    def test_staff_session_dialog_opens_role_details_and_closes_back_to_chip(self):
+        from pathlib import Path
+        shared = Path("app/static/js/app.js").read_text()
+        shared = shared[shared.index("const cleanEmailValue"):shared.index("const initInvitationEmailCopyButtons")]
+        detail = Path("app/static/js/staff_exam_sessions.js").read_text()
+        harness = r'''
+const assert = require("node:assert/strict");
+class Element {
+  constructor(tag="div") {this.tagName=tag;this.children=[];this.dataset={};this.textContent="";this.hidden=false;this.classes=new Set();this.classList={add:(c)=>this.classes.add(c),remove:(c)=>this.classes.delete(c)};}
+  append(...items) {items.forEach((item)=>{if(typeof item==="object") item.parent=this;});this.children.push(...items);}
+  replaceChildren(...items) {this.children=[];this.append(...items);}
+  matchesSelector(s) {
+    const key={"[data-staff-decline-open]":"staffDeclineOpen","[data-staff-decline-cancel]":"staffDeclineCancel","[data-staff-decline-control]":"staffDeclineControl","[data-staff-decline-panel]":"staffDeclinePanel","[data-staff-participation-open]":"staffParticipationOpen","[data-staff-participation-cancel]":"staffParticipationCancel","[data-staff-participation-control]":"staffParticipationControl","[data-staff-participation-panel]":"staffParticipationPanel"}[s];
+    return key ? Object.hasOwn(this.dataset,key) : s==='button[type="submit"]' && this.tagName==='button' && this.type==='submit';
+  }
+  closest(s) {return this.matchesSelector(s)?this:this.parent?.closest(s)||null;}
+  querySelector(s) {for(const item of this.children) {if(typeof item!=="object") continue;if(item.matchesSelector(s)) return item;const found=item.querySelector(s);if(found) return found;}return null;}
+  focus() {this.focused=true;}
+  addEventListener(event, handler) {this.events ||= {};this.events[event]=handler;}
+  showModal() {this.open=true;}
+  close() {this.open=false;this.events?.close?.();}
+}
+const text = (node) => [node.textContent, ...node.children.map(text)].join(" ");
+let clickHandler;
+for (const role of ["Examiner", "Supervisor", "Intern", "Emergency contact"]) {
+  const fields = {};
+  const root = new Element();
+  root.dataset.staffSessionPayload = JSON.stringify({role, confirmation_url:"/confirm-staff", decline_url:"/decline-staff", confirmation_csrf:"test-csrf", session_date_short:"10/12/2026", session_name:"Test exam", full_name:"Test Person", logistics_status:"Uber", logistics_url:"https://example.com/logistics", schedule_folder_url:"https://example.com/schedule", examiner_guideline_url:"https://example.com/guidelines", material_for_examiners_url:"https://example.com/materials", supervisor_guideline_url:"https://example.com/supervisor", backup_material_for_examiners_url:"https://example.com/backup"});
+  root.querySelector = (s) => fields[s] ||= new Element();
+  const dialog = new Element();
+  const events = {};
+  dialog.querySelectorAll = (s) => s === "[data-staff-session-payload]" ? [root] : [];
+  dialog.addEventListener = (event, handler) => events[event]=handler;
+  dialog.showModal = () => {dialog.open=true;};
+  dialog.close = () => {dialog.open=false;events.close();};
+  const trigger = {dataset:{staffSessionOpen:"test"},focus:()=>{trigger.focused=true;},closest:(s)=>s==="[data-staff-session-open]"?trigger:null};
+  global.document = {createElement:(tag)=>new Element(tag),body:new Element(),getElementById:()=>dialog,querySelectorAll:(selector)=>selector==="dialog.staff-session-detail"?[dialog]:[],addEventListener:(_,fn)=>{clickHandler=fn;}};
+  eval(DETAIL_SOURCE);
+  clickHandler({target:trigger});
+  assert.equal(dialog.open,true);
+  assert.equal(dialog.dataset.initialized,"true");
+  assert.equal(fields["[data-staff-response-actions]"].children.length,3);
+  const confirm=fields["[data-staff-response-actions]"].children[0];
+  const confirmButton=confirm.children[0], confirmPanel=confirm.children[1];
+  assert.equal(confirmButton.textContent,"Confirm participation");
+  assert.equal(confirmButton.type,"button");
+  assert.equal(confirmPanel.tagName,"dialog");
+  assert.notEqual(confirmPanel.open,true);
+  clickHandler({target:confirmButton});
+  assert.equal(confirmPanel.open,true);
+  assert.equal(dialog.open,true);
+  const confirmForm=confirmPanel.children[2];
+  assert.equal(confirmForm.method,"post");
+  assert.equal(confirmForm.action,"/confirm-staff");
+  assert.equal(confirmForm.children[0].name,"csrf_token");
+  assert.equal(confirmForm.children[0].value,"test-csrf");
+  assert.equal(confirmForm.children[1].textContent,"Yes, confirm participation");
+  assert.equal(confirmForm.children[1].type,"submit");
+  clickHandler({target:confirmForm.children[2]});
+  assert.equal(confirmPanel.open,false);
+  assert.equal(dialog.open,true);
+  assert.equal(confirmButton.focused,true);
+  const question=fields["[data-staff-response-actions]"].children[1];
+  if (["Examiner", "Supervisor"].includes(role)) {
+    const whatsapp=new URL(question.href);
+    assert.equal(whatsapp.origin,"https://wa.me");
+    assert.equal(whatsapp.pathname,"/5491150954847");
+    assert.equal(question.target,"_blank");
+    assert.equal(question.rel,"noopener noreferrer");
+    assert.equal(whatsapp.searchParams.get("text"), `*Test exam (10/12/2026)*\n- *${role}: Test Person*\n\n¡Hola, equipo de Path!\n\nTengo la siguiente consulta sobre esta sesión de examen:`);
+  } else assert.ok(question.href.startsWith("mailto:"));
+  const declineControl=fields["[data-staff-response-actions]"].children[2];
+  const declineButton=declineControl.children[0], declinePanel=declineControl.children[1];
+  assert.equal(declineButton.type,"button");
+  assert.equal(declinePanel.tagName,"dialog");
+  assert.notEqual(declinePanel.open,true);
+  clickHandler({target:declineButton});
+  assert.equal(declinePanel.open,true);
+  assert.equal(dialog.open,true);
+  assert.equal(declineButton.hidden,false);
+  const declineForm=declinePanel.children[2];
+  assert.equal(declineForm.action,"/decline-staff");
+  assert.equal(declineForm.method,"post");
+  assert.equal(declineForm.children[1].name,"reconfirmed");
+  assert.equal(declineForm.children[1].value,"1");
+  clickHandler({target:declineForm.children[3]});
+  assert.equal(declinePanel.open,false);
+  assert.equal(dialog.open,true);
+  assert.equal(declineButton.focused,true);
+  if(role==="Intern") assert.equal(fields["[data-staff-materials-section]"].hidden,true);
+  if(role==="Examiner") {assert.ok(text(fields["[data-staff-materials]"]).includes("Examiner guidelines"));assert.equal(fields["[data-staff-responsibilities-section]"].hidden,true);}
+  if(role==="Supervisor") {assert.ok(!text(fields["[data-staff-materials]"]).includes("Back-up material"));assert.ok(text(fields["[data-staff-materials]"]).includes("Supervisor guidelines"));}
+  if(role==="Emergency contact") {assert.equal(fields["[data-staff-travel-section]"].hidden,true);assert.ok(text(fields["[data-staff-materials]"]).includes("Emergency contact manual"));}
+  const materialCount=fields["[data-staff-materials]"].children.length;
+  clickHandler({target:trigger});
+  assert.equal(fields["[data-staff-materials]"].children.length,materialCount);
+  clickHandler({target:{closest:(s)=>s==="[data-staff-session-close]"?{closest:()=>dialog}:null}});
+  assert.equal(dialog.open,false);
+  assert.equal(trigger.focused,true);
+  Object.keys(fields).forEach((key)=>delete fields[key]);
+  dialog.dataset.initialized="";
+  root.dataset.staffSessionPayload=JSON.stringify({...JSON.parse(root.dataset.staffSessionPayload),participation_confirmed:true});
+  clickHandler({target:trigger});
+  assert.equal(dialog.open,true);
+  assert.equal(fields["[data-staff-response-actions]"],undefined);
+  if(role==="Supervisor") {
+    assert.ok(text(fields["[data-staff-materials]"]).includes("Back-up material for examiners"));
+    const backup=fields["[data-staff-materials]"].children.find((item)=>text(item).includes("Back-up material for examiners"));
+    assert.ok(backup.children.some((item)=>item.href==="https://example.com/backup"));
+  }
+  if(role==="Examiner") assert.ok(!text(fields["[data-staff-materials]"]).includes("Material for examiners"));
+  dialog.close();
+}
+'''.replace("DETAIL_SOURCE", json.dumps(detail))
+        result = subprocess.run(["node", "-e", shared + harness], capture_output=True, text=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_staff_exam_sessions_submit_aggregates_only_submitted_assignments(self):
+        from app.models import StaffExamSessionsShare, StaffExamSessionSubmission
+        other, unsubmitted, unrelated = self.create_concat_schedule_test_sessions()
+        member = AcademicStaff(id=805, status="Active", full_name="My Sessions Examiner", roles="Examiner, Supervisor")
+        stranger = AcademicStaff(id=806, status="Active", full_name="Other Examiner", roles="Examiner")
+        db.session.add_all([member, stranger])
+        assignments = []
+        for record, model, person in [(self.session_record, ExamSessionExaminerAssignment, member),
+                                     (other, ExamSessionSupervisorAssignment, member),
+                                     (unsubmitted, ExamSessionExaminerAssignment, member),
+                                     (unrelated, ExamSessionExaminerAssignment, stranger)]:
+            assignment = model(exam_session_id=record.id, team_member_id=person.id,
+                               participation_status="Pending", staffing_role_check_verified=True)
+            assignments.append(assignment)
+            db.session.add(assignment)
+            db.session.add(ExamSessionScheduleWorkflow(exam_session_id=record.id, status="Approved"))
+        db.session.commit()
+        client = self.login_client()
+        def submit(record, role, assignment):
+            return client.post(f"/pre-session-control-tower/sessions/{record.id}/staffing-assignments/{role}/{assignment.id}/submit",
+                               data={"csrf_token": "token"})
+        first = submit(self.session_record, "examiner", assignments[0])
+        self.assertEqual(first.status_code, 303)
+        self.assertEqual(submit(self.session_record, "examiner", assignments[0]).headers["Location"], first.headers["Location"])
+        second = submit(other, "supervisor", assignments[1])
+        self.assertEqual(second.headers["Location"], first.headers["Location"])
+        stranger_link = submit(unrelated, "examiner", assignments[3]).headers["Location"]
+        self.assertNotEqual(stranger_link, first.headers["Location"])
+        self.assertEqual(StaffExamSessionsShare.query.count(), 2)
+        self.assertEqual(StaffExamSessionSubmission.query.count(), 3)
+        anonymous = self.app.test_client()
+        response = anonymous.get(first.headers["Location"] + "?lang=es")
+        self.assertEqual(response.status_code, 200)
+        html = response.get_data(as_text=True)
+        self.assertIn("Your exam sessions", html)
+        self.assertIn("My Sessions Examiner", html)
+        self.assertIn(self.session_record.exam_session_name + " (25/06/2026)", html)
+        self.assertIn(other.exam_session_name + " (25/07/2026)", html)
+        self.assertNotIn(unsubmitted.exam_session_name, html)
+        self.assertNotIn(unrelated.exam_session_name, html)
+        self.assertNotIn("Versión en español", html)
+        self.assertNotIn("Choose your language", html)
+        self.assertIn("no-store", response.headers["Cache-Control"])
+        self.assertEqual(anonymous.get("/my-exam-sessions/invalid-token").status_code, 404)
+        awaiting = html.split('aria-labelledby="awaiting-sessions-title"', 1)[1].split('</section>', 1)[0]
+        confirmed = html.split('aria-labelledby="submitted-sessions-title"', 1)[1].split('</section>', 1)[0]
+        self.assertIn(self.session_record.exam_session_name, awaiting)
+        self.assertIn(other.exam_session_name, awaiting)
+        self.assertIn('staff-exam-session-chip is-awaiting', awaiting)
+        self.assertNotIn(self.session_record.exam_session_name, confirmed)
+        assignments[0].participation_status = "Confirmed"
+        db.session.commit()
+        updated = anonymous.get(first.headers["Location"]).get_data(as_text=True)
+        awaiting = updated.split('aria-labelledby="awaiting-sessions-title"', 1)[1].split('</section>', 1)[0]
+        confirmed = updated.split('aria-labelledby="submitted-sessions-title"', 1)[1].split('</section>', 1)[0]
+        self.assertNotIn(self.session_record.exam_session_name, awaiting)
+        self.assertIn(other.exam_session_name, awaiting)
+        self.assertIn(self.session_record.exam_session_name, confirmed)
+        self.assertNotIn(other.exam_session_name, confirmed)
+        # A previous recipient must not retain access after reassignment.
+        assignments[1].team_member_id = stranger.id
+        db.session.commit()
+        self.assertNotIn(other.exam_session_name, anonymous.get(first.headers["Location"]).get_data(as_text=True))
+
+    def test_staff_exam_sessions_submit_requires_verified_role_approved_schedule_and_edit_access(self):
+        from app.models import StaffExamSessionSubmission
+        member = AcademicStaff(id=807, status="Active", full_name="Verified Examiner", roles="Examiner")
+        db.session.add(member)
+        assignment = ExamSessionExaminerAssignment(exam_session_id=self.session_record.id, team_member_id=member.id,
+                                                  participation_status="Pending", staffing_role_check_verified=False)
+        workflow = ExamSessionScheduleWorkflow(exam_session_id=self.session_record.id, status="In progress")
+        db.session.add_all([assignment, workflow])
+        db.session.commit()
+        url = f"/pre-session-control-tower/sessions/{self.session_record.id}/staffing-assignments/examiner/{assignment.id}/submit"
+        client = self.login_client()
+        self.assertEqual(client.post(url, data={"csrf_token": "invalid"}).status_code, 400)
+        self.assertEqual(client.post(url, data={"csrf_token": "token"}).status_code, 400)
+        workflow.status = "Approved"
+        db.session.commit()
+        self.assertEqual(client.post(url, data={"csrf_token": "token"}).status_code, 400)
+        assignment.staffing_role_check_verified = True
+        db.session.commit()
+        viewer = self.login_client_for_user(self.create_my_actions_user("Admin", can_edit=False))
+        self.assertEqual(viewer.post(url, data={"csrf_token": "token"}).status_code, 403)
+        self.assertEqual(StaffExamSessionSubmission.query.count(), 0)
+        self.assertEqual(self.app.test_client().post(url, data={"csrf_token": "token"}).status_code, 302)
+
+    def test_staff_invitation_icons_only_show_whatsapp_for_every_submission(self):
+        other, next_year, separate = self.create_concat_schedule_test_sessions()
+        next_year.session_date = date(2027, 1, 10)
+        for year in (2026, 2027):
+            if not ExamSessionYear.query.filter_by(year=year).first():
+                db.session.add(ExamSessionYear(year=year))
+        member = AcademicStaff(id=901, status='Active', full_name='Annual Invite Staff', roles='Examiner, Supervisor, Intern',
+                               email='annual@example.com', phone='+54 911 5555 2222')
+        another = AcademicStaff(id=902, status='Active', full_name='Separate Invite Staff', roles='Examiner')
+        db.session.add_all([member, another])
+        db.session.flush()
+        specs = [(other, 'examiner', ExamSessionExaminerAssignment, member),
+                 (self.session_record, 'supervisor', ExamSessionSupervisorAssignment, member),
+                 (self.session_record, 'intern', ExamSessionInternAssignment, member),
+                 (next_year, 'supervisor', ExamSessionSupervisorAssignment, member),
+                 (separate, 'examiner', ExamSessionExaminerAssignment, another)]
+        assignments = []
+        for record, role, model, person in specs:
+            assignment = model(exam_session_id=record.id, team_member_id=person.id, participation_status='Pending', staffing_role_check_verified=True)
+            db.session.add(assignment)
+            assignments.append((record, role, assignment))
+        for record in [self.session_record, other, next_year, separate]:
+            db.session.add(ExamSessionScheduleWorkflow(exam_session_id=record.id, status='Approved'))
+        db.session.commit()
+        client = self.login_client()
+        responses = []
+        for record, role, assignment in assignments:
+            url = f'/pre-session-control-tower/sessions/{record.id}/staffing-assignments/{role}/{assignment.id}/submit'
+            response = client.post(url, data={'csrf_token': 'token'}, headers={'Accept': 'application/json'})
+            self.assertEqual(response.status_code, 200)
+            responses.append(response.json)
+        self.assertEqual([item['invitation_actions']['show_email'] for item in responses], [True, False, False, True, True])
+        whatsapp = urlparse(responses[0]['invitation_actions']['whatsapp_url'])
+        self.assertEqual(whatsapp.netloc, 'api.whatsapp.com')
+        self.assertEqual(whatsapp.path, '/send')
+        self.assertEqual(parse_qs(whatsapp.query)['phone'], ['5491155552222'])
+        message = parse_qs(whatsapp.query)['text'][0]
+        self.assertIn(other.exam_session_name, message)
+        self.assertTrue(message.startswith("Hello, Annual Invite Staff!\n\n"))
+        self.assertIn("*Staff member portal*", message)
+        self.assertIn("_view all the relevant information_", message)
+        self.assertIn("*one exam session awaiting your confirmation*", message)
+        self.assertIn(f"- *{other.exam_session_name} | Examiner | {other.session_date.strftime('%d/%m/%Y')} | {other.format}", message)
+        self.assertIn("We’ll notify you if any additional exam sessions are assigned to you in the portal.", message)
+        self.assertTrue(message.endswith("Brenda\n*Path Examinations*"))
+        self.assertIn("😊", message)
+        self.assertIn("🚀", message)
+        self.assertIn("💙", message)
+        self.assertIn("👉", message)
+        self.assertIn("❗", message)
+        self.assertNotIn("\ufffd", message)
+        self.assertNotIn("ðŸ", message)
+        self.assertNotIn("+", whatsapp.query)
+        for encoded in ("%F0%9F%98%8A", "%F0%9F%9A%80", "%F0%9F%91%89", "%E2%9D%97", "%F0%9F%92%99"):
+            self.assertIn(encoded, whatsapp.query)
+        self.assertIn('/my-exam-sessions/', message)
+        email = parse_qs(urlparse(responses[0]['invitation_actions']['email_url']).query)
+        self.assertEqual(email['to'], ['annual@example.com'])
+        self.assertIn('/my-exam-sessions/', email['body'][0])
+        self.assertNotIn('phone', parse_qs(urlparse(responses[-1]['invitation_actions']['whatsapp_url']).query))
+        self.assertEqual(responses[-1]['invitation_actions']['email_url'], '')
+        messages = [parse_qs(urlparse(item['invitation_actions']['whatsapp_url']).query)['text'][0] for item in responses]
+        for text, count in zip(messages, (1, 2, 2, 3, 1)):
+            label = "one exam session" if count == 1 else f"{count} exam sessions"
+            self.assertIn(f"*{label} awaiting your confirmation*", text)
+            self.assertEqual(sum(line.startswith('- *') for line in text.splitlines()), count)
+        self.assertIn('Supervisor, Intern', messages[2])
+        self.assertNotIn(another.full_name, messages[3])
+        for year, indexes in [(2026, [0, 1, 2, 4]), (2027, [3])]:
+            html = client.get(f'/pre-session-control-tower?session_year={year}&view=sessions').get_data(as_text=True)
+            for index in indexes:
+                record, role, assignment = assignments[index]
+                key = f'{record.id}:{role}:{assignment.id}'
+                self.assertTrue(f'data-staffing-assignment-key="{key}"' in html, f'Missing row {key} for year {year}; present: ' + str(re.findall(r'data-staffing-assignment-key="([^"]+)"', html)))
+                row = html.split(f'data-staffing-assignment-key="{key}"', 1)[1].split('</tr>', 1)[0]
+                self.assertIn('staffing-invitation-icon is-whatsapp', row)
+                self.assertNotIn('staffing-invitation-icon is-email', row)
+                self.assertNotIn('data-staff-confirmation-email', row)
+
+        # Current statuses, identity and submission presence govern the whole list.
+        from app.routes import staff_portal_invitation_actions
+        from app.models import StaffExamSessionSubmission
+        submission = StaffExamSessionSubmission.query.filter_by(
+            exam_session_id=other.id, assignment_type='examiner', assignment_id=assignments[0][2].id).one()
+        def current_message():
+            with self.app.test_request_context():
+                actions = staff_portal_invitation_actions(other, submission, member.full_name, member.email, member.phone)
+                return parse_qs(urlparse(actions['whatsapp_url']).query)['text'][0]
+        self.assertIn("We're pleased to share our new *Staff member portal*", current_message())
+        assignments[0][2].participation_status = 'Official confirmation sent'
+        db.session.commit()
+        # This row's own status does not turn its initial invitation into a follow-up.
+        self.assertIn("We're pleased to share our new *Staff member portal*", current_message())
+        assignments[1][2].participation_status = 'Official confirmation sent'
+        db.session.commit()
+        short = current_message()
+        self.assertTrue(short.startswith('*NEW EXAM SESSION AWAITING CONFIRMATION* 🚀'))
+        self.assertIn('💻 Your portal:', short)
+        self.assertIn('Hello, Annual Invite Staff! 👋', short)
+        self.assertIn('*3 exam sessions awaiting your confirmation:*', short)
+        self.assertEqual(sum(line.startswith('- *') for line in short.splitlines()), 3)
+        self.assertIn('*confirm your participation as soon as possible*', short)
+        self.assertNotIn("We're pleased to share", short)
+        assignments[1][2].participation_status = 'Pending'
+        assignments[3][2].participation_status = 'Confirmed'
+        db.session.commit()
+        # A confirmed invitation in another year does not trigger the short template.
+        self.assertIn("We're pleased to share our new *Staff member portal*", current_message())
+        assignments[1][2].participation_status = 'Confirmed'
+        assignments[2][2].participation_status = 'Declined'
+        assignments[3][2].team_member_id = another.id
+        unsubmitted = ExamSessionExaminerAssignment(exam_session_id=separate.id, team_member_id=member.id,
+                                                    participation_status='Pending')
+        db.session.add(unsubmitted)
+        db.session.commit()
+        text = current_message()
+        self.assertIn('*1 exam session awaiting your confirmation:*', text)
+        self.assertEqual(sum(line.startswith('- *') for line in text.splitlines()), 1)
+        self.assertIn(f'- *{other.exam_session_name} | Examiner |', text)
+        assignments[0][2].participation_status = 'Confirmed'
+        db.session.commit()
+        text = current_message()
+        self.assertIn('*no exam sessions awaiting your confirmation*', text)
+        self.assertFalse(any(line.startswith('- *') for line in text.splitlines()))
+
+    def test_staffing_added_link_persists_and_follows_the_current_assignee(self):
+        first = AcademicStaff(id=891, status='Active', full_name='First Added Examiner', roles='Examiner')
+        second = AcademicStaff(id=892, status='Active', full_name='Replacement Examiner', roles='Examiner')
+        db.session.add_all([first, second])
+        db.session.flush()
+        assignment = ExamSessionExaminerAssignment(exam_session_id=self.session_record.id, team_member_id=first.id,
+            participation_status='Pending', staffing_role_check_verified=True)
+        db.session.add(assignment)
+        db.session.add(ExamSessionScheduleWorkflow(exam_session_id=self.session_record.id, status='Approved'))
+        db.session.commit()
+        bundle = self.create_shipment_bundle_record(session_record=self.session_record)
+        client = self.login_client()
+        page_url = f'/pre-session-control-tower?session_year=2026&view=bundle&bundle_id={bundle.id}'
+        action_url = f'/pre-session-control-tower/sessions/{self.session_record.id}/staffing-assignments/examiner/{assignment.id}/submit'
+        def row_html():
+            html = client.get(page_url).get_data(as_text=True)
+            return html.split(f'data-staffing-assignment-key="{self.session_record.id}:examiner:{assignment.id}"', 1)[1].split('</tr>', 1)[0]
+        self.assertIn('>Add</button>', row_html())
+        added = client.post(action_url, data={'csrf_token': 'token'}, headers={'Accept': 'application/json'})
+        self.assertEqual(added.status_code, 200)
+        self.assertTrue(added.json['ok'])
+        first_url = added.json['url']
+        row = row_html()
+        self.assertIn('class="staffing-added-link"', row)
+        self.assertIn('>Added</a>', row)
+        self.assertIn(html_lib.escape(first_url, quote=True), row)
+        self.assertNotIn('>Add</button>', row)
+        assignment.participation_status = 'Confirmed'
+        db.session.commit()
+        row = row_html()
+        link = re.search(r'<a class="staffing-added-link"[^>]+>Added</a>', row).group(0)
+        self.assertNotIn('data-role-check-dependent', link)
+        self.assertNotIn('is-disabled', link)
+        assignment.team_member_id = second.id
+        assignment.participation_status = 'Pending'
+        db.session.commit()
+        self.assertIn('>Add</button>', row_html())
+        self.assertNotIn('>Added</a>', row_html())
+        added = client.post(action_url, data={'csrf_token': 'token'}, headers={'Accept': 'application/json'})
+        self.assertEqual(added.status_code, 200)
+        self.assertNotEqual(added.json['url'], first_url)
+        self.assertIn('>Added</a>', row_html())
+
+    def test_staffing_vacant_role_cards_remain_accessible_and_allow_assignment(self):
+        self.session_record.emergency_contact_required = True
+        self.session_record.emergency_contact_not_required = False
+        self.session_record.emergency_contact_member_id = None
+        examiner = AcademicStaff(id=882, status='Active', full_name='New Assigned Examiner', roles='Examiner')
+        db.session.add(examiner)
+        vacant = ExamSessionExaminerAssignment(exam_session_id=self.session_record.id, participation_status='Pending')
+        vacant_supervisor = ExamSessionSupervisorAssignment(exam_session_id=self.session_record.id, participation_status='Pending')
+        vacant_intern = ExamSessionInternAssignment(exam_session_id=self.session_record.id, participation_status='Pending')
+        db.session.add_all([vacant, vacant_supervisor, vacant_intern])
+        db.session.commit()
+        bundle = self.create_shipment_bundle_record(session_record=self.session_record)
+        client = self.login_client()
+        url = f'/pre-session-control-tower?session_year=2026&view=bundle&bundle_id={bundle.id}'
+        html = client.get(url).get_data(as_text=True)
+        for role, assignment_id, label in [('examiner', vacant.id, 'Examiner'), ('supervisor', vacant_supervisor.id, 'Supervisor'),
+                                         ('intern', vacant_intern.id, 'Intern'), ('emergency_contact', self.session_record.id, 'Emergency contact')]:
+            key = f'{self.session_record.id}:{role}:{assignment_id}'
+            row = html.split(f'data-staffing-assignment-key="{key}"', 1)[1].split('</tr>', 1)[0]
+            self.assertIn('Role to cover', row)
+            button = re.search(r'<button[^>]+data-staffing-member-card="[^"]+"[^>]*>', row).group(0)
+            self.assertNotIn(' disabled', button)
+            self.assertIn(f'data-staffing-member-card-title="{label} - Role to cover"', button)
+            card_url = html_lib.unescape(re.search(r'data-staffing-member-card="([^"]+)"', button).group(1))
+            embedded = client.get(card_url)
+            self.assertEqual(embedded.status_code, 200)
+            self.assertEqual(embedded.headers['X-Frame-Options'], 'SAMEORIGIN')
+        key = f'existing-{vacant.id}'
+        saved = client.post(f'/exam-session-planner/sessions/{self.session_record.id}/members', data={
+            'csrf_token': 'token', 'session_year': '2026', 'session_fullscreen': '1', 'modal_action': 'save_close',
+            'examiner_row_keys': key, f'examiner_assignment_id_{key}': str(vacant.id),
+            f'examiner_team_member_id_{key}': str(examiner.id), f'examiner_participation_status_{key}': 'Pending',
+            f'examiner_start_time_{key}': '09:00', f'examiner_end_time_{key}': '12:00',
+        }, headers={'Accept': 'application/json'})
+        self.assertEqual(saved.status_code, 200)
+        self.assertTrue(saved.json['ok'])
+        self.assertNotIn('Location', saved.headers)
+        db.session.refresh(vacant)
+        self.assertEqual(vacant.team_member_id, examiner.id)
+        html = client.get(url).get_data(as_text=True)
+        row = html.split(f'data-staffing-assignment-key="{self.session_record.id}:examiner:{vacant.id}"', 1)[1].split('</tr>', 1)[0]
+        self.assertIn('New Assigned Examiner', row)
+        self.assertIn('Examiner - New Assigned Examiner', row)
+
+    def test_staffing_member_card_link_embeds_planner_and_saves_without_redirect(self):
+        member = AcademicStaff(id=801, status="Active", full_name="Focused Examiner", roles="Examiner")
+        db.session.add(member)
+        assignment = ExamSessionExaminerAssignment(exam_session_id=self.session_record.id,
+                                                  team_member_id=member.id, participation_status="Pending")
+        other = ExamSessionSupervisorAssignment(exam_session_id=self.session_record.id, participation_status="Pending")
+        db.session.add_all([assignment, other])
+        db.session.commit()
+        bundle = self.create_shipment_bundle_record(session_record=self.session_record)
+        client = self.login_client()
+        response = client.get(f"/pre-session-control-tower?session_year=2026&view=bundle&bundle_id={bundle.id}")
+        html = response.get_data(as_text=True)
+        self.assertIn('data-staffing-member-card=', html)
+        self.assertIn(f'staff_card=examiner:{assignment.id}', html)
+        self.assertIn('id="staffing-member-card-modal"', html)
+        url = f"/exam-session-planner?session_year=2026&session_fullscreen=1&open_session_modal={self.session_record.id}&staff_card=examiner:{assignment.id}"
+        embedded = client.get(url)
+        self.assertEqual(embedded.status_code, 200)
+        self.assertEqual(embedded.headers["X-Frame-Options"], "SAMEORIGIN")
+        self.assertIn(f'data-assignment-id="{assignment.id}" data-section-key="examiner"', embedded.get_data(as_text=True))
+        self.assertEqual(client.get("/exam-session-planner?session_year=2026").headers["X-Frame-Options"], "DENY")
+        key = f"existing-{assignment.id}"
+        saved = client.post(f"/exam-session-planner/sessions/{self.session_record.id}/members", data={
+            "csrf_token": "token", "session_year": "2026", "session_fullscreen": "1", "modal_action": "save_close",
+            "examiner_row_keys": key, f"examiner_assignment_id_{key}": str(assignment.id),
+            f"examiner_team_member_id_{key}": str(member.id), f"examiner_participation_status_{key}": "Pending",
+            f"examiner_start_time_{key}": "09:00", f"examiner_end_time_{key}": "12:00",
+        }, headers={"Accept": "application/json"})
+        self.assertEqual(saved.status_code, 200)
+        self.assertTrue(saved.json["ok"])
+        self.assertNotIn("Location", saved.headers)
+        db.session.refresh(assignment)
+        self.assertEqual(assignment.start_time, "09:00")
+        self.assertIsNotNone(db.session.get(ExamSessionSupervisorAssignment, other.id))
 
     def test_staffing_role_check_required_before_marking_official_confirmation_sent(self):
         self.session_record.format = "Onsite"
@@ -21590,8 +22588,10 @@ assert.equal(storage.size, 0);
             exam_session_id=self.session_record.id,
             team_member_id=staff_member.id,
             participation_status="Pending",
+            staffing_role_check_verified=True,
         )
         db.session.add(assignment)
+        db.session.add(ExamSessionScheduleWorkflow(exam_session_id=self.session_record.id, status="Approved"))
         db.session.commit()
         client = self.login_client()
 
@@ -21609,8 +22609,9 @@ assert.equal(storage.size, 0);
 
         response = client.get("/pre-session-control-tower?session_year=2026&view=sessions")
         staffing_html = response.get_data(as_text=True)
-        self.assertIn("Mark as confirmed", staffing_html)
-        self.assertIn("Mark as declined", staffing_html)
+        self.assertIn("Awaiting confirmation", staffing_html)
+        self.assertNotIn("Mark as confirmed", staffing_html)
+        self.assertNotIn("Mark as declined", staffing_html)
         self.assertNotIn('value="Official confirmation sent">\n                          <button class="staffing-action-chip staffing-action-chip-blue" type="submit">Mark as sent</button>', staffing_html)
 
     def test_staffing_actions_declined_clears_assignment_and_marks_non_available(self):

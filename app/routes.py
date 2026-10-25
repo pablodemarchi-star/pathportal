@@ -50,6 +50,9 @@ from app.models import (
     ExamSessionIncidentReviewFlag,
     ExamSessionInternAssignment,
     ExamSessionJourneyShare,
+    StaffExamSessionsShare,
+    StaffExamSessionSubmission,
+    StaffExamSessionEndChecks,
     ExamSessionAttendanceRequest,
     ExamSessionLogistics,
     ExamSessionLogisticsControl,
@@ -1624,11 +1627,23 @@ def staffing_readiness_contract(supervisor_assignments=None, examiner_assignment
         and schedule_notification_confirmed
     )
 
+    sent_confirmation_deadlines = [
+        getattr(assignment, "staffing_status_due_at", None)
+        for assignments in role_sources.values() for assignment in assignments
+        if staffing_assignment_has_staff_member(assignment)
+        and normalize_participation_status(assignment.participation_status) == "Official confirmation sent"
+    ]
+    if (session_record and session_record.emergency_contact_required and not session_record.emergency_contact_not_required
+            and session_record.emergency_contact_member_id
+            and normalize_participation_status(session_record.emergency_contact_participation_status) == "Official confirmation sent"):
+        sent_confirmation_deadlines.append(session_record.emergency_contact_status_due_at)
+
     return {
         "status": status,
         "ready": ready,
         "final_email_ready": ready,
         "totals": totals,
+        "sent_confirmation_deadlines": sent_confirmation_deadlines,
         "by_role": by_role,
         "open_position_details": open_position_details,
         "schedule_notification_confirmed": schedule_notification_confirmed,
@@ -7264,6 +7279,7 @@ def staffing_official_confirmation_email_payload(session_record, role, assignmen
     return {
         "full_name": staff_name or staffing_assignment_person_name(assignment),
         "role": clean_role,
+        "is_remote": bool(getattr(assignment, "is_remote", False)),
         "session_name": getattr(session_record, "exam_session_name", "") or "",
         "session_date": long_session_date_filter(getattr(session_record, "session_date", None)),
         "time_ranges": staffing_email_time_ranges(assignment, session_record, assignment_type),
@@ -7281,6 +7297,8 @@ def staffing_official_confirmation_email_payload(session_record, role, assignmen
         "next_payment_date": next_payment_date or "",
         "contacts": contacts or [],
         "emergency_contacts": staffing_email_emergency_contacts(session_record),
+        "emergency_contact_required": bool(getattr(session_record, "emergency_contact_required", False)
+            and not getattr(session_record, "emergency_contact_not_required", False)),
     }
 
 
@@ -7299,6 +7317,8 @@ def staffing_assignment_row(role, assignment=None, assignment_type="", status="P
         "assignment_id": assignment_id if assignment_id is not None else (assignment.id if assignment else None),
         "staff_name": resolved_name or "Assigned staff member",
         "staff_email": resolved_email,
+        "staff_phone": getattr(staffing_assignment_person(assignment), "phone", "") if assignment else getattr(getattr(session_record, "emergency_contact_member", None), "phone", ""),
+        "person_ref": staffing_assignment_person_ref(assignment) if assignment else str(getattr(session_record, "emergency_contact_member_id", None) or ""),
         "final_confirmation_gmail_url": "https://mail.google.com/mail/?" + urlencode({"view": "cm", "fs": "1", "to": resolved_email, "su": "Final confirmation - Colegio Nuestra Señora de La Salette"}) if resolved_email else "",
         "final_confirmation_email_url": f"mailto:{quote(resolved_email, safe='@')}?{urlencode({'subject': 'Final staff confirmation - ' + (getattr(session_record, 'exam_session_name', '') or '')}, quote_via=quote)}" if resolved_email else "",
         "final_confirmation_sent": bool(getattr(session_record, "emergency_contact_final_confirmation_sent", False) if assignment_type == "emergency_contact" else getattr(assignment, "final_confirmation_sent", False)),
@@ -7378,6 +7398,17 @@ def staffing_assignment_rows(session_record, supervisor_assignments=None, examin
             contacts=contacts,
             next_payment_date=next_payment_date,
         ))
+    added = {
+        (submission.assignment_type, submission.assignment_id, submission.share.person_ref): submission
+        for submission in StaffExamSessionSubmission.query.filter_by(exam_session_id=session_record.id)
+        .options(joinedload(StaffExamSessionSubmission.share)).all()
+    } if session_record and has_request_context() else {}
+    for row in rows:
+        submission = added.get((row["assignment_type"], row["assignment_id"], row["person_ref"]))
+        row["staff_portal_url"] = url_for("staff.staff_exam_sessions", token=submission.share.token,
+            session_year=session_record.session_date.year if session_record.session_date else None) if submission else ""
+        row["staff_invitation_actions"] = staff_portal_invitation_actions(session_record, submission,
+            row["staff_name"], row["staff_email"], row["staff_phone"]) if submission else {}
     return rows
 
 
@@ -10052,14 +10083,24 @@ def bundle_detail_action_items(
         sent_confirmations = totals.get("sent", 0)
         if schedule_approved and pending_confirmations:
             staffing_messages.append(f"{pluralize_phrase(pending_confirmations, 'confirmation')} to be sent.")
-        if schedule_approved and sent_confirmations:
-            staffing_messages.append(f"{pluralize_phrase(sent_confirmations, 'confirmation')} to be updated.")
         if staffing_messages or (not open_position_actions and staffing_status not in {"awaiting_confirmations", "open_positions"}):
             actions.append({
                 "department": (staffing_control or {}).get("responsible_label", "ADMIN"),
                 "description": staffing_messages[0] if staffing_messages else "Complete staff participation and confirmation.",
                 "overdue": staffing_overdue,
             })
+
+    if schedule_preparation_unlocked and schedule_status == "Approved" and staffing_contract.get("totals", {}).get("sent", 0):
+        sent_count = staffing_contract["totals"]["sent"]
+        today = datetime.now(LOCAL_TZ).date()
+        overdue_count = sum(1 for deadline in staffing_contract.get("sent_confirmation_deadlines", [])
+                            if deadline and deadline < today)
+        waiting_count = max(0, sent_count - overdue_count)
+        for count, department, overdue in ((overdue_count, "ADMIN", True), (waiting_count, "", False)):
+            if count:
+                actions.append({"department": department,
+                                "description": f"{pluralize_phrase(count, 'confirmation')} to be updated.",
+                                "overdue": overdue})
 
     actions = [row if "section" in row else {**row, "section": "staffing"} for row in actions] if include_sections else actions
     logistics = logistics or {}
@@ -13607,6 +13648,17 @@ def current_action_department():
     return str(getattr(user, "department", None) or session.get("user_department") or "").strip().upper()
 
 
+def shipment_bundle_priority_key(bundle):
+    """Shared ordering for bundles and the actions belonging to their sessions."""
+    delivered = any((action.get("description") or "").rstrip(".") == "Bundle shipment delivered"
+                    for action in bundle.get("action_items", []))
+    rank = 3 if delivered else 0 if bundle.get("unblocked") else 1 if bundle.get("semi_unblocked") else 2
+    first_date = min((record.session_date for record in bundle.get("included_sessions", []) if record.session_date),
+                     default=date.max)
+    sequence = getattr(bundle.get("record"), "bundle_sequence", None) or 999999
+    return (rank, first_date, sequence, bundle["id"])
+
+
 def department_my_actions(schedule_views, bundle_views, pending_bundle, staffing_contracts, today=None):
     department = current_action_department()
     if department not in {"ADMIN", "FINANCE", "LOGISTICS", "MANAGEMENT"}:
@@ -13615,6 +13667,11 @@ def department_my_actions(schedule_views, bundle_views, pending_bundle, staffing
     seen = set()
     views = {view["session"].id: view for view in schedule_views}
     bundle_schedules = bundle_schedule_presentations([view["session"] for view in schedule_views])
+    bundle_priorities = {}
+    for bundle in bundle_views:
+        priority = shipment_bundle_priority_key(bundle)
+        for record in bundle.get("included_sessions", []):
+            bundle_priorities[record.id] = min(priority, bundle_priorities.get(record.id, priority))
 
     def add(view, action, section, identity=None, sessions=None):
         if section not in MY_ACTION_SECTIONS or str(action.get("department") or "").upper() != department:
@@ -13671,8 +13728,10 @@ def department_my_actions(schedule_views, bundle_views, pending_bundle, staffing
         if key not in grouped:
             grouped[key] = {**row, "id": str(key), "actions": []}
         grouped[key]["actions"].append(action)
-    return sorted(grouped.values(), key=lambda row: (row["session"].session_date or date.max,
-                  row["session"].exam_session_name.lower(), row["section_label"]))
+    return sorted(grouped.values(), key=lambda row: (
+        bundle_priorities.get(row["session"].id, (2, row["session"].session_date or date.max, 999999, 0)),
+        row["session"].session_date or date.max,
+        row["session"].exam_session_name.lower(), row["section_label"]))
 
 
 def filter_department_my_actions(rows, query="", section="", overdue=False):
@@ -18375,12 +18434,7 @@ def pre_session_control_tower(_count_only=False):
         else:
             bundle_view["sort_gate_rank"] = 2
     bundle_views = [bundle_view for bundle_view in all_bundle_views if not bundle_view["completed"]]
-    bundle_views.sort(key=lambda bundle_view: (
-        bundle_view["sort_gate_rank"],
-        bundle_view["sort_first_session_date"],
-        bundle_view["record"].bundle_sequence or 999999,
-        bundle_view["id"],
-    ))
+    bundle_views.sort(key=shipment_bundle_priority_key)
     selected_bundle_view = None
     if selected_bundle_id:
         selected_bundle_view = next((bundle_view for bundle_view in all_bundle_views if bundle_view["id"] == selected_bundle_id), None)
@@ -18512,12 +18566,6 @@ def pre_session_control_tower(_count_only=False):
         examiner_assignments = examiner_assignments_by_session.get(session_record.id, [])
         intern_assignments = intern_assignments_by_session.get(session_record.id, [])
         session_assignments = supervisor_assignments + examiner_assignments + intern_assignments
-        staffing_contract = staffing_readiness_contract(
-            supervisor_assignments,
-            examiner_assignments,
-            intern_assignments,
-            session_record=session_record,
-        )
         schedule_gate = schedule_gate_status(workflows_by_session.get(session_record.id))
         staffing_deadlines_changed = (
             sync_staffing_assignment_deadlines_for_session(
@@ -18527,6 +18575,12 @@ def pre_session_control_tower(_count_only=False):
                 today=today,
             )
             or staffing_deadlines_changed
+        )
+        staffing_contract = staffing_readiness_contract(
+            supervisor_assignments,
+            examiner_assignments,
+            intern_assignments,
+            session_record=session_record,
         )
         staffing_contracts_by_session[session_record.id] = staffing_contract
         schedule_gates_by_session[session_record.id] = schedule_gate
@@ -19863,6 +19917,357 @@ def update_staff_final_confirmation(session_id, assignment_type, assignment_id):
     if request.headers.get("Accept") == "application/json":
         return jsonify({"ok": True, "final_confirmation_sent": sent})
     return staffing_control_redirect(session_record, status_filter)
+
+
+def staff_submission_assignment(session_record, assignment_type, assignment_id):
+    if assignment_type == "emergency_contact":
+        if assignment_id == session_record.id and session_record.emergency_contact_member_id:
+            return session_record, str(session_record.emergency_contact_member_id)
+        return None, ""
+    model = staffing_assignment_model(assignment_type)
+    assignment = model.query.filter_by(id=assignment_id, exam_session_id=session_record.id).first() if model else None
+    return assignment, staffing_assignment_person_ref(assignment) if assignment else ""
+
+
+def staff_has_previous_official_confirmation(record, submission):
+    """Other invitations for this person in the same exam year trigger the short message."""
+    if not record.session_date:
+        return False
+    ref = submission.share.person_ref
+    member_field = "potential_entry_id" if ref.startswith("potential:") else "team_member_id"
+    member_id = int(ref.split(":", 1)[-1])
+    for role in ("supervisor", "examiner", "intern"):
+        model = staffing_assignment_model(role)
+        assignments = (model.query.join(ExamSession, model.exam_session_id == ExamSession.id)
+            .filter(getattr(model, member_field) == member_id,
+                    db.extract("year", ExamSession.session_date) == record.session_date.year,
+                    model.participation_status.in_(["Official confirmation sent", "Confirmed"])).all())
+        if any(not (role == submission.assignment_type and item.id == submission.assignment_id) for item in assignments):
+            return True
+    if member_field == "team_member_id":
+        emergency_sessions = ExamSession.query.filter(
+            ExamSession.emergency_contact_member_id == member_id,
+            db.extract("year", ExamSession.session_date) == record.session_date.year,
+            ExamSession.emergency_contact_participation_status.in_(["Official confirmation sent", "Confirmed"])).all()
+        return any(not (submission.assignment_type == "emergency_contact" and exam.id == record.id)
+                   for exam in emergency_sessions)
+    return False
+
+
+def staff_portal_invitation_actions(record, submission, name, email, phone):
+    year = record.session_date.year if record.session_date else None
+    cache = getattr(g, "staff_portal_first_invitation", None)
+    if cache is None:
+        cache = g.staff_portal_first_invitation = {}
+    key = (submission.share_id, year)
+    if key not in cache:
+        first = (StaffExamSessionSubmission.query.join(ExamSession)
+            .filter(StaffExamSessionSubmission.share_id == submission.share_id,
+                    db.extract("year", ExamSession.session_date) == year)
+            .order_by(StaffExamSessionSubmission.submitted_at.asc(), StaffExamSessionSubmission.id.asc()).first())
+        cache[key] = first.id if first else None
+    portal_url = url_for("staff.staff_exam_sessions", token=submission.share.token, session_year=year, _external=True)
+    pending = {}
+    # Only invitations added to this person's portal and still awaiting a response.
+    for invitation in StaffExamSessionSubmission.query.filter_by(share_id=submission.share_id).all():
+        exam = invitation.exam_session
+        if not exam.session_date:
+            continue
+        assignment, person_ref = staff_submission_assignment(exam, invitation.assignment_type, invitation.assignment_id)
+        if not assignment or person_ref != submission.share.person_ref:
+            continue
+        status = (exam.emergency_contact_participation_status if invitation.assignment_type == "emergency_contact"
+                  else assignment.participation_status)
+        if status in {"Confirmed", "Declined", "Cancelled"}:
+            continue
+        entry = pending.setdefault(exam.id, {"session": exam, "roles": []})
+        role = staffing_assignment_role_label(invitation.assignment_type, assignment)
+        if role not in entry["roles"]:
+            entry["roles"].append(role)
+    bullets = []
+    for entry in sorted(pending.values(), key=lambda item: (item["session"].session_date, item["session"].id)):
+        exam = entry["session"]
+        location = ", ".join(value.strip() for value in (exam.city, exam.province) if value and value.strip())
+        details = " | ".join(value for value in (
+            exam.exam_session_name, ", ".join(entry["roles"]), exam.session_date.strftime("%d/%m/%Y"), exam.format, location
+        ) if value)
+        bullets.append(f"- *{details}*")
+    count = len(pending)
+    pending_label = "one exam session" if count == 1 else f"{count} exam sessions"
+    pending_text = (f"❗ You currently have *{pending_label} awaiting your confirmation*:\n\n" + "\n".join(bullets)
+                    if count else "You currently have *no exam sessions awaiting your confirmation*.")
+    message = (
+        f"Hello, {name}!\n\n"
+        "We hope you're doing well! 😊\n\n"
+        "We're pleased to share our new *Staff member portal* with you! 🚀\n\n"
+        f"👉 You can access it here: {portal_url}\n\n"
+        "Once you access the portal, you'll find all your assigned exam sessions. "
+        "Simply click on each session to _view all the relevant information_ and "
+        "*confirm your participation, ask a question, or decline the assignment*.\n\n"
+        f"{pending_text}\n\n"
+        "We'd really appreciate it if you could complete this process "
+        "*as soon as you receive this message*, so we can move forward with the remaining session arrangements.\n\n"
+        "We’ll notify you if any additional exam sessions are assigned to you in the portal.\n\n"
+        "Thank you very much! 💙\n\n"
+        "Brenda\n*Path Examinations*"
+    )
+    if staff_has_previous_official_confirmation(record, submission):
+        short_label = f"{count} exam session" + ("s" if count != 1 else "")
+        short_pending = (f"❗ You currently have *{short_label} awaiting your confirmation:*\n\n" + "\n".join(bullets)
+                         if count else "You currently have *no exam sessions awaiting your confirmation*.")
+        message = (
+            "*NEW EXAM SESSION AWAITING CONFIRMATION* 🚀\n\n"
+            f"💻 Your portal: {portal_url}\n\n"
+            f"Hello, {name}! 👋\n\n"
+            "We've added a new exam session to your *Staff member portal*.\n\n"
+            f"{short_pending}\n\n"
+            "Please access your portal and *confirm your participation as soon as possible* "
+            "so we can finalise the session arrangements.\n\n"
+            "Thank you! 💙\n\nBrenda\n*Path Examinations*"
+        )
+    digits = re.sub(r"\D", "", phone or "")
+    return {
+        # Use the direct send endpoint with UTF-8 percent encoding, avoiding
+        # the wa.me redirect and form-style plus signs in the message.
+        "whatsapp_url": "https://api.whatsapp.com/send?" + urlencode(
+            {"phone": digits, "text": message}, quote_via=quote, encoding="utf-8", errors="strict"
+        ),
+        "show_email": cache[key] == submission.id,
+        "email_url": "https://mail.google.com/mail/?" + urlencode({"view": "cm", "fs": "1", "to": email,
+            "su": "Your exam sessions - Path Examinations", "body": message}) if email else "",
+    }
+
+
+@staff_bp.route("/pre-session-control-tower/sessions/<int:session_id>/staffing-assignments/<assignment_type>/<int:assignment_id>/submit", methods=["POST"])
+@login_required
+def submit_staff_exam_session(session_id, assignment_type, assignment_id):
+    if not validate_csrf():
+        abort(400, description="Security token expired. Please try again.")
+    record = ExamSession.query.get_or_404(session_id)
+    assignment, person_ref = staff_submission_assignment(record, assignment_type, assignment_id)
+    if not assignment or not person_ref:
+        abort(404)
+    workflow = ExamSessionScheduleWorkflow.query.filter_by(exam_session_id=session_id).first()
+    if not workflow or workflow.status != "Approved" or not staffing_assignment_role_check_is_verified(record, assignment_type, assignment):
+        abort(400, description="Approve the schedule and verify the role check before submitting this session.")
+    status = record.emergency_contact_participation_status if assignment_type == "emergency_contact" else assignment.participation_status
+    if status in {"Declined", "Cancelled"}:
+        abort(400, description="This staffing assignment is no longer active.")
+    share = StaffExamSessionsShare.query.filter_by(person_ref=person_ref).first()
+    if not share:
+        share = StaffExamSessionsShare(person_ref=person_ref, token=secrets.token_urlsafe(48))
+        db.session.add(share)
+        db.session.flush()
+    submission = StaffExamSessionSubmission.query.filter_by(share_id=share.id, exam_session_id=session_id,
+        assignment_type=assignment_type, assignment_id=assignment_id).first()
+    if not submission:
+        submission = StaffExamSessionSubmission(share_id=share.id, exam_session_id=session_id,
+            assignment_type=assignment_type, assignment_id=assignment_id)
+        db.session.add(submission)
+    db.session.commit()
+    portal_url = url_for("staff.staff_exam_sessions", token=share.token,
+        session_year=record.session_date.year if record.session_date else None)
+    if request.accept_mimetypes.best == "application/json":
+        person = record.emergency_contact_member if assignment_type == "emergency_contact" else staffing_assignment_person(assignment)
+        actions = staff_portal_invitation_actions(record, submission, person.full_name,
+            getattr(person, "email", "") or "", getattr(person, "phone", "") or "")
+        return jsonify(ok=True, url=portal_url, invitation_actions=actions)
+    return redirect(portal_url, code=303)
+
+
+STAFF_END_CHECK_FIELDS = ("attendance", "return_papers", "recordings", "audiovisual", "end_report", "centre_feedback")
+
+
+def staff_end_checks_available(record, now=None):
+    now = now or datetime.now(timezone.utc)
+    return bool(record.session_date and now.astimezone(LOCAL_TZ).date() >= record.session_date)
+
+
+def staff_end_checks_view(record, role, status, submission, share):
+    if role != "supervisor" or status != "Confirmed":
+        return {}
+    saved = submission.end_checks
+    return {"end_checks": {
+        "available": staff_end_checks_available(record),
+        "opens_at": datetime.combine(record.session_date, time.min, tzinfo=LOCAL_TZ).isoformat() if record.session_date else "",
+        "values": {key: bool(getattr(saved, key, False)) for key in STAFF_END_CHECK_FIELDS},
+        "folder_url": (record.session_pictures_folder_url or "").strip(),
+        "report_url": current_app.config.get("STAFF_END_OF_SESSION_REPORT_URL", ""),
+        "url": url_for("staff.update_staff_end_checks", token=share.token, submission_id=submission.id),
+    }}
+
+
+@staff_bp.route("/my-exam-sessions/<token>/submissions/<int:submission_id>/end-checks", methods=["POST"])
+def update_staff_end_checks(token, submission_id):
+    share = StaffExamSessionsShare.query.filter_by(token=token).first_or_404()
+    if not validate_csrf():
+        return jsonify(ok=False, error="Security token expired. Please reload and try again."), 400
+    submission = StaffExamSessionSubmission.query.filter_by(id=submission_id, share_id=share.id).first_or_404()
+    record = submission.exam_session
+    assignment, person_ref = staff_submission_assignment(record, submission.assignment_type, submission.assignment_id)
+    if not assignment or person_ref != share.person_ref or submission.assignment_type != "supervisor":
+        abort(404)
+    if assignment.participation_status != "Confirmed" or not staff_end_checks_available(record):
+        return jsonify(ok=False, error="End-of-session checks are not available yet."), 403
+    key = request.form.get("check")
+    checked = request.form.get("checked")
+    if key not in STAFF_END_CHECK_FIELDS or checked not in {"0", "1"}:
+        return jsonify(ok=False, error="Please select a valid checklist item."), 400
+    saved = submission.end_checks
+    if not saved:
+        saved = StaffExamSessionEndChecks(submission=submission)
+        db.session.add(saved)
+    setattr(saved, key, checked == "1")
+    db.session.commit()
+    return jsonify(ok=True, check=key, checked=getattr(saved, key))
+
+
+@staff_bp.route("/my-exam-sessions/<token>")
+def staff_exam_sessions(token):
+    share = StaffExamSessionsShare.query.filter_by(token=token).first_or_404()
+    if share.person_ref.startswith("potential:"):
+        person = db.session.get(PotentialEntry, int(share.person_ref.split(":", 1)[1]))
+    else:
+        person = db.session.get(AcademicStaff, int(share.person_ref))
+    if not person:
+        abort(404)
+    confirmation_csrf = session.setdefault("csrf_token", secrets.token_hex(32))
+    records = {}
+    awaiting_ids = set()
+    active_assignments = defaultdict(list)
+    for submission in share.submissions:
+        record = submission.exam_session
+        assignment, person_ref = staff_submission_assignment(record, submission.assignment_type, submission.assignment_id)
+        if not assignment or person_ref != share.person_ref:
+            continue
+        status = record.emergency_contact_participation_status if submission.assignment_type == "emergency_contact" else assignment.participation_status
+        if status not in {"Declined", "Cancelled"}:
+            records[record.id] = record
+            active_assignments[record.id].append((submission.assignment_type, assignment, status, submission))
+            if status != "Confirmed":
+                awaiting_ids.add(record.id)
+    session_years = sorted({record.session_date.year for record in records.values() if record.session_date})
+    requested_year = request.args.get("session_year", type=int)
+    current_year = datetime.now(LOCAL_TZ).year
+    selected_year = requested_year if requested_year in session_years else (
+        current_year if current_year in session_years else session_years[-1] if session_years else current_year)
+    records = {key: record for key, record in records.items()
+               if record.session_date and record.session_date.year == selected_year}
+    ordered_sessions = sorted(records.values(), key=lambda item: (item.session_date or date.max, item.id))
+    session_details = {}
+    next_payment = ""
+    if ordered_sessions:
+        next_payment = staff_payment_settings_values(staff_payment_settings())["next_payment_date"]
+        for record in ordered_sessions:
+            contacts = staffing_email_contacts(
+                ExamSessionSupervisorAssignment.query.filter_by(exam_session_id=record.id).all(),
+                ExamSessionExaminerAssignment.query.filter_by(exam_session_id=record.id).all(),
+                ExamSessionInternAssignment.query.filter_by(exam_session_id=record.id).all())
+            logistics = ExamSessionLogistics.query.filter_by(exam_session_id=record.id).first()
+            session_details[record.id] = [{
+                **staffing_official_confirmation_email_payload(
+                    record, staffing_assignment_role_label(role, assignment),
+                    assignment=None if role == "emergency_contact" else assignment,
+                    assignment_type=role, staff_name=person.full_name, logistics_config=logistics,
+                    contacts=contacts, next_payment_date=next_payment),
+                "confirmation_url": url_for("staff.confirm_staff_exam_session", token=share.token,
+                    session_id=record.id, assignment_type=role, assignment_id=assignment.id),
+                "confirmation_csrf": confirmation_csrf,
+                "decline_url": url_for("staff.decline_staff_exam_session", token=share.token,
+                    session_id=record.id, assignment_type=role, assignment_id=assignment.id),
+                "assignment_type": role,
+                "session_date_short": record.session_date.strftime("%d/%m/%Y") if record.session_date else "Date to be confirmed",
+                "participation_confirmed": status == "Confirmed",
+                **staff_end_checks_view(record, role, status, submission, share),
+            } for role, assignment, status, submission in active_assignments[record.id]]
+    fee_rows = [
+        {"session": record, "detail": detail}
+        for record in ordered_sessions if record.id not in awaiting_ids
+        for detail in session_details[record.id]
+    ]
+    session_fee_totals = empty_currency_totals()
+    for row in fee_rows:
+        for currency, amount in parse_formatted_currency_totals(row["detail"]["total_fee"]).items():
+            add_currency_total(session_fee_totals, currency, amount)
+    response = current_app.make_response(render_template("pre_session_control_tower/staff_exam_sessions.html",
+        staff_name=person.full_name, staff_is_senior=bool(getattr(person, "seniority", False)),
+        session_details=session_details, exam_sessions=ordered_sessions,
+        share_token=share.token, session_years=session_years, selected_session_year=selected_year,
+        fee_rows=fee_rows, total_session_fees=format_currency_totals(session_fee_totals),
+        next_payment_date=next_payment,
+        awaiting_sessions=[item for item in ordered_sessions if item.id in awaiting_ids],
+        confirmed_sessions=[item for item in ordered_sessions if item.id not in awaiting_ids]))
+    response.headers["Cache-Control"] = "private, no-store"
+    response.headers["Referrer-Policy"] = "no-referrer"
+    response.headers["X-Robots-Tag"] = "noindex, nofollow"
+    return response
+
+
+@staff_bp.route("/my-exam-sessions/<token>/sessions/<int:session_id>/assignments/<assignment_type>/<int:assignment_id>/confirm", methods=["POST"])
+def confirm_staff_exam_session(token, session_id, assignment_type, assignment_id):
+    share = StaffExamSessionsShare.query.filter_by(token=token).first_or_404()
+    if not validate_csrf():
+        abort(400, description="Security token expired. Please reopen your sessions page and try again.")
+    submission = StaffExamSessionSubmission.query.filter_by(share_id=share.id, exam_session_id=session_id,
+        assignment_type=assignment_type, assignment_id=assignment_id).first_or_404()
+    record = submission.exam_session
+    assignment, person_ref = staff_submission_assignment(record, assignment_type, assignment_id)
+    if not assignment or person_ref != share.person_ref:
+        abort(404)
+    previous = record.emergency_contact_participation_status if assignment_type == "emergency_contact" else assignment.participation_status
+    if previous in {"Declined", "Cancelled"}:
+        abort(409, description="This assignment is no longer available for confirmation.")
+    if previous != "Confirmed":
+        note = "Participation confirmed by the staff member through Your exam sessions."
+        if assignment_type == "emergency_contact":
+            event = record_emergency_contact_status_change(record, previous, "Confirmed", note=note)
+            record.emergency_contact_participation_status = "Confirmed"
+            record.emergency_contact_role_check_verified = True
+        else:
+            event = record_staffing_status_change(record, assignment, assignment_type, previous, "Confirmed", note=note)
+            assignment.participation_status = "Confirmed"
+            assignment.staffing_role_check_verified = True
+        if event:
+            event.created_by = "Staff member: " + share.person_ref
+        db.session.commit()
+    response = redirect(url_for("staff.staff_exam_sessions", token=share.token,
+        session_year=record.session_date.year if record.session_date else None), code=303)
+    response.headers["Cache-Control"] = "private, no-store"
+    return response
+
+
+@staff_bp.route("/my-exam-sessions/<token>/sessions/<int:session_id>/assignments/<assignment_type>/<int:assignment_id>/decline", methods=["POST"])
+def decline_staff_exam_session(token, session_id, assignment_type, assignment_id):
+    share = StaffExamSessionsShare.query.filter_by(token=token).first_or_404()
+    if not validate_csrf() or request.form.get("reconfirmed") != "1":
+        abort(400, description="Please reopen your session details and reconfirm this action.")
+    submission = StaffExamSessionSubmission.query.filter_by(share_id=share.id, exam_session_id=session_id,
+        assignment_type=assignment_type, assignment_id=assignment_id).first_or_404()
+    record = submission.exam_session
+    assignment, person_ref = staff_submission_assignment(record, assignment_type, assignment_id)
+    if not assignment or person_ref != share.person_ref:
+        abort(404)
+    previous = record.emergency_contact_participation_status if assignment_type == "emergency_contact" else assignment.participation_status
+    if previous in {"Confirmed", "Declined", "Cancelled"}:
+        abort(409, description="This invitation is no longer awaiting your response. Please contact Path Examinations.")
+    note = "Participation declined and reconfirmed by the staff member through Your exam sessions."
+    if assignment_type == "emergency_contact":
+        event = record_emergency_contact_status_change(record, previous, "Declined", note=note)
+        add_session_non_available_ref(record, person_ref)
+        clear_emergency_contact_for_decline(record)
+        clear_emergency_contact_deadline(record)
+    else:
+        event = record_staffing_status_change(record, assignment, assignment_type, previous, "Declined", note=note)
+        add_session_non_available_ref(record, person_ref)
+        clear_staffing_assignment_for_decline(assignment)
+        clear_staffing_assignment_deadline(assignment)
+    if event:
+        event.created_by = "Staff member: " + share.person_ref
+    db.session.commit()
+    response = redirect(url_for("staff.staff_exam_sessions", token=share.token,
+        session_year=record.session_date.year if record.session_date else None), code=303)
+    response.headers["Cache-Control"] = "private, no-store"
+    return response
 
 
 @staff_bp.route("/pre-session-control-tower/sessions/<int:session_id>/staffing-assignments/<assignment_type>/<int:assignment_id>/role-check", methods=["POST"])

@@ -1045,7 +1045,7 @@ document.querySelectorAll("[data-status-track-toggle]").forEach((button) => {
 });
 
 const getFocusableElements = (container) => Array.from(container.querySelectorAll(
-  'a[href], button:not([disabled]), textarea:not([disabled]), input:not([disabled]):not([type="hidden"]), select:not([disabled]), details summary, [tabindex]:not([tabindex="-1"])'
+  'a[href], iframe, button:not([disabled]), textarea:not([disabled]), input:not([disabled]):not([type="hidden"]), select:not([disabled]), details summary, [tabindex]:not([tabindex="-1"])'
 )).filter((element) => {
   if (element.closest("[hidden]")) return false;
   const style = window.getComputedStyle(element);
@@ -2217,7 +2217,9 @@ const syncStaffingRoleCheckRow = (checkbox) => {
   });
 };
 
-document.querySelectorAll("[data-role-check-form]").forEach((form) => {
+const initStaffingRoleChecks = (root = document) => root.querySelectorAll("[data-role-check-form]").forEach((form) => {
+  if (form.dataset.roleCheckInitialized) return;
+  form.dataset.roleCheckInitialized = "true";
   const checkbox = form.querySelector("[data-role-check]");
   if (!checkbox) return;
   syncStaffingRoleCheckRow(checkbox);
@@ -2247,6 +2249,7 @@ document.querySelectorAll("[data-role-check-form]").forEach((form) => {
     }
   });
 });
+initStaffingRoleChecks();
 
 document.querySelectorAll("[data-pre-logistics-provider-remove-form]").forEach((form) => {
   const checkbox = form.querySelector("[data-pre-logistics-provider-checkbox]");
@@ -8165,7 +8168,7 @@ const validateStaffOfficialConfirmationEmailPayload = (payload) => {
     return "Exam session information is incomplete.";
   }
   if (!Array.isArray(payload?.time_ranges || payload?.timeRanges) || !(payload.time_ranges || payload.timeRanges).length) {
-    return "Staff member time range is required for official confirmation emails.";
+    return "Staff member time range is required for official confirmation.";
   }
   if (!cleanEmailValue(payload?.address)) return "Exam session address is required for onsite sessions.";
   const role = cleanEmailValue(payload?.role);
@@ -8769,7 +8772,75 @@ const initStaffOfficialConfirmationEmailButtons = (root = document) => {
   });
 };
 
-if (typeof document !== "undefined") initStaffOfficialConfirmationEmailButtons();
+const validateStaffSessionSubmit = (form, submitter = null) => {
+  const payload = parseStaffOfficialConfirmationPayload(form);
+  const error = validateStaffOfficialConfirmationEmailPayload(payload);
+  if (!error) return true;
+  const button = submitter || form.querySelector('button[type="submit"]');
+  if (button) showStaffOfficialConfirmationEmailFeedback(button, error, true);
+  return false;
+};
+
+const appendStaffInvitationIcons = (container, actions) => {
+  const icon = (kind, href, label, svg) => {
+    const element = document.createElement(href ? "a" : "span");
+    element.className = `staffing-invitation-icon is-${kind}${href ? "" : " is-disabled"}`;
+    element.title = label;
+    element.ariaLabel = label;
+    if (href) {
+      element.href = href;
+      element.target = "_blank";
+      element.rel = "noopener noreferrer";
+    } else element.ariaDisabled = "true";
+    element.innerHTML = svg;
+    container.append(element);
+  };
+  icon("whatsapp", actions.whatsapp_url, "Share staff portal via WhatsApp", '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><path d="M20.5 11.5a8.5 8.5 0 0 1-12.7 7.4L3 20l1.2-4.6a8.5 8.5 0 1 1 16.3-3.9Z"/><path d="M8.2 7.5c.5-.5 1.3 1.6 1.2 1.9l-.6 1c.7 1.3 1.7 2.2 3 2.8l1-.7c.4-.2 2.4.8 2.3 1.3-.5 2.8-4.3 1.1-6.4-1-2-2-3-4-1.5-5.3Z"/></svg>');
+};
+
+const addStaffSessionToPortal = async (form, submitter = null) => {
+  const button = submitter || form.querySelector('button[type="submit"]');
+  if (!button || button.disabled) return;
+  const portal = window.open("about:blank", "_blank");
+  if (portal) portal.opener = null;
+  const originalText = button.textContent;
+  button.disabled = true;
+  button.textContent = "Adding…";
+  try {
+    const response = await fetch(form.action, { method: "POST", body: new FormData(form), headers: { Accept: "application/json" } });
+    const result = await response.json();
+    if (!response.ok || !result.ok || !result.url) throw new Error(result.error || "The session could not be added. Please try again.");
+    const added = document.createElement("a");
+    added.className = "staffing-added-link";
+    added.textContent = "Added";
+    added.href = result.url;
+    added.target = "_blank";
+    added.rel = "noopener noreferrer";
+    if (result.invitation_actions) {
+      const group = document.createElement("span");
+      group.className = "staffing-added-actions";
+      group.append(added);
+      appendStaffInvitationIcons(group, result.invitation_actions);
+      form.replaceWith(group);
+    } else form.replaceWith(added);
+    if (portal) portal.location.replace(added.href);
+  } catch (error) {
+    if (portal) portal.close();
+    button.textContent = originalText;
+    button.disabled = false;
+    showStaffOfficialConfirmationEmailFeedback(button, error.message || "The session could not be added. Please try again.", true);
+  }
+};
+
+if (typeof document !== "undefined") {
+  initStaffOfficialConfirmationEmailButtons();
+  document.addEventListener("submit", (event) => {
+    const form = event.target.closest("[data-staff-session-submit]");
+    if (!form) return;
+    event.preventDefault();
+    if (validateStaffSessionSubmit(form, event.submitter)) addStaffSessionToPortal(form, event.submitter);
+  });
+}
 
 const initInvitationEmailCopyButtons = (root = document) => {
   root.querySelectorAll("[data-copy-invitation-email]").forEach((button) => {
@@ -11043,7 +11114,7 @@ document.querySelectorAll("[data-session-members-form]").forEach((form) => {
     const modal = form.closest(".modal");
     const closeAfterSave = actionInput.value === "save_close";
     const fullscreen = form.elements.namedItem("session_fullscreen")?.value === "1";
-    const saveInPlace = !closeAfterSave || !fullscreen;
+    const saveInPlace = !closeAfterSave || !fullscreen || form.dataset.embeddedStaffCard === "true";
     const formData = saveInPlace ? new FormData(form) : null;
     if (saveInPlace) event.preventDefault();
     modal?.querySelectorAll("[data-session-members-save]").forEach((button) => {
@@ -11091,7 +11162,9 @@ document.querySelectorAll("[data-session-members-form]").forEach((form) => {
       form.dataset.staffChangesUnsaved = "false";
       showTransientFlash([payload.message, ...(payload.notices || [])].join(" "), "success");
       await refreshPlannerSessionRow(form).catch(() => {});
-      if (closeAfterSave) closeModal(modal);
+      if (closeAfterSave && form.dataset.embeddedStaffCard === "true") {
+        window.parent.postMessage({ type: "staffing-member-card-saved" }, window.location.origin);
+      } else if (closeAfterSave) closeModal(modal);
     } catch (error) {
       showTransientFlash(error.message || "The session could not be saved. Please try again.", "error");
     } finally {
@@ -14097,4 +14170,83 @@ document.addEventListener("submit", (event) => {
   if (!page) refresh();
   window.setInterval(refresh, 45000);
   window.addEventListener("focus", refresh);
+})();
+
+// A focused planner card runs in its own document, keeping Staffing and its scroll state intact.
+(() => {
+  const cardKey = new URLSearchParams(window.location.search).get("staff_card");
+  if (cardKey && window.parent !== window) {
+    const [role, assignmentId] = cardKey.split(":");
+    const form = document.querySelector("[data-session-members-form]");
+    const emergency = role === "emergency_contact" && form?.dataset.sessionId === assignmentId;
+    const card = emergency ? document.querySelector("[data-emergency-contact-control]") : Array.from(form?.querySelectorAll("[data-supervisor-row]") || []).find(
+      (item) => item.dataset.sectionKey === role && item.dataset.assignmentId === assignmentId);
+    if (!card) return;
+    form.dataset.embeddedStaffCard = "true";
+    document.body.classList.add("embedded-staff-card-page");
+    card.classList.add("focused-staff-member-card");
+    card.closest(".session-member-section")?.classList.add("focused-staff-member-section");
+    if (emergency) card.closest(".session-modal-scroll-controls").classList.add("focused-emergency-card-container");
+    if (!emergency && !card.querySelector("[data-team-member-select]")?.value) {
+      syncStaffCollapsibleSection(card.querySelector(".staff-card-assignment-block"), true);
+    }
+    document.addEventListener("keydown", (event) => {
+      if (event.key !== "Escape" || document.querySelector(".nested-modal.is-open")) return;
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      window.parent.postMessage({ type: "staffing-member-card-close" }, window.location.origin);
+    }, true);
+    const cancel = document.querySelector(".modal-bottom-actions > a");
+    cancel?.addEventListener("click", (event) => {
+      event.preventDefault();
+      window.parent.postMessage({ type: "staffing-member-card-close" }, window.location.origin);
+    });
+  }
+  const modal = document.getElementById("staffing-member-card-modal");
+  if (!modal) return;
+  const frame = modal.querySelector("[data-staffing-card-frame]");
+  const loading = modal.querySelector("[data-staffing-card-loading]");
+  document.addEventListener("click", (event) => {
+    const button = event.target.closest("[data-staffing-member-card]");
+    if (!button) return;
+    frame.hidden = true;
+    loading.hidden = false;
+    loading.textContent = "Loading staff member card…";
+    modal.querySelector("h2[data-staffing-member-card-title]").textContent = button.dataset.staffingMemberCardTitle;
+    frame.src = button.dataset.staffingMemberCard;
+    openModal(modal.id, { opener: button });
+  });
+  frame.addEventListener("load", () => {
+    if (!frame.contentDocument?.querySelector(".focused-staff-member-card")) {
+      loading.textContent = "The staff member card could not be opened. Please close and try again.";
+      return;
+    }
+    loading.hidden = true;
+    frame.hidden = false;
+  });
+  window.addEventListener("message", async (event) => {
+    if (event.origin !== window.location.origin || event.source !== frame.contentWindow) return;
+    if (!["staffing-member-card-saved", "staffing-member-card-close"].includes(event.data?.type)) return;
+    const opener = modalOpeners.get(modal);
+    closeModal(modal);
+    if (event.data.type !== "staffing-member-card-saved") return;
+    const row = opener?.closest("[data-staffing-assignment-key]");
+    if (!row) return;
+    const parentModal = row.closest(".modal");
+    const scrollTop = parentModal?.scrollTop;
+    try {
+      const response = await fetch(window.location.href);
+      if (!response.ok) throw new Error("Could not refresh staffing");
+      const page = new DOMParser().parseFromString(await response.text(), "text/html");
+      const updated = page.querySelector(`[data-staffing-assignment-key="${row.dataset.staffingAssignmentKey}"]`);
+      if (!updated) throw new Error("Staffing row was not found");
+      row.replaceWith(updated);
+      initStaffingRoleChecks(updated);
+      initStaffOfficialConfirmationEmailButtons(updated);
+      if (parentModal) parentModal.scrollTop = scrollTop;
+      updated.querySelector("[data-staffing-member-card]")?.focus({ preventScroll: true });
+    } catch {
+      showTransientFlash("Changes saved. Reopen Staffing to refresh the displayed information.", "success");
+    }
+  });
 })();

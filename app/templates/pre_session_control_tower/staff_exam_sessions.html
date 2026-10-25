@@ -1,0 +1,111 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="robots" content="noindex, nofollow">
+  <title>Your exam sessions | Path Examinations</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/styles.css', v='20261025-staff-participation-popup-3') }}">
+</head>
+<body>
+<main class="staff-exam-sessions-shell">
+  <section class="journey-page journey-page-institution" lang="en">
+    <header class="journey-hero">
+      <div class="journey-institution-title-row">
+        <img class="journey-path-logo" src="{{ url_for('static', filename='img/path-logo-white-transparent.png') }}" alt="Path International Examinations">
+        <div class="journey-institution-title-copy"><h1>Your exam sessions</h1><p class="staff-session-hero-name">{{ staff_name }}{% if staff_is_senior %}<span class="staff-session-senior-chip">Senior</span>{% endif %}</p></div>
+      </div>
+      <p class="journey-hero-message">Your exam sessions with Path Examinations.</p>
+    </header>
+    {% if session_years %}
+    <section class="year-toolbar staff-session-year-toolbar" aria-label="Filter your exam sessions by year">
+      <div class="year-tabs">
+        {% for year in session_years %}
+          <a class="year-tab{% if year == selected_session_year %} active{% endif %}" href="{{ url_for('staff.staff_exam_sessions', token=share_token, session_year=year) }}"{% if year == selected_session_year %} aria-current="page"{% endif %}>{{ year }}</a>
+        {% endfor %}
+      </div>
+    </section>
+    {% endif %}
+    <section class="staff-exam-sessions-panel" aria-labelledby="awaiting-sessions-title">
+      <h2 id="awaiting-sessions-title">{% if awaiting_sessions|length == 0 %}No exam sessions awaiting your confirmation{% elif awaiting_sessions|length == 1 %}1 exam session awaiting your confirmation{% else %}{{ awaiting_sessions|length }} exam sessions awaiting your confirmation{% endif %}</h2>
+      <div class="staff-exam-session-chips">
+        {% for exam_session in awaiting_sessions %}
+          <button type="button" class="staff-exam-session-chip is-awaiting" data-staff-session-open="staff-session-detail-{{ exam_session.id }}" aria-haspopup="dialog" aria-controls="staff-session-detail-{{ exam_session.id }}">{{ exam_session.exam_session_name }} ({{ exam_session.session_date.strftime('%d/%m/%Y') if exam_session.session_date else 'Date to be confirmed' }}) <span aria-hidden="true">↗</span></button>
+        {% else %}
+          <p class="staff-exam-sessions-empty">No exam sessions are awaiting your confirmation.</p>
+        {% endfor %}
+      </div>
+    </section>
+    <section class="staff-exam-sessions-panel" aria-labelledby="submitted-sessions-title">
+      <h2 id="submitted-sessions-title">Your confirmed exam sessions</h2>
+      {% if confirmed_sessions %}
+      <div class="staff-confirmed-table-frame">
+      <table class="staff-confirmed-sessions-table" aria-label="Your confirmed exam sessions">
+        <thead><tr><th>Exam session</th><th>Format</th><th>Date</th><th>Role</th><th>Logistics</th><th>Details</th></tr></thead>
+        <tbody>
+          {% for exam_session in confirmed_sessions %}
+          <tr data-confirmed-session="{{ exam_session.id }}">
+            <td data-label="Exam session"><strong class="staff-confirmed-name">{{ exam_session.exam_session_name }}</strong></td>
+            <td data-label="Format"><span class="staff-confirmed-format">{{ exam_session.format or 'To be confirmed' }}</span></td>
+            <td data-label="Date">{% if exam_session.session_date %}<time class="staff-confirmed-date" datetime="{{ exam_session.session_date.isoformat() }}">{{ exam_session.session_date.strftime('%d/%m/%Y') }}</time>{% else %}<span class="staff-detail-muted">To be confirmed</span>{% endif %}</td>
+            <td data-label="Role"><div class="staff-confirmed-role-list">{% for detail in session_details[exam_session.id] %}<span class="staff-confirmed-role role-{{ detail.assignment_type }}">{{ detail.role }}{% if detail.is_remote %} (remote){% endif %}</span>{% endfor %}</div></td>
+            <td data-label="Logistics">{% for status in session_details[exam_session.id]|map(attribute='logistics_status')|unique %}<div class="staff-confirmed-logistics{% if not status or status == 'Does not apply' %} is-not-applicable{% endif %}">{{ status or 'Does not apply' }}</div>{% endfor %}</td>
+            <td><button type="button" class="staff-detail-link staff-confirmed-details-button" data-staff-session-open="staff-session-detail-{{ exam_session.id }}" aria-haspopup="dialog" aria-controls="staff-session-detail-{{ exam_session.id }}" aria-label="Access session details for {{ exam_session.exam_session_name }}"><span>Access session details</span><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M5 12h14m-6-6 6 6-6 6"/></svg></button></td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+      </div>
+      {% else %}
+        <p class="staff-exam-sessions-empty">No confirmed exam sessions are currently available.</p>
+      {% endif %}
+    </section>
+    {% if confirmed_sessions %}
+    <section class="staff-exam-sessions-panel" aria-labelledby="session-fees-title">
+      <h2 id="session-fees-title">Your exam session fees</h2>
+      <div class="staff-fees-invoice-layout">
+      <div class="staff-confirmed-table-frame">
+        <table class="staff-confirmed-sessions-table staff-session-fees-table" aria-label="Your exam session fees">
+          <thead><tr><th>Exam session</th><th>Date</th><th>Role</th><th>Fee</th></tr></thead>
+          <tbody>
+            {% for row in fee_rows %}
+            <tr>
+              <td data-label="Exam session"><strong class="staff-confirmed-name">{{ row.session.exam_session_name }}</strong></td>
+              <td data-label="Date">{% if row.session.session_date %}<time class="staff-confirmed-date" datetime="{{ row.session.session_date.isoformat() }}">{{ row.session.session_date.strftime('%d/%m/%Y') }}</time>{% else %}To be confirmed{% endif %}</td>
+              <td data-label="Role"><span class="staff-session-fee-role">{{ row.detail.role }}{% if row.detail.is_remote %} (remote){% endif %}</span></td>
+              <td data-label="Fee" class="staff-session-fee-value">{{ row.detail.total_fee if row.detail.total_fee and row.detail.total_fee != '-' else 'To be confirmed' }}</td>
+            </tr>
+            {% endfor %}
+          </tbody>
+          <tfoot><tr><td colspan="3"></td><td class="staff-session-fees-total"><span>Total session fees</span><strong>{{ total_session_fees }}</strong></td></tr></tfoot>
+        </table>
+      </div>
+      <aside class="staff-invoice-information" aria-labelledby="invoice-information-title">
+        <h3 id="invoice-information-title">Invoice information</h3>
+        <p>Please issue <strong>one consolidated invoice</strong> once all your exam sessions have been completed.</p>
+        <h4>BILLING DETAILS FOR PATH EXAMINATIONS IN ARGENTINA</h4>
+        <ul>
+          <li><strong>Legal company name:</strong> Bellis Ignis Group S.R.L.</li>
+          <li><strong>CUIT (Tax ID):</strong> 30-71601631-1</li>
+          <li><strong>Registered address:</strong> Av. Corrientes 1383 (1043), CABA</li>
+          <li><strong>VAT status:</strong> Responsable Inscripto (VAT-Registered)</li>
+        </ul>
+        <p>Please send your final invoice to <a href="https://mail.google.com/mail/?view=cm&amp;fs=1&amp;to=finance%40pathexaminations.com&amp;su={{ ('Exam session invoice - ' ~ staff_name)|urlencode }}" target="_blank" rel="noopener noreferrer">finance@pathexaminations.com</a> at least 3 business days before the scheduled payment date: <strong>{{ next_payment_date or 'To be confirmed' }} -</strong> 5:00 pm · GMT-3</p>
+        <a class="staff-detail-link" href="https://drive.google.com/drive/u/0/my-drive" target="_blank" rel="noopener noreferrer">View sample invoice ↗</a>
+      </aside>
+      </div>
+    </section>
+    {% endif %}
+    {% for exam_session in exam_sessions %}
+      {% include 'pre_session_control_tower/_staff_session_detail.html' %}
+    {% endfor %}
+    <footer class="journey-footer">
+      <p>Path International Examinations</p>
+      <small class="journey-visibility-note">Evolution in language assessment</small>
+    </footer>
+  </section>
+</main>
+<script src="{{ url_for('static', filename='js/app.js', v='20261024-staff-session-details-1') }}"></script>
+<script src="{{ url_for('static', filename='js/staff_exam_sessions.js', v='20261025-staff-participation-popup-3') }}"></script>
+</body>
+</html>
