@@ -13,6 +13,8 @@ def assignment(member_id=None, status="Pending", assignment_id=1):
     return SimpleNamespace(
         id=assignment_id,
         team_member_id=member_id,
+        team_member=None,
+        potential_entry=None,
         participation_status=status,
         logistics_enabled=False,
     )
@@ -68,7 +70,9 @@ class StaffingReadinessContractTest(unittest.TestCase):
             with self.subTest(status=status):
                 result = staffing_readiness_contract([assignment(member_id=10, status=status)], [], [])
 
-                self.assertEqual(result["totals"]["sent"], 1)
+                awaiting_response = status == "Official confirmation sent"
+                self.assertEqual(result["totals"]["sent"], int(awaiting_response))
+                self.assertEqual(result["totals"]["pending_assigned"], int(not awaiting_response))
                 self.assertFalse(result["ready"])
 
     def test_single_assigned_confirmed_is_ready(self):
@@ -193,8 +197,8 @@ class StaffingReadinessContractTest(unittest.TestCase):
         tooltip = exam_session_pending_status_tooltip(staffing, logistics)
 
         self.assertIn("Confirm all assigned staff", tooltip)
-        self.assertIn("1 Pending staff member", tooltip)
-        self.assertIn("1 confirmation in progress", tooltip)
+        self.assertIn("2 Pending staff members", tooltip)
+        self.assertNotIn("confirmation in progress", tooltip)
 
 
 if __name__ == "__main__":

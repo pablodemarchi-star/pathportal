@@ -17725,6 +17725,7 @@ body.staff-session-detail-open { overflow: hidden; }
 }
 
 .staff-detail-travel-section { grid-column: 1 / -1; }
+.staff-detail-remote-arrangements { grid-column: 1 / -1; border: 2px solid #b87b16; border-left-width: 6px; background: #fff8e8; }
 
 .staff-detail-confirm-form { margin: 0; }
 .staff-detail-confirm-form button { font-family: inherit; cursor: pointer; }

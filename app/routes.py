@@ -1464,7 +1464,7 @@ def staffing_readiness_contract(supervisor_assignments=None, examiner_assignment
         if session_record.emergency_contact_member_id:
             participation_status = normalize_participation_status(session_record.emergency_contact_participation_status)
             counts["assigned"] = 1
-            if participation_status == "Pending":
+            if participation_status in {"Pending", "Pre-confirmation sent", "Pre-confirmed"}:
                 counts["pending_assigned"] = 1
             elif participation_status == "Declined":
                 counts["pending_assigned"] = 1
@@ -1482,7 +1482,7 @@ def staffing_readiness_contract(supervisor_assignments=None, examiner_assignment
                     "assignment_id": session_record.id,
                     "message": "Emergency contact participation was cancelled and needs follow-up.",
                 })
-            elif participation_status_is_in_progress(participation_status):
+            elif participation_status == "Official confirmation sent":
                 counts["sent"] = 1
             elif participation_status == "Confirmed":
                 counts["confirmed"] = 1
@@ -1523,7 +1523,7 @@ def staffing_readiness_contract(supervisor_assignments=None, examiner_assignment
             counts["required"] += 1
             if has_member:
                 counts["assigned"] += 1
-                if participation_status == "Pending":
+                if participation_status in {"Pending", "Pre-confirmation sent", "Pre-confirmed"}:
                     counts["pending_assigned"] += 1
                 elif participation_status == "Declined":
                     counts["pending_assigned"] += 1
@@ -1541,7 +1541,7 @@ def staffing_readiness_contract(supervisor_assignments=None, examiner_assignment
                         "assignment_id": assignment_id,
                         "message": f"{role} participation was cancelled and needs follow-up.",
                     })
-                elif participation_status_is_in_progress(participation_status):
+                elif participation_status == "Official confirmation sent":
                     counts["sent"] += 1
                 elif participation_status == "Confirmed":
                     counts["confirmed"] += 1
@@ -20163,8 +20163,11 @@ def staff_exam_sessions(token):
     if ordered_sessions:
         next_payment = staff_payment_settings_values(staff_payment_settings())["next_payment_date"]
         for record in ordered_sessions:
+            supervisors = ExamSessionSupervisorAssignment.query.filter_by(exam_session_id=record.id).all()
+            is_session_supervisor = any(
+                staffing_assignment_person_ref(item) == share.person_ref for item in supervisors)
             contacts = staffing_email_contacts(
-                ExamSessionSupervisorAssignment.query.filter_by(exam_session_id=record.id).all(),
+                supervisors,
                 ExamSessionExaminerAssignment.query.filter_by(exam_session_id=record.id).all(),
                 ExamSessionInternAssignment.query.filter_by(exam_session_id=record.id).all())
             logistics = ExamSessionLogistics.query.filter_by(exam_session_id=record.id).first()
@@ -20180,6 +20183,9 @@ def staff_exam_sessions(token):
                 "decline_url": url_for("staff.decline_staff_exam_session", token=share.token,
                     session_id=record.id, assignment_type=role, assignment_id=assignment.id),
                 "assignment_type": role,
+                "examiner_receives_shipment": (
+                    role == "examiner" and bool(assignment.is_shipment_recipient)
+                    and not is_session_supervisor),
                 "session_date_short": record.session_date.strftime("%d/%m/%Y") if record.session_date else "Date to be confirmed",
                 "participation_confirmed": status == "Confirmed",
                 **staff_end_checks_view(record, role, status, submission, share),

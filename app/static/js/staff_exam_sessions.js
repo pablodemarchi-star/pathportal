@@ -47,6 +47,9 @@
           && !(role === "Examiner" && title.includes("Material for examiners"))
           && !(role === "Supervisor" && data.is_remote
             && (title.includes("Supervisor guidelines") || title.includes("Exam box shipment"))));
+      if (role === "Examiner" && data.examiner_receives_shipment) {
+        rows.push(["📦🚚 Exam box shipment", "Once you confirm your participation as a Examiner, our Logistics team will contact you in due course to arrange the delivery of the materials for your assigned exam session(s). You will also receive instructions on how to handle the materials after the exam session has ended.", ""]);
+      }
       rows.forEach(([title, description, url]) => {
         const item = make("div", "staff-detail-material");
         item.append(make("h4", "", title), make("p", "", description));
