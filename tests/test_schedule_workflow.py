@@ -1605,6 +1605,31 @@ class ScheduleWorkflowTest(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertNotIn('>Concatenated</span>', response.get_data(as_text=True))
 
+    def test_bundle_schedule_prefers_onsite_only_within_seven_calendar_days(self):
+        from app.routes import bundle_schedule_presentations
+        other, chained, standalone = self.create_concat_schedule_test_sessions()
+        self.session_record.session_date = date(2026, 12, 1)
+        other.session_date = date(2026, 12, 3)
+        other.format = "Online"
+        chained.format = "Onsite"
+        for first_format in ("Online", "Online at exam centre"):
+            self.session_record.format = first_format
+            for gap in (0, 7, 8, 9):
+                with self.subTest(first_format=first_format, gap=gap):
+                    chained.session_date = self.session_record.session_date + timedelta(days=gap)
+                    db.session.commit()
+                    # Primary selection must use the whole group, even when only Onsite is visible.
+                    states = bundle_schedule_presentations([chained, other, standalone])
+                    self.assertEqual(states[chained.id]["is_secondary"], gap >= 8)
+                    self.assertTrue(states[other.id]["is_secondary"])
+                    self.assertFalse(states[standalone.id]["is_secondary"])
+                    self.assertTrue(states[chained.id]["is_secondary_by_date"])
+        chained.format = "Online"
+        db.session.commit()
+        states = bundle_schedule_presentations([self.session_record, other, chained])
+        self.assertFalse(states[self.session_record.id]["is_secondary"])
+        self.assertTrue(states[chained.id]["is_secondary"])
+
     def test_concat_contact_points_add_edit_remove_require_confirmation_and_sync_entire_group(self):
         other, chained, standalone = self.create_concat_schedule_test_sessions()
         client = self.login_client()

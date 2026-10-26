@@ -6534,18 +6534,29 @@ def schedule_status_deadline(status, entered_at, session_record=None):
 
 
 def bundle_schedule_presentations(session_records):
-    """Only the earliest session in each concatenated group opens Schedule."""
+    """Prefer the earliest Onsite session when it is within seven days of the group start."""
     components = exam_session_concat_component_map()
-    dates = dict(db.session.query(ExamSession.id, ExamSession.session_date).all())
+    sessions = db.session.query(ExamSession.id, ExamSession.session_date, ExamSession.format).all()
+    dates = {session_id: session_date for session_id, session_date, _ in sessions}
+    formats = {session_id: session_format for session_id, _, session_format in sessions}
     statuses = dict(db.session.query(ExamSessionScheduleWorkflow.exam_session_id, ExamSessionScheduleWorkflow.status).all())
     result = {}
     for record in session_records:
         ids = components.get(record.id, {record.id})
-        primary_id = min(ids, key=lambda session_id: (dates.get(session_id) or date.max, session_id))
+        chronological_key = lambda session_id: (dates.get(session_id) or date.max, session_id)
+        first_id = min(ids, key=chronological_key)
+        primary_id = first_id
+        onsite_ids = [session_id for session_id in ids
+                      if formats.get(session_id) == "Onsite" and dates.get(session_id)]
+        if onsite_ids and dates.get(first_id):
+            first_onsite_id = min(onsite_ids, key=chronological_key)
+            if (dates[first_onsite_id] - dates[first_id]).days < 8:
+                primary_id = first_onsite_id
         secondary = len(ids) > 1 and record.id != primary_id
         status = statuses.get(primary_id, "Not started")
         result[record.id] = {
             "is_secondary": secondary,
+            "is_secondary_by_date": len(ids) > 1 and record.id != first_id,
             "status": "Concatenated" if secondary and status in {"Not started", "Ready to send"} else status,
         }
     return result
