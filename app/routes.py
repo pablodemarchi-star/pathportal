@@ -19995,21 +19995,22 @@ def staff_portal_invitation_actions(record, submission, name, email, phone):
         ) if value)
         bullets.append(f"- *{details}*")
     count = len(pending)
-    pending_label = "one exam session" if count == 1 else f"{count} exam sessions"
+    pending_label = f"{count} exam session" + ("s" if count != 1 else "")
     pending_text = (f"❗ You currently have *{pending_label} awaiting your confirmation*:\n\n" + "\n".join(bullets)
                     if count else "You currently have *no exam sessions awaiting your confirmation*.")
     message = (
         f"Hello, {name}!\n\n"
         "We hope you're doing well! 😊\n\n"
-        "We're pleased to share our new *Staff member portal* with you! 🚀\n\n"
+        "We're pleased to introduce our new *Staff member portal*! 🚀\n\n"
         f"👉 You can access it here: {portal_url}\n\n"
-        "Once you access the portal, you'll find all your assigned exam sessions. "
-        "Simply click on each session to _view all the relevant information_ and "
-        "*confirm your participation, ask a question, or decline the assignment*.\n\n"
+        "This portal brings together _*all your current and future exam session assignments*_ in one place. "
+        "Simply click on each session to *view all the relevant information*, "
+        "*confirm or decline your participation*, or ask any questions.\n\n"
         f"{pending_text}\n\n"
-        "We'd really appreciate it if you could complete this process "
-        "*as soon as you receive this message*, so we can move forward with the remaining session arrangements.\n\n"
-        "We’ll notify you if any additional exam sessions are assigned to you in the portal.\n\n"
+        "We'd really appreciate it if you could *access the portal and "
+        "confirm or decline your participation as soon as possible*, "
+        "so we can move forward with the remaining session arrangements.\n\n"
+        "We'll notify you whenever new exam sessions are added to your portal.\n\n"
         "Thank you very much! 💙\n\n"
         "Brenda\n*Path Examinations*"
     )
