@@ -3319,7 +3319,9 @@ This stage has already been marked as complete. Reopening it may affect package 
 	                    <span class="package-preparation-blocked-chip">Do not proceed with printing full schedule. Staff members have not been confirmed yet</span>
 	                  {% endif %}
 	                </li>
-	                <li>Add a Path Examinations bag with the gift inside.</li>
+	                {% if not view.get('bundle_schedule', {}).get('is_secondary', false) %}
+	                  <li>Add a Path Examinations bag with the gift inside.</li>
+	                {% endif %}
 	              </ol>
             </div>
             <div class="package-preparation-actions" aria-label="Inclusion of final items actions">
