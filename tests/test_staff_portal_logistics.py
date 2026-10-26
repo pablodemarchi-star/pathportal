@@ -220,6 +220,40 @@ class StaffPortalLogisticsTest(unittest.TestCase):
         self.assertIn("Configure the Logistics folder link", response.json["error"])
         self.assertEqual(db.session.get(ExamSessionExaminerAssignment, assignment.id).logistics_type, "Does not apply")
 
+    def test_uber_options_disable_fuel_even_if_submitted(self):
+        self.person.has_car = "Yes"
+        assignment = ExamSessionExaminerAssignment(exam_session_id=self.record.id, team_member_id=self.person.id,
+                                                  logistics_type="Does not apply", participation_status="Pending", km=100)
+        provider_type = ProviderType(name="Transport")
+        concept = ExamSessionLogisticsConcept(exam_session_id=self.record.id, status="Pending")
+        db.session.add_all([assignment, provider_type, concept])
+        db.session.commit()
+        key = f"existing-{assignment.id}"
+        concept_key = f"existing-{concept.id}"
+        for value in ["Does not apply", "Uber ride", "Complex Uber ride", "Complex logistics"]:
+            response = self.client.post(f'/exam-session-planner/sessions/{self.record.id}/members',
+                headers={"Accept": "application/json"}, data={
+                    "csrf_token": "test", "session_year": "2026", "examiner_row_keys": key,
+                    f"examiner_assignment_id_{key}": str(assignment.id),
+                    f"examiner_team_member_id_{key}": str(self.person.id),
+                    f"examiner_participation_status_{key}": "Pending",
+                    f"examiner_logistics_type_{key}": value, f"examiner_km_{key}": "100",
+                    f"examiner_fuel_enabled_{key}": "1", f"examiner_fuel_{key}": "100",
+                    f"examiner_fuel_currency_{key}": "ARS", f"examiner_vehicle_dep_{key}": "50",
+                    "logistics_files_url": "https://example.com/logistics",
+                    "logistics_concept_row_keys": concept_key,
+                    f"logistics_concept_id_{concept_key}": str(concept.id),
+                    f"logistics_provider_type_id_{concept_key}": str(provider_type.id),
+                    f"logistics_staff_member_ids_{concept_key}": str(self.person.id),
+                })
+            self.assertEqual(response.status_code, 200, response.json)
+            item = db.session.get(ExamSessionExaminerAssignment, assignment.id)
+            blocked = value in {"Uber ride", "Complex Uber ride"}
+            self.assertEqual(item.fuel_enabled, not blocked)
+            if blocked:
+                self.assertFalse(item.fuel)
+                self.assertFalse(item.vehicle_dep)
+
 
 if __name__ == "__main__":
     unittest.main()

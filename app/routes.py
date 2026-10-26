@@ -24542,7 +24542,8 @@ def save_exam_session_assignment_section(
         commuting_currency = request.form.get(f"{section_key}_commuting_currency_{row_key}", "").strip() if km is not None or manual_fee_override else ""
         commuting_base_value = request.form.get(f"{section_key}_commuting_base_value_{row_key}", "").strip() if km is not None or manual_fee_override else ""
         commuting_unit = request.form.get(f"{section_key}_commuting_unit_{row_key}", "").strip() if km is not None or manual_fee_override else ""
-        fuel_enabled = request.form.get(f"{section_key}_fuel_enabled_{row_key}", "").strip() == "1"
+        fuel_enabled = (request.form.get(f"{section_key}_fuel_enabled_{row_key}", "").strip() == "1"
+                        and logistics_type not in {"Uber ride", "Complex Uber ride"})
         fuel = request.form.get(f"{section_key}_fuel_{row_key}", "").strip() if fuel_enabled else ""
         fuel_currency = request.form.get(f"{section_key}_fuel_currency_{row_key}", "").strip() if fuel_enabled else ""
         fuel_base_value = request.form.get(f"{section_key}_fuel_base_value_{row_key}", "").strip() if fuel_enabled else ""
@@ -25382,6 +25383,7 @@ def update_exam_session_members(session_id):
         intern_assignments = ExamSessionInternAssignment.query.filter_by(exam_session_id=session_record.id).all()
         staffing = staffing_readiness_contract(supervisor_assignments, examiner_assignments, intern_assignments, session_record=session_record)
         logistics_config = ExamSessionLogistics.query.filter_by(exam_session_id=session_record.id).first()
+        logistics_concepts = ExamSessionLogisticsConcept.query.filter_by(exam_session_id=session_record.id).all()
         logistics = logistics_readiness_contract(
             supervisor_assignments + examiner_assignments + intern_assignments,
             logistics_concepts,

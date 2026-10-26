@@ -520,8 +520,9 @@
         <span class="assignment-disabled-dash" data-commuting-dash data-commuting-name="{{ section_key }}_commuting_{{ row_key }}">-</span>
       {% endif %}
       </div>
-    {% set fuel_vehicle_allowed = selected_member and selected_member.has_car == 'Yes' and assignment and assignment.km is not none and assignment.km >= 60 %}
-    {% set fuel_vehicle_enabled = assignment and (assignment.fuel_enabled or assignment.fuel or assignment.vehicle_dep) %}
+    {% set fuel_blocked_by_logistics = logistics_type in ['Uber ride', 'Complex Uber ride'] %}
+    {% set fuel_vehicle_allowed = not fuel_blocked_by_logistics and selected_member and selected_member.has_car == 'Yes' and assignment and assignment.km is not none and assignment.km >= 60 %}
+    {% set fuel_vehicle_enabled = not fuel_blocked_by_logistics and assignment and (assignment.fuel_enabled or assignment.fuel or assignment.vehicle_dep) %}
       <div class="staff-card-field" data-fuel-cell>
       <span class="staff-card-field-label">Fuel</span>
       {% if fuel_vehicle_enabled %}

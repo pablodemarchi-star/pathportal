@@ -4127,7 +4127,10 @@ const resetManualFeeOverride = (row) => {
   syncEditFeesButton(row);
 };
 
+const rowUsesUberRide = (row) => ["Uber ride", "Complex Uber ride", "Uber", "Simple logistics"].includes(row?.querySelector("[data-logistics-control]")?.value);
+
 const enableFuelVehicleInputs = (row) => {
+  if (rowUsesUberRide(row)) return;
   const fuelCell = row?.querySelector("[data-fuel-cell]");
   const vehicleCell = row?.querySelector("[data-vehicle-cell]");
   if (!fuelCell || !vehicleCell) return;
@@ -4145,7 +4148,7 @@ const resetFuelVehicleActivation = (row) => {
   const names = fuelVehicleNames(row);
   const kmInput = row.querySelector("[data-km-input]");
   const kmValue = Number.parseInt(kmInput?.value || "", 10);
-  const canActivateFuel = Boolean(kmInput) && Number.isInteger(kmValue) && kmValue >= 60 && selectedRowTeamMemberHasCar(row);
+  const canActivateFuel = !rowUsesUberRide(row) && Boolean(kmInput) && Number.isInteger(kmValue) && kmValue >= 60 && selectedRowTeamMemberHasCar(row);
   replaceStaffCardFieldValue(
     fuelCell,
     canActivateFuel
@@ -4157,6 +4160,19 @@ const resetFuelVehicleActivation = (row) => {
 
 const syncFuelVehicleCells = (row) => {
   if (!row) return;
+  if (rowUsesUberRide(row)) {
+    const fuelCell = row.querySelector("[data-fuel-cell]");
+    const vehicleCell = row.querySelector("[data-vehicle-cell]");
+    if (!fuelCell || !vehicleCell) return;
+    const names = fuelVehicleNames(row);
+    const label = renderFuelVehicleCheckbox(names);
+    label.querySelector("input").disabled = true;
+    label.title = "Fuel is not available for Uber ride or Complex Uber ride.";
+    replaceStaffCardFieldValue(fuelCell, label);
+    replaceStaffCardFieldValue(vehicleCell, renderDisabledAssignmentDash(names, "data-vehicle-dash"));
+    syncAssignmentTotalFee(row);
+    return;
+  }
   if (rowFeesAreLocked(row)) return;
   const fuelCell = row.querySelector("[data-fuel-cell]");
   const vehicleCell = row.querySelector("[data-vehicle-cell]");
@@ -4195,7 +4211,7 @@ document.addEventListener("change", (event) => {
   const checkbox = event.target.closest("[data-enable-fuel-vehicle]");
   if (!checkbox || !checkbox.checked) return;
   const row = staffAssignmentRow(checkbox);
-  if (rowFeesAreLocked(row)) {
+  if (rowFeesAreLocked(row) || rowUsesUberRide(row)) {
     checkbox.checked = false;
     return;
   }
@@ -9936,6 +9952,7 @@ const syncStaffLogisticsControl = (control) => {
   syncStaffHeaderLogisticsTag(row, control.value);
   const hiddenInput = row?.querySelector("[data-logistics-enabled-input]");
   if (hiddenInput) hiddenInput.value = logisticsControlIsActive(control) ? "1" : "";
+  syncFuelVehicleCells(row);
   syncLogisticsStaffMemberLists(control.closest("[data-session-members-form]"));
 };
 
