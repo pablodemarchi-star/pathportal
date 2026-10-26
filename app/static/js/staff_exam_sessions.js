@@ -70,12 +70,17 @@
         duties.items.forEach((text) => root.querySelector("[data-staff-responsibilities]").append(make("li", "", text)));
       } else root.querySelector("[data-staff-responsibilities-section]").hidden = true;
       if (remote) root.querySelector("[data-staff-travel-section]").hidden = true;
-      else {
-        const travel = officialTravelCopy(role, data.logistics_status || "Does not apply", data.logistics_url || "");
-        travel.text.split(/\n+/).filter((text) => text && text !== data.logistics_url).forEach((text) => {
-          root.querySelector("[data-staff-travel]").append(make("p", "", text));
+      const instructionsDialog = root.querySelector("[data-staff-logistics-instructions-dialog]");
+      const instructionsButton = root.querySelector("[data-staff-logistics-instructions-open]");
+      if (instructionsDialog && instructionsButton) {
+        instructionsButton.addEventListener("click", () => instructionsDialog.showModal());
+        instructionsDialog.querySelectorAll("[data-staff-logistics-instructions-close]").forEach((button) => {
+          button.addEventListener("click", () => instructionsDialog.close());
         });
-        if (data.logistics_url && data.logistics_status !== "Does not apply") appendLink(root.querySelector("[data-staff-logistics-link]"), "Open logistics folder ↗", data.logistics_url);
+        instructionsDialog.addEventListener("close", (event) => {
+          event.stopPropagation();
+          instructionsButton.focus();
+        });
       }
       if (data.participation_confirmed) return;
       const subject = `Re: Path exam session invitation - ${data.session_name || "Exam session"} - ${data.full_name}`;

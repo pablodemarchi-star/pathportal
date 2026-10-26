@@ -8200,7 +8200,7 @@ const validateStaffOfficialConfirmationEmailPayload = (payload) => {
     return "Total fee is required for official confirmation emails.";
   }
   const logisticsStatus = cleanEmailValue(payload?.logistics_status || payload?.logisticsStatus);
-  if (!["Does not apply", "Uber", "Simple logistics", "Uber ride", "Complex Uber ride", "Complex logistics"].includes(logisticsStatus)) {
+  if (role !== "Emergency contact" && !["Does not apply", "Uber", "Simple logistics", "Uber ride", "Complex Uber ride", "Complex logistics"].includes(logisticsStatus)) {
     return "Logistics status is required for official confirmation emails.";
   }
   if (["Uber", "Simple logistics", "Uber ride", "Complex Uber ride"].includes(logisticsStatus) && !emailLinkIsUsable(payload?.logistics_url || payload?.logisticsUrl)) {
@@ -8776,7 +8776,15 @@ const initStaffOfficialConfirmationEmailButtons = (root = document) => {
 
 const validateStaffSessionSubmit = (form, submitter = null) => {
   const payload = parseStaffOfficialConfirmationPayload(form);
-  const error = validateStaffOfficialConfirmationEmailPayload(payload);
+  const role = cleanEmailValue(payload?.role);
+  const logisticsStatus = cleanEmailValue(payload?.logistics_status || payload?.logisticsStatus);
+  let error = "";
+  if (role === "Supervisor" && payload?.is_remote && logisticsStatus !== "Does not apply") {
+    error = "Remote supervisors must have Logistics set to Does not apply before adding the session.";
+  } else if (role !== "Emergency contact" && !["Does not apply", "Uber", "Simple logistics", "Uber ride", "Complex Uber ride", "Complex logistics"].includes(logisticsStatus)) {
+    error = "Select Logistics for this staff member in Exam session planner before adding the session.";
+  }
+  error = error || validateStaffOfficialConfirmationEmailPayload(payload);
   if (!error) return true;
   const button = submitter || form.querySelector('button[type="submit"]');
   if (button) showStaffOfficialConfirmationEmailFeedback(button, error, true);
@@ -9842,7 +9850,8 @@ function syncLogisticsStaffMemberLists(form) {
     const selectedOption = selectedTeamMemberOption(teamInput);
     const staffMemberId = teamInput?.value || "";
     if (
-      logisticsControl?.value !== "Complex logistics"
+      !logisticsControlIsActive(logisticsControl)
+      || rowIsRemoteSupervisor(row)
       || !staffMemberId
       || staffMemberId.startsWith("potential:")
       || selectedOption?.dataset.entryType === "potential"
@@ -9872,7 +9881,7 @@ function syncLogisticsStaffMemberLists(form) {
     if (!complexStaffMembers.length || !rowKey) {
       const empty = document.createElement("span");
       empty.className = "logistics-staff-empty";
-      empty.textContent = "No Complex logistics staff";
+      empty.textContent = "No staff with active logistics";
       list.appendChild(empty);
       list.dataset.selectedStaffIds = "";
       return;
@@ -9977,6 +9986,7 @@ const syncLogisticsSection = (form) => {
   const section = form.querySelector("[data-logistics-section]");
   if (!section) return;
   section.hidden = activeLogisticsControls(form).length === 0;
+  syncLogisticsFilesLink(section);
   syncLogisticsPlannedState(section);
   syncSessionLogisticsActivityBadge(form);
 };
@@ -10000,13 +10010,16 @@ const syncLogisticsFilesLink = (section) => {
   const field = section?.querySelector(".logistics-files-field");
   if (!input || !link) return true;
   const value = input.value.trim();
-  const valid = logisticsUrlIsValid(value);
-  if (error) error.textContent = valid ? "" : "Please enter a valid link.";
+  const required = activeLogisticsControls(section.closest("[data-session-members-form]")).length > 0;
+  const missing = required && !value;
+  const valid = !missing && logisticsUrlIsValid(value);
+  if (error) error.textContent = missing ? "Configure the Logistics folder link before saving this session." : valid ? "" : "Please enter a valid link.";
   link.classList.toggle("is-disabled", !value || !valid);
   link.toggleAttribute("aria-disabled", !value || !valid);
   if (configureButton) configureButton.hidden = Boolean(value && valid);
   if (editButton) editButton.hidden = !Boolean(value && valid);
   if (field && value && valid) field.hidden = true;
+  if (field && !valid) field.hidden = false;
   if (value && valid) {
     link.href = value;
   } else {
@@ -10073,7 +10086,7 @@ const complexLogisticsCoverageError = (form) => {
     const teamInput = row.querySelector("[data-team-member-select]");
     const staffMemberId = teamInput?.value || "";
     if (
-      logisticsControl?.value === "Complex logistics"
+      ["Complex Uber ride", "Complex logistics"].includes(logisticsControl?.value)
       && staffMemberId
       && !staffMemberId.startsWith("potential:")
     ) {
@@ -10090,7 +10103,7 @@ const complexLogisticsCoverageError = (form) => {
     .filter(([staffMemberId]) => !coveredMemberIds.has(staffMemberId))
     .map(([, name]) => name);
   if (!missingNames.length) return "";
-  return `Each Complex logistics staff member must be selected in at least one Logistics concept before saving: ${missingNames.join(", ")}`;
+  return `Each Complex Uber ride or Complex logistics staff member must be selected in at least one Logistics concept before saving: ${missingNames.join(", ")}`;
 };
 
 const LOGISTICS_CONFIRMED_PASSWORD = "Check";

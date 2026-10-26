@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="robots" content="noindex, nofollow">
   <title>Your exam sessions | Path Examinations</title>
-  <link rel="stylesheet" href="{{ url_for('static', filename='css/styles.css', v='20261026-staff-session-checks-1') }}">
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/styles.css', v='20261026-staff-travel-instructions-1') }}">
 </head>
 <body>
 <main class="staff-exam-sessions-shell">
@@ -47,7 +47,7 @@
       {% if table_sessions %}
       <div class="staff-confirmed-table-frame">
       <table class="staff-confirmed-sessions-table" aria-label="{{ table_title }}">
-        <thead><tr><th>Exam session</th><th>Format</th><th>Date</th><th>Role</th><th>Logistics</th><th>Details</th></tr></thead>
+        <thead><tr><th>Exam session</th><th>Format</th><th>Date</th><th>Role</th>{% if table_kind == 'regular' %}<th>Logistics</th>{% endif %}<th class="staff-confirmed-details-heading">Details</th></tr></thead>
         <tbody>
           {% for exam_session in table_sessions %}
           {% if table_kind == 'emergency' %}
@@ -62,7 +62,9 @@
             <td data-label="Format"><span class="staff-confirmed-format">{{ exam_session.format or 'To be confirmed' }}</span></td>
             <td data-label="Date">{% if exam_session.session_date %}<time class="staff-confirmed-date" datetime="{{ exam_session.session_date.isoformat() }}">{{ exam_session.session_date.strftime('%d/%m/%Y') }}</time>{% else %}<span class="staff-detail-muted">To be confirmed</span>{% endif %}</td>
             <td data-label="Role"><div class="staff-confirmed-role-list">{% for detail in table_details %}<span class="staff-confirmed-role role-{{ detail.assignment_type }}">{% if detail.role == 'Supervisor' and detail.is_remote %}Remote supervisor{% else %}{{ detail.role }}{% endif %}</span>{% endfor %}</div></td>
+            {% if table_kind == 'regular' %}
             <td data-label="Logistics">{% for status in table_details|map(attribute='logistics_status')|unique %}<div class="staff-confirmed-logistics{% if not status or status == 'Does not apply' %} is-not-applicable{% endif %}">{{ status or 'Does not apply' }}</div>{% endfor %}</td>
+            {% endif %}
             <td><button type="button" class="staff-detail-link staff-confirmed-details-button" data-staff-session-open="staff-session-detail-{{ exam_session.id }}" aria-haspopup="dialog" aria-controls="staff-session-detail-{{ exam_session.id }}" aria-label="Access session details for {{ exam_session.exam_session_name }}"><span>Access session details</span><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M5 12h14m-6-6 6 6-6 6"/></svg></button></td>
           </tr>
           {% endfor %}
@@ -87,7 +89,7 @@
             <tr>
               <td data-label="Exam session"><strong class="staff-confirmed-name">{{ row.session.exam_session_name }}</strong></td>
               <td data-label="Date">{% if row.session.session_date %}<time class="staff-confirmed-date" datetime="{{ row.session.session_date.isoformat() }}">{{ row.session.session_date.strftime('%d/%m/%Y') }}</time>{% else %}To be confirmed{% endif %}</td>
-              <td data-label="Role"><span class="staff-session-fee-role">{{ row.detail.role }}{% if row.detail.is_remote %} (remote){% endif %}</span></td>
+              <td data-label="Role"><span class="staff-session-fee-role{% if row.detail.role == 'Supervisor' and row.detail.is_remote %} is-remote{% endif %}">{% if row.detail.role == 'Supervisor' and row.detail.is_remote %}Remote supervisor{% else %}{{ row.detail.role }}{% endif %}</span></td>
               <td data-label="Fee" class="staff-session-fee-value">{{ row.detail.total_fee if row.detail.total_fee and row.detail.total_fee != '-' else 'To be confirmed' }}</td>
             </tr>
             {% endfor %}
@@ -121,6 +123,6 @@
   </section>
 </main>
 <script src="{{ url_for('static', filename='js/app.js', v='20261024-staff-session-details-1') }}"></script>
-<script src="{{ url_for('static', filename='js/staff_exam_sessions.js', v='20261026-staff-session-checks-1') }}"></script>
+<script src="{{ url_for('static', filename='js/staff_exam_sessions.js', v='20261026-staff-travel-instructions-1') }}"></script>
 </body>
 </html>

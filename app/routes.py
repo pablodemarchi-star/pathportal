@@ -7306,7 +7306,8 @@ def staffing_official_confirmation_email_payload(session_record, role, assignmen
         "backup_material_for_examiners_url": supervisor_material_links["backup_material_for_examiners_url"],
         "fee_lines": staffing_email_fee_lines(assignment),
         "total_fee": staffing_email_total_fee_for_payload(assignment, session_record, assignment_type),
-        "logistics_status": getattr(assignment, "logistics_type", "Does not apply") if assignment else "Does not apply",
+        "logistics_status": (normalize_assignment_logistics_type(getattr(assignment, "logistics_type", ""))
+                             or "Does not apply") if assignment else "Does not apply",
         "logistics_url": (getattr(logistics_config, "logistics_files_url", "") or "").strip(),
         "next_payment_date": next_payment_date or "",
         "contacts": contacts or [],
@@ -20056,6 +20057,19 @@ def submit_staff_exam_session(session_id, assignment_type, assignment_id):
     assignment, person_ref = staff_submission_assignment(record, assignment_type, assignment_id)
     if not assignment or not person_ref:
         abort(404)
+    if assignment_type != "emergency_contact":
+        logistics_type = (assignment.logistics_type or "").strip()
+        logistics_error = ""
+        if assignment_type == "supervisor" and assignment.is_remote:
+            if logistics_type != "Does not apply":
+                logistics_error = "Remote supervisors must have Logistics set to Does not apply before adding the session."
+        elif (not logistics_type or normalize_assignment_logistics_type(logistics_type)
+              not in EXAM_SESSION_LOGISTICS_TYPE_OPTIONS):
+            logistics_error = "Select Logistics for this staff member in Exam session planner before adding the session."
+        if logistics_error:
+            if request.accept_mimetypes.best == "application/json":
+                return jsonify(ok=False, error=logistics_error), 400
+            abort(400, description=logistics_error)
     workflow = ExamSessionScheduleWorkflow.query.filter_by(exam_session_id=session_id).first()
     if not workflow or workflow.status != "Approved" or not staffing_assignment_role_check_is_verified(record, assignment_type, assignment):
         abort(400, description="Approve the schedule and verify the role check before submitting this session.")
@@ -20151,6 +20165,23 @@ def update_staff_end_checks(token, submission_id):
     return jsonify(ok=True, check=key, checked=getattr(saved, key))
 
 
+def staff_portal_logistics_details(record, assignment):
+    member_id = getattr(assignment, "team_member_id", None)
+    concepts = (ExamSessionLogisticsConcept.query
+                .filter(ExamSessionLogisticsConcept.exam_session_id == record.id,
+                        ExamSessionLogisticsConcept.staff_members.any(AcademicStaff.id == member_id))
+                .order_by(ExamSessionLogisticsConcept.id).all()) if member_id else []
+    instructions = []
+    for concept in concepts:
+        content = sanitize_instructions(concept.instructions_html)
+        if content:
+            instructions.append({"html": content})
+    return {
+        "logistics_instructions": instructions,
+        "logistics_progress": "Confirmed" if concepts and all(item.status == "Confirmed" for item in concepts) else "Pending",
+    }
+
+
 @staff_bp.route("/my-exam-sessions/<token>")
 def staff_exam_sessions(token):
     share = StaffExamSessionsShare.query.filter_by(token=token).first_or_404()
@@ -20213,6 +20244,7 @@ def staff_exam_sessions(token):
                     and not is_session_supervisor),
                 "session_date_short": record.session_date.strftime("%d/%m/%Y") if record.session_date else "Date to be confirmed",
                 "participation_confirmed": status == "Confirmed",
+                **staff_portal_logistics_details(record, assignment),
                 **staff_end_checks_view(record, role, status, submission, share),
             } for role, assignment, status, submission in active_assignments[record.id]]
     fee_rows = [
@@ -23432,10 +23464,11 @@ def exam_session_planner():
             if (
                 assignment.team_member_id is not None
                 and assignment.team_member
+                and not getattr(assignment, "is_remote", False)
                 and normalize_assignment_logistics_type(
                     getattr(assignment, "logistics_type", ""),
                     getattr(assignment, "logistics_enabled", False),
-                ) == "Complex logistics"
+                ) in EXAM_SESSION_LOGISTICS_ACTIVE_TYPES
             ):
                 complex_members_by_id[assignment.team_member_id] = assignment.team_member
         complex_logistics_staff_members[session_id] = sorted(
@@ -24796,7 +24829,8 @@ def exam_session_staff_member_ids(session_id):
     return member_ids
 
 
-def complex_logistics_staff_members_for_session(session_id):
+def complex_logistics_staff_members_for_session(session_id, logistics_types=None):
+    logistics_types = EXAM_SESSION_LOGISTICS_ACTIVE_TYPES if logistics_types is None else logistics_types
     staff_members_by_id = {}
     for model in (ExamSessionSupervisorAssignment, ExamSessionExaminerAssignment, ExamSessionInternAssignment):
         assignments = (
@@ -24808,10 +24842,11 @@ def complex_logistics_staff_members_for_session(session_id):
             if (
                 assignment.team_member_id is not None
                 and assignment.team_member
+                and not getattr(assignment, "is_remote", False)
                 and normalize_assignment_logistics_type(
                     getattr(assignment, "logistics_type", ""),
                     getattr(assignment, "logistics_enabled", False),
-                ) == "Complex logistics"
+                ) in logistics_types
             ):
                 staff_members_by_id[assignment.team_member_id] = assignment.team_member
     return sorted(staff_members_by_id.values(), key=lambda member: (member.full_name or "").lower())
@@ -24824,6 +24859,9 @@ def save_exam_session_logistics(session_record, saved_fields=None):
         db.session.add(config)
 
     logistics_files_url = request.form.get("logistics_files_url", "").strip()
+    if logistics_enabled_for_session(session_record.id) and not logistics_files_url:
+        flash("Configure the Logistics folder link before saving this session.", "error")
+        return False
     if logistics_files_url and not is_valid_url(logistics_files_url):
         flash("Please enter a valid link.", "error")
         return False
@@ -24978,12 +25016,13 @@ def save_exam_session_logistics(session_record, saved_fields=None):
             db.session.add(concept_note)
     missing_complex_staff_members = [
         member.full_name
-        for member in valid_complex_staff_members
+        for member in complex_logistics_staff_members_for_session(
+            session_record.id, {"Complex Uber ride", "Complex logistics"})
         if member.id not in selected_complex_staff_member_ids
     ]
     if missing_complex_staff_members:
         flash(
-            "Each Complex logistics staff member must be selected in at least one Logistics concept before saving: "
+            "Each Complex Uber ride or Complex logistics staff member must be selected in at least one Logistics concept before saving: "
             + ", ".join(missing_complex_staff_members),
             "error",
         )

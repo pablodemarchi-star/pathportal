@@ -1,0 +1,50 @@
+{% set logistics_type = detail.logistics_status or 'Does not apply' %}
+{% set arrival_minutes = 50 if detail.role == 'Supervisor' else 30 %}
+{% set complex_travel = logistics_type in ['Complex Uber ride', 'Complex logistics'] %}
+{% macro reimbursements_copy() -%}
+Once the exam session is over, please access the folder below and upload your <strong>official Uber or Cabify receipts</strong> to the subfolder <strong>Reimbursements</strong>. Each receipt must be downloaded from the Uber or Cabify app and clearly show the <strong>pick-up and drop-off locations, date and time of the journey, and total fare</strong>. <strong>Do not include these expenses in your final invoice.</strong>
+{%- endmacro %}
+<section class="staff-detail-section staff-detail-travel-section" data-staff-travel-section>
+  <h3>Travel and logistics</h3>
+  <span class="staff-detail-role">{{ logistics_type }}</span>
+  {% if logistics_type == 'Complex logistics' %}
+    <span class="staff-detail-logistics-progress{% if detail.logistics_progress == 'Confirmed' %} is-confirmed{% endif %}">{{ detail.logistics_progress }}</span>
+  {% endif %}
+  <div class="staff-detail-travel" data-staff-travel>
+    {% if logistics_type == 'Does not apply' %}
+      <p>You may travel to and from the exam centre using your own vehicle or public transport. Please plan your journey accordingly, allow sufficient travel time and arrive {{ arrival_minutes }} minutes before the start of the exam session.</p>
+    {% elif logistics_type == 'Uber ride' %}
+      <p>You may travel to and from the exam centre using a travel app, such as Uber or Cabify. Please plan your journey accordingly, allow sufficient travel time and arrive {{ arrival_minutes }} minutes before the start of your first assigned module. {{ reimbursements_copy() }}</p>
+    {% elif logistics_type == 'Complex Uber ride' %}
+      <p>You may travel to and from the exam centre using a travel app, such as Uber or Cabify. Please read and follow the important instructions below, as specific procedures and requirements must be observed.</p>
+    {% elif logistics_type == 'Complex logistics' %}
+      <p>All relevant information and documents related to your <strong>travel or commute</strong> are available in the folder below. If the <strong>Travel and logistics</strong> section is marked <strong>Pending</strong>, some documents or travel arrangements are still being finalised. Once the status changes to <strong>Confirmed</strong>, all required documents and arrangements are ready. If you have any questions or need further clarification, please feel free to contact us.</p>
+      <p>Please read and follow the important instructions below, as specific procedures and requirements must be observed.</p>
+    {% endif %}
+    {% if complex_travel %}
+      <button type="button" class="staff-detail-link staff-detail-logistics-instructions-button" data-staff-logistics-instructions-open>View logistics instructions</button>
+      <dialog class="staff-detail-logistics-instructions-dialog" data-staff-logistics-instructions-dialog aria-label="Logistics instructions">
+        <header class="staff-detail-logistics-instructions-header"><h3>Logistics instructions</h3><button type="button" class="staff-detail-close" data-staff-logistics-instructions-close aria-label="Close logistics instructions">&times;</button></header>
+        <div class="staff-detail-logistics-instructions-content">
+          {% for instruction in detail.logistics_instructions %}
+            <div class="staff-detail-logistics-instruction">{{ instruction.html|safe }}</div>
+          {% else %}
+            <p>No logistics instructions have been added yet.</p>
+          {% endfor %}
+        </div>
+        <button type="button" class="secondary-button" data-staff-logistics-instructions-close>Close</button>
+      </dialog>
+      {% if logistics_type == 'Complex Uber ride' %}
+        <p>Make sure you plan your journey accordingly, allow sufficient travel time and arrive {{ arrival_minutes }} minutes before the start of your first assigned module. {{ reimbursements_copy() }}</p>
+      {% else %}
+        <p>Once the exam session is over, if you have incurred any <strong>additional expenses previously approved by Path Examinations</strong>, please upload the corresponding receipts to the <strong>Reimbursements</strong> subfolder. <strong>Do not include these expenses in your final invoice.</strong></p>
+        <p>Please note that <strong>expenses not approved in advance or without a valid receipt issued in the company’s name cannot be reimbursed.</strong></p>
+      {% endif %}
+    {% endif %}
+  </div>
+  <div data-staff-logistics-link>
+    {% if detail.logistics_url and logistics_type != 'Does not apply' %}
+      <a class="staff-detail-link" href="{{ detail.logistics_url }}" target="_blank" rel="noopener noreferrer">Open logistics folder ↗</a>
+    {% endif %}
+  </div>
+</section>
