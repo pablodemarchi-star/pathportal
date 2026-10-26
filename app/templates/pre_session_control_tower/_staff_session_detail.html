@@ -25,15 +25,21 @@
           <div class="staff-detail-payment"><span>Next payment</span><strong>{{ detail.next_payment_date or 'To be confirmed' }}</strong><small>5:00 pm · GMT-3</small></div>
           <details class="staff-detail-invoice"><summary>Invoice &amp; payment information</summary><p>Once all your exam sessions are over, send <strong>one consolidated invoice</strong> to <a href="https://mail.google.com/mail/?view=cm&amp;fs=1&amp;to=finance%40pathexaminations.com&amp;su={{ ('Exam session invoice - ' ~ detail.full_name)|urlencode }}" target="_blank" rel="noopener noreferrer">finance@pathexaminations.com</a>, including only the sum of your total session fees.</p><p>Do not include additional expenses. Only invoices matching the system amount will be processed. The invoice may be issued in your name or someone else’s name.</p><a class="staff-detail-link" href="https://drive.google.com/drive/u/0/my-drive" target="_blank" rel="noopener noreferrer">View sample invoice ↗</a><p>Payment will appear as Bellis Ignis Group SRL. First-time payments may take up to 72 working hours after processing; previous recipients should receive payment immediately.</p></details>
         </aside>
-        {% if detail.examiner_receives_shipment %}
-        <section class="staff-detail-section staff-detail-remote-arrangements" aria-label="Remote supervision arrangements">
-          <h3><strong>Remote supervision arrangements</strong></h3>
-          <p>Please note that a <strong>Remote supervisor</strong> has been assigned to this session. This means you will be responsible for <strong>bringing the exam materials to the session and arranging their return shipment to Path International Examinations afterwards.</strong></p>
-          <p>The Remote supervisor will contact you to coordinate the return of materials and guide you through the <strong>End-of-session checks.</strong></p>
-        </section>
-        {% endif %}
         <section class="staff-detail-section staff-detail-travel-section" data-staff-travel-section><h3>Travel and logistics</h3><span class="staff-detail-role">{{ detail.logistics_status or 'Does not apply' }}</span><div class="staff-detail-travel" data-staff-travel></div><div data-staff-logistics-link></div></section>
       </div>
+      {% if detail.role == 'Supervisor' and detail.is_remote %}
+      <section class="staff-detail-section staff-detail-coordination" aria-label="Pre-session coordination with the Examiner">
+        <h3>Pre-session coordination with the Examiner</h3>
+        <p><strong>Contact the Examiner in charge before the exam day</strong> to reconfirm their arrival time, coordinate the handling of exam materials, clarify any questions and agree on the procedures to follow after the session. Remember that <strong>you must both complete your respective End-of-session checks</strong>, available in your individual session details.</p>
+      </section>
+      {% endif %}
+      {% if detail.examiner_receives_shipment %}
+      <section class="staff-detail-section staff-detail-remote-arrangements" aria-label="Remote supervision arrangements">
+        <h3><strong>Remote supervision arrangements</strong></h3>
+        <p>Please note that a <strong>Remote supervisor</strong> has been assigned to this session. This means you will be responsible for <strong>bringing the exam materials to the session and arranging their return shipment to Path International Examinations afterwards.</strong></p>
+        <p>The Remote supervisor will contact you to coordinate the return of materials and guide you through the <strong>End-of-session checks.</strong></p>
+      </section>
+      {% endif %}
       <section class="staff-detail-section"><h3>Your session team</h3><p class="staff-detail-muted">The people working with you on this exam session.</p><div class="staff-detail-contacts">
         {% for contact in detail.contacts %}<div class="staff-detail-contact"><span class="staff-detail-eyebrow">{{ contact.label|replace('Supervisor', 'Remote supervisor') if contact.is_remote else contact.label }}</span>{% if contact.assigned %}<strong>{{ contact.title }} {{ contact.name }}</strong><span class="staff-detail-contact-status is-{{ contact.statusTone }}">{{ contact.status }}</span>{% if contact.seniority %}<small>Senior</small>{% endif %}{% if contact.dietaryRequirements %}<small>{{ contact.dietaryRequirements }}</small>{% endif %}<span data-staff-phone="{{ contact.phone }}">{{ contact.phone or 'Phone number not available' }}</span>{% else %}<span class="staff-detail-muted">{{ contact.emptyMessage }}</span>{% endif %}</div>{% else %}<p class="staff-detail-muted">Team details will appear here once staff members are assigned.</p>{% endfor %}
       </div>
@@ -57,6 +63,9 @@
         {% endif %}
       </section>
       {% endif %}
+      {% include 'pre_session_control_tower/_staff_session_end_checks.html' %}
+      {% endif %}
+      {% if detail.role == 'Examiner' and detail.examiner_receives_shipment and detail.participation_confirmed %}
       {% include 'pre_session_control_tower/_staff_session_end_checks.html' %}
       {% endif %}
       {% if not detail.participation_confirmed %}

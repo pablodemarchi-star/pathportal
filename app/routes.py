@@ -24,6 +24,7 @@ from werkzeug.datastructures import MultiDict
 from werkzeug.utils import secure_filename
 
 from app.journey_translations import SPANISH_JOURNEY_TEXT, CONCAT_JOURNEY_TEXT
+from app.rich_text import sanitize_instructions
 from app import db, login_required, validate_csrf
 from app.models import (
     AcademicStaff,
@@ -328,10 +329,11 @@ POTENTIAL_ENTRY_ASSIGNMENT_EXCLUDED_STATUSES = {
 }
 EXAM_SESSION_LOGISTICS_TYPE_OPTIONS = [
     "Does not apply",
-    "Uber",
+    "Uber ride",
+    "Complex Uber ride",
     "Complex logistics",
 ]
-EXAM_SESSION_LOGISTICS_ACTIVE_TYPES = {"Uber", "Complex logistics"}
+EXAM_SESSION_LOGISTICS_ACTIVE_TYPES = {"Uber ride", "Complex Uber ride", "Complex logistics"}
 LEGACY_PARTICIPATION_STATUS_MAP = {
     "Sent": "Pre-confirmation sent",
 }
@@ -1331,7 +1333,10 @@ def logistics_concepts_have_data(concepts):
 
 def logistics_enabled_for_session(session_id):
     for model in (ExamSessionSupervisorAssignment, ExamSessionExaminerAssignment, ExamSessionInternAssignment):
-        if model.query.filter_by(exam_session_id=session_id, logistics_enabled=True).first():
+        if any(normalize_assignment_logistics_type(item.logistics_type, item.logistics_enabled)
+               in EXAM_SESSION_LOGISTICS_ACTIVE_TYPES
+               for item in model.query.filter_by(exam_session_id=session_id).all()
+               if not getattr(item, "is_remote", False)):
             return True
     return False
 
@@ -1430,13 +1435,13 @@ def normalize_participation_status(status):
 
 def normalize_assignment_logistics_type(logistics_type, legacy_enabled=False):
     logistics_type = (logistics_type or "").strip()
-    if logistics_type == "Simple logistics":
-        return "Uber"
+    if logistics_type in {"Simple logistics", "Uber"}:
+        return "Uber ride"
     if logistics_type in EXAM_SESSION_LOGISTICS_TYPE_OPTIONS:
         return logistics_type
     if legacy_enabled:
-        return "Uber"
-    return "Does not apply"
+        return "Uber ride"
+    return "" if not logistics_type else "Does not apply"
 
 
 def participation_status_is_in_progress(status):
@@ -20080,6 +20085,19 @@ def submit_staff_exam_session(session_id, assignment_type, assignment_id):
 
 
 STAFF_END_CHECK_FIELDS = ("attendance", "return_papers", "recordings", "audiovisual", "end_report", "centre_feedback")
+REMOTE_STAFF_END_CHECK_FIELDS = STAFF_END_CHECK_FIELDS + ("printed_attendance",)
+EXAMINER_RECIPIENT_END_CHECK_FIELDS = ("printed_attendance", "return_papers", "audiovisual", "centre_feedback", "end_report")
+
+
+def staff_assignment_end_check_fields(record, role, assignment):
+    if role == "supervisor":
+        return REMOTE_STAFF_END_CHECK_FIELDS if assignment.is_remote else STAFF_END_CHECK_FIELDS
+    if role == "examiner" and assignment.is_shipment_recipient:
+        person_ref = staffing_assignment_person_ref(assignment)
+        supervisors = ExamSessionSupervisorAssignment.query.filter_by(exam_session_id=record.id).all()
+        if not any(staffing_assignment_person_ref(item) == person_ref for item in supervisors):
+            return EXAMINER_RECIPIENT_END_CHECK_FIELDS
+    return ()
 
 
 def staff_end_checks_available(record, now=None):
@@ -20088,15 +20106,19 @@ def staff_end_checks_available(record, now=None):
 
 
 def staff_end_checks_view(record, role, status, submission, share):
-    if role != "supervisor" or status != "Confirmed":
+    if status != "Confirmed":
         return {}
     saved = submission.end_checks
+    assignment, _ = staff_submission_assignment(record, submission.assignment_type, submission.assignment_id)
+    check_fields = staff_assignment_end_check_fields(record, role, assignment) if assignment else ()
+    if not check_fields:
+        return {}
     return {"end_checks": {
         "available": staff_end_checks_available(record),
         "opens_at": datetime.combine(record.session_date, time.min, tzinfo=LOCAL_TZ).isoformat() if record.session_date else "",
-        "values": {key: bool(getattr(saved, key, False)) for key in STAFF_END_CHECK_FIELDS},
+        "values": {key: bool(getattr(saved, key, False)) for key in check_fields},
         "folder_url": (record.session_pictures_folder_url or "").strip(),
-        "report_url": current_app.config.get("STAFF_END_OF_SESSION_REPORT_URL", ""),
+        "report_url": "" if role == "examiner" else current_app.config.get("STAFF_END_OF_SESSION_REPORT_URL", ""),
         "url": url_for("staff.update_staff_end_checks", token=share.token, submission_id=submission.id),
     }}
 
@@ -20109,13 +20131,16 @@ def update_staff_end_checks(token, submission_id):
     submission = StaffExamSessionSubmission.query.filter_by(id=submission_id, share_id=share.id).first_or_404()
     record = submission.exam_session
     assignment, person_ref = staff_submission_assignment(record, submission.assignment_type, submission.assignment_id)
-    if not assignment or person_ref != share.person_ref or submission.assignment_type != "supervisor":
+    if not assignment or person_ref != share.person_ref:
+        abort(404)
+    allowed_fields = staff_assignment_end_check_fields(record, submission.assignment_type, assignment)
+    if not allowed_fields:
         abort(404)
     if assignment.participation_status != "Confirmed" or not staff_end_checks_available(record):
         return jsonify(ok=False, error="End-of-session checks are not available yet."), 403
     key = request.form.get("check")
     checked = request.form.get("checked")
-    if key not in STAFF_END_CHECK_FIELDS or checked not in {"0", "1"}:
+    if key not in allowed_fields or checked not in {"0", "1"}:
         return jsonify(ok=False, error="Please select a valid checklist item."), 400
     saved = submission.end_checks
     if not saved:
@@ -23392,10 +23417,10 @@ def exam_session_planner():
         session_concepts.sort(key=lambda concept: logistics_concept_display_sort_key(concept, sessions_by_id))
     logistics_activity_by_session = {session_id: False for session_id in session_ids}
     for assignment in assignment_records + examiner_assignment_records + intern_assignment_records:
-        if assignment.logistics_enabled:
+        if (not getattr(assignment, "is_remote", False)
+                and normalize_assignment_logistics_type(assignment.logistics_type, assignment.logistics_enabled)
+                in EXAM_SESSION_LOGISTICS_ACTIVE_TYPES):
             logistics_activity_by_session[assignment.exam_session_id] = True
-    for concept in logistics_concept_records:
-        logistics_activity_by_session[concept.exam_session_id] = True
     complex_logistics_staff_members = {}
     for session_id in session_ids:
         complex_members_by_id = {}
@@ -24458,6 +24483,9 @@ def save_exam_session_assignment_section(
             logistics_enabled = False
             logistics_type = "Does not apply"
         is_remote = section_key == "supervisor" and request.form.get(f"{section_key}_remote_{row_key}") == "1"
+        if is_remote:
+            logistics_type = "Does not apply"
+            logistics_enabled = False
         has_live_calculation = participation_status in EXAM_SESSION_LIVE_CALCULATION_PARTICIPATION_OPTIONS
         manual_fee_override = (
             has_live_calculation
@@ -24888,7 +24916,7 @@ def save_exam_session_logistics(session_record, saved_fields=None):
         )
         staff_members_by_id = {member.id: member for member in staff_member_records}
         staff_member_records = [staff_members_by_id[member_id] for member_id in staff_member_ids if member_id in staff_members_by_id]
-        is_blank_new_row = concept is None and status == "Pending" and provider_type_id is None and provider_id is None and currency == "ARS" and fee is None and not pending_notes and not staff_member_records
+        is_blank_new_row = concept is None and status == "Pending" and provider_type_id is None and provider_id is None and currency == "ARS" and fee is None and not pending_notes and not staff_member_records and not request.form.get(f"logistics_instructions_{row_key}", "").strip()
         if is_blank_new_row:
             continue
         current_session_manager_provider_type = session_manager_provider_type()
@@ -24925,6 +24953,13 @@ def save_exam_session_logistics(session_record, saved_fields=None):
             concept = ExamSessionLogisticsConcept(exam_session_id=session_record.id)
             db.session.add(concept)
         concept.status = status
+        instructions_key = f"logistics_instructions_{row_key}"
+        if instructions_key in request.form:
+            raw_instructions = request.form[instructions_key]
+            if len(raw_instructions) > 50000:
+                flash("Instructions must be shorter than 50,000 characters.", "error")
+                return False
+            concept.instructions_html = sanitize_instructions(raw_instructions)
         if saved_fields is not None:
             saved_fields[f"logistics_concept_id_{row_key}"] = concept
         concept.provider_type_id = provider_type_id
@@ -25300,16 +25335,6 @@ def update_exam_session_members(session_id):
         return session_members_redirect(keep_open=True)
 
     db.session.flush()
-    logistics_concepts = ExamSessionLogisticsConcept.query.filter_by(exam_session_id=session_record.id).all()
-    if (
-        session_record.exam_session_organised_by != PATH_EXAM_SESSION_ORGANISER
-        and not logistics_enabled_for_session(session_record.id)
-        and logistics_concepts_have_data(logistics_concepts)
-    ):
-        db.session.rollback()
-        flash("Remove all Logistics concepts before deactivating Logistics from the session.", "error")
-        return session_members_redirect(keep_open=True)
-
     update_exam_session_overall_status(session_record)
     db.session.commit()
     if wants_json:
@@ -25355,6 +25380,21 @@ def update_exam_session_members(session_id):
         "success",
     )
     return session_members_redirect(keep_open=keep_modal_open_on_success)
+
+
+@staff_bp.route("/exam-session-planner/logistics-concepts/<int:concept_id>/instructions", methods=["POST"])
+@login_required
+def update_logistics_instructions(concept_id):
+    require_menu_edit("exam_session_planner")
+    if not validate_csrf():
+        return jsonify(ok=False, error="Security token expired. Please reload and try again."), 400
+    concept = ExamSessionLogisticsConcept.query.get_or_404(concept_id)
+    value = request.form.get("instructions", "")
+    if len(value) > 50000:
+        return jsonify(ok=False, error="Instructions must be shorter than 50,000 characters."), 400
+    concept.instructions_html = sanitize_instructions(value)
+    db.session.commit()
+    return jsonify(ok=True, instructions=concept.instructions_html)
 
 
 @staff_bp.route("/exam-session-planner/logistics-concepts/<int:concept_id>/notes", methods=["POST"])

@@ -5318,7 +5318,7 @@ span.session-marker-chip {
 }
 
 .logistics-concepts-table .logistics-status-col {
-  width: 116px;
+  width: 100px;
 }
 
 .logistics-concepts-table .logistics-provider-type-col {
@@ -5334,7 +5334,7 @@ span.session-marker-chip {
 }
 
 .logistics-concepts-table .logistics-provider-details-col {
-  width: 72px;
+  width: 104px;
 }
 
 .logistics-concepts-table .logistics-history-col {
@@ -5353,7 +5353,7 @@ span.session-marker-chip {
   vertical-align: middle;
 }
 
-.is-row-locked td:not(.row-status-cell):not(.logistics-notes-cell):not(.logistics-provider-details-cell):not(.staff-email-cell) {
+.is-row-locked td:not(.row-status-cell):not(.logistics-notes-cell):not(.logistics-instructions-cell):not(.logistics-provider-details-cell):not(.staff-email-cell) {
   opacity: 0.62;
   pointer-events: none;
 }
@@ -5363,9 +5363,9 @@ span.session-marker-chip {
   pointer-events: none;
 }
 
-.is-row-locked td:not(.row-status-cell):not(.logistics-notes-cell):not(.logistics-provider-details-cell):not(.staff-email-cell) input,
-.is-row-locked td:not(.row-status-cell):not(.logistics-notes-cell):not(.logistics-provider-details-cell):not(.staff-email-cell) select,
-.is-row-locked td:not(.row-status-cell):not(.logistics-notes-cell):not(.logistics-provider-details-cell):not(.staff-email-cell) textarea {
+.is-row-locked td:not(.row-status-cell):not(.logistics-notes-cell):not(.logistics-instructions-cell):not(.logistics-provider-details-cell):not(.staff-email-cell) input,
+.is-row-locked td:not(.row-status-cell):not(.logistics-notes-cell):not(.logistics-instructions-cell):not(.logistics-provider-details-cell):not(.staff-email-cell) select,
+.is-row-locked td:not(.row-status-cell):not(.logistics-notes-cell):not(.logistics-instructions-cell):not(.logistics-provider-details-cell):not(.staff-email-cell) textarea {
   background: var(--path-grey-50);
 }
 
@@ -5636,7 +5636,7 @@ span.session-marker-chip {
 
 .logistics-concepts-table th:nth-child(1),
 .logistics-concepts-table td:nth-child(1) {
-  width: 116px;
+  width: 100px;
 }
 
 .logistics-concepts-table th:nth-child(2),
@@ -5687,6 +5687,8 @@ span.session-marker-chip {
 }
 
 .staff-logistics-simple-logistics,
+.staff-logistics-uber-ride,
+.staff-logistics-complex-uber-ride,
 .staff-logistics-uber {
   color: var(--badge-purple-text);
   background-color: var(--badge-purple-bg);
@@ -6575,7 +6577,7 @@ span.session-marker-chip {
 .logistics-table-wrap {
   width: 100%;
   max-width: 100%;
-  overflow-x: hidden;
+  overflow-x: auto;
 }
 
 .session-members-table.logistics-concepts-table {
@@ -17614,6 +17616,8 @@ span.session-marker-chip {
 .staff-exam-sessions-panel { padding: 24px; border: 1px solid var(--color-border); border-radius: 12px; background: white; }
 .staff-exam-sessions-panel h2 { margin: 0 0 18px; color: var(--color-primary-dark); font-size: 20px; line-height: 1.3; }
 .staff-exam-session-chips { display: flex; flex-wrap: wrap; gap: 12px; }
+.staff-exam-session-view { display: inline-flex; align-items: center; gap: 5px; white-space: nowrap; }
+.staff-exam-session-view small { font-size: 11px; }
 .staff-exam-session-chip { padding: 10px 16px; border: 1px solid #b9dfed; border-radius: 999px; background: #e9f5fa; color: var(--color-primary-dark); font-size: 14px; font-weight: 600; overflow-wrap: anywhere; }
 
 .staff-exam-sessions-shell .journey-page { display: grid; gap: 24px; box-sizing: border-box; }
@@ -17725,7 +17729,9 @@ body.staff-session-detail-open { overflow: hidden; }
 }
 
 .staff-detail-travel-section { grid-column: 1 / -1; }
-.staff-detail-remote-arrangements { grid-column: 1 / -1; border: 2px solid #b87b16; border-left-width: 6px; background: #fff8e8; }
+.staff-detail-remote-arrangements { margin-bottom: 24px; border: 2px solid #b87b16; border-left-width: 6px; background: #fff8e8; }
+.staff-detail-coordination { margin-bottom: 24px; border: 2px solid #b87b16; border-left-width: 6px; background: #fff8e8; }
+.staff-detail-coordination p:last-child { margin-bottom: 0; }
 
 .staff-detail-confirm-form { margin: 0; }
 .staff-detail-confirm-form button { font-family: inherit; cursor: pointer; }
@@ -17907,3 +17913,23 @@ body.staff-session-detail-open { overflow: hidden; }
   color: var(--badge-yellow-text);
   cursor: default;
 }
+
+.logistics-concepts-table .logistics-instructions-cell { text-align: center; }
+.logistics-instructions-button { border: 1px solid var(--color-border); border-radius: 6px; background: white; color: var(--color-primary-dark); padding: 5px 10px; cursor: pointer; font: inherit; }
+.logistics-instructions-button.has-instructions { border-color: transparent; background: transparent; text-decoration: underline; text-underline-offset: 3px; }
+.logistics-instructions-dialog { width: min(760px, calc(100vw - 32px)); max-height: calc(100vh - 48px); overflow: auto; padding: 24px; border: 1px solid var(--color-border); border-radius: 14px; color: var(--color-text); }
+.logistics-instructions-dialog::backdrop { background: #12252dcc; }
+.logistics-instructions-toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 16px 0 0; padding: 10px; border: 1px solid var(--color-border); background: #f4f6f8; border-radius: 8px 8px 0 0; }
+.logistics-instructions-toolbar button, .logistics-instructions-toolbar select { padding: 6px 10px; border: 1px solid var(--color-border); background: white; border-radius: 5px; cursor: pointer; }
+.logistics-instructions-toolbar label { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; }
+.logistics-instructions-editor { min-height: 240px; max-height: 45vh; overflow: auto; padding: 16px; border: 1px solid var(--color-border); border-top: 0; border-radius: 0 0 8px 8px; font-size: 14px; line-height: 1.6; overflow-wrap: anywhere; }
+.logistics-instructions-editor ul { list-style: disc; padding-left: 24px; }
+.logistics-instructions-editor ol { list-style: decimal; padding-left: 24px; }
+.logistics-instructions-editor a { color: var(--color-primary-dark); text-decoration: underline; }
+.logistics-instructions-editor:focus { outline: 2px solid var(--path-cyan); outline-offset: 1px; }
+.logistics-instructions-message { min-height: 20px; font-size: 13px; color: var(--color-muted); }
+
+.logistics-concepts-table .logistics-instructions-col, .logistics-concepts-table th:nth-child(5), .logistics-concepts-table td:nth-child(5) { width: 90px; }
+.logistics-instructions-toolbar[hidden] { display: none; }
+.logistics-concepts-table .logistics-provider-details-heading { width: 104px; white-space: normal; overflow-wrap: break-word; text-align: center; }
+.logistics-concepts-table .logistics-status-cell .logistics-chip-select { padding-left: 6px; padding-right: 16px; font-size: 11px; }

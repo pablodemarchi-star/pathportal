@@ -208,6 +208,10 @@
         </div>
       {% endif %}
     </td>
+    <td class="logistics-instructions-cell">
+      <input type="hidden" name="logistics_instructions_{{ row_key }}" value="{{ concept.instructions_html if concept else '' }}" data-logistics-instructions-value>
+      <button type="button" class="logistics-instructions-button{% if concept and concept.instructions_html %} has-instructions{% endif %}" data-logistics-instructions-open{% if concept %} data-instructions-url="{{ url_for('staff.update_logistics_instructions', concept_id=concept.id) }}"{% endif %} aria-label="{% if concept and concept.instructions_html %}View or edit instructions{% else %}Add instructions{% endif %}" title="Instructions">{% if concept and concept.instructions_html %}View{% else %}<span aria-hidden="true">✎</span>{% endif %}</button>
+    </td>
     <td class="logistics-provider-details-cell">
       <button class="mini-button provider-details-button" type="button" data-provider-details-button {% if selected_provider_ids|length > 0 %}data-provider-detail-ids="{{ selected_provider_ids|join(',') }}"{% else %}disabled{% endif %} aria-label="Provider details" title="{% if selected_provider_ids|length > 1 %}Provider details for {{ selected_provider_ids|length }} providers{% else %}Provider details{% endif %}">i</button>
     </td>
@@ -288,8 +292,10 @@
   {% set participation_has_live_calculation = participation_status in exam_session_planner_participation_options %}
   {% set participation_class = participation_status|lower|replace(' ', '-') %}
   {% set raw_logistics_type = assignment.logistics_type if assignment and assignment.logistics_type else '' %}
-  {% set logistics_type = raw_logistics_type if raw_logistics_type in logistics_type_options else ('Uber' if assignment and assignment.logistics_enabled else 'Does not apply') %}
-  {% set logistics_type_class = logistics_type|lower|replace(' ', '-') %}
+  {% set logistics_type = raw_logistics_type if raw_logistics_type in logistics_type_options else ('Uber ride' if raw_logistics_type in ['Uber', 'Simple logistics'] or (assignment and assignment.logistics_enabled) else '') %}
+  {% set remote_logistics = section_key == 'supervisor' and assignment and assignment.is_remote %}
+  {% if remote_logistics %}{% set logistics_type = 'Does not apply' %}{% endif %}
+  {% set logistics_type_class = (logistics_type or 'Does not apply')|lower|replace(' ', '-') %}
   <article class="staff-assignment-card" data-supervisor-row data-assignment-id="{{ assignment.id if assignment else '' }}" data-section-key="{{ section_key }}" data-saved-team-member-id="{{ selected_value }}" data-saved-participation-status="{{ assignment.participation_status if assignment else '' }}" {% if is_shipment_recipient %}data-shipment-recipient-row="true"{% endif %}>
     <div class="staff-card-header">
       <div class="staff-card-title-stack">
@@ -297,7 +303,7 @@
         <strong data-staff-card-title>{{ selected_member.full_name if selected_member else 'Role to cover' }}</strong>
         <div class="staff-card-header-tags" aria-label="Staff assignment summary">
           <span class="staff-card-header-tag participation-{{ participation_class }}" data-staff-header-participation>{{ participation_status }}</span>
-          <span class="staff-card-header-tag staff-logistics-{{ logistics_type_class }}" data-staff-header-logistics>{{ logistics_type }}</span>
+          <span class="staff-card-header-tag staff-logistics-{{ logistics_type_class }}" data-staff-header-logistics>{{ logistics_type or 'Select logistics' }}</span>
         </div>
       </div>
       <div class="staff-card-header-actions">
@@ -416,11 +422,12 @@
       <div class="staff-card-field centered-table-cell">
       <span class="staff-card-field-label">Logistics</span>
       <select name="{{ section_key }}_logistics_type_{{ row_key }}" class="staff-logistics-select staff-logistics-{{ logistics_type_class }}" data-logistics-control>
+        <option value="" class="staff-logistics-does-not-apply"{% if not logistics_type %} selected{% endif %}{% if remote_logistics %} disabled{% endif %}>Select logistics</option>
         {% for option in logistics_type_options %}
-          <option value="{{ option }}" {% if logistics_type == option %}selected{% endif %}>{{ option }}</option>
+          <option value="{{ option }}" class="staff-logistics-{{ option|lower|replace(' ', '-') }}" {% if logistics_type == option %}selected{% endif %}{% if remote_logistics and option != 'Does not apply' %} disabled{% endif %}>{{ option }}</option>
         {% endfor %}
       </select>
-      <input type="hidden" name="{{ section_key }}_logistics_enabled_{{ row_key }}" value="{{ '1' if logistics_type != 'Does not apply' else '' }}" data-logistics-enabled-input>
+      <input type="hidden" name="{{ section_key }}_logistics_enabled_{{ row_key }}" value="{{ '1' if logistics_type and logistics_type != 'Does not apply' else '' }}" data-logistics-enabled-input>
       </div>
       </div>
     </section>
@@ -1481,17 +1488,7 @@
         </div>
         {% set session_logistics_config = logistics_by_session.get(session.id) %}
         {% set session_logistics_concepts = logistics_concepts.get(session.id, []) %}
-        {% set logistics_ns = namespace(enabled=false) %}
-        {% for assignment in supervisor_assignments.get(session.id, []) %}
-          {% if assignment.logistics_enabled %}{% set logistics_ns.enabled = true %}{% endif %}
-        {% endfor %}
-        {% for assignment in examiner_assignments.get(session.id, []) %}
-          {% if assignment.logistics_enabled %}{% set logistics_ns.enabled = true %}{% endif %}
-        {% endfor %}
-        {% for assignment in intern_assignments.get(session.id, []) %}
-          {% if assignment.logistics_enabled %}{% set logistics_ns.enabled = true %}{% endif %}
-        {% endfor %}
-        <section class="session-member-section logistics-section" data-logistics-section {% if not logistics_ns.enabled and session_logistics_concepts|length == 0 %}hidden{% endif %}>
+        <section class="session-member-section logistics-section" data-logistics-section {% if not logistics_activity_by_session.get(session.id, false) %}hidden{% endif %}>
           <div class="session-member-section-header">
             <div>
               <h3>Logistics</h3>
@@ -1527,6 +1524,7 @@
                 <col class="logistics-provider-type-col">
                 <col class="logistics-provider-col">
                 <col class="logistics-staff-members-col">
+                <col class="logistics-instructions-col">
                 <col class="logistics-provider-details-col">
                 <col class="logistics-history-col">
                 <col class="logistics-delete-col">
@@ -1537,7 +1535,8 @@
                   <th>Type of provider</th>
                   <th>Provider</th>
                   <th>Staff members</th>
-                  <th>Provider details</th>
+                  <th class="logistics-instructions-cell">Instructions</th>
+                  <th class="logistics-provider-details-heading">Provider details</th>
                   <th>History</th>
                   <th aria-label="Delete"></th>
                 </tr>
@@ -1786,4 +1785,26 @@
     </div>
   </div>
 {% endfor %}
+<dialog class="logistics-instructions-dialog" id="logistics-instructions-dialog" aria-labelledby="logistics-instructions-title" data-can-edit="{{ 'true' if user_can_edit('exam_session_planner') else 'false' }}">
+  <div class="modal-header">
+    <h2 id="logistics-instructions-title">Instructions</h2>
+    <button type="button" class="icon-button" data-instructions-close aria-label="Close instructions">&times;</button>
+  </div>
+  <div class="logistics-instructions-toolbar" role="toolbar" aria-label="Text formatting">
+    <button type="button" data-instructions-command="bold" aria-label="Bold"><strong>B</strong></button>
+    <button type="button" data-instructions-command="italic" aria-label="Italic"><em>I</em></button>
+    <button type="button" data-instructions-command="insertUnorderedList" aria-label="Bullet list">• List</button>
+    <button type="button" data-instructions-command="insertOrderedList" aria-label="Numbered list">1. List</button>
+    <label>Font size <select data-instructions-size aria-label="Font size"><option value="2">Small</option><option value="3" selected>Normal</option><option value="4">Large</option><option value="5">Extra large</option></select></label>
+    <button type="button" data-instructions-link>Add link</button>
+    <button type="button" data-instructions-command="unlink">Remove link</button>
+  </div>
+  <div class="logistics-instructions-editor" data-instructions-editor contenteditable="true" role="textbox" aria-multiline="true" aria-label="Instructions text"></div>
+  <p class="logistics-instructions-message" data-instructions-message role="status" aria-live="polite"></p>
+  <div class="form-actions">
+    <button type="button" class="danger-button" data-instructions-delete>Delete instructions</button>
+    <button type="button" class="secondary-button" data-instructions-close>Cancel</button>
+    <button type="button" class="primary-button" data-instructions-save>Save instructions</button>
+  </div>
+</dialog>
 {% endblock %}

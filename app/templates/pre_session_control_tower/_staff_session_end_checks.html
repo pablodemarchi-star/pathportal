@@ -6,10 +6,25 @@
   <p class="staff-detail-muted">Please tick each box to confirm that the actions have been completed:</p>
   {% set check_items = [
     ('attendance', 'I confirm that all examiners have registered candidate attendance on both the printed candidate lists attached to the exam packages and in Sinapsis, and that no candidates remain with Pending status.'),
-    ('return_papers', 'I confirm that all submitted exam papers and those belonging to absent candidates have been securely placed in their respective return exam packages.'),
+    ('return_papers', 'I confirm that all submitted exam papers and those belonging to absent candidates have been securely placed in their respective return exam packages, which have been sealed and signed by the Head of the Exam centre.'),
     ('recordings', 'I confirm that I have reminded all examiners to upload their Listening and Speaking module recordings within one business day after the exam session ends.'),
     ('audiovisual', 'I confirm that I have uploaded all audiovisual materials from the exam session, including photographs and videos.')
   ] %}
+  {% if detail.role == 'Examiner' and detail.examiner_receives_shipment %}
+    {% set check_items = [
+      ('printed_attendance', 'I confirm that all examiners have registered candidate attendance on all the printed candidate lists attached to the exam packages.'),
+      ('return_papers', 'I confirm that all submitted exam papers and those belonging to absent candidates have been securely placed in their respective return exam packages, which have been sealed and signed by the Head of the Exam centre.'),
+      ('audiovisual', 'I confirm that I have uploaded all audiovisual materials from the exam session, including photographs and videos.')
+    ] %}
+  {% elif detail.is_remote %}
+    {% set check_items = [
+      ('attendance', 'I confirm that all examiners have registered candidate attendance in Sinapsis, and that no candidates remain with Pending status.'),
+      ('printed_attendance', 'I confirmed with the Examiner that candidate attendance has been registered on all printed candidate lists attached to the exam packages.'),
+      ('return_papers', 'I confirmed with the Examiner that all submitted exam papers and those belonging to absent candidates have been securely placed in their respective return exam packages, which have been sealed and signed by the Head of the Exam centre.'),
+      ('recordings', 'I confirm that I have reminded all examiners to upload their Listening and Speaking module recordings within one business day after the exam session ends.'),
+      ('audiovisual', 'I confirm that the Examiner has uploaded all audiovisual materials, including photographs and videos, to their session details section.')
+    ] %}
+  {% endif %}
   <div class="staff-end-checks-items">
     {% for key, text in check_items %}
     <div class="staff-end-check-row{% if not detail.end_checks.available %} is-disabled{% endif %}">
@@ -26,8 +41,13 @@
       <span class="staff-end-checks-feedback-pending">Session feedback pending</span>
     </div>
     <div class="staff-end-check-row{% if not detail.end_checks.available %} is-disabled{% endif %}">
-      <label><input type="checkbox" data-end-check="end_report" aria-label="I confirm that I have completed the End-of-session report."{% if detail.end_checks['values']['end_report'] %} checked{% endif %}{% if not detail.end_checks.available %} disabled{% endif %}><span>I confirm that I have completed the End-of-session report.</span></label>
+      {% set end_report_text = 'I confirmed with the Examiner that the End-of-session report has been completed.' if detail.is_remote else 'I confirm that I have completed the End-of-session report.' %}
+      <label><input type="checkbox" data-end-check="end_report" aria-label="{{ end_report_text }}"{% if detail.end_checks['values']['end_report'] %} checked{% endif %}{% if not detail.end_checks.available %} disabled{% endif %}><span>{{ end_report_text }}</span></label>
+      {% if detail.is_remote %}
+      <span class="staff-end-checks-feedback-pending">End-of-session report pending</span>
+      {% else %}
       <a class="staff-detail-link staff-end-checks-folder{% if not detail.end_checks.available or not detail.end_checks.report_url %} is-disabled{% endif %}" data-end-checks-folder data-folder-url="{{ detail.end_checks.report_url }}" href="{{ detail.end_checks.report_url if detail.end_checks.available and detail.end_checks.report_url else '#' }}" target="_blank" rel="noopener noreferrer"{% if not detail.end_checks.available or not detail.end_checks.report_url %} aria-disabled="true" tabindex="-1"{% endif %}>End-of-session report ↗</a>
+      {% endif %}
     </div>
   </div>
   <span class="staff-end-checks-feedback" data-end-checks-feedback role="status" aria-live="polite"></span>

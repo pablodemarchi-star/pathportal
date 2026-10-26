@@ -3645,6 +3645,8 @@ document.addEventListener("change", (event) => {
   }
   syncRemoteKmMutualExclusion(row);
   syncLiveFeeCalculations(row);
+  syncStaffLogisticsControl(row?.querySelector("[data-logistics-control]"));
+  syncLogisticsSection(row?.closest("[data-session-members-form]"));
 });
 
 const syncKmDisableButton = (input) => {
@@ -8198,10 +8200,10 @@ const validateStaffOfficialConfirmationEmailPayload = (payload) => {
     return "Total fee is required for official confirmation emails.";
   }
   const logisticsStatus = cleanEmailValue(payload?.logistics_status || payload?.logisticsStatus);
-  if (!["Does not apply", "Uber", "Simple logistics", "Complex logistics"].includes(logisticsStatus)) {
+  if (!["Does not apply", "Uber", "Simple logistics", "Uber ride", "Complex Uber ride", "Complex logistics"].includes(logisticsStatus)) {
     return "Logistics status is required for official confirmation emails.";
   }
-  if (["Uber", "Simple logistics"].includes(logisticsStatus) && !emailLinkIsUsable(payload?.logistics_url || payload?.logisticsUrl)) {
+  if (["Uber", "Simple logistics", "Uber ride", "Complex Uber ride"].includes(logisticsStatus) && !emailLinkIsUsable(payload?.logistics_url || payload?.logisticsUrl)) {
     return "Logistics folder link is required for Uber.";
   }
 	  if (logisticsStatus === "Complex logistics" && !emailLinkIsUsable(payload?.logistics_url || payload?.logisticsUrl)) {
@@ -8410,7 +8412,7 @@ const officialTravelCopy = (role, status, logisticsUrl) => {
       text: `You may travel to and from the exam centre using your own vehicle or public transport. Please plan your journey accordingly, allow sufficient travel time and ${suffix}`,
     };
   }
-  if (["Uber", "Simple logistics"].includes(status)) {
+  if (["Uber", "Simple logistics", "Uber ride", "Complex Uber ride"].includes(status)) {
     const suffix = role === "Supervisor"
       ? `allow sufficient travel time, and arrive ${arrival} minutes before the start of the exam session.`
       : `allow sufficient travel time and arrive ${arrival} minutes before the start of your first assigned module.`;
@@ -9708,6 +9710,9 @@ const STAFF_PARTICIPATION_CLASSES = [
 const STAFF_LOGISTICS_CLASSES = [
   "staff-logistics-does-not-apply",
   "staff-logistics-simple-logistics",
+  "staff-logistics-uber",
+  "staff-logistics-uber-ride",
+  "staff-logistics-complex-uber-ride",
   "staff-logistics-complex-logistics",
 ];
 
@@ -9728,11 +9733,13 @@ const syncStaffHeaderLogisticsTag = (row, value) => {
   const logisticsClass = {
     "Does not apply": "staff-logistics-does-not-apply",
     "Uber": "staff-logistics-simple-logistics",
+    "Uber ride": "staff-logistics-uber-ride",
+    "Complex Uber ride": "staff-logistics-complex-uber-ride",
     "Simple logistics": "staff-logistics-simple-logistics",
     "Complex logistics": "staff-logistics-complex-logistics",
   }[value] || "staff-logistics-does-not-apply";
   tag.classList.add(logisticsClass);
-  tag.textContent = value || "Does not apply";
+  tag.textContent = value || "Select logistics";
 };
 
 const syncParticipationSelect = (select) => {
@@ -9819,7 +9826,7 @@ const formHasLogisticsConcepts = (form) => logisticsConceptRows(form).length > 0
 
 const logisticsControls = (form) => Array.from(form?.querySelectorAll("[data-logistics-control]") || []);
 
-const logisticsControlIsActive = (control) => ["Uber", "Complex logistics"].includes(control?.value);
+const logisticsControlIsActive = (control) => ["Uber ride", "Complex Uber ride", "Complex logistics"].includes(control?.value);
 
 const activeLogisticsControls = (form) => logisticsControls(form).filter(logisticsControlIsActive);
 
@@ -9899,17 +9906,24 @@ function syncLogisticsStaffMemberLists(form) {
 
 const syncStaffLogisticsControl = (control) => {
   if (!control) return;
+  const row = control.closest("[data-supervisor-row]");
+  const remote = rowIsRemoteSupervisor(row);
+  if (remote) control.value = "Does not apply";
+  Array.from(control.options).forEach((option) => {
+    option.disabled = remote && option.value !== "Does not apply";
+  });
   control.classList.remove(
     ...STAFF_LOGISTICS_CLASSES,
   );
   const logisticsClass = {
     "Does not apply": "staff-logistics-does-not-apply",
     "Uber": "staff-logistics-simple-logistics",
+    "Uber ride": "staff-logistics-uber-ride",
+    "Complex Uber ride": "staff-logistics-complex-uber-ride",
     "Simple logistics": "staff-logistics-simple-logistics",
     "Complex logistics": "staff-logistics-complex-logistics",
   }[control.value] || "staff-logistics-does-not-apply";
   control.classList.add(logisticsClass);
-  const row = control.closest("[data-supervisor-row]");
   syncStaffHeaderLogisticsTag(row, control.value);
   const hiddenInput = row?.querySelector("[data-logistics-enabled-input]");
   if (hiddenInput) hiddenInput.value = logisticsControlIsActive(control) ? "1" : "";
@@ -9921,7 +9935,7 @@ const syncSessionLogisticsActivityBadge = (form) => {
   if (!sessionId) return;
   const cell = document.querySelector(`[data-session-logistics-status-cell][data-session-id="${sessionId}"]`);
   if (!cell) return;
-  const active = activeLogisticsControls(form).length > 0 || formHasLogisticsConcepts(form);
+  const active = activeLogisticsControls(form).length > 0;
   cell.innerHTML = active
     ? '<span class="badge logistics-activity-yes">Yes</span>'
     : '<span class="centered-dash muted">-</span>';
@@ -9962,7 +9976,7 @@ const syncLogisticsSection = (form) => {
   if (!form) return;
   const section = form.querySelector("[data-logistics-section]");
   if (!section) return;
-  section.hidden = activeLogisticsControls(form).length === 0 && !formHasLogisticsConcepts(form);
+  section.hidden = activeLogisticsControls(form).length === 0;
   syncLogisticsPlannedState(section);
   syncSessionLogisticsActivityBadge(form);
 };
@@ -10029,7 +10043,7 @@ const syncLogisticsStatusSelect = (select) => {
   const chip = row?.querySelector("[data-logistics-lock-chip]");
   if (chip) chip.hidden = !locked;
   row?.querySelectorAll("button").forEach((button) => {
-    if (button.matches("[data-logistics-notes-button]")) {
+    if (button.matches("[data-logistics-notes-button], [data-logistics-instructions-open]")) {
       button.disabled = false;
       delete button.dataset.rowLockDisabled;
       return;
@@ -10638,13 +10652,7 @@ const initLogisticsControls = (root = document) => {
     control.dataset.logisticsInitialized = "true";
     control.addEventListener("change", () => {
       const form = control.closest("[data-session-members-form]");
-      const previousValue = control.dataset.previousLogisticsValue || "Does not apply";
       syncStaffLogisticsControl(control);
-      if (!logisticsControlIsActive(control) && activeLogisticsControls(form).length === 0 && formHasLogisticsConcepts(form)) {
-        window.alert("Remove all Logistics concepts before deactivating Logistics from the session.");
-        control.value = previousValue;
-        syncStaffLogisticsControl(control);
-      }
       control.dataset.previousLogisticsValue = control.value;
       syncLogisticsSection(form);
       syncInvitationEmailCopyButtons(form);
@@ -10904,10 +10912,6 @@ document.addEventListener("click", (event) => {
   if (!row || !form) return;
   const sectionKey = row.dataset.sectionKey || "supervisor";
   const sectionLabel = sectionKey === "examiner" ? "examiner" : sectionKey === "intern" ? "intern" : "supervisor";
-  if (rowHasActiveLogisticsControl(row) && activeLogisticsControls(form).length === 1 && formHasLogisticsConcepts(form)) {
-    window.alert("Remove all Logistics concepts before deactivating Logistics from the session.");
-    return;
-  }
   const confirmationMessage = `Are you sure you want to permanently delete this ${sectionLabel}? This action cannot be undone.`;
   if (!window.confirm(confirmationMessage)) return;
   const assignmentInput = row.querySelector(`input[name^='${sectionKey}_assignment_id_']`);
@@ -10989,10 +10993,6 @@ document.addEventListener("click", (event) => {
   const teamMemberInput = row?.querySelector("[data-team-member-select]");
   const selectedValue = teamMemberInput?.value || "";
   if (!row || !form || !selectedValue) return;
-  if (rowHasActiveLogisticsControl(row) && activeLogisticsControls(form).length === 1 && formHasLogisticsConcepts(form)) {
-    window.alert("Remove all Logistics concepts before deactivating Logistics from the session.");
-    return;
-  }
   if (!window.confirm("Please confirm this staff member declined their participation.")) return;
   markStaffMemberNonAvailable(form, selectedValue);
   resetDeclinedStaffAssignmentRow(row);
@@ -14249,4 +14249,116 @@ document.addEventListener("submit", (event) => {
       showTransientFlash("Changes saved. Reopen Staffing to refresh the displayed information.", "success");
     }
   });
+})();
+
+// Logistics instructions: a single editor shared by existing and draft rows.
+(() => {
+  const dialog = document.getElementById('logistics-instructions-dialog');
+  if (!dialog) return;
+  const editor = dialog.querySelector('[data-instructions-editor]');
+  const message = dialog.querySelector('[data-instructions-message]');
+  const save = dialog.querySelector('[data-instructions-save]');
+  const remove = dialog.querySelector('[data-instructions-delete]');
+  const canEdit = dialog.dataset.canEdit === 'true';
+  editor.contentEditable = String(canEdit);
+  dialog.querySelector('.logistics-instructions-toolbar').hidden = !canEdit;
+  save.hidden = !canEdit;
+  let opener;
+  let row;
+  let selection;
+  let busy = false;
+  const rememberSelection = () => {
+    const selected = window.getSelection();
+    if (selected.rangeCount && editor.contains(selected.anchorNode)) selection = selected.getRangeAt(0).cloneRange();
+  };
+  const restoreSelection = () => {
+    editor.focus();
+    if (selection) {
+      const selected = window.getSelection();
+      selected.removeAllRanges();
+      selected.addRange(selection);
+    }
+  };
+  editor.addEventListener('keyup', rememberSelection);
+  editor.addEventListener('mouseup', rememberSelection);
+  editor.addEventListener('input', rememberSelection);
+  editor.addEventListener('paste', (event) => {
+    event.preventDefault();
+    document.execCommand('insertText', false, event.clipboardData.getData('text/plain'));
+  });
+  dialog.addEventListener('keydown', (event) => event.stopPropagation());
+  dialog.addEventListener('cancel', (event) => { if (busy) event.preventDefault(); });
+  dialog.addEventListener('close', () => opener?.focus());
+  document.addEventListener('click', (event) => {
+    const button = event.target.closest('[data-logistics-instructions-open]');
+    if (!button) return;
+    opener = button;
+    row = button.closest('[data-logistics-concept-row]');
+    editor.innerHTML = row.querySelector('[data-logistics-instructions-value]').value;
+    selection = null;
+    const conceptId = row.querySelector('input[name^="logistics_concept_id_"]').value;
+    message.textContent = conceptId ? '' : 'Instructions for this new row will be saved when you save the session.';
+    remove.hidden = !canEdit || !editor.textContent.trim();
+    dialog.showModal();
+    editor.focus();
+  });
+  dialog.querySelectorAll('[data-instructions-close]').forEach((button) => button.addEventListener('click', () => {
+    if (!busy) dialog.close();
+  }));
+  dialog.querySelectorAll('[data-instructions-command]').forEach((button) => {
+    button.addEventListener('mousedown', (event) => event.preventDefault());
+    button.addEventListener('click', () => {
+      restoreSelection();
+      document.execCommand(button.dataset.instructionsCommand, false);
+      rememberSelection();
+    });
+  });
+  dialog.querySelector('[data-instructions-size]').addEventListener('change', (event) => {
+    restoreSelection();
+    document.execCommand('fontSize', false, event.target.value);
+    rememberSelection();
+  });
+  dialog.querySelector('[data-instructions-link]').addEventListener('click', () => {
+    const value = window.prompt('Link URL (https://, http:// or mailto:)');
+    if (!value) return;
+    try {
+      const url = new URL(value);
+      if (!['https:', 'http:', 'mailto:'].includes(url.protocol)) throw new Error();
+      restoreSelection();
+      document.execCommand('createLink', false, url.href);
+      rememberSelection();
+    } catch { message.textContent = 'Enter a valid https://, http:// or mailto: link.'; }
+  });
+  const persist = async (deleted = false) => {
+    if (busy || !canEdit) return;
+    if (deleted && !window.confirm('Delete these instructions?')) return;
+    const input = row.querySelector('[data-logistics-instructions-value]');
+    let value = deleted || !editor.textContent.trim() ? '' : editor.innerHTML;
+    const conceptId = row.querySelector('input[name^="logistics_concept_id_"]').value;
+    busy = true;
+    save.disabled = remove.disabled = true;
+    message.textContent = 'Saving…';
+    try {
+      if (conceptId) {
+        const form = row.closest('form');
+        const body = new FormData();
+        body.set('csrf_token', form.querySelector('[name="csrf_token"]').value);
+        body.set('instructions', value);
+        const response = await fetch(`/exam-session-planner/logistics-concepts/${encodeURIComponent(conceptId)}/instructions`, {method: 'POST', body, headers: {'Accept': 'application/json'}});
+        const payload = await response.json();
+        if (!response.ok || !payload.ok) throw new Error(payload.error || 'Could not save instructions.');
+        value = payload.instructions;
+      }
+      input.value = value;
+      if (conceptId) input.defaultValue = value;
+      opener.textContent = value ? 'View' : '✎';
+      opener.classList.toggle('has-instructions', Boolean(value));
+      opener.setAttribute('aria-label', value ? 'View or edit instructions' : 'Add instructions');
+      if (!conceptId) markStaffChangesUnsaved(row.closest('form'));
+      dialog.close();
+    } catch (error) { message.textContent = error.message || 'Could not save instructions. Please try again.'; }
+    finally { busy = false; save.disabled = remove.disabled = false; }
+  };
+  save.addEventListener('click', () => persist());
+  remove.addEventListener('click', () => persist(true));
 })();

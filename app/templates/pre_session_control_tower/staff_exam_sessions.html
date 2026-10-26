@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="robots" content="noindex, nofollow">
   <title>Your exam sessions | Path Examinations</title>
-  <link rel="stylesheet" href="{{ url_for('static', filename='css/styles.css', v='20261025-remote-supervisor-materials-1') }}">
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/styles.css', v='20261026-staff-session-checks-1') }}">
 </head>
 <body>
 <main class="staff-exam-sessions-shell">
@@ -30,7 +30,7 @@
       <h2 id="awaiting-sessions-title">{% if awaiting_sessions|length == 0 %}No exam sessions awaiting your confirmation{% elif awaiting_sessions|length == 1 %}1 exam session awaiting your confirmation{% else %}{{ awaiting_sessions|length }} exam sessions awaiting your confirmation{% endif %}</h2>
       <div class="staff-exam-session-chips">
         {% for exam_session in awaiting_sessions %}
-          <button type="button" class="staff-exam-session-chip is-awaiting" data-staff-session-open="staff-session-detail-{{ exam_session.id }}" aria-haspopup="dialog" aria-controls="staff-session-detail-{{ exam_session.id }}">{{ exam_session.exam_session_name }} ({{ exam_session.session_date.strftime('%d/%m/%Y') if exam_session.session_date else 'Date to be confirmed' }}) <span aria-hidden="true">↗</span></button>
+          <button type="button" class="staff-exam-session-chip is-awaiting" data-staff-session-open="staff-session-detail-{{ exam_session.id }}" aria-haspopup="dialog" aria-controls="staff-session-detail-{{ exam_session.id }}">{{ exam_session.exam_session_name }} ({{ exam_session.session_date.strftime('%d/%m/%Y') if exam_session.session_date else 'Date to be confirmed' }}) <span class="staff-exam-session-view"><small>View</small> <span aria-hidden="true">↗</span></span></button>
         {% else %}
           <p class="staff-exam-sessions-empty">No exam sessions are awaiting your confirmation.</p>
         {% endfor %}
@@ -121,6 +121,6 @@
   </section>
 </main>
 <script src="{{ url_for('static', filename='js/app.js', v='20261024-staff-session-details-1') }}"></script>
-<script src="{{ url_for('static', filename='js/staff_exam_sessions.js', v='20261025-remote-supervisor-materials-1') }}"></script>
+<script src="{{ url_for('static', filename='js/staff_exam_sessions.js', v='20261026-staff-session-checks-1') }}"></script>
 </body>
 </html>
