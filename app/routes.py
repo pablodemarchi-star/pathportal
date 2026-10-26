@@ -13738,6 +13738,7 @@ def department_my_actions(schedule_views, bundle_views, pending_bundle, staffing
             grouped[key] = {**row, "id": str(key), "actions": []}
         grouped[key]["actions"].append(action)
     return sorted(grouped.values(), key=lambda row: (
+        (row["session"].format or "").strip() == "Online",
         bundle_priorities.get(row["session"].id, (2, row["session"].session_date or date.max, 999999, 0)),
         row["session"].session_date or date.max,
         row["session"].exam_session_name.lower(), row["section_label"]))
