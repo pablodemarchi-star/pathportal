@@ -20165,13 +20165,78 @@ assert.equal(storage.size, 0);
         self.session_record.emergency_contact_not_required = True
         db.session.commit()
         hidden = path_session_journey_contract(self.session_record, "institution", now=moment)
-        self.assertIsNone(hidden["emergency_contact"])
+        self.assertEqual(hidden["emergency_contact"]["name"], "Path International Examinations")
+        self.assertEqual(hidden["emergency_contact"]["phone"], "+5491128508482")
         with self.app.test_request_context():
             html = render_template("pre_session_control_tower/session_journey.html", journey=hidden, share=None, csrf_token="")
-        self.assertNotIn("Path emergency contact", html)
+        self.assertIn("Path emergency contact", html)
+        self.assertIn('href="tel:+5491128508482"', html)
+        self.assertIn("Calls only – No messages", html)
+        self.assertNotIn(member.phone, html)
+        outside = journey_emergency_contact(self.session_record, "institution", now=datetime(2026, 6, 26, 3, tzinfo=timezone.utc))
+        self.assertFalse(outside["available"])
+        self.assertEqual(outside["contacts"], [])
         response = self.login_client().get(f"/path-session-journeys/sessions/{self.session_record.id}")
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.headers["Cache-Control"], "no-store")
+
+    def test_concat_journey_emergency_contacts_follow_each_session_date(self):
+        from app.routes import journey_emergency_contact
+        from flask import render_template
+        records = [self.session_record]
+        for day in [12, 14]:
+            record = ExamSession(exam_session_name=f"December {day}", category="Path School", status="Pending",
+                session_date=date(2026, 12, day), shifts="Morning", modules="Speaking", format="Onsite")
+            db.session.add(record)
+            records.append(record)
+        records[0].session_date = date(2026, 12, 10)
+        records[0].exam_session_name = "December 10"
+        db.session.flush()
+        for index, record in enumerate(records):
+            member = AcademicStaff(full_name=f"Emergency December {record.session_date.day}", status="Active",
+                                   roles="Examiner", phone=f"555-DEC-{record.session_date.day}")
+            db.session.add(member)
+            db.session.flush()
+            record.emergency_contact_required = True
+            record.emergency_contact_member_id = member.id
+            record.concat_session_ids = json.dumps([other.id for other in records if other.id != record.id])
+        db.session.commit()
+        for day in [9, 10, 11, 12, 13, 14, 15]:
+            moment = datetime(2026, 12, day, 12, tzinfo=timezone.utc)
+            for origin in records:
+                with self.subTest(day=day, origin=origin.id):
+                    result = journey_emergency_contact(origin, "institution", now=moment)
+                    self.assertEqual(result["available"], day in [10, 12, 14])
+                    self.assertEqual([item["phone"] for item in result["contacts"]], [f"555-DEC-{day}"] if day in [10, 12, 14] else [])
+        moment = datetime(2026, 12, 12, 12, tzinfo=timezone.utc)
+        journey = path_session_journey_contract(records[0], "institution", now=moment)
+        with self.app.test_request_context():
+            html = render_template("pre_session_control_tower/session_journey.html", journey=journey, share=None, csrf_token="")
+        self.assertIn('href="tel:555-DEC-12"', html)
+        self.assertIn("December 12 · 12/12/2026", html)
+        self.assertNotIn("555-DEC-10", html)
+        self.assertNotIn("555-DEC-14", html)
+        self.assertNotIn("Available on exam day only", html)
+        # Multiple sessions on the same day retain their own contact and session label.
+        records[2].session_date = records[1].session_date
+        records[0].emergency_contact_not_required = True
+        db.session.commit()
+        result = journey_emergency_contact(records[0], "institution", now=moment)
+        self.assertEqual({item["phone"] for item in result["contacts"]}, {"555-DEC-12", "555-DEC-14"})
+        records[1].emergency_contact_not_required = True
+        db.session.commit()
+        mixed = journey_emergency_contact(records[0], "institution", now=moment)["contacts"]
+        self.assertEqual({item["phone"] for item in mixed}, {"+5491128508482", "555-DEC-14"})
+        records[2].emergency_contact_member.phone = "UPDATED-CONCAT-PHONE"
+        db.session.commit()
+        self.assertIn("UPDATED-CONCAT-PHONE", [item["phone"] for item in journey_emergency_contact(records[0], "institution", now=moment)["contacts"]])
+        records[2].emergency_contact_not_required = True
+        db.session.commit()
+        defaults = journey_emergency_contact(records[0], "institution", now=moment)["contacts"]
+        self.assertEqual(len(defaults), 2)
+        self.assertTrue(all(item["phone"] == "+5491128508482" and item["name"] == "Path International Examinations" for item in defaults))
+        for audience in ["external", "public", "external_public"]:
+            self.assertIsNone(path_session_journey_contract(records[0], audience, now=moment)["emergency_contact"])
 
     def test_path_session_journey_contract_separates_institution_and_public_safety(self):
         self.session_record.session_date = date(2026, 7, 2)

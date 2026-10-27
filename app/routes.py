@@ -14631,15 +14631,36 @@ def path_session_journey_sources(session_record, today=None):
 
 
 def journey_emergency_contact(session_record, audience, is_external=False, now=None):
-    if audience != "institution" or is_external or session_record.emergency_contact_not_required:
+    if audience != "institution" or is_external:
         return None
     now = now or datetime.now(timezone.utc)
-    available = now.astimezone(LOCAL_TZ).date() == session_record.session_date
-    member = session_record.emergency_contact_member if available else None
+    session_ids = monthly_unified_total_session_ids(session_record)
+    records = (ExamSession.query.filter(ExamSession.id.in_(session_ids))
+               .order_by(ExamSession.session_date, ExamSession.id).all()) if len(session_ids) > 1 else [session_record]
+    local_date = now.astimezone(LOCAL_TZ).date()
+    contacts = []
+    for record in records:
+        if record.session_date != local_date:
+            continue
+        member = record.emergency_contact_member
+        if record.emergency_contact_not_required:
+            name, phone = "Path International Examinations", "+5491128508482"
+        else:
+            name = (member.full_name or "").strip() if member else ""
+            phone = (member.phone or "").strip() if member else ""
+        contacts.append({
+            "session_id": record.id,
+            "session_name": record.exam_session_name,
+            "session_date": record.session_date,
+            "name": name,
+            "phone": phone,
+        })
     return {
-        "available": available,
-        "name": (member.full_name or "").strip() if member else "",
-        "phone": (member.phone or "").strip() if member else "",
+        "available": bool(contacts),
+        "is_concatenated": len(records) > 1,
+        "contacts": contacts,
+        "name": contacts[0]["name"] if contacts else "",
+        "phone": contacts[0]["phone"] if contacts else "",
     }
 
 

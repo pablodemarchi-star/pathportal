@@ -9871,6 +9871,7 @@ span.session-marker-chip {
 }
 
 .journey-emergency-contact-details { display: flex; align-items: center; flex-wrap: wrap; gap: 10px 14px; margin: 16px 0; padding: 14px 16px; border: 1px solid var(--path-sage); border-radius: 10px; background: var(--badge-green-bg); }
+.journey-emergency-session { flex-basis: 100%; font-size: 13px; }
 .journey-emergency-phone { font-size: 18px; font-weight: 800; white-space: nowrap; }
 .journey-emergency-calls-only { display: inline-flex; padding: 5px 9px; border-radius: 6px; background: var(--badge-red-bg); color: var(--badge-red-text); font-size: 12px; font-weight: 800; }
 
@@ -17972,10 +17973,9 @@ body.staff-session-detail-open { overflow: hidden; }
 .staff-detail-logistics-progress.is-inline { display: inline; margin: 0; padding: 0 5px; font-size: 0.85em; line-height: inherit; vertical-align: baseline; white-space: nowrap; }
 .staff-detail-logistics-instructions-dialog { box-sizing: border-box; width: min(680px, calc(100vw - 32px)); max-height: calc(100vh - 48px); overflow: auto; padding: 24px; border: 1px solid var(--color-border); border-radius: 14px; color: var(--color-primary-dark); }
 .staff-detail-logistics-instructions-dialog::backdrop { background: #12252dcc; }
-.staff-detail-exam-centre { padding: 20px; border: 1px solid var(--path-ochre); border-left-width: 5px; border-radius: 12px; background: var(--badge-yellow-bg); }
+.staff-detail-exam-centre { margin-top: 20px; padding: 20px; border: 1px solid var(--path-ochre); border-left-width: 5px; border-radius: 12px; background: var(--badge-yellow-bg); }
 .staff-detail-exam-centre-heading { display: flex; align-items: center; flex-wrap: wrap; gap: 10px 14px; margin-bottom: 12px; }
 .staff-detail-exam-centre-heading h3 { margin: 0; font-size: 20px; }
-.staff-detail-exam-centre-availability { display: inline-flex; padding: 5px 10px; border-radius: 999px; background: var(--badge-red-bg); color: var(--badge-red-text); font-size: 11px; font-weight: 800; }
 .staff-detail-exam-centre-list { display: grid; gap: 12px; margin-top: 16px; }
 .staff-detail-exam-centre-contact { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 16px; padding: 14px; border: 1px solid var(--color-border); border-radius: 8px; background: white; overflow-wrap: anywhere; }
 .staff-detail-exam-centre-contact a { color: var(--path-blue-303up); text-decoration: underline; }
