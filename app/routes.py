@@ -15662,14 +15662,32 @@ def package_label_verification_status_label(status):
 def apply_package_stage_status_update(session_record, action, status_attr, updated_at_attr, updated_by_attr, stage_label):
     if schedule_workflow_status(session_record.schedule_workflow) != "Approved":
         return "The schedule must be approved before package preparation can begin."
-    new_status = PACKAGE_LABEL_VERIFICATION_ACTIONS.get(action)
-    if not new_status:
-        return "Please select a valid package preparation action."
     current_status = getattr(session_record, status_attr, None) or "not_started"
+    try:
+        previous_states = json.loads(session_record.package_incident_previous_states or "{}")
+    except (TypeError, ValueError):
+        previous_states = {}
+    if not isinstance(previous_states, dict):
+        previous_states = {}
+    if action == "clear_incident":
+        if current_status != "incident":
+            return f"{stage_label} has no active incident."
+        new_status = previous_states.get(status_attr, "not_started")
+        if new_status not in {"not_started", "in_progress"}:
+            new_status = "not_started"
+    else:
+        new_status = PACKAGE_LABEL_VERIFICATION_ACTIONS.get(action)
+        if not new_status:
+            return "Please select a valid package preparation action."
     if current_status == "completed" and action != "reopen":
         return f"{stage_label} is completed. Reopen it before making changes."
     if action == "mark_complete" and current_status != "in_progress":
         return f"{stage_label} must be marked as in progress before it can be completed."
+    if action == "mark_incident" and current_status != "incident":
+        previous_states[status_attr] = current_status
+    elif new_status != "incident":
+        previous_states.pop(status_attr, None)
+    session_record.package_incident_previous_states = json.dumps(previous_states)
     setattr(session_record, status_attr, new_status)
     setattr(session_record, updated_at_attr, datetime.now(timezone.utc))
     actor = current_note_actor()
@@ -22516,6 +22534,29 @@ def create_package_unit(session_id):
         current_app.logger.exception("Package unit creation failed")
         flash("The package unit could not be created. Please try again.", "error")
         return package_control_redirect(session_record, status_filter)
+
+
+@staff_bp.route("/pre-session-control-tower/sessions/<int:session_id>/packages/resolve-incident", methods=["POST"])
+@login_required
+def resolve_package_stage_incident(session_id):
+    session_record = ExamSession.query.get_or_404(session_id)
+    stage = request.form.get("stage", "")
+    fields = next((item for item in PACKAGE_STATUS_TRACK_FIELDS if item[1] == stage), None)
+    if not fields:
+        abort(400, description="Please select a valid package preparation stage.")
+    label, status_attr, updated_at_attr, updated_by_attr = fields
+    target = "package-" + status_attr.removesuffix("_status").removeprefix("package_").replace("_", "-")
+    if not validate_csrf():
+        flash("Security token expired. Please try again.", "error")
+    else:
+        error = apply_package_stage_status_update(session_record, "clear_incident", status_attr,
+                                                updated_at_attr, updated_by_attr, label)
+        if error:
+            flash(error, "error")
+        else:
+            db.session.commit()
+            flash(f"{label} incident cleared. Previous status restored.", "success")
+    return package_control_redirect(session_record, request.form.get("schedule_status", ""), target=target)
 
 
 @staff_bp.route("/pre-session-control-tower/sessions/<int:session_id>/packages/label-verification", methods=["POST"])

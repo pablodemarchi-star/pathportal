@@ -2,6 +2,21 @@
 {% from "staff/_badges.html" import role_badge %}
 {% from "finance_requests/_payment_form_fields.html" import payment_form_fields with context %}
 
+{% macro package_stage_state(record, status, stage) -%}
+  {% if status == 'incident' %}
+    <form class="package-preparation-state package-preparation-state-incident package-incident-chip" method="post" action="{{ url_for('staff.resolve_package_stage_incident', session_id=record.id) }}" data-disable-on-submit>
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+      <input type="hidden" name="schedule_status" value="{{ selected_schedule_status }}">
+      <input type="hidden" name="stage" value="{{ stage }}">
+      {{ pre_session_return_fields(selected_view, selected_bundle) }}
+      <span>With incident</span>
+      <button type="submit" class="package-incident-dismiss" aria-label="Clear incident and restore previous status" title="Clear incident and restore previous status">&times;</button>
+    </form>
+  {% else %}
+    <span class="package-preparation-state package-preparation-state-{{ status|replace('_', '-') }}">{{ {'in_progress': 'In progress', 'completed': 'Completed'}.get(status, 'Not started yet') }}</span>
+  {% endif %}
+{%- endmacro %}
+
 {% macro department_actions_sort_header(column, label) -%}
   {% set active = department_actions_sort == column %}
   <th aria-sort="{{ ('ascending' if department_actions_order == 'asc' else 'descending') if active else 'none' }}">
@@ -2947,17 +2962,7 @@
               {% set label_verification_status = session.package_label_verification_status or "not_started" %}
               <div class="package-preparation-guidance-title">
                 <strong>Candidate label verification</strong>
-                <span class="package-preparation-state package-preparation-state-{{ label_verification_status|replace('_', '-') }}">
-                  {% if label_verification_status == "in_progress" %}
-                    In progress
-                  {% elif label_verification_status == "completed" %}
-                    Completed
-                  {% elif label_verification_status == "incident" %}
-                    With incident
-                  {% else %}
-                    Not started yet
-                  {% endif %}
-                </span>
+                {{ package_stage_state(session, label_verification_status, 'package_label_verification_status') }}
               </div>
               <ol>
                 <li>Enter the exam session in Sinapsis and download the candidate labels for each exam room.</li>
@@ -3005,17 +3010,7 @@ This stage has already been marked as complete. Reopening it may affect package 
 	              {% set label_printing_unlocked = label_verification_status == "completed" %}
               <div class="package-preparation-guidance-title">
                 <strong>Candidate label printing and affixing</strong>
-                <span class="package-preparation-state package-preparation-state-{{ label_printing_status|replace('_', '-') }}">
-                  {% if label_printing_status == "in_progress" %}
-                    In progress
-                  {% elif label_printing_status == "completed" %}
-                    Completed
-                  {% elif label_printing_status == "incident" %}
-                    With incident
-                  {% else %}
-                    Not started yet
-                  {% endif %}
-                </span>
+                {{ package_stage_state(session, label_printing_status, 'package_label_printing_status') }}
               </div>
               <ol>
                 <li>Prepare the exam papers required for each module and exam room, arranging them in the exact order shown on the approved schedule.</li>
@@ -3064,17 +3059,7 @@ This stage has already been marked as complete. Reopening it may affect package 
 	              {% set room_package_sealing_unlocked = label_printing_status == "completed" %}
               <div class="package-preparation-guidance-title">
                 <strong>Room package sealing</strong>
-                <span class="package-preparation-state package-preparation-state-{{ room_package_sealing_status|replace('_', '-') }}">
-                  {% if room_package_sealing_status == "in_progress" %}
-                    In progress
-                  {% elif room_package_sealing_status == "completed" %}
-                    Completed
-                  {% elif room_package_sealing_status == "incident" %}
-                    With incident
-                  {% else %}
-                    Not started yet
-                  {% endif %}
-                </span>
+                {{ package_stage_state(session, room_package_sealing_status, 'room_package_sealing_status') }}
               </div>
               {% if view.packages.schedule_ready and not view.packages.staffing_ready %}
                 <p class="staffing-schedule-notice">Staffing must be ready before the exam room records can be printed and affixed to the packages.</p>
@@ -3138,17 +3123,7 @@ This stage has already been marked as complete. Reopening it may affect package 
               {% set return_packages_status = session.return_packages_status or "not_started" %}
               <div class="package-preparation-guidance-title">
                 <strong>Return packages</strong>
-                <span class="package-preparation-state package-preparation-state-{{ return_packages_status|replace('_', '-') }}">
-                  {% if return_packages_status == "in_progress" %}
-                    In progress
-                  {% elif return_packages_status == "completed" %}
-                    Completed
-                  {% elif return_packages_status == "incident" %}
-                    With incident
-                  {% else %}
-                    Not started yet
-                  {% endif %}
-                </span>
+                {{ package_stage_state(session, return_packages_status, 'return_packages_status') }}
               </div>
               <p>1. Include the following return packages:</p>
               {% if view.packages.return_package_requirements %}
@@ -3202,17 +3177,7 @@ This stage has already been marked as complete. Reopening it may affect package 
                 {% set staff_member_ids_status = session.staff_member_ids_status or "not_started" %}
                 <div class="package-preparation-guidance-title">
                   <strong>Staff member IDs</strong>
-                  <span class="package-preparation-state package-preparation-state-{{ staff_member_ids_status|replace('_', '-') }}">
-                    {% if staff_member_ids_status == "in_progress" %}
-                      In progress
-                    {% elif staff_member_ids_status == "completed" %}
-                      Completed
-                    {% elif staff_member_ids_status == "incident" %}
-                      With incident
-                    {% else %}
-                      Not started yet
-                    {% endif %}
-                  </span>
+                  {{ package_stage_state(session, staff_member_ids_status, 'staff_member_ids_status') }}
                 </div>
                 {% if not view.packages.staffing_ready %}
                   <p class="staffing-schedule-notice">Staffing must be ready before staff member IDs can be issued.</p>
@@ -3279,17 +3244,7 @@ This stage has already been marked as complete. Reopening it may affect package 
               {% set inclusion_final_items_status = session.inclusion_final_items_status or "not_started" %}
               <div class="package-preparation-guidance-title">
                 <strong>Inclusion of final items</strong>
-                <span class="package-preparation-state package-preparation-state-{{ inclusion_final_items_status|replace('_', '-') }}">
-                  {% if inclusion_final_items_status == "in_progress" %}
-                    In progress
-                  {% elif inclusion_final_items_status == "completed" %}
-                    Completed
-                  {% elif inclusion_final_items_status == "incident" %}
-                    With incident
-                  {% else %}
-                    Not started yet
-                  {% endif %}
-	                </span>
+                {{ package_stage_state(session, inclusion_final_items_status, 'inclusion_final_items_status') }}
 	              </div>
 	              {% if not view.packages.staffing_ready %}
 	                <p class="staffing-schedule-notice">Staffing must be ready before adding full schedule for each room for the Supervisor.</p>
@@ -3348,17 +3303,7 @@ This stage has already been marked as complete. Reopening it may affect package 
               {% set session_box_sealing_prerequisites_complete = label_verification_status == "completed" and label_printing_status == "completed" and room_package_sealing_status == "completed" and return_packages_status == "completed" and inclusion_final_items_status == "completed" and (not view.packages.staff_member_id_requirements or staff_member_ids_status == "completed") %}
               <div class="package-preparation-guidance-title">
                 <strong>Session box sealing</strong>
-                <span class="package-preparation-state package-preparation-state-{{ session_box_sealing_status|replace('_', '-') }}">
-                  {% if session_box_sealing_status == "in_progress" %}
-                    In progress
-                  {% elif session_box_sealing_status == "completed" %}
-                    Completed
-                  {% elif session_box_sealing_status == "incident" %}
-                    With incident
-                  {% else %}
-                    Not started yet
-                  {% endif %}
-                </span>
+                {{ package_stage_state(session, session_box_sealing_status, 'session_box_sealing_status') }}
               </div>
               <ol>
                 <li>Ensure all previous items are included in the session box.</li>

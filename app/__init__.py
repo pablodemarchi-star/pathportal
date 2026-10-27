@@ -272,6 +272,8 @@ def create_app():
                 db.session.execute(text(f"ALTER TABLE staff_exam_session_end_checks ADD COLUMN {column} BOOLEAN NOT NULL DEFAULT 0"))
 
         journey_session_columns = {row[1] for row in db.session.execute(text("PRAGMA table_info(exam_session)"))}
+        if "package_incident_previous_states" not in journey_session_columns:
+            db.session.execute(text("ALTER TABLE exam_session ADD COLUMN package_incident_previous_states TEXT NOT NULL DEFAULT '{}'"))
         for field in ("public_journey_schedule_access", "public_journey_entry_slips_access"):
             if field not in journey_session_columns:
                 db.session.execute(text(f"ALTER TABLE exam_session ADD COLUMN {field} BOOLEAN NOT NULL DEFAULT 0"))

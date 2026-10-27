@@ -6993,6 +6993,68 @@ for (const days of [2, 3, 4]) {
         self.assertEqual(response.status_code, 302)
         self.assertEqual(ExamSessionPackageUnit.query.count(), 0)
 
+    def test_package_incident_dismiss_restores_each_stage_previous_status(self):
+        from app.routes import PACKAGE_STATUS_TRACK_FIELDS, apply_package_stage_status_update
+        self.approve_schedule()
+        client = self.login_client()
+        url = f"/pre-session-control-tower/sessions/{self.session_record.id}/packages/resolve-incident"
+        for label, field, updated_at, updated_by in PACKAGE_STATUS_TRACK_FIELDS:
+            for previous in ("not_started", "in_progress"):
+                with self.subTest(stage=field, previous=previous):
+                    setattr(self.session_record, field, previous)
+                    with self.app.test_request_context():
+                        self.assertEqual(apply_package_stage_status_update(self.session_record, "mark_incident", field, updated_at, updated_by, label), "")
+                        # Repeated incident requests must not replace the original state.
+                        self.assertEqual(apply_package_stage_status_update(self.session_record, "mark_incident", field, updated_at, updated_by, label), "")
+                    db.session.commit()
+                    self.assertEqual(json.loads(self.session_record.package_incident_previous_states)[field], previous)
+                    response = client.post(url, data={"csrf_token": "token", "stage": field})
+                    self.assertEqual(response.status_code, 302)
+                    self.assertEqual(getattr(self.session_record, field), previous)
+                    self.assertNotIn(field, json.loads(self.session_record.package_incident_previous_states))
+
+    def test_package_incident_dismiss_chip_and_management_action(self):
+        from app.routes import packages_action_contract, package_preparation_status_contract
+        self.approve_schedule()
+        client = self.login_client()
+        for path in ("label-verification", "return-packages"):
+            client.post(f"/pre-session-control-tower/sessions/{self.session_record.id}/packages/{path}",
+                        data={"csrf_token": "token", "action": "mark_incident"})
+        def action():
+            return packages_action_contract(self.session_record, schedule_gate={"is_ready": True},
+                preparation_status=package_preparation_status_contract(self.session_record))
+        self.assertEqual(action()["responsible"], "MANAGEMENT")
+        page = client.get("/pre-session-control-tower?session_year=2026&view=sessions").get_data(as_text=True)
+        self.assertEqual(page.count('class="package-incident-dismiss"'), 2)
+        self.assertIn('aria-label="Clear incident and restore previous status"', page)
+        self.assertIn('name="stage" value="package_label_verification_status"', page)
+        url = f"/pre-session-control-tower/sessions/{self.session_record.id}/packages/resolve-incident"
+        client.post(url, data={"csrf_token": "token", "stage": "package_label_verification_status"})
+        self.assertEqual(action()["responsible"], "MANAGEMENT")
+        client.post(url, data={"csrf_token": "token", "stage": "return_packages_status"})
+        self.assertEqual(action()["responsible"], "LOGISTICS")
+        self.assertEqual(package_preparation_status_contract(self.session_record)["status"], "not_started")
+
+    def test_package_incident_dismiss_validates_csrf_stage_and_schedule(self):
+        self.session_record.package_label_verification_status = "incident"
+        self.session_record.package_incident_previous_states = json.dumps({"package_label_verification_status": "in_progress"})
+        db.session.commit()
+        client = self.login_client()
+        url = f"/pre-session-control-tower/sessions/{self.session_record.id}/packages/resolve-incident"
+        self.assertEqual(client.post(url, data={"csrf_token": "token", "stage": "status"}).status_code, 400)
+        client.post(url, data={"csrf_token": "invalid", "stage": "package_label_verification_status"})
+        self.assertEqual(self.session_record.package_label_verification_status, "incident")
+        client.post(url, data={"csrf_token": "token", "stage": "package_label_verification_status"})
+        self.assertEqual(self.session_record.package_label_verification_status, "incident")
+        self.approve_schedule()
+        client.post(url, data={"csrf_token": "token", "stage": "package_label_verification_status"})
+        self.assertEqual(self.session_record.package_label_verification_status, "in_progress")
+        self.session_record.package_label_verification_status = "incident"
+        self.session_record.package_incident_previous_states = "{}"
+        db.session.commit()
+        client.post(url, data={"csrf_token": "token", "stage": "package_label_verification_status"})
+        self.assertEqual(self.session_record.package_label_verification_status, "not_started")
+
     def test_package_label_verification_status_actions(self):
         self.approve_schedule()
         client = self.login_client()
