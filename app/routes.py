@@ -10397,7 +10397,7 @@ def shipment_pre_dispatch_cards(bundle, max_examiner_count=0):
             "bundle_label_url": f"/pre-session-control-tower/bundles/{bundle.id}/bundle-label.pdf" if getattr(bundle, "id", None) else "",
             "delivery_option": bundle.delivery_option or "",
             "steps": [
-                "Wrap all session boxes, the Listening and speaking pack for examiners, and the emergency pack together with black nylon. Heat-seal the bundle to prepare it as a single shipment.",
+                "Wrap all session boxes, the Listening and speaking pack for examiners, the emergency pack and the 'Extra help' label set together with black nylon. Heat-seal the bundle to prepare it as a single shipment.",
                 "Print the shipping label and affix it to the top of the bundle.",
             ],
         },

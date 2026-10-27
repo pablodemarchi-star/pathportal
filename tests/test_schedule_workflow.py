@@ -15521,7 +15521,7 @@ assert.equal(storage.size, 0);
         self.assertIn("Emergency pack and &#39;Extra help&#39; label set", modal)
         self.assertIn("Include <span class=\"shipment-pack-count-chip\">1</span> sealed emergency pack and <span class=\"shipment-pack-count-chip\">1</span> set of orange 'Extra help' labels.", modal)
         self.assertIn(
-            "Wrap all session boxes, the Listening and speaking pack for examiners, and the emergency pack together with black nylon. Heat-seal the bundle to prepare it as a single shipment.",
+            "Wrap all session boxes, the Listening and speaking pack for examiners, the emergency pack and the &#39;Extra help&#39; label set together with black nylon. Heat-seal the bundle to prepare it as a single shipment.",
             modal,
         )
         self.assertIn("Print the shipping label and affix it to the top of the bundle.", modal)
