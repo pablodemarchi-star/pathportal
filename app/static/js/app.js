@@ -8201,7 +8201,7 @@ const validateStaffOfficialConfirmationEmailPayload = (payload) => {
     return "Total fee is required for official confirmation emails.";
   }
   const logisticsStatus = cleanEmailValue(payload?.logistics_status || payload?.logisticsStatus);
-  if (role !== "Emergency contact" && !["Does not apply", "Uber", "Simple logistics", "Uber ride", "Complex Uber ride", "Complex logistics"].includes(logisticsStatus)) {
+  if (role !== "Emergency contact" && !["Does not apply", "Uber", "Simple logistics", "Uber ride", "Complex Uber ride", "Complex logistics", "Carpooling"].includes(logisticsStatus)) {
     return "Logistics status is required for official confirmation emails.";
   }
   if (["Uber", "Simple logistics", "Uber ride", "Complex Uber ride"].includes(logisticsStatus) && !emailLinkIsUsable(payload?.logistics_url || payload?.logisticsUrl)) {
@@ -8782,7 +8782,7 @@ const validateStaffSessionSubmit = (form, submitter = null) => {
   let error = "";
   if (role === "Supervisor" && payload?.is_remote && logisticsStatus !== "Does not apply") {
     error = "Remote supervisors must have Logistics set to Does not apply before adding the session.";
-  } else if (role !== "Emergency contact" && !["Does not apply", "Uber", "Simple logistics", "Uber ride", "Complex Uber ride", "Complex logistics"].includes(logisticsStatus)) {
+  } else if (role !== "Emergency contact" && !["Does not apply", "Uber", "Simple logistics", "Uber ride", "Complex Uber ride", "Complex logistics", "Carpooling"].includes(logisticsStatus)) {
     error = "Select Logistics for this staff member in Exam session planner before adding the session.";
   }
   error = error || validateStaffOfficialConfirmationEmailPayload(payload);
@@ -9746,6 +9746,7 @@ const syncStaffHeaderLogisticsTag = (row, value) => {
     "Complex Uber ride": "staff-logistics-complex-uber-ride",
     "Simple logistics": "staff-logistics-simple-logistics",
     "Complex logistics": "staff-logistics-complex-logistics",
+    "Carpooling": "staff-logistics-complex-logistics",
   }[value] || "staff-logistics-does-not-apply";
   tag.classList.add(logisticsClass);
   tag.textContent = value || "Select logistics";
@@ -9835,7 +9836,7 @@ const formHasLogisticsConcepts = (form) => logisticsConceptRows(form).length > 0
 
 const logisticsControls = (form) => Array.from(form?.querySelectorAll("[data-logistics-control]") || []);
 
-const logisticsControlIsActive = (control) => ["Uber ride", "Complex Uber ride", "Complex logistics"].includes(control?.value);
+const logisticsControlIsActive = (control) => ["Uber ride", "Complex Uber ride", "Complex logistics", "Carpooling"].includes(control?.value);
 
 const activeLogisticsControls = (form) => logisticsControls(form).filter(logisticsControlIsActive);
 
@@ -9932,6 +9933,7 @@ const syncStaffLogisticsControl = (control) => {
     "Complex Uber ride": "staff-logistics-complex-uber-ride",
     "Simple logistics": "staff-logistics-simple-logistics",
     "Complex logistics": "staff-logistics-complex-logistics",
+    "Carpooling": "staff-logistics-complex-logistics",
   }[control.value] || "staff-logistics-does-not-apply";
   control.classList.add(logisticsClass);
   syncStaffHeaderLogisticsTag(row, control.value);
@@ -14271,11 +14273,13 @@ document.addEventListener("submit", (event) => {
   const dialog = document.getElementById('logistics-instructions-dialog');
   if (!dialog) return;
   const editor = dialog.querySelector('[data-instructions-editor]');
+  const title = dialog.querySelector('[data-instructions-title]');
   const message = dialog.querySelector('[data-instructions-message]');
   const save = dialog.querySelector('[data-instructions-save]');
   const remove = dialog.querySelector('[data-instructions-delete]');
   const canEdit = dialog.dataset.canEdit === 'true';
   editor.contentEditable = String(canEdit);
+  title.readOnly = !canEdit;
   dialog.querySelector('.logistics-instructions-toolbar').hidden = !canEdit;
   save.hidden = !canEdit;
   let opener;
@@ -14310,6 +14314,7 @@ document.addEventListener("submit", (event) => {
     opener = button;
     row = button.closest('[data-logistics-concept-row]');
     editor.innerHTML = row.querySelector('[data-logistics-instructions-value]').value;
+    title.value = row.querySelector('[data-logistics-instructions-title-value]').value;
     selection = null;
     const conceptId = row.querySelector('input[name^="logistics_concept_id_"]').value;
     message.textContent = conceptId ? '' : 'Instructions for this new row will be saved when you save the session.';
@@ -14348,6 +14353,8 @@ document.addEventListener("submit", (event) => {
     if (busy || !canEdit) return;
     if (deleted && !window.confirm('Delete these instructions?')) return;
     const input = row.querySelector('[data-logistics-instructions-value]');
+    const titleInput = row.querySelector('[data-logistics-instructions-title-value]');
+    let titleValue = deleted ? '' : title.value.trim();
     let value = deleted || !editor.textContent.trim() ? '' : editor.innerHTML;
     const conceptId = row.querySelector('input[name^="logistics_concept_id_"]').value;
     busy = true;
@@ -14359,13 +14366,16 @@ document.addEventListener("submit", (event) => {
         const body = new FormData();
         body.set('csrf_token', form.querySelector('[name="csrf_token"]').value);
         body.set('instructions', value);
+        body.set('title', titleValue);
         const response = await fetch(`/exam-session-planner/logistics-concepts/${encodeURIComponent(conceptId)}/instructions`, {method: 'POST', body, headers: {'Accept': 'application/json'}});
         const payload = await response.json();
         if (!response.ok || !payload.ok) throw new Error(payload.error || 'Could not save instructions.');
         value = payload.instructions;
+        titleValue = payload.title;
       }
       input.value = value;
-      if (conceptId) input.defaultValue = value;
+      titleInput.value = titleValue;
+      if (conceptId) { input.defaultValue = value; titleInput.defaultValue = titleValue; }
       opener.textContent = value ? 'View' : '✎';
       opener.classList.toggle('has-instructions', Boolean(value));
       opener.setAttribute('aria-label', value ? 'View or edit instructions' : 'Add instructions');

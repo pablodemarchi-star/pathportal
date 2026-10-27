@@ -332,8 +332,9 @@ EXAM_SESSION_LOGISTICS_TYPE_OPTIONS = [
     "Uber ride",
     "Complex Uber ride",
     "Complex logistics",
+    "Carpooling",
 ]
-EXAM_SESSION_LOGISTICS_ACTIVE_TYPES = {"Uber ride", "Complex Uber ride", "Complex logistics"}
+EXAM_SESSION_LOGISTICS_ACTIVE_TYPES = {"Uber ride", "Complex Uber ride", "Complex logistics", "Carpooling"}
 LEGACY_PARTICIPATION_STATUS_MAP = {
     "Sent": "Pre-confirmation sent",
 }
@@ -20206,10 +20207,10 @@ def staff_portal_logistics_details(record, assignment):
     for concept in concepts:
         content = sanitize_instructions(concept.instructions_html)
         if content:
-            instructions.append({"html": content})
+            instructions.append({"html": content, "title": concept.instructions_title or ""})
     return {
         "logistics_instructions": instructions,
-        "logistics_progress": "Confirmed" if concepts and all(item.status == "Confirmed" for item in concepts) else "Pending",
+        "logistics_progress": "Confirmed" if concepts and all(item.status == "Confirmed" for item in concepts) else "In progress",
     }
 
 
@@ -25046,6 +25047,13 @@ def save_exam_session_logistics(session_record, saved_fields=None):
             concept = ExamSessionLogisticsConcept(exam_session_id=session_record.id)
             db.session.add(concept)
         concept.status = status
+        title_key = f"logistics_instructions_title_{row_key}"
+        if title_key in request.form:
+            title = request.form[title_key].strip()
+            if len(title) > 200:
+                flash("Instructions title must be 200 characters or fewer.", "error")
+                return False
+            concept.instructions_title = title
         instructions_key = f"logistics_instructions_{row_key}"
         if instructions_key in request.form:
             raw_instructions = request.form[instructions_key]
@@ -25487,9 +25495,13 @@ def update_logistics_instructions(concept_id):
     value = request.form.get("instructions", "")
     if len(value) > 50000:
         return jsonify(ok=False, error="Instructions must be shorter than 50,000 characters."), 400
+    title = request.form.get("title", concept.instructions_title or "").strip()
+    if len(title) > 200:
+        return jsonify(ok=False, error="Instructions title must be 200 characters or fewer."), 400
+    concept.instructions_title = title
     concept.instructions_html = sanitize_instructions(value)
     db.session.commit()
-    return jsonify(ok=True, instructions=concept.instructions_html)
+    return jsonify(ok=True, instructions=concept.instructions_html, title=concept.instructions_title)
 
 
 @staff_bp.route("/exam-session-planner/logistics-concepts/<int:concept_id>/notes", methods=["POST"])
@@ -31651,6 +31663,14 @@ def bulk_update_members():
         for member in members:
             member.has_car = has_car
         label = f"Car ownership changed to {has_car}"
+    elif bulk_action == "id_issued":
+        id_issued = request.form.get("id_issued", "").strip()
+        if id_issued not in {"0", "1"}:
+            flash("Please select a valid ID issued value.", "error")
+            return redirect(url_for("staff.index"))
+        for member in members:
+            member.id_issued = id_issued == "1"
+        label = "ID marked as issued" if id_issued == "1" else "ID marked as not issued"
     else:
         flash("Please select a valid bulk action.", "error")
         return redirect(url_for("staff.index"))

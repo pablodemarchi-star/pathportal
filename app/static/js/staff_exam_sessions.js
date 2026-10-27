@@ -70,9 +70,9 @@
         duties.items.forEach((text) => root.querySelector("[data-staff-responsibilities]").append(make("li", "", text)));
       } else root.querySelector("[data-staff-responsibilities-section]").hidden = true;
       if (remote) root.querySelector("[data-staff-travel-section]").hidden = true;
-      const instructionsDialog = root.querySelector("[data-staff-logistics-instructions-dialog]");
-      const instructionsButton = root.querySelector("[data-staff-logistics-instructions-open]");
-      if (instructionsDialog && instructionsButton) {
+      root.querySelectorAll("[data-staff-logistics-instructions-item]").forEach((item) => {
+        const instructionsDialog = item.querySelector("[data-staff-logistics-instructions-dialog]");
+        const instructionsButton = item.querySelector("[data-staff-logistics-instructions-open]");
         instructionsButton.addEventListener("click", () => instructionsDialog.showModal());
         instructionsDialog.querySelectorAll("[data-staff-logistics-instructions-close]").forEach((button) => {
           button.addEventListener("click", () => instructionsDialog.close());
@@ -81,7 +81,7 @@
           event.stopPropagation();
           instructionsButton.focus();
         });
-      }
+      });
       if (data.participation_confirmed) return;
       const subject = `Re: Path exam session invitation - ${data.session_name || "Exam session"} - ${data.full_name}`;
       const confirmation = make("div", "staff-detail-confirm-form");

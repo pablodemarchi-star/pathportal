@@ -39,8 +39,10 @@ class LogisticsInstructionsTest(unittest.TestCase):
 
     def test_save_edit_delete_and_render(self):
         content = '<ul><li><b>Bring materials</b> <i>early</i></li></ul><font size="4">Large</font><a href="https://example.com">Link</a>'
-        response = self.client.post(self.url, data={"csrf_token": "test", "instructions": content})
+        response = self.client.post(self.url, data={"csrf_token": "test", "instructions": content, "title": "Traslado de ida"})
         self.assertEqual(response.status_code, 200)
+        self.assertEqual(self.concept.instructions_title, "Traslado de ida")
+        self.assertEqual(response.json["title"], "Traslado de ida")
         self.assertIn('<font size="4">', self.concept.instructions_html)
         page = self.client.get("/exam-session-planner?session_year=2026").get_data(as_text=True)
         self.assertLess(page.index('>Staff members</th>'), page.index('>Instructions</th>'))
@@ -59,6 +61,8 @@ class LogisticsInstructionsTest(unittest.TestCase):
             self.assertEqual(self.client.post(self.url, data={"csrf_token": "test", "instructions": "text"}).status_code, 403)
         self.assertEqual(self.client.post(self.url, data={"csrf_token": "test", "instructions": "x" * 50001}).status_code, 400)
         self.assertEqual(self.concept.instructions_html, "")
+        self.assertEqual(self.client.post(self.url, data={"csrf_token": "test", "instructions": "text", "title": "x" * 201}).status_code, 400)
+        self.assertEqual(self.concept.instructions_title, "")
 
     def test_draft_instructions_save_with_new_concept(self):
         provider_type = ProviderType(name="Transport")
@@ -67,11 +71,13 @@ class LogisticsInstructionsTest(unittest.TestCase):
         with self.app.test_request_context(method="POST", data={
             "logistics_concept_row_keys": "new-1", "logistics_status_new-1": "Pending",
             "logistics_provider_type_id_new-1": str(provider_type.id),
+            "logistics_instructions_title_new-1": "Return journey",
             "logistics_instructions_new-1": "<ol><li><strong>First</strong></li></ol>",
         }):
             self.assertTrue(save_exam_session_logistics(self.record))
             db.session.commit()
         draft = ExamSessionLogisticsConcept.query.filter(ExamSessionLogisticsConcept.id != self.concept.id).one()
+        self.assertEqual(draft.instructions_title, "Return journey")
         self.assertEqual(draft.instructions_html, "<ol><li><strong>First</strong></li></ol>")
 
     def test_sanitizer_keeps_formatting_without_active_content(self):

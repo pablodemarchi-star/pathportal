@@ -31,6 +31,23 @@ class StaffMemberSettingsTest(unittest.TestCase):
             user_session["csrf_token"] = "token"
         return client
 
+    def test_bulk_id_issued_updates_only_selected_members_and_rejects_invalid_values(self):
+        members = [AcademicStaff(full_name=name, status="Active", roles="Examiner")
+                   for name in ["Selected A", "Selected B", "Unselected"]]
+        db.session.add_all(members)
+        db.session.commit()
+        client = self.client()
+        html = client.get("/staff-members").get_data(as_text=True)
+        self.assertIn('name="bulk_action" value="id_issued"', html)
+        for value, expected in [("1", True), ("invalid", True), ("0", False)]:
+            response = client.post("/members/bulk-update", data={
+                "csrf_token": "token", "bulk_action": "id_issued", "id_issued": value,
+                "member_ids": [str(member.id) for member in members[:2]],
+            })
+            self.assertEqual(response.status_code, 302)
+            db.session.expire_all()
+            self.assertEqual([member.id_issued for member in members], [expected, expected, False])
+
     def test_staff_members_settings_render_empty_without_creating_record(self):
         staff_response = self.client().get("/staff-members")
         staff_html = staff_response.get_data(as_text=True)

@@ -209,6 +209,7 @@
       {% endif %}
     </td>
     <td class="logistics-instructions-cell">
+      <input type="hidden" name="logistics_instructions_title_{{ row_key }}" value="{{ concept.instructions_title if concept else '' }}" data-logistics-instructions-title-value>
       <input type="hidden" name="logistics_instructions_{{ row_key }}" value="{{ concept.instructions_html if concept else '' }}" data-logistics-instructions-value>
       <button type="button" class="logistics-instructions-button{% if concept and concept.instructions_html %} has-instructions{% endif %}" data-logistics-instructions-open{% if concept %} data-instructions-url="{{ url_for('staff.update_logistics_instructions', concept_id=concept.id) }}"{% endif %} aria-label="{% if concept and concept.instructions_html %}View or edit instructions{% else %}Add instructions{% endif %}" title="Instructions">{% if concept and concept.instructions_html %}View{% else %}<span aria-hidden="true">✎</span>{% endif %}</button>
     </td>
@@ -1791,6 +1792,7 @@
     <h2 id="logistics-instructions-title">Instructions</h2>
     <button type="button" class="icon-button" data-instructions-close aria-label="Close instructions">&times;</button>
   </div>
+  <label>Title<input type="text" maxlength="200" data-instructions-title></label>
   <div class="logistics-instructions-toolbar" role="toolbar" aria-label="Text formatting">
     <button type="button" data-instructions-command="bold" aria-label="Bold"><strong>B</strong></button>
     <button type="button" data-instructions-command="italic" aria-label="Italic"><em>I</em></button>

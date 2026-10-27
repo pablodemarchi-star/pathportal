@@ -55,7 +55,7 @@ class StaffPortalLogisticsTest(unittest.TestCase):
             self.assertEqual(response.status_code, 400)
             self.assertIn("Select Logistics", response.json["error"])
             self.assertEqual(StaffExamSessionSubmission.query.count(), before)
-            for value in ["Does not apply", "Uber ride", "Complex Uber ride", "Complex logistics"]:
+            for value in ["Does not apply", "Uber ride", "Complex Uber ride", "Complex logistics", "Carpooling"]:
                 assignment.logistics_type = value
                 db.session.commit()
                 self.assertEqual(self.add(role, assignment.id).status_code, 200)
@@ -64,7 +64,7 @@ class StaffPortalLogisticsTest(unittest.TestCase):
         assignment = ExamSessionSupervisorAssignment(exam_session_id=self.record.id, team_member_id=self.person.id,
             staffing_role_check_verified=True, participation_status="Pre-confirmed", is_remote=True)
         db.session.add(assignment)
-        for value in ["", "Uber ride", "Complex Uber ride", "Complex logistics"]:
+        for value in ["", "Uber ride", "Complex Uber ride", "Complex logistics", "Carpooling"]:
             assignment.logistics_type = value
             db.session.commit()
             response = self.add("supervisor", assignment.id)
@@ -106,6 +106,9 @@ class StaffPortalLogisticsTest(unittest.TestCase):
 
     def test_travel_texts_labels_and_bold_for_each_option(self):
         assignment = self.portal_assignment()
+        db.session.add(ExamSessionLogisticsConcept(exam_session_id=self.record.id,
+            instructions_html="<p>Travel instructions</p>", staff_members=[self.person]))
+        db.session.commit()
         for value in ["Does not apply", "Uber ride", "Complex Uber ride", "Complex logistics"]:
             assignment.logistics_type = value
             db.session.commit()
@@ -137,6 +140,33 @@ class StaffPortalLogisticsTest(unittest.TestCase):
         self.assertIn('<span class="staff-detail-role">Uber ride</span>', page)
         self.assertIn('arrive 50 minutes before the start of your first assigned module.', page)
 
+    def test_carpooling_examiner_portal(self):
+        self.assert_carpooling_portal("examiner", 30)
+
+    def test_carpooling_supervisor_portal(self):
+        self.assert_carpooling_portal("supervisor", 50)
+
+    def assert_carpooling_portal(self, role, minutes):
+        assignment = self.portal_assignment(role)
+        assignment.logistics_type = "Carpooling"
+        concept = ExamSessionLogisticsConcept(exam_session_id=self.record.id,
+            instructions_html="<p>Meet at the shared vehicle.</p>", staff_members=[self.person])
+        other = AcademicStaff(full_name="Other traveller", status="Active", roles="Examiner")
+        db.session.add_all([concept, other])
+        db.session.flush()
+        db.session.add(ExamSessionLogisticsConcept(exam_session_id=self.record.id,
+            instructions_html="PRIVATE CARPOOL INSTRUCTIONS", staff_members=[other]))
+        db.session.commit()
+        page = self.portal_page()
+        self.assertIn('>Carpooling</div>', page)
+        self.assertIn('<span class="staff-detail-role">Carpooling</span>', page)
+        self.assertIn('Your journey to the exam centre will involve sharing a vehicle with other staff members. Please read and follow the important instructions below, as specific procedures and requirements must be observed.', page)
+        self.assertIn('data-staff-logistics-instructions-open>View instructions</button>', page)
+        self.assertIn('<p>Meet at the shared vehicle.</p>', page)
+        self.assertNotIn('PRIVATE CARPOOL INSTRUCTIONS', page)
+        self.assertIn(f'Make sure you plan your journey accordingly, allow sufficient travel time and arrive {minutes} minutes before the start of your first assigned module.', page)
+        self.assertIn(self.person, complex_logistics_staff_members_for_session(self.record.id))
+
     def test_instructions_are_scoped_to_member_and_session_and_progress_updates(self):
         assignment = self.portal_assignment()
         assignment.logistics_type = "Complex Uber ride"
@@ -157,10 +187,28 @@ class StaffPortalLogisticsTest(unittest.TestCase):
         self.assertNotIn('PRIVATE OTHER', page)
         assignment.logistics_type = "Complex logistics"
         db.session.commit()
-        self.assertIn('staff-detail-logistics-progress">Pending</span>', self.portal_page())
+        self.assertIn('staff-detail-logistics-progress">In progress</span>', self.portal_page())
         own.status = "Confirmed"
         db.session.commit()
         self.assertIn('staff-detail-logistics-progress is-confirmed">Confirmed</span>', self.portal_page())
+
+    def test_multiple_concepts_have_separate_titled_buttons_and_dialogs(self):
+        assignment = self.portal_assignment()
+        assignment.logistics_type = "Carpooling"
+        for title, content in [("Traslado de ida", "Outbound instructions"), ("Traslado de vuelta", "Return instructions")]:
+            db.session.add(ExamSessionLogisticsConcept(exam_session_id=self.record.id,
+                instructions_title=title, instructions_html=content, staff_members=[self.person]))
+        db.session.commit()
+        page = self.portal_page()
+        for title in ["Traslado de ida", "Traslado de vuelta"]:
+            self.assertIn(f'View instructions | {title}</button>', page)
+        import re
+        items = re.findall(r'<div data-staff-logistics-instructions-item>(.*?)</dialog>', page, re.S)
+        self.assertEqual(len(items), 2)
+        self.assertIn("Outbound instructions", items[0])
+        self.assertNotIn("Return instructions", items[0])
+        self.assertIn("Return instructions", items[1])
+        self.assertNotIn("Outbound instructions", items[1])
 
     def test_planner_logistics_requires_folder_and_lists_all_active_staff(self):
         members = []
@@ -230,7 +278,7 @@ class StaffPortalLogisticsTest(unittest.TestCase):
         db.session.commit()
         key = f"existing-{assignment.id}"
         concept_key = f"existing-{concept.id}"
-        for value in ["Does not apply", "Uber ride", "Complex Uber ride", "Complex logistics"]:
+        for value in ["Does not apply", "Uber ride", "Complex Uber ride", "Complex logistics", "Carpooling"]:
             response = self.client.post(f'/exam-session-planner/sessions/{self.record.id}/members',
                 headers={"Accept": "application/json"}, data={
                     "csrf_token": "test", "session_year": "2026", "examiner_row_keys": key,

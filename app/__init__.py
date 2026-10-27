@@ -266,6 +266,8 @@ def create_app():
         logistics_columns = {row[1] for row in db.session.execute(text("PRAGMA table_info(exam_session_logistics_concept)"))}
         if "instructions_html" not in logistics_columns:
             db.session.execute(text("ALTER TABLE exam_session_logistics_concept ADD COLUMN instructions_html TEXT NOT NULL DEFAULT ''"))
+        if "instructions_title" not in logistics_columns:
+            db.session.execute(text("ALTER TABLE exam_session_logistics_concept ADD COLUMN instructions_title VARCHAR(200) NOT NULL DEFAULT ''"))
         end_check_columns = {row[1] for row in db.session.execute(text("PRAGMA table_info(staff_exam_session_end_checks)"))}
         for column in ("end_report", "centre_feedback", "printed_attendance"):
             if column not in end_check_columns:

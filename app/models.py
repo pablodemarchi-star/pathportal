@@ -2124,6 +2124,7 @@ class ExamSessionLogisticsConcept(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     exam_session_id = db.Column(db.Integer, db.ForeignKey("exam_session.id"), nullable=False, index=True)
     status = db.Column(db.String(30), nullable=False, default="Pending", index=True)
+    instructions_title = db.Column(db.String(200), nullable=False, default="")
     instructions_html = db.Column(db.Text, nullable=False, default="")
     provider_type_id = db.Column(db.Integer, db.ForeignKey("provider_type.id"), nullable=True, index=True)
     provider_id = db.Column(db.Integer, db.ForeignKey("provider.id"), nullable=True, index=True)

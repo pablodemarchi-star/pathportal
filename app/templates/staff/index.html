@@ -470,6 +470,18 @@
           </label>
           <button class="primary-button compact-action" type="submit">Apply</button>
         </form>
+        <form method="post" action="{{ url_for('staff.bulk_update_members') }}" data-bulk-stage-form data-bulk-scope="[data-staff-records-table]" data-bulk-empty-message="Please select at least one member before applying a bulk action.">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+          <input type="hidden" name="bulk_action" value="id_issued">
+          <label>
+            <span>Change ID issued</span>
+            <select name="id_issued" required>
+              <option value="1">Mark as issued</option>
+              <option value="0">Mark as not issued</option>
+            </select>
+          </label>
+          <button class="primary-button compact-action" type="submit">Apply</button>
+        </form>
         {% if filters.show_archived %}
           <form method="post" action="{{ url_for('staff.bulk_update_members') }}" data-bulk-stage-form data-bulk-scope="[data-staff-records-table]" data-bulk-empty-message="Please select at least one archived member before deleting." data-confirm-password-submit="This will permanently delete the selected archived members and all their related records. This cannot be undone." data-confirm-password-value="Path1234">
             <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
