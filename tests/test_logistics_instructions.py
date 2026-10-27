@@ -87,6 +87,22 @@ class LogisticsInstructionsTest(unittest.TestCase):
             self.assertNotIn(unsafe, result)
         self.assertEqual(sanitize_instructions("<div><br></div>"), "")
 
+    def test_rich_formatting_survives_saving_reopening_and_sanitizing(self):
+        content = '<p><span style="font-size: 18px; color: rgb(23, 92, 211); font-weight: 700; font-style: italic">Formatted</span> <font size="2" color="#b42318">Small red</font></p>'
+        response = self.client.post(self.url, data={"csrf_token": "test", "instructions": content})
+        self.assertEqual(response.status_code, 200)
+        saved = response.json["instructions"]
+        self.assertIn('font-size: 18px; color: rgb(23, 92, 211); font-weight: 700; font-style: italic', saved)
+        self.assertIn('<font size="2" color="#b42318">Small red</font>', saved)
+        self.assertEqual(sanitize_instructions(saved), saved)
+        self.assertEqual(self.concept.instructions_html, saved)
+        page = self.client.get("/exam-session-planner?session_year=2026").get_data(as_text=True)
+        self.assertIn('font-size: 18px; color: rgb(23, 92, 211)', page)
+
+    def test_sanitizer_rejects_unsafe_styles_and_preserves_supported_paste_formatting(self):
+        content = '<span style="color: red; background: url(https://example.com/track); position: fixed; font-size: expression(bad); font-weight: bold">Safe</span><script>bad()</script><style>body {display:none}</style>'
+        self.assertEqual(sanitize_instructions(content), '<span style="color: red; font-weight: bold">Safe</span>')
+
 
 if __name__ == "__main__":
     unittest.main()

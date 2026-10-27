@@ -14286,9 +14286,74 @@ document.addEventListener("submit", (event) => {
   let row;
   let selection;
   let busy = false;
+  const sizeControl = dialog.querySelector('[data-instructions-size]');
+  const linkPanel = dialog.querySelector('[data-instructions-link-panel]');
+  const linkURL = dialog.querySelector('[data-instructions-link-url]');
+  const linkMessage = dialog.querySelector('[data-instructions-link-message]');
+  const commandButtons = [...dialog.querySelectorAll('[data-instructions-command]')];
+  const colorButtons = [...dialog.querySelectorAll('[data-instructions-color]')];
+  const nodeElement = (node) => node?.nodeType === Node.TEXT_NODE ? node.parentElement : node;
+  const rangeElements = (range) => {
+    if (range.collapsed) {
+      const node = range.startContainer;
+      return [nodeElement(node.nodeType === Node.ELEMENT_NODE ? node.childNodes[range.startOffset] || node : node)];
+    }
+    const result = [];
+    const walker = document.createTreeWalker(editor, NodeFilter.SHOW_TEXT);
+    let node;
+    while ((node = walker.nextNode())) {
+      if (!node.textContent || !range.intersectsNode(node)) continue;
+      if (range.startContainer === node && range.startOffset === node.length) continue;
+      if (range.endContainer === node && range.endOffset === 0) continue;
+      result.push(node.parentElement);
+    }
+    return result.length ? result : [nodeElement(range.startContainer)];
+  };
+  const normalizedColor = (value) => {
+    const probe = document.createElement('span');
+    probe.style.color = value;
+    return probe.style.color;
+  };
+  const selectionLink = () => {
+    if (!selection) return null;
+    const first = nodeElement(selection.startContainer)?.closest('a');
+    const last = nodeElement(selection.endContainer)?.closest('a');
+    return first && first === last && editor.contains(first) ? first : null;
+  };
+  const syncToolbar = () => {
+    if (!selection || !editor.contains(selection.commonAncestorContainer)) return;
+    const elements = rangeElements(selection);
+    const styles = elements.map((element) => getComputedStyle(element));
+    const sizes = [...new Set(styles.map((style) => style.fontSize))];
+    if (sizes.length !== 1) sizeControl.value = 'mixed';
+    else {
+      const px = parseFloat(sizes[0]);
+      const size = ({12: '2', 13: '2', 14: '3', 16: '3', 18: '4', 24: '5'})[px];
+      sizeControl.value = size || 'custom';
+      sizeControl.querySelector('[value="custom"]').textContent = size ? 'Custom' : `${sizes[0]} (custom)`;
+    }
+    commandButtons.forEach((button) => {
+      const command = button.dataset.instructionsCommand;
+      const states = elements.map((element, index) => {
+        if (command === 'bold') return styles[index].fontWeight === 'bold' || parseInt(styles[index].fontWeight, 10) >= 600;
+        if (command === 'italic') return styles[index].fontStyle === 'italic';
+        return Boolean(element.closest(command === 'insertOrderedList' ? 'ol' : 'ul'));
+      });
+      button.setAttribute('aria-pressed', states.every(Boolean) ? 'true' : states.some(Boolean) ? 'mixed' : 'false');
+    });
+    const colors = [...new Set(styles.map((style) => normalizedColor(style.color)))];
+    colorButtons.forEach((button) => {
+      const color = button.dataset.instructionsColor === 'default' ? getComputedStyle(editor).color : button.dataset.instructionsColor;
+      button.setAttribute('aria-pressed', String(colors.length === 1 && colors[0] === normalizedColor(color)));
+    });
+    dialog.querySelector('[data-instructions-link]').setAttribute('aria-pressed', String(Boolean(selectionLink())));
+  };
   const rememberSelection = () => {
     const selected = window.getSelection();
-    if (selected.rangeCount && editor.contains(selected.anchorNode)) selection = selected.getRangeAt(0).cloneRange();
+    if (selected.rangeCount && editor.contains(selected.anchorNode) && editor.contains(selected.focusNode)) {
+      selection = selected.getRangeAt(0).cloneRange();
+      syncToolbar();
+    }
   };
   const restoreSelection = () => {
     editor.focus();
@@ -14298,12 +14363,109 @@ document.addEventListener("submit", (event) => {
       selected.addRange(selection);
     }
   };
+  const applyCommand = (command, value = null) => {
+    if (!canEdit) return;
+    restoreSelection();
+    document.execCommand('styleWithCSS', false, true);
+    document.execCommand(command, false, value);
+    rememberSelection();
+  };
+  // Copy only supported formatting, never arbitrary clipboard attributes or markup.
+  const cleanClipboardHTML = (html) => {
+    const source = new DOMParser().parseFromString(html, 'text/html');
+    const safe = document.createElement('div');
+    const allowed = new Set(['P', 'DIV', 'BR', 'UL', 'OL', 'LI', 'STRONG', 'B', 'EM', 'I', 'U', 'A', 'FONT', 'SPAN']);
+    const blocked = new Set(['SCRIPT', 'STYLE', 'IFRAME', 'OBJECT', 'SVG', 'MATH', 'IMG', 'INPUT', 'BUTTON']);
+    const copy = (node, parent) => {
+      if (node.nodeType === Node.TEXT_NODE) { parent.append(document.createTextNode(node.textContent)); return; }
+      if (node.nodeType !== Node.ELEMENT_NODE || blocked.has(node.tagName)) return;
+      const element = document.createElement(allowed.has(node.tagName) ? node.tagName.toLowerCase() : 'span');
+      ['color', 'font-size', 'font-weight', 'font-style', 'text-decoration'].forEach((property) => {
+        const value = node.style.getPropertyValue(property);
+        if (value && !/url\(|var\(|expression|[<>]/i.test(value)) element.style.setProperty(property, value);
+      });
+      if (node.tagName === 'FONT') {
+        if (/^[1-7]$/.test(node.getAttribute('size') || '')) element.setAttribute('size', node.getAttribute('size'));
+        element.style.color = node.getAttribute('color') || element.style.color;
+      }
+      if (node.tagName === 'A') {
+        try {
+          const url = new URL(node.getAttribute('href'));
+          if (['http:', 'https:', 'mailto:'].includes(url.protocol)) {
+            element.href = url.href; element.target = '_blank'; element.rel = 'noopener noreferrer';
+          }
+        } catch { /* Invalid links are pasted as text. */ }
+      }
+      parent.append(element);
+      node.childNodes.forEach((child) => copy(child, element));
+    };
+    source.body.childNodes.forEach((node) => copy(node, safe));
+    return safe.innerHTML;
+  };
+  document.addEventListener('selectionchange', () => { if (dialog.open) rememberSelection(); });
   editor.addEventListener('keyup', rememberSelection);
   editor.addEventListener('mouseup', rememberSelection);
   editor.addEventListener('input', rememberSelection);
   editor.addEventListener('paste', (event) => {
+    if (!canEdit) return;
     event.preventDefault();
-    document.execCommand('insertText', false, event.clipboardData.getData('text/plain'));
+    restoreSelection();
+    const html = event.clipboardData.getData('text/html');
+    if (html) document.execCommand('insertHTML', false, cleanClipboardHTML(html));
+    else document.execCommand('insertText', false, event.clipboardData.getData('text/plain'));
+    rememberSelection();
+  });
+  commandButtons.forEach((button) => {
+    button.addEventListener('mousedown', (event) => event.preventDefault());
+    button.addEventListener('click', () => applyCommand(button.dataset.instructionsCommand));
+  });
+  sizeControl.addEventListener('change', () => {
+    const value = sizeControl.value;
+    if (['2', '3', '4', '5'].includes(value)) applyCommand('fontSize', value);
+  });
+  colorButtons.forEach((button) => {
+    button.addEventListener('mousedown', (event) => event.preventDefault());
+    button.addEventListener('click', () => applyCommand('foreColor', button.dataset.instructionsColor === 'default' ? getComputedStyle(editor).color : button.dataset.instructionsColor));
+  });
+  const closeLinkPanel = () => { linkPanel.hidden = true; restoreSelection(); };
+  const openLinkPanel = () => {
+    if (!canEdit) return;
+    const anchor = selectionLink();
+    if (anchor) { selection = document.createRange(); selection.selectNodeContents(anchor); }
+    linkURL.value = anchor?.getAttribute('href') || '';
+    linkMessage.textContent = '';
+    dialog.querySelector('[data-instructions-link-remove]').disabled = !anchor;
+    linkPanel.hidden = false;
+    linkURL.focus();
+    linkURL.select();
+  };
+  dialog.querySelector('[data-instructions-link]').addEventListener('mousedown', (event) => event.preventDefault());
+  dialog.querySelector('[data-instructions-link]').addEventListener('click', openLinkPanel);
+  editor.addEventListener('keydown', (event) => {
+    if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'k') { event.preventDefault(); openLinkPanel(); }
+  });
+  const applyLink = () => {
+    const value = linkURL.value.trim();
+    try {
+      const url = new URL(value);
+      if (!['https:', 'http:', 'mailto:'].includes(url.protocol)) throw new Error();
+      restoreSelection();
+      if (selection?.collapsed) {
+        const anchor = document.createElement('a');
+        anchor.href = url.href; anchor.textContent = value;
+        document.execCommand('insertHTML', false, anchor.outerHTML);
+        rememberSelection();
+      } else applyCommand('createLink', url.href);
+      linkPanel.hidden = true;
+      syncToolbar();
+    } catch { linkMessage.textContent = 'Enter a valid https://, http:// or mailto: link.'; linkURL.focus(); }
+  };
+  dialog.querySelector('[data-instructions-link-apply]').addEventListener('click', applyLink);
+  dialog.querySelector('[data-instructions-link-remove]').addEventListener('click', () => { applyCommand('unlink'); closeLinkPanel(); });
+  dialog.querySelector('[data-instructions-link-cancel]').addEventListener('click', closeLinkPanel);
+  linkURL.addEventListener('keydown', (event) => {
+    if (event.key === 'Enter') { event.preventDefault(); applyLink(); }
+    if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); closeLinkPanel(); }
   });
   dialog.addEventListener('keydown', (event) => event.stopPropagation());
   dialog.addEventListener('cancel', (event) => { if (busy) event.preventDefault(); });
@@ -14316,39 +14478,22 @@ document.addEventListener("submit", (event) => {
     editor.innerHTML = row.querySelector('[data-logistics-instructions-value]').value;
     title.value = row.querySelector('[data-logistics-instructions-title-value]').value;
     selection = null;
+    linkPanel.hidden = true;
     const conceptId = row.querySelector('input[name^="logistics_concept_id_"]').value;
     message.textContent = conceptId ? '' : 'Instructions for this new row will be saved when you save the session.';
     remove.hidden = !canEdit || !editor.textContent.trim();
     dialog.showModal();
     editor.focus();
+    const initialRange = document.createRange();
+    initialRange.selectNodeContents(editor);
+    initialRange.collapse(false);
+    selection = initialRange;
+    restoreSelection();
+    rememberSelection();
   });
   dialog.querySelectorAll('[data-instructions-close]').forEach((button) => button.addEventListener('click', () => {
     if (!busy) dialog.close();
   }));
-  dialog.querySelectorAll('[data-instructions-command]').forEach((button) => {
-    button.addEventListener('mousedown', (event) => event.preventDefault());
-    button.addEventListener('click', () => {
-      restoreSelection();
-      document.execCommand(button.dataset.instructionsCommand, false);
-      rememberSelection();
-    });
-  });
-  dialog.querySelector('[data-instructions-size]').addEventListener('change', (event) => {
-    restoreSelection();
-    document.execCommand('fontSize', false, event.target.value);
-    rememberSelection();
-  });
-  dialog.querySelector('[data-instructions-link]').addEventListener('click', () => {
-    const value = window.prompt('Link URL (https://, http:// or mailto:)');
-    if (!value) return;
-    try {
-      const url = new URL(value);
-      if (!['https:', 'http:', 'mailto:'].includes(url.protocol)) throw new Error();
-      restoreSelection();
-      document.execCommand('createLink', false, url.href);
-      rememberSelection();
-    } catch { message.textContent = 'Enter a valid https://, http:// or mailto: link.'; }
-  });
   const persist = async (deleted = false) => {
     if (busy || !canEdit) return;
     if (deleted && !window.confirm('Delete these instructions?')) return;

@@ -20,7 +20,7 @@ Once the exam session is over, please access the folder below and upload your <s
     {% elif logistics_type == 'Carpooling' %}
       <p>Your journey to the exam centre will involve sharing a vehicle with other staff members. Please read and follow the important instructions below, as specific procedures and requirements must be observed.</p>
     {% elif logistics_type == 'Complex logistics' %}
-      <p>All relevant information and documents related to your <strong>travel or commute</strong> are available in the folder below. If the <strong>Travel and logistics</strong> section is marked <strong>Pending</strong>, some documents or travel arrangements are still being finalised. Once the status changes to <strong>Confirmed</strong>, all required documents and arrangements are ready. If you have any questions or need further clarification, please feel free to contact us.</p>
+      <p>All relevant information and documents related to your <strong>travel or commute</strong> are available in the folder below. If the <strong>Travel and logistics</strong> section is marked <span class="staff-detail-logistics-progress is-inline">In progress</span>, some documents or travel arrangements are still being finalised. Once the status changes to <span class="staff-detail-logistics-progress is-confirmed is-inline">Confirmed</span>, all required documents and arrangements are ready. If you have any questions or need further clarification, please feel free to contact us.</p>
       <p>Please read and follow the important instructions below, as specific procedures and requirements must be observed.</p>
     {% endif %}
     {% if complex_travel %}
@@ -28,7 +28,13 @@ Once the exam session is over, please access the folder below and upload your <s
       <div data-staff-logistics-instructions-item>
         <button type="button" class="staff-detail-link staff-detail-logistics-instructions-button" data-staff-logistics-instructions-open>View instructions{% if instruction.title %} | {{ instruction.title }}{% endif %}</button>
         <dialog class="staff-detail-logistics-instructions-dialog" data-staff-logistics-instructions-dialog aria-label="{{ instruction.title or 'Logistics instructions' }}">
-          <header class="staff-detail-logistics-instructions-header"><h3>{{ instruction.title or 'Logistics instructions' }}</h3><button type="button" class="staff-detail-close" data-staff-logistics-instructions-close aria-label="Close logistics instructions">&times;</button></header>
+          <header class="staff-detail-logistics-instructions-header">
+            <div class="staff-detail-logistics-instructions-heading">
+              {% if instruction.title %}<p class="staff-detail-logistics-instructions-eyebrow">Logistics instructions</p>{% endif %}
+              <h3>{{ instruction.title or 'Logistics instructions' }}</h3>
+            </div>
+            <button type="button" class="staff-detail-close" data-staff-logistics-instructions-close aria-label="Close logistics instructions">&times;</button>
+          </header>
           <div class="staff-detail-logistics-instructions-content">
             <div class="staff-detail-logistics-instruction">{{ instruction.html|safe }}</div>
           </div>

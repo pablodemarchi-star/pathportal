@@ -1798,9 +1798,24 @@
     <button type="button" data-instructions-command="italic" aria-label="Italic"><em>I</em></button>
     <button type="button" data-instructions-command="insertUnorderedList" aria-label="Bullet list">• List</button>
     <button type="button" data-instructions-command="insertOrderedList" aria-label="Numbered list">1. List</button>
-    <label>Font size <select data-instructions-size aria-label="Font size"><option value="2">Small</option><option value="3" selected>Normal</option><option value="4">Large</option><option value="5">Extra large</option></select></label>
-    <button type="button" data-instructions-link>Add link</button>
-    <button type="button" data-instructions-command="unlink">Remove link</button>
+    <label>Font size <select data-instructions-size aria-label="Font size"><option value="mixed" disabled>Mixed</option><option value="custom" disabled>Custom</option><option value="2">Small</option><option value="3" selected>Normal</option><option value="4">Large</option><option value="5">Extra large</option></select></label>
+    <div class="logistics-instructions-colors" role="group" aria-label="Text color">
+      <button type="button" data-instructions-color="default" aria-label="Default text color" title="Default text color">A</button>
+      <button type="button" data-instructions-color="#b42318" aria-label="Red text" title="Red" style="--swatch: #b42318">A</button>
+      <button type="button" data-instructions-color="#175cd3" aria-label="Blue text" title="Blue" style="--swatch: #175cd3">A</button>
+      <button type="button" data-instructions-color="#287a45" aria-label="Green text" title="Green" style="--swatch: #287a45">A</button>
+      <button type="button" data-instructions-color="#7839ab" aria-label="Violet text" title="Violet" style="--swatch: #7839ab">A</button>
+    </div>
+    <button type="button" data-instructions-link aria-label="Add or edit link">Add / edit link</button>
+  </div>
+  <div class="logistics-instructions-link-panel" data-instructions-link-panel hidden>
+    <label>Link URL<input type="url" data-instructions-link-url placeholder="https://example.com" aria-label="Link URL"></label>
+    <div class="logistics-instructions-link-actions">
+      <button type="button" data-instructions-link-apply>Apply</button>
+      <button type="button" data-instructions-link-remove>Remove link</button>
+      <button type="button" data-instructions-link-cancel>Cancel</button>
+    </div>
+    <p data-instructions-link-message role="status" aria-live="polite"></p>
   </div>
   <div class="logistics-instructions-editor" data-instructions-editor contenteditable="true" role="textbox" aria-multiline="true" aria-label="Instructions text"></div>
   <p class="logistics-instructions-message" data-instructions-message role="status" aria-live="polite"></p>
