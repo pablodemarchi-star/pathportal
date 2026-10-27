@@ -3067,7 +3067,7 @@ This stage has already been marked as complete. Reopening it may affect package 
               <ol>
                 <li>Seal each exam room package with transparent plastic wrap.</li>
                 <li class="{% if not view.packages.staffing_ready %}package-preparation-blocked-step{% endif %}">
-                  <span>Print each exam room record on an A4 adhesive label.</span>
+                  <span>Print each exam room's candidate list on an A4 adhesive label.</span>
                   {% if not view.packages.staffing_ready %}
                     <span class="package-preparation-blocked-chip">Do not proceed with this stage. Staff members have not been confirmed yet</span>
                   {% endif %}
@@ -3306,9 +3306,9 @@ This stage has already been marked as complete. Reopening it may affect package 
                 {{ package_stage_state(session, session_box_sealing_status, 'session_box_sealing_status') }}
               </div>
               <ol>
-                <li>Ensure all previous items are included in the session box.</li>
-                <li>Close the box, wrap it securely with black plastic wrap, and heat-seal it.</li>
-                <li>Print the <a{% if not view.packages.schedule_ready %} aria-disabled="true" tabindex="-1"{% endif %} href="{{ url_for('staff.session_identification_label_pdf', session_id=session.id) }}" target="_blank" rel="noopener noreferrer" aria-label="Open session identification label PDF">session identification label</a> and affix it to the top of the sealed box.</li>
+                <li>Ensure all previously listed items are included in the session box, then close it.</li>
+                <li>Print <span class="shipment-pack-count-chip">2</span> copies of the <a{% if not view.packages.schedule_ready %} aria-disabled="true" tabindex="-1"{% endif %} href="{{ url_for('staff.session_identification_label_pdf', session_id=session.id) }}" target="_blank" rel="noopener noreferrer" aria-label="Open session identification label PDF">session identification label</a> and affix <span class="shipment-pack-count-chip">1</span> to the designated square on the front of the session box.</li>
+                <li>Wrap the session box securely in black plastic, heat-seal it, and affix the second session identification label to the top of the sealed box.</li>
               </ol>
             </div>
             <div class="package-preparation-actions" aria-label="Session box sealing actions">
@@ -3845,6 +3845,8 @@ This stage has already been marked as complete. Reopening it may affect package 
                       {% endfor %}
                     {% endif %}
                   </ol>
+                {% elif card.item_key == 'emergency_pack' %}
+                  <p>Include <span class="shipment-pack-count-chip">1</span> sealed emergency pack and <span class="shipment-pack-count-chip">1</span> set of orange 'Extra help' labels.</p>
                 {% elif card.count is defined %}
                   <p>{{ card.description }} <span class="shipment-pack-count-chip">{{ card.count }}</span> {{ card.suffix }}</p>
                 {% else %}

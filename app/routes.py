@@ -1082,8 +1082,8 @@ SHIPMENT_CHECKLIST_TEMPLATES = [
     },
     {
         "item_key": "emergency_pack",
-        "label": "Emergency pack",
-        "description": "Include one sealed emergency pack containing two exam papers for each level.",
+        "label": "Emergency pack and 'Extra help' label set",
+        "description": "Include 1 sealed emergency pack and 1 set of orange 'Extra help' labels.",
         "is_required": True,
         "display_order": 30,
     },
@@ -10386,8 +10386,8 @@ def shipment_pre_dispatch_cards(bundle, max_examiner_count=0):
         {
             "item_key": "emergency_pack",
             "requires_item_key": "jbl_speakers_dice",
-            "title": "Emergency pack",
-            "description": "Include one sealed emergency pack containing two exam papers for each level.",
+            "title": "Emergency pack and 'Extra help' label set",
+            "description": "Include 1 sealed emergency pack and 1 set of orange 'Extra help' labels.",
         },
         {
             "item_key": "correo_label",
