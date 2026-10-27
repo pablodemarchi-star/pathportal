@@ -683,7 +683,7 @@
           {% set member_session_details = staff_member_session_details.get(member.id, []) if staff_member_session_details is defined else [] %}
           {% set member_sessions_email_payload = staff_sessions_email_payloads.get(member.id, {}) if staff_sessions_email_payloads is defined else {} %}
           <div class="staff-session-count-actions">
-            <span class="staff-session-count-chip" {% if member_session_details %}title="{% for session_detail in member_session_details %}{{ session_detail.name }} ({{ session_detail.status|lower }}){% if not loop.last %}&#10;{% endif %}{% endfor %}"{% endif %}>{{ confirmed_session_counts.get(member.id, 0) }}</span>
+            <span class="staff-session-count-chip" aria-label="Assigned sessions in {{ staff_sessions_year }}" title="Assigned sessions in {{ staff_sessions_year }}{% for session_detail in member_session_details %}&#10;{{ session_detail.name }} ({{ session_detail.status|lower }}){% endfor %}">{{ confirmed_session_counts.get(member.id, 0) }}</span>
             <button class="copy-icon-button staff-session-email-copy-button" type="button" data-staff-sessions-copy-email data-staff-sessions-email-payload='{{ member_sessions_email_payload|tojson }}' aria-label="Copy sessions email" title="Copy sessions email" {% if not current_menu_can_edit %}disabled{% endif %}>
               <svg class="copy-icon" viewBox="0 0 24 24" aria-hidden="true">
                 <rect x="9" y="9" width="10" height="10" rx="2"></rect>
@@ -694,6 +694,7 @@
               </svg>
               <span class="copy-button-feedback">Copied</span>
             </button>
+            <span class="staff-session-count-chip staff-session-count-chip-history" title="Confirmed participation across all years" aria-label="Confirmed sessions across all years">{{ all_years_confirmed_session_counts.get(member.id, 0) if all_years_confirmed_session_counts is defined else 0 }}</span>
           </div>
         </td>
         <td class="datetime-cell">{{ member.updated_on|localdt }}</td>

@@ -5138,7 +5138,7 @@ def build_staff_payment_rows(selected_year):
     return sorted(rows, key=lambda item: (item["member"].full_name.lower(), item["currency_label"]))
 
 
-def assigned_session_counts_by_member(member_ids, session_year=None):
+def assigned_session_counts_by_member(member_ids, session_year=None, confirmed_only=False):
     counts = {member_id: 0 for member_id in member_ids}
     session_ids_by_member = {member_id: set() for member_id in member_ids}
     if not member_ids:
@@ -5155,6 +5155,8 @@ def assigned_session_counts_by_member(member_ids, session_year=None):
             .filter(
                 assignment_model.team_member_id.in_(member_ids),
                 assignment_model.team_member_id.isnot(None),
+                *([assignment_model.is_remote.is_(False)] if assignment_model is ExamSessionSupervisorAssignment else []),
+                *([assignment_model.participation_status == "Confirmed"] if confirmed_only else []),
                 *([db.extract("year", ExamSession.session_date) == session_year] if session_year else []),
             )
             .all()
@@ -5190,6 +5192,7 @@ def assigned_session_details_by_member(member_ids, session_year=None):
             .filter(
                 assignment_model.team_member_id.in_(member_ids),
                 assignment_model.team_member_id.isnot(None),
+                *([assignment_model.is_remote.is_(False)] if assignment_model is ExamSessionSupervisorAssignment else []),
                 *([db.extract("year", ExamSession.session_date) == session_year] if session_year else []),
             )
             .all()
@@ -5330,6 +5333,7 @@ def staff_sessions_email_payload_by_member(members, session_year=None):
             .filter(
                 assignment_model.team_member_id.in_(member_ids),
                 assignment_model.team_member_id.isnot(None),
+                *([assignment_model.is_remote.is_(False)] if assignment_model is ExamSessionSupervisorAssignment else []),
                 *([db.extract("year", ExamSession.session_date) == session_year] if session_year else []),
             )
             .all()
@@ -5370,6 +5374,7 @@ def staff_member_session_counts_subquery(session_year=None):
         .join(ExamSession, ExamSession.id == ExamSessionSupervisorAssignment.exam_session_id)
         .filter(
             ExamSessionSupervisorAssignment.team_member_id.isnot(None),
+            ExamSessionSupervisorAssignment.is_remote.is_(False),
             *year_filter,
         )
         .statement,
@@ -5458,13 +5463,19 @@ def active_exam_session_names_by_member(member_ids):
 
 
 def flash_active_exam_session_status_blockers(members):
-    blockers = active_exam_session_names_by_member([member.id for member in members])
+    details = assigned_session_details_by_member([member.id for member in members], latest_active_exam_session_year())
+    blocked = False
     for member in members:
-        session_names = blockers.get(member.id)
-        if not session_names:
+        sessions = details.get(member.id, [])
+        if not sessions:
             continue
-        flash("Staff member cannot be inactivated because they are still assigned to active exam sessions.", "error")
-    return bool(blockers)
+        blocked = True
+        flash(
+            f"{member.full_name} cannot be made Inactive or Archived because they are assigned to exam sessions "
+            f"in the latest active year: {'; '.join(item['name'] for item in sessions)}.",
+            "error",
+        )
+    return blocked
 
 
 def flash_active_exam_session_delete_blocker(member):
@@ -28778,6 +28789,7 @@ def index():
 
     members, pagination = paginate_query(query)
     confirmed_session_counts = assigned_session_counts_by_member([member.id for member in members], staff_sessions_year)
+    all_years_confirmed_session_counts = assigned_session_counts_by_member([member.id for member in members], confirmed_only=True)
     staff_member_session_details = assigned_session_details_by_member([member.id for member in members], staff_sessions_year)
     staff_sessions_email_payloads = staff_sessions_email_payload_by_member(members, staff_sessions_year)
     staff_settings = staff_members_settings()
@@ -28797,6 +28809,7 @@ def index():
         potential_reactivation_statuses=POTENTIAL_REACTIVATION_STATUS_OPTIONS,
         interviewer_options=INTERVIEWER_OPTIONS,
         confirmed_session_counts=confirmed_session_counts,
+        all_years_confirmed_session_counts=all_years_confirmed_session_counts,
         staff_member_session_details=staff_member_session_details,
         staff_sessions_year=staff_sessions_year,
         staff_sessions_email_payloads=staff_sessions_email_payloads,

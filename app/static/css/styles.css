@@ -15490,6 +15490,11 @@ span.session-marker-chip {
   line-height: 1;
 }
 
+.staff-session-count-chip-history {
+  background: var(--badge-blue-bg);
+  color: var(--badge-blue-text);
+}
+
 .staff-session-count-actions {
   display: inline-flex;
   align-items: center;

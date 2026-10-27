@@ -5146,7 +5146,8 @@ console.log(JSON.stringify({ enabledState, missingState }));
         )
 
         html = response.get_data(as_text=True)
-        self.assertIn("Staff member cannot be inactivated because they are still assigned to active exam sessions.", html)
+        self.assertIn("Active Assigned Staff cannot be made Inactive or Archived", html)
+        self.assertIn("in the latest active year: Active Blocking Session.", html)
         self.assertEqual(db.session.get(AcademicStaff, member.id).status, "Active")
 
     def test_bulk_status_change_blocks_members_assigned_to_active_sessions(self):
@@ -5173,8 +5174,76 @@ console.log(JSON.stringify({ enabledState, missingState }));
         )
 
         html = response.get_data(as_text=True)
-        self.assertIn("Staff member cannot be inactivated because they are still assigned to active exam sessions.", html)
+        self.assertIn("Bulk Active Staff cannot be made Inactive or Archived", html)
+        self.assertIn("in the latest active year: Bulk Active Session.", html)
         self.assertEqual(db.session.get(AcademicStaff, member.id).status, "Active")
+
+    def test_bulk_inactive_allows_old_assignments_and_unavailable_references(self):
+        assigned = self.add_member(full_name="Assigned Person", email="assigned@example.com")
+        unavailable = self.add_member(full_name="Unavailable Person", email="unavailable@example.com")
+        free = self.add_member(full_name="Free Person", email="free@example.com")
+        first = self.add_session(exam_session_name="Earlier Session", session_date=date(2025, 9, 20))
+        second = self.add_session(exam_session_name="Unavailable Session", session_date=date(2026, 9, 20))
+        second.non_available_member_ids = json.dumps([str(unavailable.id)])
+        db.session.add(ExamSessionSupervisorAssignment(exam_session_id=first.id, team_member_id=assigned.id))
+        db.session.commit()
+        client = self.client()
+        response = client.post("/members/bulk-update", data={
+            "csrf_token": "token", "member_ids": [str(member.id) for member in [assigned, unavailable, free]],
+            "bulk_action": "status", "status": "Inactive",
+        })
+        self.assertEqual(response.status_code, 302)
+        with client.session_transaction() as state:
+            messages = [message for category, message in state.get("_flashes", []) if category == "error"]
+        self.assertEqual(messages, [])
+        db.session.expire_all()
+        self.assertEqual([member.status for member in [assigned, unavailable, free]], ["Inactive"] * 3)
+
+    def test_session_chips_email_and_inactivation_share_latest_year_onsite_scope(self):
+        from app.routes import (assigned_session_details_by_member, staff_sessions_email_payload_by_member,
+                                staff_member_session_counts_subquery)
+        from app.models import ExamSessionYear, ExamSessionInternAssignment
+        db.session.add_all([ExamSessionYear(year=2025, is_archived=True), ExamSessionYear(year=2026)])
+        member = self.add_member(full_name="Session Counts Staff", email="counts@example.com")
+        old = self.add_session(exam_session_name="Old confirmed", session_date=date(2025, 9, 20))
+        current = self.add_session(exam_session_name="Current pending", session_date=date(2026, 9, 20))
+        confirmed = self.add_session(exam_session_name="Current confirmed", session_date=date(2026, 10, 20))
+        remote = self.add_session(exam_session_name="Remote only", session_date=date(2026, 11, 20))
+        db.session.add_all([
+            ExamSessionSupervisorAssignment(exam_session_id=old.id, team_member_id=member.id, participation_status="Confirmed"),
+            ExamSessionExaminerAssignment(exam_session_id=current.id, team_member_id=member.id, participation_status="Pending"),
+            ExamSessionInternAssignment(exam_session_id=confirmed.id, team_member_id=member.id, participation_status="Confirmed"),
+            ExamSessionExaminerAssignment(exam_session_id=confirmed.id, team_member_id=member.id, participation_status="Confirmed"),
+            ExamSessionSupervisorAssignment(exam_session_id=remote.id, team_member_id=member.id, participation_status="Confirmed", is_remote=True),
+        ])
+        db.session.commit()
+        self.assertEqual(assigned_session_counts_by_member([member.id], 2026)[member.id], 2)
+        self.assertEqual(assigned_session_counts_by_member([member.id], confirmed_only=True)[member.id], 2)
+        details = assigned_session_details_by_member([member.id], 2026)[member.id]
+        self.assertEqual({item["name"] for item in details}, {"Current pending", "Current confirmed"})
+        payload = staff_sessions_email_payload_by_member([member], 2026)[member.id]
+        self.assertEqual({item["name"] for item in payload["sessions"]}, {"Current pending", "Current confirmed"})
+        counts = staff_member_session_counts_subquery(2026)
+        self.assertEqual(db.session.query(counts.c.session_count).filter(counts.c.member_id == member.id).scalar(), 2)
+        client = self.client()
+        page = client.get("/staff-members").get_data(as_text=True)
+        self.assertIn('aria-label="Assigned sessions in 2026"', page)
+        self.assertIn('aria-label="Confirmed sessions across all years">2</span>', page)
+        data = {"csrf_token": "token", "member_ids": str(member.id), "bulk_action": "status", "status": "Inactive"}
+        client.post("/members/bulk-update", data=data)
+        db.session.refresh(member)
+        self.assertEqual(member.status, "Active")
+        ExamSessionExaminerAssignment.query.filter_by(exam_session_id=current.id).delete()
+        ExamSessionExaminerAssignment.query.filter_by(exam_session_id=confirmed.id).delete()
+        ExamSessionInternAssignment.query.filter_by(exam_session_id=confirmed.id).delete()
+        db.session.commit()
+        self.assertEqual(assigned_session_counts_by_member([member.id], 2026)[member.id], 0)
+        self.assertEqual(assigned_session_counts_by_member([member.id], confirmed_only=True)[member.id], 1)
+        for status in ["Inactive", "Archived"]:
+            data["status"] = status
+            client.post("/members/bulk-update", data=data)
+            db.session.refresh(member)
+            self.assertEqual(member.status, status)
 
     def test_save_acceptance_draft_persists_without_creating_member(self):
         entry = self.add_entry(full_name="Draft Candidate")
