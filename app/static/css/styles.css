@@ -17961,8 +17961,8 @@ body.staff-session-detail-open { overflow: hidden; }
 .logistics-concepts-table .logistics-provider-details-heading { width: 104px; white-space: normal; overflow-wrap: break-word; text-align: center; }
 .logistics-concepts-table .logistics-status-cell .logistics-chip-select { padding-left: 6px; padding-right: 16px; font-size: 11px; }
 
-.staff-detail-logistics-instructions-button { margin: 0 0 8px; background: #637c60; border: 1px solid #637c60; color: #fff; font-weight: 700; cursor: pointer; text-decoration: none; }
-.staff-detail-logistics-instructions-button:hover { background: #566e53; border-color: #566e53; color: #fff; text-decoration: none; }
+.staff-detail-logistics-instructions-button { margin: 0 0 8px; background: var(--path-sage); border: 1px solid var(--path-sage); color: #fff; font-weight: 700; cursor: pointer; text-decoration: none; }
+.staff-detail-logistics-instructions-button:hover { background: var(--path-sage); border-color: var(--path-sage); color: #fff; filter: brightness(0.96); text-decoration: none; }
 .staff-detail-logistics-progress { display: inline-block; margin-left: 6px; padding: 5px 10px; border-radius: 999px; font-size: 11px; font-weight: 700; background: var(--badge-yellow-bg); color: var(--badge-yellow-text); }
 .staff-detail-logistics-progress.is-confirmed { background: var(--badge-green-bg); color: var(--badge-green-text); }
 .staff-detail-logistics-progress.is-inline { display: inline; margin: 0; padding: 0 5px; font-size: 0.85em; line-height: inherit; vertical-align: baseline; white-space: nowrap; }
