@@ -1,6 +1,17 @@
 """Spanish copy for session journeys."""
 
 SPANISH_JOURNEY_TEXT = {
+ 'Path emergency contact': 'Contacto de emergencia de Path',
+ 'Available on exam day only': 'Disponible solo el día del examen',
+ 'Calls only – No messages': 'Solo llamadas – No mensajes',
+ 'A Path Examinations emergency contact will be displayed in this section': 'En esta sección se mostrará un contacto de emergencia de Path Examinations',
+ 'exclusively on the day of your exam session': 'exclusivamente el día de tu sesión de examen',
+ 'This contact is intended for': 'Este contacto está destinado a',
+ 'urgent situations that arise when our regular office is closed': 'situaciones urgentes que surjan cuando nuestra oficina habitual esté cerrada',
+ 'ensuring that you can still reach Path Examinations if assistance is needed during the session.': 'para que puedas comunicarte con Path Examinations si necesitas asistencia durante la sesión.',
+ 'Please note that this contact will': 'Ten en cuenta que este contacto estará',
+ 'only be visible on the exam date': 'visible únicamente en la fecha del examen',
+ 'Emergency contact details are being updated. Please contact the Path Examinations office if assistance is needed.': 'Los datos del contacto de emergencia se están actualizando. Si necesitas asistencia, comunícate con la oficina de Path Examinations.',
  ' to access the exam session schedule': ' para acceder a los horarios de la sesión de examen',
  'Allow candidates and their families to access the exam session schedule.': 'Permitir que los candidatos y sus familias accedan a los horarios de la sesión de examen.',
  'Allow candidates and their families to access the Exam entry slips.': 'Permitir que los candidatos y sus familias accedan a los Exam entry slips.',

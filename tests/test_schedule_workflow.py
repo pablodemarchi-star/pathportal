@@ -20122,6 +20122,57 @@ assert.equal(storage.size, 0);
         self.assertEqual(past["days_to_go"], 0)
         self.assertEqual(past["label"], "This Path exam session has taken place.")
 
+    def test_institution_journey_emergency_contact_local_day_boundaries_and_live_data(self):
+        from app.routes import journey_emergency_contact
+        member = AcademicStaff(full_name="Emergency Person", status="Active", roles="Examiner", phone="+54 11 5555 1234")
+        db.session.add(member)
+        db.session.flush()
+        self.session_record.emergency_contact_required = True
+        self.session_record.emergency_contact_member_id = member.id
+        db.session.commit()
+        # The session is on June 25: the GMT-3 window is 03:00 UTC to 02:59:59 UTC the next day.
+        for moment, available in [
+            (datetime(2026, 6, 25, 2, 59, 59, tzinfo=timezone.utc), False),
+            (datetime(2026, 6, 25, 3, 0, tzinfo=timezone.utc), True),
+            (datetime(2026, 6, 26, 2, 59, 59, tzinfo=timezone.utc), True),
+            (datetime(2026, 6, 26, 3, 0, tzinfo=timezone.utc), False),
+        ]:
+            with self.subTest(moment=moment):
+                details = journey_emergency_contact(self.session_record, "institution", now=moment)
+                self.assertEqual(details["available"], available)
+                self.assertEqual(details["phone"], member.phone if available else "")
+                self.assertEqual(details["name"], member.full_name if available else "")
+        moment = datetime(2026, 6, 25, 12, tzinfo=timezone.utc)
+        journey = path_session_journey_contract(self.session_record, "institution", now=moment)
+        from flask import render_template
+        with self.app.test_request_context():
+            html = render_template("pre_session_control_tower/session_journey.html", journey=journey, share=None, csrf_token="")
+        self.assertIn('href="tel:+54 11 5555 1234"', html)
+        self.assertIn("Calls only – No messages", html)
+        self.assertNotIn("Available on exam day only", html)
+        self.assertLess(html.index("Statement of session attendance for candidates"), html.index("Path emergency contact"))
+        member.phone = "+54 11 9999 5678"
+        db.session.commit()
+        self.assertEqual(path_session_journey_contract(self.session_record, "institution", now=moment)["emergency_contact"]["phone"], member.phone)
+        for audience in ["external", "public", "external_public"]:
+            self.assertIsNone(path_session_journey_contract(self.session_record, audience, now=moment)["emergency_contact"])
+        before = path_session_journey_contract(self.session_record, "institution", now=datetime(2026, 6, 24, 12, tzinfo=timezone.utc))
+        with self.app.test_request_context():
+            html = render_template("pre_session_control_tower/session_journey.html", journey=before, share=None, csrf_token="")
+        self.assertIn("Available on exam day only", html)
+        self.assertNotIn(member.phone, html)
+        self.assertNotIn("Emergency Person", html)
+        self.session_record.emergency_contact_not_required = True
+        db.session.commit()
+        hidden = path_session_journey_contract(self.session_record, "institution", now=moment)
+        self.assertIsNone(hidden["emergency_contact"])
+        with self.app.test_request_context():
+            html = render_template("pre_session_control_tower/session_journey.html", journey=hidden, share=None, csrf_token="")
+        self.assertNotIn("Path emergency contact", html)
+        response = self.login_client().get(f"/path-session-journeys/sessions/{self.session_record.id}")
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.headers["Cache-Control"], "no-store")
+
     def test_path_session_journey_contract_separates_institution_and_public_safety(self):
         self.session_record.session_date = date(2026, 7, 2)
         self.session_record.city = "Cordoba"

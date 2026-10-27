@@ -104,6 +104,80 @@ class StaffPortalLogisticsTest(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         return response.get_data(as_text=True)
 
+    def test_exam_centre_contacts_role_scope_and_gmt3_day_boundaries(self):
+        import json
+        from datetime import datetime, timezone
+        from types import SimpleNamespace
+        from app.routes import staff_exam_centre_contacts
+        self.record.contact_points = json.dumps([{"full_name": "Centre Person", "phone": "12345", "email": "centre@example.com"}])
+        ordinary = SimpleNamespace(is_shipment_recipient=False, is_remote=False)
+        remote = SimpleNamespace(is_shipment_recipient=False, is_remote=True)
+        recipient = SimpleNamespace(is_shipment_recipient=True)
+        on_day = datetime(2026, 11, 10, 12, tzinfo=timezone.utc)
+        for role, assignment in [("supervisor", ordinary), ("supervisor", remote), ("examiner", recipient), ("emergency_contact", self.record)]:
+            with self.subTest(role=role):
+                self.assertEqual(len(staff_exam_centre_contacts(self.record, role, assignment, "Confirmed", now=on_day)["contacts"]), 1)
+                self.assertIsNone(staff_exam_centre_contacts(self.record, role, assignment, "Pre-confirmed", now=on_day))
+        for role in ["examiner", "intern"]:
+            self.assertIsNone(staff_exam_centre_contacts(self.record, role, ordinary, "Confirmed", now=on_day))
+        for moment, available in [
+            (datetime(2026, 11, 10, 2, 59, 59, tzinfo=timezone.utc), False),
+            (datetime(2026, 11, 10, 3, tzinfo=timezone.utc), True),
+            (datetime(2026, 11, 11, 2, 59, 59, tzinfo=timezone.utc), True),
+            (datetime(2026, 11, 11, 3, tzinfo=timezone.utc), False),
+        ]:
+            result = staff_exam_centre_contacts(self.record, "supervisor", ordinary, "Confirmed", now=moment)
+            self.assertEqual(result["available"], available)
+            self.assertEqual(len(result["contacts"]), 1 if available else 0)
+        self.record.contact_points = "[]"
+        self.assertIsNone(staff_exam_centre_contacts(self.record, "supervisor", ordinary, "Confirmed", now=on_day))
+
+    def test_exam_centre_contacts_portal_live_updates_and_hidden_data(self):
+        import json
+        from datetime import datetime, timezone
+        from unittest.mock import patch
+        from app.routes import staff_exam_centre_contacts
+        assignment = self.portal_assignment()
+        assignment.is_shipment_recipient = True
+        contacts = [{"full_name": "Centre First", "phone": "+54 11 1234 5678", "email": "centre-first@example.com"},
+                    {"full_name": "Centre Second", "phone": "999999", "email": "centre-second@example.com"}]
+        self.record.contact_points = json.dumps(contacts)
+        db.session.commit()
+        def page_at(moment):
+            with patch("app.routes.staff_exam_centre_contacts", side_effect=lambda record, role, assignment, status:
+                       staff_exam_centre_contacts(record, role, assignment, status, now=moment)):
+                return self.portal_page()
+        before = page_at(datetime(2026, 11, 10, 2, 59, tzinfo=timezone.utc))
+        self.assertIn("Exam centre contact information", before)
+        self.assertIn("Available on exam day only", before)
+        for contact in contacts:
+            for value in contact.values():
+                self.assertNotIn(value, before)
+        moment = datetime(2026, 11, 10, 3, tzinfo=timezone.utc)
+        page = page_at(moment)
+        self.assertLess(page.index("Your session team"), page.index('aria-label="Exam centre contact information"'))
+        self.assertNotIn("Available on exam day only", page)
+        self.assertNotIn("Calls only – No messages", page)
+        for contact in contacts:
+            for value in contact.values():
+                self.assertIn(value, page)
+        contacts[0]["phone"] = "UPDATED-PHONE"
+        self.record.contact_points = json.dumps(contacts)
+        db.session.commit()
+        updated = page_at(moment)
+        self.assertIn("UPDATED-PHONE", updated)
+        self.assertNotIn("+54 11 1234 5678", updated)
+        after = page_at(datetime(2026, 11, 11, 3, tzinfo=timezone.utc))
+        self.assertNotIn("UPDATED-PHONE", after)
+        self.assertIn("Available on exam day only", after)
+        assignment.participation_status = "Pre-confirmed"
+        db.session.commit()
+        self.assertNotIn("Exam centre contact information", page_at(moment))
+        assignment.participation_status = "Confirmed"
+        self.record.contact_points = "[]"
+        db.session.commit()
+        self.assertNotIn("Exam centre contact information", page_at(moment))
+
     def test_travel_texts_labels_and_bold_for_each_option(self):
         assignment = self.portal_assignment()
         db.session.add(ExamSessionLogisticsConcept(exam_session_id=self.record.id,

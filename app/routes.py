@@ -14630,6 +14630,19 @@ def path_session_journey_sources(session_record, today=None):
     }
 
 
+def journey_emergency_contact(session_record, audience, is_external=False, now=None):
+    if audience != "institution" or is_external or session_record.emergency_contact_not_required:
+        return None
+    now = now or datetime.now(timezone.utc)
+    available = now.astimezone(LOCAL_TZ).date() == session_record.session_date
+    member = session_record.emergency_contact_member if available else None
+    return {
+        "available": available,
+        "name": (member.full_name or "").strip() if member else "",
+        "phone": (member.phone or "").strip() if member else "",
+    }
+
+
 def path_session_journey_contract(session_record, audience, today=None, sources=None, now=None):
     audience = journey_clean_text(audience)
     is_external_public = audience == "external_public"
@@ -14783,6 +14796,7 @@ def path_session_journey_contract(session_record, audience, today=None, sources=
     return {
         "audience": audience,
         "is_external": is_external,
+        "emergency_contact": journey_emergency_contact(session_record, audience, is_external=is_external, now=now),
         "public_schedule_access": public_schedule_access,
         "public_entry_slips_access": public_entry_slips_access,
         "staff_cards": staff_cards,
@@ -20208,6 +20222,20 @@ def update_staff_end_checks(token, submission_id):
     return jsonify(ok=True, check=key, checked=getattr(saved, key))
 
 
+def staff_exam_centre_contacts(record, role, assignment, status, now=None):
+    eligible = role in {"supervisor", "emergency_contact"} or (
+        role == "examiner" and bool(getattr(assignment, "is_shipment_recipient", False))
+    )
+    if status != "Confirmed" or not eligible:
+        return None
+    contacts = record.contact_points_list()
+    if not contacts:
+        return None
+    now = now or datetime.now(timezone.utc)
+    available = now.astimezone(LOCAL_TZ).date() == record.session_date
+    return {"available": available, "contacts": contacts if available else []}
+
+
 def staff_portal_logistics_details(record, assignment):
     member_id = getattr(assignment, "team_member_id", None)
     concepts = (ExamSessionLogisticsConcept.query
@@ -20287,6 +20315,7 @@ def staff_exam_sessions(token):
                     and not is_session_supervisor),
                 "session_date_short": record.session_date.strftime("%d/%m/%Y") if record.session_date else "Date to be confirmed",
                 "participation_confirmed": status == "Confirmed",
+                "exam_centre_contacts": staff_exam_centre_contacts(record, role, assignment, status),
                 **staff_portal_logistics_details(record, assignment),
                 **staff_end_checks_view(record, role, status, submission, share),
             } for role, assignment, status, submission in active_assignments[record.id]]

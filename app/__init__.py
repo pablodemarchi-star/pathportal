@@ -171,6 +171,8 @@ def create_app():
         )
         response.headers["Referrer-Policy"] = "no-referrer" if request.endpoint == "staff.staff_exam_sessions" else "strict-origin-when-cross-origin"
         response.headers["Permissions-Policy"] = "camera=(), microphone=(), geolocation=()"
+        if request.endpoint in {"staff.shared_path_session_journey", "staff.path_session_journey", "staff.preview_path_session_journey"}:
+            response.headers["Cache-Control"] = "no-store"
         return response
 
     @app.route("/login", methods=["GET", "POST"])

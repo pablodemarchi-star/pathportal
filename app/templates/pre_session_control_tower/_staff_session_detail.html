@@ -45,6 +45,26 @@
       </div>
       {% if detail.emergency_contacts and detail.role != 'Emergency contact' and not (detail.role == 'Supervisor' and detail.participation_confirmed) %}<div class="staff-detail-emergency"><h4>Emergency line</h4>{% if detail.role in ['Examiner', 'Intern'] %}<p>Please contact your Supervisor first before using this emergency line.</p>{% endif %}{% for contact in detail.emergency_contacts %}<p><strong>{{ contact.displayName }}</strong> <span data-staff-phone="{{ contact.phone }}">{{ contact.phone or 'Phone number not available' }}</span></p>{% endfor %}</div>{% endif %}
       </section>
+      {% if detail.exam_centre_contacts %}
+      <section class="staff-detail-section staff-detail-exam-centre" aria-label="Exam centre contact information">
+        <div class="staff-detail-exam-centre-heading">
+          <h3>Exam centre contact information</h3>
+          {% if not detail.exam_centre_contacts.available %}<span class="staff-detail-exam-centre-availability">Available on exam day only</span>{% endif %}
+        </div>
+        <p>Exam Centre contacts will be displayed in this section <strong>exclusively on the day of the exam session</strong>. These contacts must only be used as a last resort, in exceptional and urgent situations, when all attempts to contact Path Examinations or obtain assistance from our team have been unsuccessful. Please note that these contact details will <strong>only be visible on the exam date</strong>.</p>
+        {% if detail.exam_centre_contacts.available %}
+        <div class="staff-detail-exam-centre-list">
+          {% for contact in detail.exam_centre_contacts.contacts %}
+          <div class="staff-detail-exam-centre-contact">
+            {% if contact.full_name %}<strong>{{ contact.full_name }}</strong>{% endif %}
+            {% if contact.phone %}<a class="staff-detail-exam-centre-phone" href="tel:{{ contact.phone|replace(' ', '')|replace('-', '')|replace('(', '')|replace(')', '') }}">{{ contact.phone }}</a>{% endif %}
+            {% if contact.email %}<a href="mailto:{{ contact.email }}">{{ contact.email }}</a>{% endif %}
+          </div>
+          {% endfor %}
+        </div>
+        {% endif %}
+      </section>
+      {% endif %}
       {% if detail.role == 'Supervisor' and detail.participation_confirmed %}
       {% if not detail.is_remote %}
       <section class="staff-detail-section staff-supervisor-emergency" aria-label="Emergency contact">

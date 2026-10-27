@@ -350,6 +350,29 @@
               </ul>
             </div>
           </li>
+          {% if journey.emergency_contact and not journey.is_external %}
+          <li class="journey-milestone is-upcoming journey-emergency-contact">
+            <span class="journey-milestone-marker" aria-hidden="true">&gt;</span>
+            <div>
+              <span class="journey-stage-heading">
+                <strong>{{ t('Path emergency contact') }}</strong>
+                {% if not journey.emergency_contact.available %}<span class="journey-status-chip is-pending">{{ t('Available on exam day only') }}</span>{% endif %}
+              </span>
+              {% if journey.emergency_contact.available and journey.emergency_contact.phone %}
+              <div class="journey-emergency-contact-details">
+                <strong>{{ journey.emergency_contact.name }}</strong>
+                <a class="journey-inline-link journey-emergency-phone" href="tel:{{ journey.emergency_contact.phone }}">{{ journey.emergency_contact.phone }}</a>
+                <span class="journey-emergency-calls-only">{{ t('Calls only – No messages') }}</span>
+              </div>
+              {% elif journey.emergency_contact.available %}
+              <p>{{ t('Emergency contact details are being updated. Please contact the Path Examinations office if assistance is needed.') }}</p>
+              {% endif %}
+              <p>{{ t('A Path Examinations emergency contact will be displayed in this section') }} <strong>{{ t('exclusively on the day of your exam session') }}</strong>.</p>
+              <p>{{ t('This contact is intended for') }} <strong>{{ t('urgent situations that arise when our regular office is closed') }}</strong>, {{ t('ensuring that you can still reach Path Examinations if assistance is needed during the session.') }}</p>
+              <p>{{ t('Please note that this contact will') }} <strong>{{ t('only be visible on the exam date') }}</strong>.</p>
+            </div>
+          </li>
+          {% endif %}
           <li class="journey-milestone is-upcoming">
             <span class="journey-milestone-marker" aria-hidden="true">&gt;</span>
             {% include 'pre_session_control_tower/_journey_feedback_cards.html' %}
