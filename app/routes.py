@@ -15660,6 +15660,8 @@ def package_label_verification_status_label(status):
 
 
 def apply_package_stage_status_update(session_record, action, status_attr, updated_at_attr, updated_by_attr, stage_label):
+    if schedule_workflow_status(session_record.schedule_workflow) != "Approved":
+        return "The schedule must be approved before package preparation can begin."
     new_status = PACKAGE_LABEL_VERIFICATION_ACTIONS.get(action)
     if not new_status:
         return "Please select a valid package preparation action."

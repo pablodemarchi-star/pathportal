@@ -2938,27 +2938,10 @@
           </div>
         {% endif %}
 
-        {% set package_preparation_started = (
-          (session.package_label_verification_status or "not_started") != "not_started"
-          or (session.package_label_printing_status or "not_started") != "not_started"
-          or (session.room_package_sealing_status or "not_started") != "not_started"
-          or (session.return_packages_status or "not_started") != "not_started"
-          or (session.staff_member_ids_status or "not_started") != "not_started"
-          or (session.inclusion_final_items_status or "not_started") != "not_started"
-          or (session.session_box_sealing_status or "not_started") != "not_started"
-        ) %}
-        {% set package_preparation_forced_open = request.args.get('open_modal_target', '').startswith('package-') %}
-        {% set package_preparation_open = package_preparation_started or package_preparation_forced_open %}
-        <div class="packages-preparation-start">
-          <button class="primary-button compact-action packages-preparation-start-button" type="button" data-start-package-preparation="package-preparation-panel-{{ session.id }}" aria-controls="package-preparation-panel-{{ session.id }}" aria-expanded="{{ 'true' if package_preparation_open else 'false' }}" {% if not view.packages.schedule_ready %}disabled{% endif %}>
-            Start session package preparation
-          </button>
-          {% if not view.packages.schedule_ready %}
-            <p class="staffing-schedule-notice">The schedule must be approved before package preparation can begin.</p>
-          {% endif %}
-        </div>
-
-        <div class="package-preparation-panel" id="package-preparation-panel-{{ session.id }}" data-package-preparation-panel{% if not package_preparation_open %} hidden{% endif %}>
+        {% if not view.packages.schedule_ready %}
+          <p class="staffing-schedule-notice">The schedule must be approved before package preparation can begin.</p>
+        {% endif %}
+        <fieldset class="package-preparation-panel" id="package-preparation-panel-{{ session.id }}" data-package-preparation-panel aria-label="Package preparation stages"{% if not view.packages.schedule_ready %} disabled aria-disabled="true"{% endif %}>
 	          <div class="package-preparation-guidance" id="package-label-verification-{{ session.id }}">
             <div>
               {% set label_verification_status = session.package_label_verification_status or "not_started" %}
@@ -2978,7 +2961,7 @@
               </div>
               <ol>
                 <li>Enter the exam session in Sinapsis and download the candidate labels for each exam room.</li>
-                <li>Verify that the label count matches the number of candidates in each room on the {% if session.schedule_folder_url %}<a href="{{ session.schedule_folder_url }}" target="_blank" rel="noopener noreferrer" aria-label="Open approved schedule folder">approved schedule in this folder</a>{% else %}approved schedule in this folder{% endif %}.</li>
+                <li>Verify that the label count matches the number of candidates in each room on the {% if session.schedule_folder_url %}<a{% if not view.packages.schedule_ready %} aria-disabled="true" tabindex="-1"{% endif %} href="{{ session.schedule_folder_url }}" target="_blank" rel="noopener noreferrer" aria-label="Open approved schedule folder">approved schedule in this folder</a>{% else %}approved schedule in this folder{% endif %}.</li>
               </ol>
             </div>
             <div class="package-preparation-actions" aria-label="Candidate label verification actions">
@@ -3175,7 +3158,7 @@ This stage has already been marked as complete. Reopening it may affect package 
                   {% endfor %}
                 </ul>
                 {% set return_package_label_count = view.packages.return_package_count %}
-                <p>2. Include <a href="{{ url_for('staff.return_package_label_pdf', session_id=session.id) }}" target="_blank" rel="noopener noreferrer" aria-label="Open return package label PDF">{{ "this return label" if return_package_label_count == 1 else "these return labels" }}</a> loose for the Supervisor - DO NOT AFFIX</p>
+                <p>2. Include <a{% if not view.packages.schedule_ready %} aria-disabled="true" tabindex="-1"{% endif %} href="{{ url_for('staff.return_package_label_pdf', session_id=session.id) }}" target="_blank" rel="noopener noreferrer" aria-label="Open return package label PDF">{{ "this return label" if return_package_label_count == 1 else "these return labels" }}</a> loose for the Supervisor - DO NOT AFFIX</p>
               {% endif %}
             </div>
             <div class="package-preparation-actions" aria-label="Return packages actions">
@@ -3380,7 +3363,7 @@ This stage has already been marked as complete. Reopening it may affect package 
               <ol>
                 <li>Ensure all previous items are included in the session box.</li>
                 <li>Close the box, wrap it securely with black plastic wrap, and heat-seal it.</li>
-                <li>Print the <a href="{{ url_for('staff.session_identification_label_pdf', session_id=session.id) }}" target="_blank" rel="noopener noreferrer" aria-label="Open session identification label PDF">session identification label</a> and affix it to the top of the sealed box.</li>
+                <li>Print the <a{% if not view.packages.schedule_ready %} aria-disabled="true" tabindex="-1"{% endif %} href="{{ url_for('staff.session_identification_label_pdf', session_id=session.id) }}" target="_blank" rel="noopener noreferrer" aria-label="Open session identification label PDF">session identification label</a> and affix it to the top of the sealed box.</li>
               </ol>
             </div>
             <div class="package-preparation-actions" aria-label="Session box sealing actions">
@@ -3418,7 +3401,7 @@ This stage has already been marked as complete. Reopening it may affect package 
               {% endif %}
             </div>
           </div>
-        </div>
+        </fieldset>
 
       </section>
 

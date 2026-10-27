@@ -6994,6 +6994,7 @@ for (const days of [2, 3, 4]) {
         self.assertEqual(ExamSessionPackageUnit.query.count(), 0)
 
     def test_package_label_verification_status_actions(self):
+        self.approve_schedule()
         client = self.login_client()
 
         self.assertEqual(self.session_record.package_label_verification_status, "not_started")
@@ -7009,6 +7010,7 @@ for (const days of [2, 3, 4]) {
         self.assertEqual(self.session_record.package_label_verification_status, "in_progress")
 
     def test_package_label_printing_status_actions_are_independent(self):
+        self.approve_schedule()
         self.session_record.package_label_verification_status = "completed"
         self.session_record.package_label_printing_status = "in_progress"
         db.session.commit()
@@ -7044,6 +7046,7 @@ for (const days of [2, 3, 4]) {
         self.assertEqual(self.session_record.package_label_verification_status, "not_started")
 
     def test_room_package_sealing_status_actions_are_independent(self):
+        self.approve_schedule()
         self.session_record.package_label_verification_status = "completed"
         self.session_record.package_label_printing_status = "completed"
         db.session.commit()
@@ -7129,6 +7132,7 @@ for (const days of [2, 3, 4]) {
         self.assertEqual(self.session_record.room_package_sealing_status, "not_started")
 
     def test_return_packages_status_actions_are_independent(self):
+        self.approve_schedule()
         self.session_record.return_packages_status = "in_progress"
         db.session.commit()
         client = self.login_client()
@@ -7322,6 +7326,7 @@ for (const days of [2, 3, 4]) {
         self.assertNotIn("Include a lanyard, rigid ID card, and card holder for each of the following staff members:", packages_section)
 
     def test_staff_member_ids_status_actions_are_independent(self):
+        self.approve_schedule()
         self.confirm_staffing()
         client = self.login_client()
         pending_id_member = AcademicStaff(
@@ -8032,6 +8037,7 @@ for (const days of [2, 3, 4]) {
         )
 
     def test_inclusion_final_items_status_actions_are_independent(self):
+        self.approve_schedule()
         self.confirm_staffing()
         self.session_record.inclusion_final_items_status = "in_progress"
         db.session.commit()
@@ -8055,6 +8061,7 @@ for (const days of [2, 3, 4]) {
         self.assertEqual(self.session_record.room_package_sealing_status, "not_started")
 
     def test_session_box_sealing_status_actions_are_independent(self):
+        self.approve_schedule()
         self.session_record.package_label_verification_status = "completed"
         self.session_record.package_label_printing_status = "completed"
         self.session_record.room_package_sealing_status = "completed"
@@ -8473,15 +8480,13 @@ for (const days of [2, 3, 4]) {
         self.assertNotIn("<th>Package</th>", table)
         self.assertNotIn("<th>Shipment</th>", table)
         self.assertLess(table.index("<th>Action description</th>"), table.index("<th>Logistics</th>"))
-        self.assertLess(table.index("<th>Logistics</th>"), table.index("<th>Finance</th>"))
-        self.assertLess(table.index("<th>Finance</th>"), table.index("<th>Final checks</th>"))
+        self.assertLess(table.index("<th>Logistics</th>"), table.index(">Finance</th>"))
+        self.assertLess(table.index(">Finance</th>"), table.index("<th>Final checks</th>"))
         packages_section_start = html.index(f'<section class="staffing-control-section packages-control-section" id="packages-{self.session_record.id}"')
         packages_section_end = html.index('<section class="staffing-control-section shipments-control-section"', packages_section_start)
         packages_section = html[packages_section_start:packages_section_end]
-        packages_header = packages_section[:packages_section.index('<div class="packages-preparation-start">')]
-        start_button = packages_section[
-            packages_section.index('data-start-package-preparation=') : packages_section.index("</button>", packages_section.index('data-start-package-preparation='))
-        ]
+        packages_header = packages_section[:packages_section.index('<fieldset class="package-preparation-panel"')]
+        panel_tag = re.search(r'<fieldset[^>]*data-package-preparation-panel[^>]*>', packages_section).group(0)
         self.assertIn('class="package-actions-title" id=', packages_header)
         self.assertIn("Package actions", packages_header)
         self.assertIn("packages-status-not-started", packages_header)
@@ -8493,15 +8498,16 @@ for (const days of [2, 3, 4]) {
         self.assertNotIn("Not configured", packages_header)
         self.assertNotIn("No package units configured", packages_header)
         self.assertNotIn("packages checked", packages_header)
-        packages_summary = packages_section[:packages_section.index('<div class="packages-preparation-start">')]
+        packages_summary = packages_section[:packages_section.index('<fieldset class="package-preparation-panel"')]
         self.assertIn("Current status", packages_summary)
         self.assertIn("Recommended next action", packages_summary)
         self.assertIn("Responsible", packages_summary)
         self.assertIn("Current deadline", packages_summary)
         self.assertIn("Start session package preparation", packages_summary)
         self.assertIn("LOGISTICS", packages_summary)
-        self.assertIn("Start session package preparation", start_button)
-        self.assertNotIn("disabled", start_button)
+        self.assertNotIn("data-start-package-preparation", packages_section)
+        self.assertNotIn("disabled", panel_tag)
+        self.assertNotIn("hidden", panel_tag)
         self.assertNotIn("Add room package", packages_section)
         self.assertLess(
             packages_section.index("Candidate label verification"),
@@ -8567,14 +8573,14 @@ for (const days of [2, 3, 4]) {
         self.assertIn("Mark as in progress", packages_section)
         self.assertIn("Mark as complete", packages_section)
         self.assertIn("Mark incident", packages_section)
-        self.assertIn("data-package-preparation-panel hidden", packages_section)
+        self.assertNotIn("data-package-preparation-panel hidden", packages_section)
         response = client.get(
             f"/pre-session-control-tower?session_year=2026&view=sessions&open_schedule_modal={self.session_record.id}&open_modal_target=package-label-verification&packages_only=1"
         )
         forced_html = response.get_data(as_text=True)
         forced_packages_start = forced_html.index(f'<section class="staffing-control-section packages-control-section" id="packages-{self.session_record.id}"')
         forced_packages_section = forced_html[forced_packages_start:forced_packages_start + 36000]
-        self.assertIn(f'id="package-preparation-panel-{self.session_record.id}" data-package-preparation-panel>', forced_packages_section)
+        self.assertIn(f'id="package-preparation-panel-{self.session_record.id}" data-package-preparation-panel aria-label="Package preparation stages">', forced_packages_section)
         self.assertNotIn(f'id="package-preparation-panel-{self.session_record.id}" data-package-preparation-panel hidden', forced_packages_section)
         self.assertNotIn('data-add-package-unit-row aria-label="Add room package line"', packages_section)
         self.assertNotIn('data-package-unit-row-template', packages_section)
@@ -8723,35 +8729,52 @@ for (const days of [2, 3, 4]) {
         self.assertNotIn("There is 2 unsolved incident.", packages_section)
 
     def test_control_tower_packages_lock_state_follows_schedule_and_staffing(self):
+        bundle = self.create_shipment_bundle_record()
         client = self.login_client()
 
-        response = client.get("/pre-session-control-tower?session_year=2026&view=sessions")
-        html = response.data.decode()
-        self.assertIn("BLOCKED", html)
-        packages_section_start = html.index(f'<section class="staffing-control-section packages-control-section" id="packages-{self.session_record.id}"')
-        packages_section = html[packages_section_start:packages_section_start + 36000]
-        start_button = packages_section[
-            packages_section.index('data-start-package-preparation=') : packages_section.index("</button>", packages_section.index('data-start-package-preparation='))
-        ]
-        self.assertIn("Start session package preparation", start_button)
-        self.assertIn("disabled", start_button)
-        self.assertIn("The schedule must be approved before package preparation can begin.", packages_section)
+        def package_section():
+            response = client.get(f"/pre-session-control-tower?session_year=2026&view=bundle&bundle_id={bundle.id}")
+            self.assertEqual(response.status_code, 200)
+            html = response.get_data(as_text=True)
+            start = html.index(f'<section class="staffing-control-section packages-control-section" id="packages-{self.session_record.id}"')
+            end = html.index('<section class="staffing-control-section shipments-control-section"', start)
+            section = html[start:end]
+            self.assertNotIn("data-start-package-preparation", section)
+            return section, re.search(r'<fieldset[^>]*data-package-preparation-panel[^>]*>', section).group(0)
+
+        section, panel = package_section()
+        self.assertIn("disabled", panel)
+        self.assertNotIn("hidden", panel)
+        self.assertIn("The schedule must be approved before package preparation can begin.", section)
+        for title in ("Candidate label verification", "Candidate label printing and affixing", "Room package sealing",
+                      "Return packages", "Inclusion of final items", "Session box sealing"):
+            self.assertIn(title, section)
+        links = re.findall(r'<a [^>]+>', section[section.index('<fieldset'):])
+        self.assertTrue(links)
+        self.assertTrue(all('aria-disabled="true"' in link and 'tabindex="-1"' in link for link in links))
+
+        response = client.post(f"/pre-session-control-tower/sessions/{self.session_record.id}/packages/label-verification",
+                               data={"csrf_token": "token", "action": "mark_in_progress"})
+        self.assertEqual(response.status_code, 302)
+        self.assertEqual(self.session_record.package_label_verification_status, "not_started")
 
         self.approve_schedule()
-        response = client.get("/pre-session-control-tower?session_year=2026&view=sessions")
-        html = response.data.decode()
-        self.assertIn("SEMI-UNBLOCKED", html)
-        packages_section_start = html.index(f'<section class="staffing-control-section packages-control-section" id="packages-{self.session_record.id}"')
-        packages_section = html[packages_section_start:packages_section_start + 36000]
-        start_button = packages_section[
-            packages_section.index('data-start-package-preparation=') : packages_section.index("</button>", packages_section.index('data-start-package-preparation='))
-        ]
-        self.assertNotIn("disabled", start_button)
+        section, panel = package_section()
+        self.assertNotIn("disabled", panel)
+        self.assertNotIn("hidden", panel)
+        self.assertIn("Not started yet", section)
+        self.assertEqual(self.session_record.package_label_verification_status, "not_started")
+        client.post(f"/pre-session-control-tower/sessions/{self.session_record.id}/packages/label-verification",
+                    data={"csrf_token": "token", "action": "mark_in_progress"})
+        self.assertEqual(self.session_record.package_label_verification_status, "in_progress")
+        section, panel = package_section()
+        self.assertIn("packages-status-in-progress", section)
+        self.assertNotIn("disabled", panel)
 
         self.confirm_staffing()
-        response = client.get("/pre-session-control-tower?session_year=2026&view=sessions")
-        html = response.data.decode()
-        self.assertIn("UNBLOCKED", html)
+        section, panel = package_section()
+        self.assertNotIn("disabled", panel)
+        self.assertNotIn("hidden", panel)
 
     def test_package_label_verification_completed_render_shows_reopen(self):
         self.approve_schedule()
@@ -8807,6 +8830,7 @@ for (const days of [2, 3, 4]) {
         self.assertNotIn("<strong>-</strong>", package_summary)
 
     def test_packages_column_opens_packages_only_modal_context(self):
+        self.approve_schedule()
         self.session_record.package_label_verification_status = "in_progress"
         self.session_record.package_label_verification_updated_at = datetime(2026, 6, 20, 14, 30, tzinfo=timezone.utc)
         self.session_record.package_label_verification_updated_by = "Admin User"
@@ -8832,8 +8856,8 @@ for (const days of [2, 3, 4]) {
         self.assertIn(f'id="package-return-packages-{session_id}"', packages_section)
         self.assertIn(f'id="package-inclusion-final-items-{session_id}"', packages_section)
         self.assertIn(f'id="package-session-box-sealing-{session_id}"', packages_section)
-        self.assertIn(f'aria-controls="package-preparation-panel-{session_id}" aria-expanded="true"', packages_section)
-        self.assertIn(f'id="package-preparation-panel-{session_id}" data-package-preparation-panel>', packages_section)
+        self.assertNotIn("data-start-package-preparation", packages_section)
+        self.assertIn(f'id="package-preparation-panel-{session_id}" data-package-preparation-panel aria-label="Package preparation stages">', packages_section)
         self.assertNotIn(f'id="package-preparation-panel-{session_id}" data-package-preparation-panel hidden', packages_section)
         self.assertIn("Candidate label verification: Not started yet → In progress", packages_section)
         self.assertIn("Admin User", packages_section)
@@ -8855,8 +8879,8 @@ for (const days of [2, 3, 4]) {
         self.assertIn('"package-label-verification": ["packages", "package-label-verification"]', js)
         self.assertIn('"package-session-box-sealing": "Session box sealing"', js)
         self.assertIn('"package-session-box-sealing": ["packages", "package-session-box-sealing"]', js)
-        self.assertIn('const packagePreparationTrigger = event.target.closest("[data-start-package-preparation]");', js)
-        self.assertIn("panel.hidden = false;", js)
+        self.assertNotIn("data-start-package-preparation", js)
+        self.assertIn("fieldset[data-package-preparation-panel][disabled]", js)
 
     def test_shipment_column_opens_shipments_only_modal_context(self):
         self.create_supervisor(staff_id=1, name="Laura Mendez")

@@ -1856,21 +1856,6 @@ document.addEventListener("click", (event) => {
     return;
   }
 
-  const packagePreparationTrigger = event.target.closest("[data-start-package-preparation]");
-  if (packagePreparationTrigger) {
-    event.preventDefault();
-    const panel = document.getElementById(packagePreparationTrigger.dataset.startPackagePreparation);
-    if (!panel) return;
-    panel.hidden = false;
-    const addPanel = panel.matches("details") ? panel : panel.querySelector("details");
-    if (addPanel) addPanel.open = true;
-    packagePreparationTrigger.setAttribute("aria-expanded", "true");
-    window.requestAnimationFrame(() => {
-      panel.querySelector("summary, input:not([type='hidden']), select, textarea, button")?.focus();
-    });
-    return;
-  }
-
   const packageRowAddButton = event.target.closest("[data-add-package-unit-row]");
   if (packageRowAddButton) {
     event.preventDefault();
@@ -14392,3 +14377,11 @@ document.addEventListener("submit", (event) => {
   save.addEventListener('click', () => persist());
   remove.addEventListener('click', () => persist(true));
 })();
+
+// Block resource links as well as form controls while Schedule is not approved.
+document.addEventListener("click", (event) => {
+  if (event.target.closest("fieldset[data-package-preparation-panel][disabled]")) {
+    event.preventDefault();
+    event.stopImmediatePropagation();
+  }
+}, true);

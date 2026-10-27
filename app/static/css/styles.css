@@ -11126,7 +11126,14 @@ span.session-marker-chip {
 .package-preparation-panel {
   display: grid;
   gap: 10px;
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
 }
+
+.package-preparation-panel:disabled .package-preparation-guidance { filter: grayscale(1); opacity: 0.65; background: var(--path-grey-50); }
+.package-preparation-panel:disabled a { pointer-events: none; color: var(--color-muted); text-decoration: none; }
 
 .package-preparation-guidance {
   display: grid;
