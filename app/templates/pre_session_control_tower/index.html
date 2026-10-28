@@ -17,6 +17,23 @@
   {% endif %}
 {%- endmacro %}
 
+{% macro schedule_approval_notification_chip(record, event_id) -%}
+  {% if event_id %}
+  <form class="schedule-automatic-chip schedule-approval-notification-chip" method="post" action="{{ url_for('staff.acknowledge_schedule_approval_notification', session_id=record.id) }}" data-disable-on-submit>
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <input type="hidden" name="approval_event_id" value="{{ event_id }}">
+    {{ pre_session_return_fields(selected_view, selected_bundle) }}
+    {% if is_my_actions_page %}
+      {% for name, value in [('actions_q', department_actions_query), ('actions_section', department_actions_section), ('actions_overdue', '1' if department_actions_overdue else ''), ('actions_sort', department_actions_sort), ('actions_order', department_actions_order)] %}
+      <input type="hidden" name="{{ name }}" value="{{ value }}">
+      {% endfor %}
+    {% endif %}
+    <span>Notify schedule approval</span>
+    <button type="submit" aria-label="Mark schedule approval notification as completed for {{ record.exam_session_name }}" title="Mark notification as completed"{% if not current_menu_can_edit %} disabled{% endif %}>&times;</button>
+  </form>
+  {% endif %}
+{%- endmacro %}
+
 {% macro department_actions_sort_header(column, label) -%}
   {% set active = department_actions_sort == column %}
   <th aria-sort="{{ ('ascending' if department_actions_order == 'asc' else 'descending') if active else 'none' }}">
@@ -1808,6 +1825,7 @@
             <strong>{{ row_session.exam_session_name }}</strong>
             {{ session_concat_indicator(row_session.id) }}
             <small class="bundle-session-date">{{ row_session.session_date|session_date }}</small>
+            {{ schedule_approval_notification_chip(row_session, schedule_approval_notifications.get(row_session.id)) }}
           </span>{% endfor %}</td>
           <td>{{ bundle_detail_departments_cell(action.actions|default([action])) }}</td>
           <td>{{ bundle_detail_action_descriptions_cell(action.actions|default([action])) }}</td>
@@ -1970,15 +1988,7 @@
               <strong>{{ session.exam_session_name }}</strong>
               {{ session_concat_indicator(session.id) }}
               <small class="bundle-session-date">{{ session.session_date|session_date }}</small>
-              {% if view.schedule_approval_notification_event_id %}
-              <form class="schedule-automatic-chip schedule-approval-notification-chip" method="post" action="{{ url_for('staff.acknowledge_schedule_approval_notification', session_id=session.id) }}" data-disable-on-submit>
-                <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-                <input type="hidden" name="approval_event_id" value="{{ view.schedule_approval_notification_event_id }}">
-                {{ pre_session_return_fields(selected_view, selected_bundle) }}
-                <span>Notify schedule approval</span>
-                <button type="submit" aria-label="Mark schedule approval notification as completed for {{ session.exam_session_name }}" title="Mark notification as completed"{% if not current_menu_can_edit %} disabled{% endif %}>&times;</button>
-              </form>
-              {% endif %}
+              {{ schedule_approval_notification_chip(session, view.schedule_approval_notification_event_id) }}
               {% if selected_view != 'bundle' and view.shipments.bundle_view %}
                 {% set session_shipment_status = view.shipments.bundle_view.status %}
                 {% if session_shipment_status in ['Delivered successfully', 'Recipient review successful', 'Recipient review with discrepancy'] %}

@@ -1253,6 +1253,36 @@ class ScheduleWorkflowTest(unittest.TestCase):
         db.session.commit()
         return user
 
+    def test_my_actions_can_acknowledge_schedule_auto_approval_and_preserve_automatic_marker(self):
+        self.session_record.monthly_registrations_closed = True
+        self.session_record.date_confirmation_status = "Confirmed"
+        workflow = ExamSessionScheduleWorkflow(exam_session_id=self.session_record.id, status="Approved", review_round=1)
+        event = ExamSessionScheduleEvent(workflow=workflow, previous_status="Sent for review", new_status="Approved", created_by="Automatic countdown")
+        db.session.add_all([workflow, event])
+        db.session.commit()
+        bundle = self.create_shipment_bundle_record()
+        client = self.login_client_for_user(self.create_my_actions_user("Admin"))
+        page = client.get("/my-actions?session_year=2026&actions_section=schedule").get_data(as_text=True)
+        row = re.search(r'<tr data-my-action-section="schedule"[^>]*>.*?</tr>', page, re.S).group(0)
+        self.assertIn("Notify institution of schedule auto-approval", row)
+        first_cell = row.split("</td>")[0]
+        self.assertIn('schedule-approval-notification-chip', first_cell)
+        self.assertLess(first_cell.index('bundle-session-date'), first_cell.index('Notify schedule approval'))
+        self.assertIn('name="view" value="department-actions"', first_cell)
+        url = f"/pre-session-control-tower/sessions/{self.session_record.id}/schedule-approval-notification/acknowledge"
+        response = client.post(url, data={"csrf_token": "token", "approval_event_id": event.id,
+            "view": "department-actions", "actions_section": "schedule"}, follow_redirects=True)
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.request.path, "/my-actions")
+        self.assertIn("actions_section=schedule", response.request.query_string.decode())
+        self.assertNotIn("Notify schedule approval", response.get_data(as_text=True))
+        db.session.refresh(event)
+        self.assertTrue(event.approval_notification_acknowledged)
+        tower = client.get(f"/pre-session-control-tower?session_year=2026&view=bundle&bundle_id={bundle.id}").get_data(as_text=True)
+        self.assertNotIn("Notify schedule approval", tower)
+        self.assertNotIn("Notify institution of schedule auto-approval", tower)
+        self.assertIn('<span class="schedule-automatic-chip">Automatic</span>', tower)
+
     def test_sent_for_review_has_no_internal_department_and_is_not_a_my_actions_task(self):
         self.session_record.monthly_registrations_closed = True
         self.session_record.date_confirmation_status = "Confirmed"

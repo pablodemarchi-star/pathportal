@@ -19233,6 +19233,7 @@ def pre_session_control_tower(_count_only=False):
         concat_session_names_by_session=concat_session_names_by_session,
         consideration_recipient_options=note_to_user_options(),
         schedule_views=schedule_views,
+        schedule_approval_notifications={view["session"].id: view.get("schedule_approval_notification_event_id") for view in all_schedule_views},
         modal_views=modal_views,
         show_session_package_column=show_session_package_column,
         show_session_shipment_column=show_session_shipment_column,
@@ -19564,6 +19565,9 @@ def acknowledge_schedule_approval_notification(session_id):
         abort(409, description="The schedule approval has changed. Please reload and try again.")
     event.approval_notification_acknowledged = True
     db.session.commit()
+    if request.form.get("view") == "department-actions":
+        filters = {key: request.form.get(key, "") for key in ("actions_q", "actions_section", "actions_overdue", "actions_sort", "actions_order")}
+        return redirect(url_for("staff.my_actions", session_year=record.session_date.year, **filters))
     return redirect(url_for("staff.pre_session_control_tower", **pre_session_control_tower_return_args(record)))
 
 
