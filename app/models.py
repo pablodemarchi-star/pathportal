@@ -1668,6 +1668,7 @@ class ExamSessionScheduleEvent(db.Model):
     previous_status = db.Column(db.String(40), nullable=False)
     new_status = db.Column(db.String(40), nullable=False)
     note = db.Column(db.Text, nullable=True)
+    approval_notification_acknowledged = db.Column(db.Boolean, nullable=False, default=False)
     due_at = db.Column(db.Date, nullable=True)
     created_at = db.Column(db.DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))
     created_by = db.Column(db.String(120), nullable=True)

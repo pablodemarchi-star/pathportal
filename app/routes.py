@@ -14264,21 +14264,26 @@ SCHEDULE_AUTO_CONFIRMATION_NOTE = "Confirmed automatically after the schedule re
 SCHEDULE_AUTO_CONFIRMATION_ACTOR = "Automatic countdown"
 
 
-def schedule_workflow_auto_confirmed(workflow):
+def schedule_workflow_auto_approval_event(workflow):
     if not workflow or workflow.status != "Approved":
-        return False
+        return None
     approved_events = sorted(
         (event for event in workflow.events if event.new_status == "Approved"),
         key=lambda event: (event.created_at or datetime.min.replace(tzinfo=timezone.utc), event.id or 0),
         reverse=True,
     )
     if not approved_events:
-        return False
+        return None
     latest_approved = approved_events[0]
-    return (
+    is_automatic = (
         (latest_approved.note or "").strip() == SCHEDULE_AUTO_CONFIRMATION_NOTE
         or (latest_approved.created_by or "").strip() == SCHEDULE_AUTO_CONFIRMATION_ACTOR
     )
+    return latest_approved if is_automatic else None
+
+
+def schedule_workflow_auto_confirmed(workflow):
+    return schedule_workflow_auto_approval_event(workflow) is not None
 
 
 def auto_approve_expired_schedule_review(session_record, workflow=None, now=None, commit=False):
@@ -15146,9 +15151,15 @@ def schedule_workflow_view(session_record, workflow=None, today=None, staffing=N
         finance_view,
         today=today,
     )
+    auto_approval_event = schedule_workflow_auto_approval_event(workflow)
+    notification_pending = bool(auto_approval_event and not auto_approval_event.approval_notification_acknowledged)
+    detail_actions = list(bundle_detail_actions or [])
+    if notification_pending:
+        detail_actions.insert(0, {"department": "ADMIN", "description": "Notify institution of schedule auto-approval", "section": "schedule"})
     return {
         "session": session_record,
         "workflow": workflow,
+        "schedule_approval_notification_event_id": auto_approval_event.id if notification_pending else None,
         "status": status,
         "next_action": schedule_workflow_next_action(status),
         "responsible": schedule_workflow_responsible(status),
@@ -15170,7 +15181,7 @@ def schedule_workflow_view(session_record, workflow=None, today=None, staffing=N
         "staffing_deadline_badge": staffing_deadline_badge,
         "staffing_rows": staffing_rows or [],
         "staffing_events": staffing_events or [],
-        "bundle_detail_actions": bundle_detail_actions or [],
+        "bundle_detail_actions": detail_actions,
         "staffing_control": staffing_control_view,
         "logistics": logistics or logistics_presentation_from_contract(logistics_readiness_contract([], [], None)),
         "logistics_gate": logistics_gate_view,
@@ -19538,6 +19549,22 @@ def create_path_session_journey_share_token(session_id, audience=None, action=No
         open_schedule_modal=session_record.id,
         manage_target="journey",
     ))
+
+
+@staff_bp.route("/pre-session-control-tower/sessions/<int:session_id>/schedule-approval-notification/acknowledge", methods=["POST"])
+@login_required
+def acknowledge_schedule_approval_notification(session_id):
+    require_menu_edit("pre_session_control_tower")
+    if not validate_csrf():
+        abort(400, description="Security token expired. Please reload and try again.")
+    record = ExamSession.query.get_or_404(session_id)
+    workflow = ExamSessionScheduleWorkflow.query.filter_by(exam_session_id=record.id).first()
+    event = schedule_workflow_auto_approval_event(workflow)
+    if not event or request.form.get("approval_event_id", type=int) != event.id:
+        abort(409, description="The schedule approval has changed. Please reload and try again.")
+    event.approval_notification_acknowledged = True
+    db.session.commit()
+    return redirect(url_for("staff.pre_session_control_tower", **pre_session_control_tower_return_args(record)))
 
 
 @staff_bp.route("/pre-session-control-tower/sessions/<int:session_id>/schedule", methods=["POST"])

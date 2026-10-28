@@ -20511,6 +20511,39 @@ assert.equal(storage.size, 0);
         self.assertLess(session_row.index("Rounds: 1"), session_row.index("Automatic"))
         db.session.refresh(workflow)
         self.assertEqual(workflow.status, "Approved")
+        self.assertIn("Notify schedule approval", session_row)
+        self.assertIn("Notify institution of schedule auto-approval", session_row)
+        self.assertIn("ADMIN", session_row)
+        client = self.login_client()
+        acknowledge_url = f"/pre-session-control-tower/sessions/{self.session_record.id}/schedule-approval-notification/acknowledge"
+        data = {"csrf_token": "token", "approval_event_id": str(latest_event.id), "view": "bundle", "bundle_id": str(bundle.id)}
+        self.assertEqual(client.post(acknowledge_url, data={**data, "csrf_token": "invalid"}).status_code, 400)
+        self.assertFalse(latest_event.approval_notification_acknowledged)
+        response = client.post(acknowledge_url, data=data, follow_redirects=True)
+        self.assertEqual(response.status_code, 200)
+        db.session.refresh(latest_event)
+        self.assertTrue(latest_event.approval_notification_acknowledged)
+        page = response.get_data(as_text=True)
+        self.assertNotIn("Notify schedule approval", page)
+        self.assertNotIn("Notify institution of schedule auto-approval", page)
+        self.assertIn('<span class="schedule-automatic-chip">Automatic</span>', page)
+        # A new automatic approval creates a fresh notification; stale clicks cannot clear it.
+        new_event = ExamSessionScheduleEvent(workflow=workflow, previous_status="Sent for review", new_status="Approved",
+            note="Confirmed automatically after the schedule review countdown ended.", created_by="Automatic countdown",
+            created_at=latest_event.created_at + timedelta(seconds=1))
+        db.session.add(new_event)
+        db.session.commit()
+        self.assertEqual(client.post(acknowledge_url, data=data).status_code, 409)
+        refreshed = client.get("/pre-session-control-tower", query_string={"session_year": "2026", "view": "bundle", "bundle_id": str(bundle.id)}).get_data(as_text=True)
+        self.assertIn("Notify schedule approval", refreshed)
+        self.assertIn("Notify institution of schedule auto-approval", refreshed)
+        from app.routes import schedule_workflow_auto_confirmed
+        manual = ExamSessionScheduleEvent(workflow=workflow, previous_status="Sent for review", new_status="Approved",
+            created_by="admin", created_at=new_event.created_at + timedelta(seconds=1))
+        db.session.add(manual)
+        db.session.commit()
+        self.assertFalse(schedule_workflow_auto_confirmed(workflow))
+        self.assertIsNone(schedule_workflow_view(self.session_record, workflow)["schedule_approval_notification_event_id"])
 
     def test_path_session_journey_links_use_configured_session_folders(self):
         self.session_record.details_url = "https://example.com/all-session-details"

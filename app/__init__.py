@@ -265,6 +265,9 @@ def create_app():
 
     with app.app_context():
         db.create_all()
+        schedule_event_columns = {row[1] for row in db.session.execute(text("PRAGMA table_info(exam_session_schedule_event)"))}
+        if "approval_notification_acknowledged" not in schedule_event_columns:
+            db.session.execute(text("ALTER TABLE exam_session_schedule_event ADD COLUMN approval_notification_acknowledged BOOLEAN NOT NULL DEFAULT 0"))
         logistics_columns = {row[1] for row in db.session.execute(text("PRAGMA table_info(exam_session_logistics_concept)"))}
         if "instructions_html" not in logistics_columns:
             db.session.execute(text("ALTER TABLE exam_session_logistics_concept ADD COLUMN instructions_html TEXT NOT NULL DEFAULT ''"))
