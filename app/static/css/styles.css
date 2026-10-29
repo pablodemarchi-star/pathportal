@@ -8454,6 +8454,7 @@ span.session-marker-chip {
   white-space: nowrap;
 }
 
+.schedule-status-change-request { margin: 8px 0 0; white-space: pre-wrap; overflow-wrap: anywhere; font-size: 13px; line-height: 1.5; }
 .schedule-approval-notification-chip { gap: 5px; margin: 3px 0 0; }
 .schedule-approval-notification-chip button { display: inline-flex; align-items: center; justify-content: center; width: 18px; height: 18px; padding: 0; border: 0; border-radius: 50%; background: transparent; color: inherit; font-size: 16px; cursor: pointer; }
 .schedule-approval-notification-chip button:hover { background: rgba(0, 0, 0, 0.06); }

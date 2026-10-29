@@ -5333,6 +5333,29 @@ class ScheduleWorkflowTest(unittest.TestCase):
         self.assertIn("operations", track_panel)
         self.assertNotIn("In progress → In progress", track_panel)
 
+    def test_resolved_journey_change_request_remains_visible_in_schedule_status_track(self):
+        from app.routes import journey_schedule_action_response
+        workflow = ExamSessionScheduleWorkflow(exam_session_id=self.session_record.id, status="Sent for review")
+        db.session.add(workflow)
+        db.session.commit()
+        requested = "Please move Speaking to 10:30.\nKeep <Group A> together."
+        with self.app.test_request_context(method="POST"):
+            response = journey_schedule_action_response(self.session_record, "request-changes", note=requested)
+            self.assertTrue(response.get_json()["ok"])
+        for action in ["mark_revised_ready", "send_for_review", "approve"]:
+            _, error = apply_schedule_workflow_transition(self.session_record, action, created_by="admin")
+            self.assertIsNone(error)
+        db.session.commit()
+        self.assertEqual(workflow.status, "Approved")
+        html = self.login_client().get("/pre-session-control-tower?session_year=2026&view=sessions").get_data(as_text=True)
+        start = html.index(f'id="schedule-status-track-{self.session_record.id}"')
+        track = html[start:html.index("</section>", start)]
+        self.assertIn("Sent for review → Changes requested", track)
+        self.assertIn("Please move Speaking to 10:30.\nKeep &lt;Group A&gt; together.", track)
+        self.assertIn("schedule-status-change-request", track)
+        self.assertIn("Path Session Journey", track)
+        self.assertEqual(ExamSessionScheduleEvent.query.filter_by(workflow_id=workflow.id, new_status="Changes requested").one().note, requested)
+
     def test_schedule_column_shows_deadline_chip_status(self):
         on_track_session = ExamSession(
             exam_session_name="Deadline on track schedule",

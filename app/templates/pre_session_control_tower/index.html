@@ -959,6 +959,9 @@
           <article class="status-track-item">
             <strong>{{ event.previous_status }} → {{ event.new_status }}</strong>
             <span>{{ event.created_at|status_track_dt }} · {{ event.created_by or 'Unknown user' }}</span>
+            {% if event.new_status == 'Changes requested' and event.note %}
+              <p class="schedule-status-change-request">{{ event.note }}</p>
+            {% endif %}
           </article>
       {% endfor %}
       {% if status_track.has_changes %}
