@@ -28061,6 +28061,7 @@ def finance_requests():
         current_user_is_superadmin=current_user_is_superadmin(),
         current_user_id=getattr(getattr(g, "current_user", None), "id", None),
         current_menu_key=FINANCE_REQUESTS_MENU_KEY,
+        csrf_token=session.setdefault("csrf_token", secrets.token_urlsafe(32)),
     )
 
 

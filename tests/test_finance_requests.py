@@ -33,6 +33,24 @@ from app.routes import (
 
 
 class FinanceRequestsTest(unittest.TestCase):
+    def test_management_review_form_renders_session_token_and_can_approve(self):
+        import re
+        requester = self.create_user("requester@example.com")
+        reviewer = self.create_user("reviewer@example.com", is_superadmin=True)
+        payment = self.payment(requester)
+        client = self.client_for(reviewer)
+        page = client.get("/finance-requests?tab=management_review").get_data(as_text=True)
+        form = re.search(r'<form class="finance-management-review-actions".*?</form>', page, re.S).group(0)
+        token = re.search(r'name="csrf_token" value="([^"]+)"', form).group(1)
+        with client.session_transaction() as state:
+            self.assertEqual(token, state["csrf_token"])
+        with patch("app.routes.send_finance_scheduled_payment_email"):
+            response = client.post(f"/finance-requests/payment-requests/{payment.id}/management", data={
+                "csrf_token": token, "action": "approve", "management_comments": "Approved"})
+        self.assertEqual(response.status_code, 302)
+        db.session.refresh(payment)
+        self.assertEqual(payment.status, "Management approved")
+
     def queue_review_email(self, payment):
         from app.payment_notifications import queue_management_notification
         event = PaymentRequestEvent(payment_request=payment, event_type=payment.status, new_status=payment.status)
