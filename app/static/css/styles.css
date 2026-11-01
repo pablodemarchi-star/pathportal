@@ -8456,11 +8456,19 @@ span.session-marker-chip {
 
 .schedule-status-change-request { margin: 8px 0 0; white-space: pre-wrap; overflow-wrap: anywhere; font-size: 13px; line-height: 1.5; }
 .schedule-approval-notification-chip { gap: 5px; margin: 3px 0 0; }
-.online-control-tower-table { table-layout: fixed; }
-.online-control-tower-table th:first-child { width: 20%; }
-.online-control-tower-table th:nth-child(2) { width: 12%; }
-.online-control-tower-table th:nth-child(3) { width: 28%; }
-.online-control-tower-table th:nth-child(4), .online-control-tower-table th:nth-child(5) { width: 20%; }
+.online-control-tower-table { table-layout: fixed; min-width: 1120px; }
+.online-control-tower-table th:first-child { width: 22%; }
+.online-control-tower-table th:nth-child(2) { width: 14%; }
+.online-control-tower-table th:nth-child(3) { width: 26%; }
+.online-control-tower-table th:nth-child(4), .online-control-tower-table th:nth-child(5) { width: 19%; }
+.online-control-tower-table td:first-child { padding-right: 20px; }
+.online-control-tower-table .control-tower-session-name-cell { min-width: 0; width: 100%; max-width: 100%; white-space: normal; overflow-wrap: anywhere; }
+.online-control-tower-table .control-tower-session-name-cell > * { min-width: 0; max-width: 100%; white-space: normal; overflow-wrap: anywhere; }
+.online-control-tower-table .schedule-approval-notification-chip { box-sizing: border-box; }
+.online-control-tower-table .schedule-approval-notification-chip span { min-width: 0; white-space: normal; overflow-wrap: anywhere; }
+.online-control-tower-table .schedule-approval-notification-chip button { flex-shrink: 0; }
+.online-control-tower-table .bundle-action-stack, .online-control-tower-table .contextual-cell-trigger { min-width: 0; max-width: 100%; overflow-wrap: anywhere; }
+.online-control-tower-table .users-department-chip { box-sizing: border-box; max-width: 100%; white-space: normal; overflow-wrap: anywhere; }
 .concat-tower-navigation { margin-top: 5px; font-size: 12px; white-space: normal; }
 .concat-tower-navigation summary { color: var(--color-primary-dark); cursor: pointer; }
 .concat-tower-navigation a, .concat-primary-schedule-link { display: block; margin-top: 5px; color: var(--color-primary-dark); font-size: 12px; text-decoration: underline; overflow-wrap: anywhere; }
