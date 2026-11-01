@@ -15181,6 +15181,7 @@ def schedule_workflow_view(session_record, workflow=None, today=None, staffing=N
         "deadline_badge": schedule_deadline_badge_contract(workflow, status=status, today=today),
         "review_round": schedule_workflow_review_round(workflow),
         "schedule_auto_confirmed": schedule_workflow_auto_confirmed(workflow),
+        "schedule_requires_entry_slips": not journey_online_format_group(session_record),
         "latest_schedule_change_request": schedule_workflow_latest_change_request(workflow),
         "health": schedule_workflow_health(status, deadline, today=today),
         "schedule_gate": gate,
@@ -15840,7 +15841,10 @@ def apply_schedule_workflow_transition(session_record, action_key, due_at=None, 
     component_sessions = ExamSession.query.filter(ExamSession.id.in_(component_ids)).all()
     if len(component_sessions) > 1:
         shared_urls = {}
+        requires_entry_slips = not journey_online_format_group(session_record)
         for field, label in CONCAT_SHARED_FOLDER_FIELDS.items():
+            if field == "exam_entry_slips_url" and not requires_entry_slips:
+                continue
             values = {(getattr(record, field) or "").strip() for record in component_sessions}
             values.discard("")
             if len(values) > 1:
@@ -19662,14 +19666,15 @@ def update_schedule_workflow(session_id):
     if action_key in {"start_preparation", "reopen"}:
         due_at = schedule_preparation_deadline_for_session_bundle(session_record)
     if action_key in {"mark_ready", "mark_revised_ready"}:
+        requires_entry_slips = not journey_online_format_group(session_record)
         if not (session_record.schedule_folder_url or "").strip():
             flash("Please configure the Schedule folder before marking schedules as ready to send.", "error")
             return schedule_workflow_redirect(session_record, status_filter, action_key)
-        if not (session_record.exam_entry_slips_url or "").strip():
+        if requires_entry_slips and not (session_record.exam_entry_slips_url or "").strip():
             flash("Please configure the Exam entry slips folder before marking schedules as ready to send.", "error")
             return schedule_workflow_redirect(session_record, status_filter, action_key)
-        if request.form.get("schedule_uploaded_confirmation") != "1" or request.form.get("entry_slips_uploaded_confirmation") != "1":
-            flash("Please confirm the schedules and exam entry slips have been uploaded before marking schedules as ready to send.", "error")
+        if request.form.get("schedule_uploaded_confirmation") != "1" or (requires_entry_slips and request.form.get("entry_slips_uploaded_confirmation") != "1"):
+            flash("Please confirm the schedules and exam entry slips have been uploaded before marking schedules as ready to send." if requires_entry_slips else "Please confirm the schedules have been uploaded before marking schedules as ready to send.", "error")
             return schedule_workflow_redirect(session_record, status_filter, action_key)
         due_at = argentina_next_business_day(datetime.now(LOCAL_TZ).date())
     if action_key == "send_for_review":

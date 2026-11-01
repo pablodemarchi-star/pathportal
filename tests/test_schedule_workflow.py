@@ -1578,7 +1578,7 @@ class ScheduleWorkflowTest(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         page = response.get_data(as_text=True)
         table = re.search(r'<table class="control-tower-table online-control-tower-table">.*?</table>', page, re.S).group(0)
-        self.assertEqual(re.findall(r'<th>(.*?)</th>', table), ["Exam session", "Schedule", "Staffing"])
+        self.assertEqual(re.findall(r'<th>(.*?)</th>', table), ["Exam session", "Department", "Action description", "Schedule", "Staffing"])
         self.assertIn("Online format 0", table)
         self.assertIn("Online format 1", table)
         self.assertNotIn("June exam session", table)
@@ -1600,6 +1600,38 @@ class ScheduleWorkflowTest(unittest.TestCase):
         self.assertNotIn("Online format 0", bundle_table)
         self.assertNotIn("Online format 1", bundle_table)
 
+    def test_online_control_tower_department_actions_match_schedule_and_staffing_only(self):
+        from flask import template_rendered
+        self.session_record.format = "Online"
+        self.session_record.monthly_registrations_closed = True
+        self.session_record.date_confirmation_status = "Confirmed"
+        workflow = ExamSessionScheduleWorkflow(exam_session_id=self.session_record.id, status="Approved", review_round=1)
+        db.session.add_all([workflow, ExamSessionExaminerAssignment(exam_session_id=self.session_record.id, participation_status="Pending")])
+        db.session.flush()
+        db.session.add(ExamSessionScheduleEvent(workflow=workflow, previous_status="Sent for review", new_status="Approved", created_by="Automatic countdown"))
+        db.session.commit()
+        contexts = []
+        def capture(sender, template, context, **extra):
+            contexts.append(context)
+        with template_rendered.connected_to(capture, self.app):
+            page = self.login_client().get("/pre-online-session-control-tower?session_year=2026").get_data(as_text=True)
+        view = contexts[-1]["schedule_views"][0]
+        expected = [action for action in view["bundle_detail_actions"] if action.get("section") in {"schedule", "staffing"}]
+        self.assertTrue(any(action["section"] == "schedule" for action in expected))
+        self.assertTrue(any(action["section"] == "staffing" for action in expected))
+        table = re.search(r'<table class="control-tower-table online-control-tower-table">.*?</table>', page, re.S).group(0)
+        cells = re.findall(r'<td>(.*?)</td>', table, re.S)
+        self.assertEqual(cells[1].count('class="bundle-action-department-slot"'), len(expected))
+        for action in expected:
+            self.assertIn(action["department"], cells[1])
+            description = action["description"].strip()
+            if description.endswith('.') and not action.get("preserve_period"):
+                description = description[:-1]
+            self.assertIn(html_lib.escape(description), cells[2])
+        for action in view["bundle_detail_actions"]:
+            if action.get("section") not in {"schedule", "staffing"}:
+                self.assertNotIn(html_lib.escape(action["description"].strip().rstrip('.')), cells[2])
+
     def test_online_control_tower_mixed_concat_primary_links_and_shared_transitions(self):
         online = ExamSession(exam_session_name="Earlier online session", category="Path School", status="Pending",
             session_date=date(2026, 6, 21), shifts="Morning", modules="Speaking", format="Online")
@@ -1615,7 +1647,7 @@ class ScheduleWorkflowTest(unittest.TestCase):
         table = re.search(r'<table class="control-tower-table online-control-tower-table">.*?</table>', page, re.S).group(0)
         self.assertIn("Manage schedule: June exam session", table)
         self.assertIn("/pre-session-control-tower?", table)
-        schedule_cell = re.findall(r'<td>(.*?)</td>', table, re.S)[1]
+        schedule_cell = re.findall(r'<td>(.*?)</td>', table, re.S)[3]
         self.assertIn('aria-disabled="true"', schedule_cell)
         self.assertNotIn('data-open-modal=', schedule_cell)
         from app.routes import bundle_schedule_presentations
@@ -6665,6 +6697,46 @@ class ScheduleWorkflowTest(unittest.TestCase):
         self.assertIn("open_schedule_action=mark_revised_ready", response.headers["Location"])
         workflow = ExamSessionScheduleWorkflow.query.filter_by(exam_session_id=self.session_record.id).one()
         self.assertEqual(workflow.status, "Changes requested")
+
+    def test_online_ready_and_revised_ready_require_only_schedule_upload(self):
+        self.session_record.monthly_registrations_closed = True
+        self.session_record.date_confirmation_status = "Confirmed"
+        self.session_record.exam_entry_slips_url = ""
+        workflow = ExamSessionScheduleWorkflow(exam_session_id=self.session_record.id, status="In progress")
+        db.session.add(workflow)
+        db.session.commit()
+        client = self.login_client()
+        for format_name in ["Online", "Online at exam centre"]:
+            self.session_record.format = format_name
+            for status, action in [("In progress", "mark_ready"), ("Changes requested", "mark_revised_ready")]:
+                with self.subTest(format=format_name, action=action):
+                    workflow.status = status
+                    db.session.commit()
+                    page = client.get("/pre-online-session-control-tower?session_year=2026").get_data(as_text=True)
+                    form = re.search(fr'<form[^>]+id="schedule-action-form-{self.session_record.id}-{action}".*?</form>', page, re.S).group(0)
+                    self.assertIn('name="schedule_uploaded_confirmation"', form)
+                    self.assertNotIn('name="entry_slips_uploaded_confirmation"', form)
+                    url = f"/pre-session-control-tower/sessions/{self.session_record.id}/schedule"
+                    data = {"csrf_token": "token", "action_key": action, "view": "online"}
+                    client.post(url, data=data)
+                    db.session.refresh(workflow)
+                    self.assertEqual(workflow.status, status)
+                    response = client.post(url, data={**data, "schedule_uploaded_confirmation": "1"})
+                    self.assertEqual(response.status_code, 302)
+                    db.session.refresh(workflow)
+                    self.assertEqual(workflow.status, "Ready to send")
+
+    def test_mixed_concat_schedule_keeps_entry_slips_requirement(self):
+        online = ExamSession(exam_session_name="Mixed online", category="Path School", status="Pending",
+            session_date=date(2026, 6, 26), shifts="Morning", modules="Speaking", format="Online",
+            monthly_registrations_closed=True, date_confirmation_status="Confirmed", schedule_folder_url=self.session_record.schedule_folder_url)
+        db.session.add(online)
+        db.session.flush()
+        online.concat_session_ids = json.dumps([self.session_record.id])
+        db.session.add(ExamSessionScheduleWorkflow(exam_session_id=online.id, status="In progress"))
+        db.session.commit()
+        view = schedule_workflow_view(online, ExamSessionScheduleWorkflow.query.filter_by(exam_session_id=online.id).one())
+        self.assertTrue(view["schedule_requires_entry_slips"])
 
     def test_mark_ready_form_requires_upload_confirmations(self):
         db.session.add(ExamSessionScheduleWorkflow(

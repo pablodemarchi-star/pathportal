@@ -882,6 +882,7 @@
           {% endif %}
         </label>
       </div>
+      {% if not view or view.schedule_requires_entry_slips %}
       <div class="schedule-upload-confirmation-group">
         <span class="schedule-upload-title">Exam entry slips</span>
         <label class="schedule-upload-confirmation-option">
@@ -894,6 +895,7 @@
           {% endif %}
         </label>
       </div>
+      {% endif %}
     {% endif %}
     {% if action.deadline_required %}
       <label for="schedule-deadline-{{ session.id }}-{{ action.key }}">
@@ -1941,7 +1943,7 @@
 {% elif is_online_tower %}
 <section class="table-wrap control-tower-table-wrap" aria-label="Online schedule preparation and staffing">
   <table class="control-tower-table online-control-tower-table">
-    <thead><tr><th>Exam session</th><th>Schedule</th><th>Staffing</th></tr></thead>
+    <thead><tr><th>Exam session</th><th>Department</th><th>Action description</th><th>Schedule</th><th>Staffing</th></tr></thead>
     <tbody>
     {% for view in schedule_views %}
       {% set session = view.session %}
@@ -1953,6 +1955,9 @@
           {{ schedule_approval_notification_chip(session, view.schedule_approval_notification_event_id) }}
           {{ concat_tower_navigation(view) }}
         </span></td>
+        {% set online_actions = view.bundle_detail_actions|selectattr('section', 'in', ['schedule', 'staffing'])|list %}
+        <td>{{ bundle_detail_departments_cell(online_actions) }}</td>
+        <td>{{ bundle_detail_action_descriptions_cell(online_actions) }}</td>
         <td>
           {% call contextual_cell_trigger(session, 'schedule-actions', 'Review schedule', true, interactive=not view.bundle_schedule.is_secondary) %}
             {{ schedule_table_cell(view.bundle_schedule.status, view.schedule_gate, view.review_round, view.schedule_preparation_unlocked, view.deadline_badge, view.schedule_auto_confirmed) }}
@@ -1963,7 +1968,7 @@
           {{ staffing_table_cell(view.staffing, view.schedule_gate, false, view.staffing_deadline_badge, true) }}
         {% endcall %}</td>
       </tr>
-    {% else %}<tr><td colspan="3" class="empty-state">No online exam sessions for the selected year.</td></tr>{% endfor %}
+    {% else %}<tr><td colspan="5" class="empty-state">No online exam sessions for the selected year.</td></tr>{% endfor %}
     </tbody>
   </table>
 </section>
@@ -5180,7 +5185,7 @@ This stage has already been marked as complete. Reopening it may affect package 
 
           {% if view.schedule_concat_sessions and action_ns.primary and action_ns.primary.key in ['start_preparation', 'mark_ready', 'mark_revised_ready'] %}
             <aside class="schedule-concat-upload-notice" role="note">
-              <strong>Important:</strong> this exam session is concatenated with {% for linked in view.schedule_concat_sessions %}<a href="{{ linked.url }}">{{ linked.name }}</a>{% if not loop.last %}, {% endif %}{% endfor %}. All schedules and Exam entry slips for every concatenated session must be uploaded before the status can be changed to {{ schedule_status_badge('Ready to send') }}.
+              <strong>Important:</strong> this exam session is concatenated with {% for linked in view.schedule_concat_sessions %}<a href="{{ linked.url }}">{{ linked.name }}</a>{% if not loop.last %}, {% endif %}{% endfor %}. All schedules{% if view.schedule_requires_entry_slips %} and Exam entry slips{% endif %} for every concatenated session must be uploaded before the status can be changed to {{ schedule_status_badge('Ready to send') }}.
             </aside>
           {% endif %}
           {% if view.status == 'Approved' %}
