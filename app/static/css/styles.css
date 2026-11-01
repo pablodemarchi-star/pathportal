@@ -8469,6 +8469,18 @@ span.session-marker-chip {
 .online-control-tower-table .schedule-approval-notification-chip button { flex-shrink: 0; }
 .online-control-tower-table .bundle-action-stack, .online-control-tower-table .contextual-cell-trigger { min-width: 0; max-width: 100%; overflow-wrap: anywhere; }
 .online-control-tower-table .users-department-chip { box-sizing: border-box; max-width: 100%; white-space: normal; overflow-wrap: anywhere; }
+.online-control-tower-table td:nth-child(4) { padding-right: 20px; }
+.online-control-tower-table .contextual-cell-trigger { box-sizing: border-box; }
+.online-control-tower-table .schedule-summary-cell,
+.online-control-tower-table .staffing-summary-cell { grid-template-columns: minmax(0, 1fr); min-width: 0; max-width: 100%; white-space: normal; }
+.online-control-tower-table .schedule-summary-cell > *,
+.online-control-tower-table .staffing-summary-cell > *,
+.online-control-tower-table .staffing-status-badge-list,
+.online-control-tower-table .badge,
+.online-control-tower-table .workflow-deadline-chip { box-sizing: border-box; min-width: 0; max-width: 100%; white-space: normal; overflow-wrap: anywhere; }
+.online-control-tower-table .workflow-deadline-chip { flex-wrap: wrap; }
+.online-control-tower-table .workflow-gate-chip svg,
+.online-control-tower-table .staffing-gate-chip svg { flex-shrink: 0; }
 .concat-tower-navigation { margin-top: 5px; font-size: 12px; white-space: normal; }
 .concat-tower-navigation summary { color: var(--color-primary-dark); cursor: pointer; }
 .concat-tower-navigation a, .concat-primary-schedule-link { display: block; margin-top: 5px; color: var(--color-primary-dark); font-size: 12px; text-decoration: underline; overflow-wrap: anywhere; }
