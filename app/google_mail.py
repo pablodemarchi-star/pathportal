@@ -7,6 +7,7 @@ import os
 import secrets
 import tempfile
 import time
+from email.message import EmailMessage
 from functools import wraps
 from pathlib import Path
 from urllib.error import HTTPError, URLError
@@ -74,7 +75,7 @@ def save_connection(value):
             os.unlink(temporary)
 
 
-def google_json(url, *, fields=None, bearer=None):
+def google_json(url, *, fields=None, bearer=None, json_body=None, timeout=15):
     headers = {"Accept": "application/json"}
     body = None
     if fields is not None:
@@ -82,8 +83,56 @@ def google_json(url, *, fields=None, bearer=None):
         headers["Content-Type"] = "application/x-www-form-urlencoded"
     if bearer:
         headers["Authorization"] = "Bearer " + bearer
-    with urlopen(Request(url, data=body, headers=headers), timeout=15) as response:
+    if json_body is not None:
+        body = json.dumps(json_body).encode()
+        headers["Content-Type"] = "application/json"
+    with urlopen(Request(url, data=body, headers=headers), timeout=timeout) as response:
         return json.load(response)
+
+
+class MailNotSent(Exception):
+    pass
+
+
+class MailDeliveryUnknown(Exception):
+    pass
+
+
+def send_notification_email(recipient, subject, text, html, message_id):
+    """Send once. Never retry an ambiguous delivery automatically."""
+    if current_app.testing and not current_app.config.get("MAIL_DELIVERY_IN_TESTS"):
+        raise MailNotSent("Delivery is disabled in tests")
+    try:
+        saved = read_connection()
+        values = configuration()
+        if not configured() or saved.get("account") != os.getenv("GMAIL_ACCOUNT_EMAIL", EXPECTED_ACCOUNT).lower() or saved.get("client_id") != values["GOOGLE_OAUTH_CLIENT_ID"] or not saved.get("refresh_token"):
+            raise MailNotSent("Connect the designated Google account first")
+        tokens = google_json("https://oauth2.googleapis.com/token", timeout=8, fields={
+            "grant_type": "refresh_token", "client_id": values["GOOGLE_OAUTH_CLIENT_ID"],
+            "client_secret": values["GOOGLE_OAUTH_CLIENT_SECRET"], "refresh_token": saved["refresh_token"],
+        })
+        access_token = tokens["access_token"]
+        if tokens.get("refresh_token"):
+            save_connection({**saved, "refresh_token": tokens["refresh_token"]})
+        message = EmailMessage()
+        message["From"] = os.getenv("GMAIL_FROM_EMAIL", "no-reply@pathexaminations.com")
+        message["To"], message["Subject"], message["Message-ID"] = recipient, subject, message_id
+        message.set_content(text)
+        message.add_alternative(html, subtype="html")
+    except (OSError, ValueError, KeyError) as exc:
+        raise MailNotSent("Google authorization or message preparation failed") from exc
+    try:
+        result = google_json("https://gmail.googleapis.com/gmail/v1/users/me/messages/send", bearer=access_token,
+                             json_body={"raw": base64.urlsafe_b64encode(message.as_bytes()).decode()}, timeout=10)
+        if not result.get("id"):
+            raise MailDeliveryUnknown("Google did not confirm delivery")
+        return result["id"]
+    except HTTPError as exc:
+        if exc.code < 500:
+            raise MailNotSent("Google rejected the message") from exc
+        raise MailDeliveryUnknown("Google delivery was not confirmed") from exc
+    except (OSError, ValueError) as exc:
+        raise MailDeliveryUnknown("Google delivery was not confirmed") from exc
 
 
 @google_mail_bp.after_request
@@ -97,6 +146,9 @@ def private_response(response):
 @administrator
 def settings():
     session.setdefault("csrf_token", secrets.token_urlsafe(32))
+    from app.models import PaymentReviewNotification
+    retry_count = PaymentReviewNotification.query.filter(PaymentReviewNotification.status.in_(["pending", "failed"])).count()
+    uncertain_count = PaymentReviewNotification.query.filter(PaymentReviewNotification.status.in_(["sending", "unknown"])).count()
     try:
         saved = read_connection()
         connected = bool(saved.get("refresh_token"))
@@ -107,7 +159,23 @@ def settings():
     return render_template("integrations/google.html", configured=configured(), connected=connected,
         account=saved.get("account") if connected else os.getenv("GMAIL_ACCOUNT_EMAIL", EXPECTED_ACCOUNT),
         sender=os.getenv("GMAIL_FROM_EMAIL", "no-reply@pathexaminations.com"),
-        callback_uri=values["GOOGLE_OAUTH_REDIRECT_URI"], csrf_token=session.get("csrf_token"))
+        callback_uri=values["GOOGLE_OAUTH_REDIRECT_URI"], csrf_token=session.get("csrf_token"),
+        retry_count=retry_count, uncertain_count=uncertain_count)
+
+
+@google_mail_bp.post("/integrations/google/retry-payment-notifications")
+@administrator
+def retry_payment_notifications():
+    from app.models import PaymentReviewNotification
+    from app.payment_notifications import deliver_management_notification
+    if not validate_csrf():
+        abort(400)
+    ids = [row.id for row in PaymentReviewNotification.query.filter(
+        PaymentReviewNotification.status.in_(["pending", "failed"])
+    ).order_by(PaymentReviewNotification.id).limit(50).all()]
+    sent = sum(deliver_management_notification(notification_id) for notification_id in ids)
+    flash(f"{sent} payment review notifications sent. Unconfirmed deliveries were not retried.", "success")
+    return redirect(url_for("google_mail.settings"))
 
 
 @google_mail_bp.post("/integrations/google/connect")

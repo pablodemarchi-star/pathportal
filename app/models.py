@@ -2521,6 +2521,19 @@ class PaymentRequest(db.Model):
     payee_contact = db.relationship("FinanceContact")
 
 
+class PaymentReviewNotification(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    payment_request_id = db.Column(db.Integer, db.ForeignKey("payment_request.id"), nullable=False, index=True)
+    review_event_id = db.Column(db.Integer, nullable=False, unique=True)
+    recipient = db.Column(db.String(254), nullable=False)
+    status = db.Column(db.String(24), nullable=False, default="pending", index=True)
+    gmail_message_id = db.Column(db.String(200), nullable=True)
+    last_error = db.Column(db.String(250), nullable=True)
+    created_at = db.Column(db.DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))
+    sent_at = db.Column(db.DateTime(timezone=True), nullable=True)
+    payment = db.relationship("PaymentRequest", backref=db.backref("review_notifications", cascade="all, delete-orphan"))
+
+
 class PaymentRequestEvent(db.Model):
     __tablename__ = "payment_request_event"
 

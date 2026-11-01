@@ -12,7 +12,15 @@
     <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
     <button type="submit" class="primary-button"{% if not configured %} disabled{% endif %}>{{ 'Reconnect Google' if connected else 'Connect Google' }}</button>
   </form>
-  <p>Connecting does not send any email. Automatic notification rules will be configured separately.</p>
+  <p>Connecting does not send any email. New payment requests entering Management review notify pablo.demarchi@pathexaminations.com.</p>
+  {% if retry_count %}
+  <p>{{ retry_count }} payment review notifications have not been sent.</p>
+  <form method="post" action="{{ url_for('google_mail.retry_payment_notifications') }}">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <button type="submit" class="secondary-button"{% if not connected %} disabled{% endif %}>Retry unsent notifications</button>
+  </form>
+  {% endif %}
+  {% if uncertain_count %}<p>{{ uncertain_count }} deliveries could not be confirmed. Check the account’s Sent folder before retrying them; they are excluded from automatic retries.</p>{% endif %}
   <details><summary>Connection setup</summary><p>Add this exact address to the OAuth client’s authorized redirect URIs in Google Cloud:</p><code>{{ callback_uri or 'Not configured' }}</code></details>
 </section>
 {% endblock %}

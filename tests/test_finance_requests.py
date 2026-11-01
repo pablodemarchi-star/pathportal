@@ -33,6 +33,205 @@ from app.routes import (
 
 
 class FinanceRequestsTest(unittest.TestCase):
+    def queue_review_email(self, payment):
+        from app.payment_notifications import queue_management_notification
+        event = PaymentRequestEvent(payment_request=payment, event_type=payment.status, new_status=payment.status)
+        db.session.add(event)
+        notification_id = queue_management_notification(payment)
+        db.session.commit()
+        return notification_id, event.id
+
+    def test_new_management_review_request_sends_one_gmail_notification(self):
+        from app.models import PaymentReviewNotification
+        from app.payment_notifications import deliver_management_notification, queue_management_notification
+        requester = self.create_user("requester@example.com")
+        with patch("app.payment_notifications.send_notification_email", return_value="gmail-message") as send:
+            response = self.client_for(requester).post("/finance-requests/payment-requests", data={
+                "description": "Payment for accounting", "concept_id": self.concept.id,
+                "currency": "ARS", "amount": "2500", "payment_method": "Cash", "payment_date_mode": "asap",
+            })
+            self.assertEqual(response.status_code, 302)
+            self.assertEqual(send.call_count, 1)
+            recipient, subject, text, html, _ = send.call_args.args
+            self.assertEqual(recipient, "pablo.demarchi@pathexaminations.com")
+            self.assertIn("New payment request awaiting approval", subject)
+            self.assertIn("Dear Pablo", text)
+            self.assertIn('lang="en"', html)
+            self.assertIn("Approve", html)
+            self.assertIn("Reject", html)
+            self.assertIn("Mark discrepancy", html)
+            for action in ["approve", "reject", "needs_correction"]:
+                self.assertIn(f"/email-review/{action}?review_event_id=", text)
+                self.assertIn(f"/email-review/{action}?review_event_id=", html)
+            payment = PaymentRequest.query.one()
+            notification = PaymentReviewNotification.query.one()
+            self.assertEqual(notification.status, "sent")
+            self.assertEqual(queue_management_notification(payment), notification.id)
+            db.session.commit()
+            self.assertFalse(deliver_management_notification(notification.id))
+            self.assertEqual(send.call_count, 1)
+
+    def test_management_email_preserves_safe_multiline_text_and_labels_pending_amount(self):
+        from app.payment_notifications import deliver_management_notification
+        requester = self.create_user("requester@example.com")
+        payment = self.payment(requester, status="Pending approval")
+        payment.amount = Decimal("0.00")
+        payment.description = '<script>alert("test")</script>\nSecond line'
+        notification_id, _ = self.queue_review_email(payment)
+        with self.app.test_request_context(), patch("app.payment_notifications.send_notification_email", return_value="preview-id") as send:
+            self.assertTrue(deliver_management_notification(notification_id))
+        _, subject, text, html, _ = send.call_args.args
+        self.assertIn("New payment request awaiting approval", subject)
+        self.assertIn("Amount pending", text)
+        self.assertIn("Amount pending", html)
+        self.assertIn("&lt;script&gt;", html)
+        self.assertNotIn("<script>", html)
+        self.assertIn("<br>Second line", html)
+        self.assertIn("Set amount &amp; review", html)
+        self.assertIn("Set amount & review", text)
+        self.assertIn("/email-review/set_amount?", html)
+        self.assertNotIn("/email-review/approve?", html)
+        self.assertIn("Reject", html)
+        self.assertIn("Mark discrepancy", html)
+
+    def test_pending_amount_email_opens_amount_form_then_allows_separate_approval(self):
+        requester = self.create_user("finance@example.com", department="Finance")
+        reviewer = self.create_user("reviewer@example.com", is_superadmin=True)
+        payment = self.payment(requester, status="Pending approval")
+        payment.amount = Decimal("0")
+        _, event_id = self.queue_review_email(payment)
+        client = self.client_for(reviewer)
+        url = f"/finance-requests/payment-requests/{payment.id}/email-review/set_amount?review_event_id={event_id}"
+        response = client.get(url, follow_redirects=True)
+        self.assertEqual(response.status_code, 200)
+        self.assertIn(f"open_staff_modal=set-payment-amount-{payment.id}", response.request.query_string.decode())
+        db.session.refresh(payment)
+        self.assertEqual(payment.amount, Decimal("0"))
+        amount_url = f"/finance-requests/payment-requests/{payment.id}/set-amount"
+        self.assertEqual(client.post(amount_url, data={"amount": "3500"}).status_code, 400)
+        self.assertEqual(client.post(amount_url, data={"csrf_token": "token", "amount": "3500"}).status_code, 302)
+        db.session.refresh(payment)
+        self.assertEqual(payment.amount, Decimal("3500"))
+        self.assertEqual(payment.status, "Pending approval")
+        page = client.get(url).get_data(as_text=True)
+        self.assertIn("Confirm: Approve", page)
+        with patch("app.routes.send_finance_scheduled_payment_email"):
+            response = client.post(f"/finance-requests/payment-requests/{payment.id}/management", data={
+                "csrf_token": "token", "review_event_id": event_id, "action": "approve"})
+        self.assertEqual(response.status_code, 302)
+        db.session.refresh(payment)
+        self.assertEqual(payment.status, "Management approved")
+
+    def test_management_email_failure_keeps_request_and_does_not_retry_unknown_delivery(self):
+        from app.models import PaymentReviewNotification
+        from app.google_mail import MailDeliveryUnknown
+        from app.payment_notifications import deliver_management_notification
+        requester = self.create_user("requester@example.com")
+        payment = self.payment(requester)
+        notification_id, _ = self.queue_review_email(payment)
+        with self.app.test_request_context(), patch("app.payment_notifications.send_notification_email", side_effect=MailDeliveryUnknown()) as send:
+            self.assertFalse(deliver_management_notification(notification_id))
+            self.assertFalse(deliver_management_notification(notification_id))
+        self.assertEqual(send.call_count, 1)
+        self.assertEqual(db.session.get(PaymentReviewNotification, notification_id).status, "unknown")
+        self.assertEqual(payment.status, "Submitted")
+
+    def test_email_review_links_require_login_and_confirmation_for_each_action(self):
+        requester = self.create_user("requester@example.com")
+        reviewer = self.create_user("reviewer@example.com", is_superadmin=True)
+        for action, expected in [("approve", "Management approved"), ("reject", "Rejected"), ("needs_correction", "Needs correction")]:
+            payment = self.payment(requester)
+            _, event_id = self.queue_review_email(payment)
+            url = f"/finance-requests/payment-requests/{payment.id}/email-review/{action}?review_event_id={event_id}"
+            self.assertEqual(self.app.test_client().get(url).status_code, 302)
+            self.assertEqual(self.client_for(requester).get(url).status_code, 403)
+            client = self.client_for(reviewer)
+            self.assertEqual(client.get(url).status_code, 200)
+            db.session.refresh(payment)
+            self.assertEqual(payment.status, "Submitted")
+            management_url = f"/finance-requests/payment-requests/{payment.id}/management"
+            data = {"review_event_id": event_id, "action": action, "management_comments": "Reviewed"}
+            self.assertEqual(client.post(management_url, data=data).status_code, 400)
+            data["csrf_token"] = "token"
+            with patch("app.routes.send_finance_scheduled_payment_email"):
+                self.assertEqual(client.post(management_url, data=data).status_code, 302)
+            db.session.refresh(payment)
+            self.assertEqual(payment.status, expected)
+            self.assertEqual(client.post(management_url, data=data).status_code, 403)
+
+    def test_resubmission_sends_new_notification_and_old_email_cannot_review_it(self):
+        from app.models import PaymentReviewNotification
+        requester = self.create_user("requester@example.com")
+        reviewer = self.create_user("reviewer@example.com", is_superadmin=True)
+        payment = self.payment(requester)
+        _, old_event_id = self.queue_review_email(payment)
+        payment.status = "Needs correction"
+        db.session.commit()
+        with patch("app.payment_notifications.send_notification_email", return_value="second-message") as send:
+            response = self.client_for(requester).post(f"/finance-requests/payment-requests/{payment.id}/resubmit", data={
+                "description": payment.description, "concept_id": self.concept.id, "currency": "ARS", "amount": "100",
+                "payment_method": "Cash", "payment_date_mode": "asap"})
+        self.assertEqual(response.status_code, 302)
+        self.assertEqual(send.call_count, 1)
+        self.assertEqual(PaymentReviewNotification.query.count(), 2)
+        client = self.client_for(reviewer)
+        old_url = f"/finance-requests/payment-requests/{payment.id}/email-review/approve?review_event_id={old_event_id}"
+        self.assertIn("earlier submission", client.get(old_url).get_data(as_text=True))
+        self.assertEqual(client.post(f"/finance-requests/payment-requests/{payment.id}/management", data={
+            "csrf_token": "token", "review_event_id": old_event_id, "action": "approve"}).status_code, 409)
+        db.session.refresh(payment)
+        self.assertEqual(payment.status, "Resubmitted")
+
+    def test_auto_approved_submission_does_not_send_management_email(self):
+        from app.models import PaymentReviewNotification
+        reviewer = self.create_user("reviewer@example.com", is_superadmin=True)
+        with patch("app.payment_notifications.send_notification_email") as send:
+            self.client_for(reviewer).post("/finance-requests/payment-requests", data={
+                "description": "Already approved", "concept_id": self.concept.id, "currency": "ARS",
+                "amount": "100", "payment_method": "Cash", "payment_date_mode": "asap"})
+        send.assert_not_called()
+        self.assertEqual(PaymentReviewNotification.query.count(), 0)
+
+    def test_email_review_returns_to_selected_action_after_login(self):
+        requester = self.create_user("requester@example.com")
+        reviewer = self.create_user("reviewer@example.com", is_superadmin=True)
+        reviewer.set_password("test-password")
+        payment = self.payment(requester)
+        _, event_id = self.queue_review_email(payment)
+        db.session.commit()
+        client = self.app.test_client()
+        url = f"/finance-requests/payment-requests/{payment.id}/email-review/reject?review_event_id={event_id}"
+        self.assertEqual(client.get(url).status_code, 302)
+        response = client.post("/login", data={"email": reviewer.email, "password": "test-password"})
+        self.assertEqual(response.status_code, 302)
+        self.assertEqual(response.location, url)
+        self.assertEqual(client.get(response.location).status_code, 200)
+        db.session.refresh(payment)
+        self.assertEqual(payment.status, "Submitted")
+
+    def test_known_email_failure_can_retry_but_stale_notification_is_cancelled(self):
+        from app.models import PaymentReviewNotification
+        from app.google_mail import MailNotSent
+        from app.payment_notifications import deliver_management_notification
+        requester = self.create_user("requester@example.com")
+        payment = self.payment(requester)
+        notification_id, _ = self.queue_review_email(payment)
+        with self.app.test_request_context(), patch("app.payment_notifications.send_notification_email", side_effect=MailNotSent("Not connected")):
+            self.assertFalse(deliver_management_notification(notification_id))
+        self.assertEqual(db.session.get(PaymentReviewNotification, notification_id).status, "failed")
+        with self.app.test_request_context(), patch("app.payment_notifications.send_notification_email", return_value="gmail-retry") as send:
+            self.assertTrue(deliver_management_notification(notification_id))
+            self.assertEqual(send.call_count, 1)
+        self.assertEqual(db.session.get(PaymentReviewNotification, notification_id).status, "sent")
+        second = self.payment(requester)
+        notification_id, _ = self.queue_review_email(second)
+        second.status = "Rejected"
+        db.session.commit()
+        with patch("app.payment_notifications.send_notification_email") as send:
+            self.assertFalse(deliver_management_notification(notification_id))
+            send.assert_not_called()
+        self.assertEqual(db.session.get(PaymentReviewNotification, notification_id).status, "cancelled")
+
     def setUp(self):
         self.app = create_app()
         self.app.config["TESTING"] = True
@@ -992,7 +1191,7 @@ class FinanceRequestsTest(unittest.TestCase):
 
         response = self.client_for(superadmin).post(
             f"/finance-requests/payment-requests/{payment.id}/management",
-            data={
+            data={"csrf_token": "token",
                 "action": "approve",
                 "scheduled_payment_date": (date.today() + timedelta(days=1)).isoformat(),
             },
@@ -1028,7 +1227,7 @@ class FinanceRequestsTest(unittest.TestCase):
 
         response = self.client_for(superadmin).post(
             f"/finance-requests/payment-requests/{payment.id}/set-amount",
-            data={"amount": "3500,50"},
+            data={"csrf_token": "token", "amount": "3500,50"},
             follow_redirects=True,
         )
 
@@ -1070,7 +1269,7 @@ class FinanceRequestsTest(unittest.TestCase):
         with patch("app.routes.send_finance_scheduled_payment_email", return_value=True):
             response = self.client_for(superadmin).post(
                 f"/finance-requests/payment-requests/{payment.id}/management",
-                data={
+                data={"csrf_token": "token",
                     "action": "approve",
                     "scheduled_payment_date": tomorrow.isoformat(),
                 },
@@ -1097,7 +1296,7 @@ class FinanceRequestsTest(unittest.TestCase):
         with patch("app.routes.send_plain_email", return_value=True) as send_email:
             response = self.client_for(superadmin).post(
                 f"/finance-requests/payment-requests/{payment.id}/management",
-                data={
+                data={"csrf_token": "token",
                     "action": "approve",
                     "scheduled_payment_date": scheduled_date.isoformat(),
                 },
@@ -1120,7 +1319,7 @@ class FinanceRequestsTest(unittest.TestCase):
 
         response = self.client_for(superadmin).post(
             f"/finance-requests/payment-requests/{payment.id}/management",
-            data={
+            data={"csrf_token": "token",
                 "action": "reject",
                 "scheduled_payment_date": date.today().isoformat(),
                 "management_comments": "Not approved",

@@ -1,0 +1,25 @@
+{% extends "base.html" %}
+{% block title %}{{ review_label }} {{ payment.request_number }} | Path Examinations{% endblock %}
+{% block content %}
+<header class="page-header"><div><p class="eyebrow">Finance requests · Management review</p><h1>{{ review_label }} {{ payment.request_number }}</h1></div></header>
+<section class="staff-detail-section">
+  <p><strong>Status:</strong> {{ payment.status }}</p>
+  <p><strong>Payee:</strong> {{ payment.payee_name_snapshot or '-' }}<br><strong>Concept:</strong> {{ payment.concept_name_snapshot }}<br><strong>Amount:</strong> {{ payment.currency }} {{ payment.amount }}</p>
+  <p style="white-space:pre-wrap">{{ payment.description }}</p>
+  {% if not is_current %}
+    <p>This request has already been reviewed or this email belongs to an earlier submission. No action has been taken.</p>
+  {% elif review_action == 'approve' and amount_pending %}
+    <p>Set the payment amount in Management review before approving this request.</p>
+  {% else %}
+  <form method="post" action="{{ url_for('staff.manage_payment_request', payment_id=payment.id) }}">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <input type="hidden" name="review_event_id" value="{{ review_event_id }}">
+    <input type="hidden" name="action" value="{{ review_action }}">
+    {% if review_action == 'approve' %}<label>Scheduled payment date<input type="date" name="scheduled_payment_date" value="{{ payment.scheduled_payment_date.isoformat() if payment.scheduled_payment_date else '' }}"></label>{% endif %}
+    <label>Management comments{% if review_action != 'approve' %} (required){% endif %}<textarea name="management_comments" rows="4"{% if review_action != 'approve' %} required{% endif %}></textarea></label>
+    <button type="submit" class="primary-button">Confirm: {{ review_label }}</button>
+  </form>
+  {% endif %}
+  <p><a class="secondary-button" href="{{ url_for('staff.finance_requests', tab='management_review') }}">Open Management review</a></p>
+</section>
+{% endblock %}

@@ -28129,7 +28129,10 @@ def create_payment_request():
         add_payment_event(payment, "Pending approval" if is_finance_action_request else "Submitted", new_status=payment.status)
     if payment.status != "Payment completed" and initial_status == "Management approved":
         add_payment_event(payment, "Approved by Management", previous_status="Submitted", new_status="Management approved")
+    from app.payment_notifications import queue_management_notification, deliver_management_notification
+    notification_id = queue_management_notification(payment)
     db.session.commit()
+    deliver_management_notification(notification_id)
     flash("Payment request created.", "success")
     if return_url:
         return redirect(return_url)
@@ -28188,7 +28191,10 @@ def resubmit_payment_request(payment_id):
         return finance_request_redirect("payment_requests")
     payment.status = "Resubmitted"
     add_payment_event(payment, "Resubmitted", previous_status=previous, new_status="Resubmitted", comment=request.form.get("requester_comments"))
+    from app.payment_notifications import queue_management_notification, deliver_management_notification
+    notification_id = queue_management_notification(payment)
     db.session.commit()
+    deliver_management_notification(notification_id)
     flash("Payment request resubmitted.", "success")
     return finance_request_redirect(request.form.get("tab") or "management_review")
 
@@ -28201,6 +28207,8 @@ def set_payment_request_amount(payment_id):
     user = getattr(g, "current_user", None)
     if not can_management_review_payment(user, payment) or payment.status != "Pending approval":
         abort(403, description="Only the Superadmin can set the amount for pending approval payment requests.")
+    if not validate_csrf():
+        abort(400, description="Security token expired. Please reopen the amount form.")
     try:
         payment.amount = parse_finance_amount(request.form.get("amount"))
     except ValueError as exc:
@@ -28210,6 +28218,38 @@ def set_payment_request_amount(payment_id):
     db.session.commit()
     flash("Payment amount set.", "success")
     return finance_request_redirect("management_review")
+
+
+@staff_bp.route("/finance-requests/payment-requests/<int:payment_id>/email-review/<action>")
+def payment_request_email_review(payment_id, action):
+    from app.payment_notifications import email_review_is_current
+    from app.models import PaymentReviewNotification
+    if action not in {"approve", "reject", "needs_correction", "set_amount"}:
+        abort(404)
+    event_id = request.args.get("review_event_id", type=int)
+    if not event_id:
+        abort(404)
+    if not g.user:
+        session["finance_email_review_next"] = url_for("staff.payment_request_email_review", payment_id=payment_id,
+            action=action, review_event_id=event_id)
+        return redirect(url_for("login"))
+    require_menu_view(FINANCE_REQUESTS_MENU_KEY)
+    payment = PaymentRequest.query.get_or_404(payment_id)
+    if not can_management_review_payment(getattr(g, "current_user", None), payment):
+        abort(403)
+    notification = PaymentReviewNotification.query.filter_by(payment_request_id=payment.id, review_event_id=event_id).first_or_404()
+    is_current = email_review_is_current(payment, event_id)
+    if action == "set_amount" and is_current:
+        if payment_amount_is_pending(payment):
+            return finance_request_redirect("management_review", open_staff_modal=f"set-payment-amount-{payment.id}")
+        action = "approve"
+    response = current_app.make_response(render_template("finance_requests/email_review.html", payment=payment,
+        review_event_id=notification.review_event_id, review_action=action,
+        review_label={"approve": "Approve", "reject": "Reject", "needs_correction": "Mark discrepancy", "set_amount": "Set amount & review"}[action],
+        is_current=is_current, amount_pending=payment_amount_is_pending(payment),
+        csrf_token=session.setdefault("csrf_token", secrets.token_urlsafe(32))))
+    response.headers["Cache-Control"] = "private, no-store"
+    return response
 
 
 @staff_bp.route("/finance-requests/payment-requests/<int:payment_id>/management", methods=["POST"])
@@ -28222,6 +28262,12 @@ def manage_payment_request(payment_id):
         abort(403, description="Only the Superadmin can review payment requests.")
     if payment.status not in FINANCE_DASHBOARD_MANAGEMENT_REVIEW_STATUSES:
         abort(403, description="This payment request does not need Management review.")
+    if not validate_csrf():
+        abort(400, description="Security token expired. Please reload the review page.")
+    if "review_event_id" in request.form:
+        from app.payment_notifications import email_review_is_current
+        if not email_review_is_current(payment, request.form.get("review_event_id", type=int)):
+            abort(409, description="This email refers to an earlier review. Please open the current request.")
     action = request.form.get("action")
     comment = (request.form.get("management_comments") or "").strip()
     previous = payment.status

@@ -185,6 +185,9 @@ def create_app():
         error = None
         remembered_email = request.cookies.get(REMEMBER_LOGIN_COOKIE, "")
         if request.method == "POST":
+            finance_review_next = session.get("finance_email_review_next", "")
+            if not re.fullmatch(r"/finance-requests/payment-requests/\d+/email-review/(approve|reject|needs_correction|set_amount)\?review_event_id=\d+", finance_review_next):
+                finance_review_next = ""
             email_or_username = request.form.get("email", request.form.get("username", "")).strip()
             password = request.form.get("password", "")
             remember_login = request.form.get("remember") == "1"
@@ -201,7 +204,7 @@ def create_app():
                     session["user_email"] = user.email
                     session["user_department"] = user.department
                     session["csrf_token"] = secrets.token_urlsafe(32)
-                    response = redirect(url_for("staff.dashboard"))
+                    response = redirect(finance_review_next or url_for("staff.dashboard"))
                     if remember_login:
                         response.set_cookie(
                             REMEMBER_LOGIN_COOKIE,
@@ -229,7 +232,7 @@ def create_app():
                     session["user_email"] = ""
                     session["user_department"] = "Admin"
                     session["csrf_token"] = secrets.token_urlsafe(32)
-                    response = redirect(url_for("staff.dashboard"))
+                    response = redirect(finance_review_next or url_for("staff.dashboard"))
                     if remember_login:
                         response.set_cookie(
                             REMEMBER_LOGIN_COOKIE,

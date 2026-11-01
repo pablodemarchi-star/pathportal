@@ -109,3 +109,27 @@ class GoogleMailTest(unittest.TestCase):
         self.assertEqual(urlsplit(response.location).path, "/integrations/google")
         with self.client.session_transaction() as session:
             self.assertNotIn("google_mail_oauth", session)
+
+    def test_sender_refreshes_credentials_and_sends_multipart_from_alias(self):
+        import base64
+        from email import policy
+        from email.parser import BytesParser
+        from app.google_mail import send_notification_email
+        save_connection({"account": "pablo.demarchi@pathexaminations.com", "client_id": "client-test", "refresh_token": "refresh-test"})
+        self.app.config["MAIL_DELIVERY_IN_TESTS"] = True
+        with patch("app.google_mail.google_json", side_effect=[{"access_token": "access-test"}, {"id": "gmail-id"}]) as api:
+            result = send_notification_email("pablo.demarchi@pathexaminations.com", "Review", "Plain text", "<p>HTML</p>", "<review-test@pathexaminations.com>")
+        self.assertEqual(result, "gmail-id")
+        self.assertEqual(api.call_args_list[0].kwargs["fields"]["grant_type"], "refresh_token")
+        raw = api.call_args_list[1].kwargs["json_body"]["raw"]
+        message = BytesParser(policy=policy.default).parsebytes(base64.urlsafe_b64decode(raw))
+        self.assertEqual(message["From"], "no-reply@pathexaminations.com")
+        self.assertEqual(message["To"], "pablo.demarchi@pathexaminations.com")
+        self.assertEqual(message.get_content_type(), "multipart/alternative")
+
+    def test_test_mode_never_uses_real_google_credentials(self):
+        from app.google_mail import send_notification_email, MailNotSent
+        with patch("app.google_mail.google_json") as api:
+            with self.assertRaises(MailNotSent):
+                send_notification_email("test@example.com", "Test", "Test", "<p>Test</p>", "<test@example.com>")
+            api.assert_not_called()

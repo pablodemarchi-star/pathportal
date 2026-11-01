@@ -873,6 +873,7 @@
           {{ payment_card(payment, 'management_review') }}
           {% if not (payment.status == 'Payment completed' and payment_is_card_already_paid(payment)) %}
             <form class="finance-management-review-actions" method="post" action="{{ url_for('staff.manage_payment_request', payment_id=payment.id) }}">
+              <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
               <input type="hidden" name="scheduled_payment_date" value="{{ payment.scheduled_payment_date.isoformat() if payment.scheduled_payment_date else '' }}">
               <textarea name="management_comments" rows="2" placeholder="Management comments" data-management-review-comments></textarea>
               <div class="finance-management-review-buttons">
@@ -893,6 +894,7 @@
                   <button class="icon-button" type="button" data-close-modal aria-label="Close modal">&times;</button>
                 </div>
                 <form id="set-payment-amount-form-{{ payment.id }}" class="finance-form-panel finance-modal-form" method="post" action="{{ url_for('staff.set_payment_request_amount', payment_id=payment.id) }}">
+                  <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
                   <label>Amount
                     <span class="finance-prefixed-input">
                       <strong>{{ payment.currency or 'Currency' }}</strong>

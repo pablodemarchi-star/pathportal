@@ -1,0 +1,56 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Payment request awaiting approval</title></head>
+<body style="margin:0;padding:0;background:#00506b;font-family:Arial,Helvetica,sans-serif;color:#111115;-webkit-text-size-adjust:100%;">
+  <div style="display:none;font-size:1px;line-height:1px;max-height:0;max-width:0;opacity:0;overflow:hidden;">{{ payment.request_number }} · {{ amount_display }} · A payment request is ready for your review.</div>
+  <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" bgcolor="#00506b" style="width:100%;background:#00506b;border-collapse:collapse;">
+    <tr><td align="center" style="padding:28px 12px;">
+      <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" bgcolor="#ffffff" style="width:100%;max-width:680px;background:#ffffff;border:1px solid #d9dfdc;border-radius:16px;border-collapse:separate;">
+        <tr><td style="padding:28px 26px 0;">
+          <p style="margin:0 0 20px;color:#00506b;font-size:11px;line-height:1.5;font-weight:700;letter-spacing:1.1px;">PATH INTERNATIONAL EXAMINATIONS</p>
+          <span style="display:inline-block;padding:5px 10px;background:#e7f5f8;color:#00506b;border-radius:999px;font-size:11px;line-height:1.4;font-weight:700;letter-spacing:.5px;text-transform:uppercase;">Management review</span>
+          <h1 style="margin:16px 0 12px;color:#00506b;font-size:26px;line-height:1.2;font-weight:700;">A payment request<br>needs your review.</h1>
+          <p style="margin:0 0 8px;font-size:15px;line-height:1.6;">Dear Pablo,</p>
+          <p style="margin:0 0 22px;color:#62727a;font-size:14px;line-height:1.6;">{% if amount_pending %}This payment request needs an amount before it can be approved. Select <strong>Set amount &amp; review</strong> to enter the amount, then review your decision.{% else %}A new payment request is awaiting your approval. Review the details below and select an action to continue.{% endif %}</p>
+        </td></tr>
+        <tr><td style="padding:0 26px 20px;">
+          <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" bgcolor="#e6f0f3" style="width:100%;background:#e6f0f3;border-left:4px solid #0b8fb2;border-radius:10px;">
+            <tr><td style="padding:18px;">
+              <p style="margin:0 0 5px;color:#62727a;font-size:11px;line-height:1.4;font-weight:700;letter-spacing:.7px;text-transform:uppercase;">Payment amount</p>
+              <p style="margin:0 0 12px;color:#00506b;font-size:28px;line-height:1.2;font-weight:700;">{{ amount_display }}</p>
+              <p style="margin:0;color:#00506b;font-size:12px;line-height:1.5;font-weight:700;">{{ payment.request_number }} <span style="color:#62727a;font-weight:400;">&nbsp;·&nbsp; {{ 'Amount required before approval' if amount_pending else 'Awaiting your approval' }}</span></p>
+            </td></tr>
+          </table>
+        </td></tr>
+        <tr><td style="padding:0 26px 20px;">
+          <h2 style="margin:0 0 12px;color:#00506b;font-size:11px;line-height:1.4;font-weight:700;letter-spacing:.8px;">REQUEST DETAILS</h2>
+          <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="width:100%;border-collapse:collapse;font-size:13px;line-height:1.5;">
+            {% for label, value in [('Requested by', requester), ('Department', payment.requester_department or 'Not specified'), ('Payee', payment.payee_name_snapshot or 'Not specified'), ('Concept', payment.concept_name_snapshot), ('Payment method', payment.payment_method), ('Requested payment date', requested_date)] %}
+            <tr><td width="42%" valign="top" style="padding:10px 10px 10px 0;border-bottom:1px solid #edf0ee;color:#62727a;">{{ label }}</td><td valign="top" style="padding:10px 0;border-bottom:1px solid #edf0ee;color:#111115;font-weight:700;overflow-wrap:anywhere;">{{ value }}</td></tr>
+            {% endfor %}
+          </table>
+        </td></tr>
+        <tr><td style="padding:0 26px 22px;">
+          <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" bgcolor="#f1f3f2" style="width:100%;background:#f1f3f2;border-radius:10px;">
+            <tr><td style="padding:16px 18px;">
+              <h2 style="margin:0 0 8px;color:#62727a;font-size:11px;line-height:1.4;font-weight:700;letter-spacing:.7px;">DESCRIPTION</h2>
+              <p style="margin:0;font-size:14px;line-height:1.6;overflow-wrap:anywhere;">{% for line in payment.description.split('\n') %}{{ line }}{% if not loop.last %}<br>{% endif %}{% endfor %}</p>
+            </td></tr>
+          </table>
+        </td></tr>
+        <tr><td style="padding:0 26px 24px;">
+          <h2 style="margin:0 0 12px;color:#00506b;font-size:11px;line-height:1.4;font-weight:700;letter-spacing:.8px;">YOUR DECISION</h2>
+          {% for item in actions %}
+          <a href="{{ item.url }}" style="display:inline-block;margin:0 6px 10px 0;padding:12px 16px;border:1px solid {{ item.color }};border-radius:8px;background:{{ '#00506b' if item.action in ['approve', 'set_amount'] else '#fbecea' if item.action == 'reject' else '#fbf4e6' }};color:{{ '#ffffff' if item.action in ['approve', 'set_amount'] else item.color }};font-size:13px;line-height:1.3;font-weight:700;text-decoration:none;text-align:center;">{{ item.label }}</a>
+          {% endfor %}
+          <p style="margin:4px 0 0;color:#62727a;font-size:12px;line-height:1.6;">Each button opens the portal to confirm your decision. Sign-in with review permissions is required. A reason is required when rejecting a request or marking a discrepancy.</p>
+        </td></tr>
+        <tr><td style="padding:20px 26px;border-top:1px solid #d9dfdc;">
+          <p style="margin:0;color:#00506b;font-size:13px;line-height:1.5;font-weight:700;">Path International Examinations</p>
+          <p style="margin:5px 0 0;color:#62727a;font-size:11px;line-height:1.5;">Finance requests · Automated notification</p>
+        </td></tr>
+      </table>
+    </td></tr>
+  </table>
+</body>
+</html>

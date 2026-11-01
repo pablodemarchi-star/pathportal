@@ -117,7 +117,22 @@ admin / admin123
 The administrator-only **Email connection** page is available at
 `/integrations/google`. It authorizes the designated Google Workspace mailbox
 with offline access and the `gmail.send`, `openid`, and `email` scopes. Connecting
-does not send messages or enable automatic notification rules.
+does not send messages. New requests entering **Management review** notify
+`pablo.demarchi@pathexaminations.com` from the configured sender alias. This
+includes Submitted, Pending approval, and Resubmitted requests; already-approved
+requests and completed card payments do not trigger a review notification.
+
+Emails include Approve, Reject, and Mark discrepancy links. Links open an
+authenticated confirmation page and never change payment status on GET. Review
+permissions, CSRF, pending amounts and required comments are enforced. Links from
+an earlier submission cannot approve a later resubmission of the same request.
+
+Each review event has one persistent delivery record. Known failures are available
+under **Email connection → Retry unsent notifications**. Ambiguous deliveries
+(for example, a timeout while sending) are excluded from retries to avoid duplicate
+messages; check Gmail's Sent folder before resolving them. Tests never send real
+emails. Links use the origin of `GOOGLE_OAUTH_REDIRECT_URI`; optionally set
+`PORTAL_BASE_URL` to the production HTTPS origin to override it.
 
 Configure these environment variables on each server:
 
