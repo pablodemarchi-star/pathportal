@@ -1562,6 +1562,92 @@ class ScheduleWorkflowTest(unittest.TestCase):
         self.assertEqual(public.get("/my-actions").status_code, 302)
         self.assertEqual(public.get("/my-actions/count").status_code, 302)
 
+    def test_online_control_tower_separates_formats_and_reuses_schedule_staffing_columns(self):
+        online_records = []
+        for index, format_name in enumerate(["Online", "Online at exam centre"]):
+            record = ExamSession(exam_session_name=f"Online format {index}", category="Path School", status="Pending",
+                session_date=date(2026, 6, 26 + index), shifts="Morning", modules="Speaking", format=format_name)
+            db.session.add(record)
+            online_records.append(record)
+        db.session.flush()
+        # An active workflow no longer makes Online sessions appear in the onsite Sessions view.
+        db.session.add(ExamSessionScheduleWorkflow(exam_session_id=online_records[0].id, status="In progress"))
+        db.session.commit()
+        client = self.login_client()
+        response = client.get("/pre-online-session-control-tower?session_year=2026")
+        self.assertEqual(response.status_code, 200)
+        page = response.get_data(as_text=True)
+        table = re.search(r'<table class="control-tower-table online-control-tower-table">.*?</table>', page, re.S).group(0)
+        self.assertEqual(re.findall(r'<th>(.*?)</th>', table), ["Exam session", "Schedule", "Staffing"])
+        self.assertIn("Online format 0", table)
+        self.assertIn("Online format 1", table)
+        self.assertNotIn("June exam session", table)
+        self.assertNotIn('control-tower-view-tabs', page)
+        self.assertIn('data-modal-schedule-only="true"', table)
+        self.assertIn('data-modal-staffing-only="true"', table)
+        self.assertIn('name="view" value="online"', page)
+        self.assertLess(page.index('<span>Pre onsite session control tower</span>'), page.index('<span>Pre online session control tower</span>'))
+        onsite = client.get("/pre-session-control-tower?session_year=2026&view=sessions").get_data(as_text=True)
+        self.assertIn("June exam session", onsite)
+        self.assertNotIn("Online format 0", onsite)
+        self.assertNotIn("Online format 1", onsite)
+        self.assertEqual(client.get("/pre-online-session-control-tower?session_year=2026&session_q=missing").status_code, 200)
+        bundle = self.create_shipment_bundle_record()
+        db.session.add_all([ExamSessionShipmentBundleSession(bundle_id=bundle.id, exam_session_id=record.id) for record in online_records])
+        db.session.commit()
+        detail = client.get(f"/pre-session-control-tower?session_year=2026&view=bundle&bundle_id={bundle.id}").get_data(as_text=True)
+        bundle_table = re.search(r'<table class="control-tower-table">.*?</table>', detail, re.S).group(0)
+        self.assertNotIn("Online format 0", bundle_table)
+        self.assertNotIn("Online format 1", bundle_table)
+
+    def test_online_control_tower_mixed_concat_primary_links_and_shared_transitions(self):
+        online = ExamSession(exam_session_name="Earlier online session", category="Path School", status="Pending",
+            session_date=date(2026, 6, 21), shifts="Morning", modules="Speaking", format="Online")
+        db.session.add(online)
+        db.session.flush()
+        online.concat_session_ids = json.dumps([self.session_record.id])
+        self.session_record.concat_session_ids = json.dumps([online.id])
+        self.session_record.monthly_registrations_closed = online.monthly_registrations_closed = True
+        self.session_record.date_confirmation_status = online.date_confirmation_status = "Confirmed"
+        db.session.commit()
+        client = self.login_client()
+        page = client.get("/pre-online-session-control-tower?session_year=2026").get_data(as_text=True)
+        table = re.search(r'<table class="control-tower-table online-control-tower-table">.*?</table>', page, re.S).group(0)
+        self.assertIn("Manage schedule: June exam session", table)
+        self.assertIn("/pre-session-control-tower?", table)
+        schedule_cell = re.findall(r'<td>(.*?)</td>', table, re.S)[1]
+        self.assertIn('aria-disabled="true"', schedule_cell)
+        self.assertNotIn('data-open-modal=', schedule_cell)
+        from app.routes import bundle_schedule_presentations
+        self.assertTrue(bundle_schedule_presentations([online])[online.id]["is_secondary"])
+        # If Onsite is eight or more days later, Online becomes the primary session.
+        self.session_record.session_date = date(2026, 7, 1)
+        db.session.commit()
+        self.assertFalse(bundle_schedule_presentations([online])[online.id]["is_secondary"])
+        response = client.post(f"/pre-session-control-tower/sessions/{online.id}/schedule", data={
+            "csrf_token": "token", "view": "online", "action_key": "start_preparation"}, follow_redirects=True)
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.request.path, "/pre-online-session-control-tower")
+        self.assertEqual(ExamSessionScheduleWorkflow.query.filter_by(exam_session_id=online.id).one().status, "In progress")
+        self.assertEqual(ExamSessionScheduleWorkflow.query.filter_by(exam_session_id=self.session_record.id).one().status, "In progress")
+        staffing_response = client.post(f"/pre-session-control-tower/sessions/{online.id}/staffing-control", data={
+            "csrf_token": "token", "view": "online", "note": "Online staffing note"}, follow_redirects=True)
+        self.assertEqual(staffing_response.status_code, 200)
+        self.assertEqual(staffing_response.request.path, "/pre-online-session-control-tower")
+        self.assertEqual(ExamSessionStaffingControl.query.filter_by(exam_session_id=online.id).one().note, "Online staffing note")
+        bundle = self.create_shipment_bundle_record()
+        onsite = client.get(f"/pre-session-control-tower?session_year=2026&view=bundle&bundle_id={bundle.id}").get_data(as_text=True)
+        self.assertIn("Manage schedule: Earlier online session", onsite)
+        self.assertIn("/pre-online-session-control-tower?", onsite)
+
+    def test_online_control_tower_uses_existing_permissions(self):
+        denied = self.login_client_for_user(self.create_my_actions_user("Finance", can_edit=False, can_view=False))
+        self.assertEqual(denied.get("/pre-online-session-control-tower").status_code, 403)
+        readonly = self.login_client_for_user(self.create_my_actions_user("Logistics", can_edit=False))
+        self.assertEqual(readonly.get("/pre-online-session-control-tower").status_code, 200)
+        self.assertEqual(readonly.post(f"/pre-session-control-tower/sessions/{self.session_record.id}/schedule",
+            data={"csrf_token": "token", "view": "online", "action_key": "start_preparation"}).status_code, 403)
+
     def test_control_tower_concat_indicator_lists_whole_group_in_sessions_and_bundles(self):
         other, chained, standalone = self.create_concat_schedule_test_sessions()
         bundle = self.create_shipment_bundle_record(session_record=self.session_record)
@@ -20290,6 +20376,101 @@ assert.equal(storage.size, 0);
         self.assertTrue(all(item["phone"] == "+5491128508482" and item["name"] == "Path International Examinations" for item in defaults))
         for audience in ["external", "public", "external_public"]:
             self.assertIsNone(path_session_journey_contract(records[0], audience, now=moment)["emergency_contact"])
+
+    def test_online_institution_journey_has_two_schedule_checks_and_no_onsite_sections(self):
+        from flask import render_template
+        db.session.add(ExamSessionScheduleWorkflow(exam_session_id=self.session_record.id, status="Approved", review_round=1))
+        db.session.commit()
+        for format_name in ["Online", "Online at exam centre"]:
+            self.session_record.format = format_name
+            db.session.commit()
+            journey = path_session_journey_contract(self.session_record, "institution")
+            self.assertTrue(journey["online_layout"])
+            self.assertEqual([item["key"] for item in journey["milestones"]], ["confirmed", "schedule"])
+            self.assertEqual(journey["staff_cards"], [])
+            with self.app.test_request_context():
+                page = render_template("pre_session_control_tower/session_journey.html", journey=journey, share=None, csrf_token="")
+            self.assertEqual(page.count("data-journey-schedule-checkbox"), 2)
+            self.assertIn('<strong>start and end time</strong> for each module', page)
+            self.assertIn('candidates included in the session', page)
+            self.assertIn("Exam session readiness checklist", page)
+            for removed in ["exam venue address", "number and names of the exam rooms", "maximum capacity of each room",
+                            "Entry slips for candidates", "Exam session staff", "Exam material shipment", "Session venue setup", 'name="allow_public_entry_slips"']:
+                self.assertNotIn(removed, page)
+            self.assertFalse(path_session_journey_contract(self.session_record, "public")["online_layout"])
+            self.assertFalse(path_session_journey_contract(self.session_record, "external")["online_layout"])
+        self.session_record.public_journey_entry_slips_access = True
+        db.session.commit()
+        response = self.login_client().post(f"/path-session-journeys/sessions/{self.session_record.id}/public-access",
+            data={"csrf_token": "token", "allow_public_schedule": "1"})
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(response.get_json()["entry_slips_access"])
+        db.session.refresh(self.session_record)
+        self.assertTrue(self.session_record.public_journey_entry_slips_access)
+
+    def test_concat_journey_online_layout_is_consistent_and_onsite_takes_priority(self):
+        from flask import render_template
+        other = ExamSession(exam_session_name="Online centre session", category="Path School", status="Pending",
+            session_date=date(2026, 7, 2), shifts="Morning", modules="Speaking", format="Online at exam centre")
+        self.session_record.format = "Online"
+        db.session.add(other)
+        db.session.flush()
+        self.session_record.concat_session_ids = json.dumps([other.id])
+        other.concat_session_ids = json.dumps([self.session_record.id])
+        for record in [self.session_record, other]:
+            db.session.add(ExamSessionScheduleWorkflow(exam_session_id=record.id, status="Approved", review_round=1))
+        db.session.commit()
+        for record in [self.session_record, other]:
+            journey = path_session_journey_contract(record, "institution")
+            self.assertTrue(journey["online_layout"])
+        onsite = ExamSession(exam_session_name="Mixed onsite session", category="Path School", status="Pending",
+            session_date=date(2026, 7, 3), shifts="Morning", modules="Speaking", format="Onsite")
+        db.session.add(onsite)
+        db.session.flush()
+        onsite.concat_session_ids = json.dumps([other.id])
+        other.concat_session_ids = json.dumps([self.session_record.id, onsite.id])
+        db.session.add(ExamSessionScheduleWorkflow(exam_session_id=onsite.id, status="Approved", review_round=1))
+        db.session.commit()
+        for record in [self.session_record, other, onsite]:
+            journey = path_session_journey_contract(record, "institution")
+            self.assertFalse(journey["online_layout"])
+            self.assertEqual({item["key"] for item in journey["milestones"]}, {"confirmed", "schedule", "entry_slips", "staffing", "material_shipment"})
+            with self.app.test_request_context():
+                page = render_template("pre_session_control_tower/session_journey.html", journey=journey, share=None, csrf_token="")
+            self.assertEqual(page.count("data-journey-schedule-checkbox"), 5)
+            self.assertIn("Exam centre readiness checklist", page)
+            self.assertIn("Session venue setup", page)
+            self.assertIn('name="allow_public_entry_slips"', page)
+
+    def test_public_online_journey_omits_shipment_and_uses_students_only_message(self):
+        from flask import render_template
+        for format_name in ["Online", "Online at exam centre"]:
+            self.session_record.format = format_name
+            db.session.commit()
+            journey = path_session_journey_contract(self.session_record, "public")
+            self.assertNotIn("material_shipment", [item["key"] for item in journey["milestones"]])
+            self.assertEqual(journey["supporting_message"], "We’re getting everything ready to make this a meaningful, organised and memorable experience for students! 💪")
+            with self.app.test_request_context():
+                page = render_template("pre_session_control_tower/session_journey.html", journey=journey, share=None, csrf_token="")
+            self.assertNotIn("Exam material shipment", page)
+            self.assertIn("experience for students! 💪", page)
+        other = ExamSession(exam_session_name="Linked online", category="Path School", status="Pending",
+            session_date=date(2026, 7, 2), shifts="Morning", modules="Speaking", format="Online")
+        db.session.add(other)
+        db.session.flush()
+        self.session_record.concat_session_ids = json.dumps([other.id])
+        other.concat_session_ids = json.dumps([self.session_record.id])
+        db.session.commit()
+        for record in [self.session_record, other]:
+            journey = path_session_journey_contract(record, "public")
+            self.assertNotIn("material_shipment", [item["key"] for item in journey["milestones"]])
+            self.assertNotIn("school team", journey["supporting_message"])
+        other.format = "Onsite"
+        db.session.commit()
+        for record in [self.session_record, other]:
+            journey = path_session_journey_contract(record, "public")
+            self.assertIn("material_shipment", [item["key"] for item in journey["milestones"]])
+            self.assertIn("students and the school team", journey["supporting_message"])
 
     def test_path_session_journey_contract_separates_institution_and_public_safety(self):
         self.session_record.session_date = date(2026, 7, 2)

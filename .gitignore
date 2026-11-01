@@ -5,5 +5,7 @@ __pycache__/
 .env
 instance/*.db
 instance/email_outbox/
+instance/google_gmail_token.json
+instance/.gmail-*
 instance/import_batches/
 .DS_Store

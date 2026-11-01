@@ -48,6 +48,14 @@
   {% if names %}<span class="session-concat-indicator" title="Concatenated with: {{ names|join(', ') }}">&lt;concat&gt;</span>{% endif %}
 {%- endmacro %}
 
+{% macro concat_tower_navigation(view) -%}
+  {% if view.concat_tower_links %}
+  <details class="concat-tower-navigation"><summary>Linked sessions</summary>
+    {% for linked in view.concat_tower_links %}<a href="{{ linked.url }}">{{ linked.name }}</a>{% endfor %}
+  </details>
+  {% endif %}
+{%- endmacro %}
+
 {% macro schedule_status_badge(status) -%}
   <span class="badge schedule-status-{{ 'not-started' if status == 'Concatenated' else status|lower|replace(' ', '-') }}">{{ status }}</span>
 {%- endmacro %}
@@ -1425,18 +1433,28 @@
   </section>
 {%- endmacro %}
 
-{% block title %}{{ 'My actions' if is_my_actions_page else 'Pre onsite session control tower' }} | Path Examinations{% endblock %}
+{% set tower_title = 'Pre online session control tower' if is_online_tower else 'Pre onsite session control tower' %}
+
+{% block title %}{{ 'My actions' if is_my_actions_page else tower_title }} | Path Examinations{% endblock %}
 
 {% block content %}
 <header class="page-header">
   <div>
-    <p class="eyebrow">Pre onsite session control tower</p>
-    <h1>{{ 'My actions (' ~ department_actions_count ~ ')' if is_my_actions_page else 'Pre onsite session control tower' }}</h1>
+    <p class="eyebrow">{{ tower_title }}</p>
+    <h1>{{ 'My actions (' ~ department_actions_count ~ ')' if is_my_actions_page else tower_title }}</h1>
     <p>{{ 'Pending actions for your department: ' ~ current_user_department if is_my_actions_page else 'Control schedule preparation, review and approval for each exam session.' }}</p>
   </div>
 </header>
 
-{% if selected_view == 'bundles' %}
+{% if is_online_tower %}
+<section class="toolbar">
+  <form method="get" action="{{ url_for('staff.pre_online_session_control_tower') }}" class="filters" data-auto-filter>
+    <input type="hidden" name="session_year" value="{{ selected_session_year }}">
+    <input type="search" name="session_q" value="{{ session_filters.q }}" placeholder="Exam session" aria-label="Search by session name">
+    <a class="text-link" href="{{ url_for('staff.pre_online_session_control_tower', session_year=selected_session_year) }}">Reset</a>
+  </form>
+</section>
+{% elif selected_view == 'bundles' %}
 <section class="toolbar pre-session-bundle-filters-toolbar">
   <form method="get" class="filters pre-session-bundle-filters" data-auto-filter>
     <input type="hidden" name="session_year" value="{{ selected_session_year }}">
@@ -1479,12 +1497,12 @@
               <span>{{ year_item.year }}</span>
               <form method="post" action="{{ url_for('staff.unarchive_exam_session_year', year=year_item.year) }}" data-confirm-submit="Restore {{ year_item.year }} to active years?">
                 <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-                <input type="hidden" name="return_to_endpoint" value="staff.pre_session_control_tower">
+                <input type="hidden" name="return_to_endpoint" value="{{ 'staff.pre_online_session_control_tower' if is_online_tower else 'staff.pre_session_control_tower' }}">
                 <button class="secondary-button compact-action" type="submit">Unarchive</button>
               </form>
               <form method="post" action="{{ url_for('staff.delete_exam_session_year', year=year_item.year) }}" data-confirm-submit="Permanently delete {{ year_item.year }} and all its exam session records? This cannot be undone.">
                 <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-                <input type="hidden" name="return_to_endpoint" value="staff.pre_session_control_tower">
+                <input type="hidden" name="return_to_endpoint" value="{{ 'staff.pre_online_session_control_tower' if is_online_tower else 'staff.pre_session_control_tower' }}">
                 <button class="danger-button compact-action" type="submit">Delete permanently</button>
               </form>
             </article>
@@ -1551,12 +1569,12 @@
               <span>{{ year_item.year }}</span>
               <form method="post" action="{{ url_for('staff.unarchive_exam_session_year', year=year_item.year) }}" data-confirm-submit="Restore {{ year_item.year }} to active years?">
                 <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-                <input type="hidden" name="return_to_endpoint" value="staff.pre_session_control_tower">
+                <input type="hidden" name="return_to_endpoint" value="{{ 'staff.pre_online_session_control_tower' if is_online_tower else 'staff.pre_session_control_tower' }}">
                 <button class="secondary-button compact-action" type="submit">Unarchive</button>
               </form>
               <form method="post" action="{{ url_for('staff.delete_exam_session_year', year=year_item.year) }}" data-confirm-submit="Permanently delete {{ year_item.year }} and all its exam session records? This cannot be undone.">
                 <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-                <input type="hidden" name="return_to_endpoint" value="staff.pre_session_control_tower">
+                <input type="hidden" name="return_to_endpoint" value="{{ 'staff.pre_online_session_control_tower' if is_online_tower else 'staff.pre_session_control_tower' }}">
                 <button class="danger-button compact-action" type="submit">Delete permanently</button>
               </form>
             </article>
@@ -1663,12 +1681,12 @@
               <span>{{ year_item.year }}</span>
               <form method="post" action="{{ url_for('staff.unarchive_exam_session_year', year=year_item.year) }}" data-confirm-submit="Restore {{ year_item.year }} to active years?">
                 <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-                <input type="hidden" name="return_to_endpoint" value="staff.pre_session_control_tower">
+                <input type="hidden" name="return_to_endpoint" value="{{ 'staff.pre_online_session_control_tower' if is_online_tower else 'staff.pre_session_control_tower' }}">
                 <button class="secondary-button compact-action" type="submit">Unarchive</button>
               </form>
               <form method="post" action="{{ url_for('staff.delete_exam_session_year', year=year_item.year) }}" data-confirm-submit="Permanently delete {{ year_item.year }} and all its exam session records? This cannot be undone.">
                 <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-                <input type="hidden" name="return_to_endpoint" value="staff.pre_session_control_tower">
+                <input type="hidden" name="return_to_endpoint" value="{{ 'staff.pre_online_session_control_tower' if is_online_tower else 'staff.pre_session_control_tower' }}">
                 <button class="danger-button compact-action" type="submit">Delete permanently</button>
               </form>
             </article>
@@ -1698,12 +1716,12 @@
               <span>{{ year_item.year }}</span>
               <form method="post" action="{{ url_for('staff.unarchive_exam_session_year', year=year_item.year) }}" data-confirm-submit="Restore {{ year_item.year }} to active years?">
                 <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-                <input type="hidden" name="return_to_endpoint" value="staff.pre_session_control_tower">
+                <input type="hidden" name="return_to_endpoint" value="{{ 'staff.pre_online_session_control_tower' if is_online_tower else 'staff.pre_session_control_tower' }}">
                 <button class="secondary-button compact-action" type="submit">Unarchive</button>
               </form>
               <form method="post" action="{{ url_for('staff.delete_exam_session_year', year=year_item.year) }}" data-confirm-submit="Permanently delete {{ year_item.year }} and all its exam session records? This cannot be undone.">
                 <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-                <input type="hidden" name="return_to_endpoint" value="staff.pre_session_control_tower">
+                <input type="hidden" name="return_to_endpoint" value="{{ 'staff.pre_online_session_control_tower' if is_online_tower else 'staff.pre_session_control_tower' }}">
                 <button class="danger-button compact-action" type="submit">Delete permanently</button>
               </form>
             </article>
@@ -1715,21 +1733,21 @@
 {% endif %}
 
 {% if session_years %}
-<section class="year-toolbar" aria-label="Pre onsite session control tower years">
+<section class="year-toolbar" aria-label="{{ tower_title }} years">
   <div class="year-tabs">
     {% for year_item in session_years %}
-      <a class="year-tab {% if year_item.year == selected_session_year %}active{% endif %}" href="{{ url_for('staff.my_actions' if is_my_actions_page else 'staff.pre_session_control_tower', session_year=year_item.year, view=selected_view, schedule_status=selected_schedule_status, action_source=selected_my_action_source, action_responsible=selected_my_action_responsible, action_status=selected_my_action_status) }}">{{ year_item.year }}</a>
+      <a class="year-tab {% if year_item.year == selected_session_year %}active{% endif %}" href="{{ url_for('staff.my_actions' if is_my_actions_page else 'staff.pre_online_session_control_tower' if is_online_tower else 'staff.pre_session_control_tower', session_year=year_item.year, view=selected_view, schedule_status=selected_schedule_status, action_source=selected_my_action_source, action_responsible=selected_my_action_responsible, action_status=selected_my_action_status) }}">{{ year_item.year }}</a>
     {% endfor %}
   </div>
   <form method="post" action="{{ url_for('staff.archive_exam_session_year', year=selected_session_year) }}" data-confirm-submit="Archive {{ selected_session_year }}? This year will be hidden but its information will be preserved.">
     <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-    <input type="hidden" name="return_to_endpoint" value="staff.pre_session_control_tower">
+    <input type="hidden" name="return_to_endpoint" value="{{ 'staff.pre_online_session_control_tower' if is_online_tower else 'staff.pre_session_control_tower' }}">
     <button class="secondary-button compact-action" type="submit">Archive year</button>
   </form>
 </section>
 {% endif %}
 
-{% if not is_my_actions_page %}
+{% if not is_my_actions_page and not is_online_tower %}
 <nav class="control-tower-view-tabs" aria-label="Pre onsite session control tower views">
   <a class="control-tower-view-tab {% if selected_view == 'bundles' %}active{% endif %}" href="{{ url_for('staff.pre_session_control_tower', session_year=selected_session_year, view='bundles') }}">Bundles</a>
   <a class="control-tower-view-tab {% if selected_view == 'sessions' %}active{% endif %}" href="{{ url_for('staff.pre_session_control_tower', session_year=selected_session_year, view='sessions', schedule_status=selected_schedule_status) }}">Sessions</a>
@@ -1920,6 +1938,35 @@
     </tbody>
   </table>
 </section>
+{% elif is_online_tower %}
+<section class="table-wrap control-tower-table-wrap" aria-label="Online schedule preparation and staffing">
+  <table class="control-tower-table online-control-tower-table">
+    <thead><tr><th>Exam session</th><th>Schedule</th><th>Staffing</th></tr></thead>
+    <tbody>
+    {% for view in schedule_views %}
+      {% set session = view.session %}
+      <tr>
+        <td><span class="shipment-summary-cell bundle-session-name-cell control-tower-session-name-cell">
+          <strong>{{ session.exam_session_name }}</strong>
+          {{ session_concat_indicator(session.id) }}
+          <small class="bundle-session-date">{{ session.session_date|session_date }}</small>
+          {{ schedule_approval_notification_chip(session, view.schedule_approval_notification_event_id) }}
+          {{ concat_tower_navigation(view) }}
+        </span></td>
+        <td>
+          {% call contextual_cell_trigger(session, 'schedule-actions', 'Review schedule', true, interactive=not view.bundle_schedule.is_secondary) %}
+            {{ schedule_table_cell(view.bundle_schedule.status, view.schedule_gate, view.review_round, view.schedule_preparation_unlocked, view.deadline_badge, view.schedule_auto_confirmed) }}
+          {% endcall %}
+          {% if view.primary_schedule_link %}<a class="concat-primary-schedule-link" href="{{ view.primary_schedule_link.url }}">Manage schedule: {{ view.primary_schedule_link.name }}</a>{% endif %}
+        </td>
+        <td>{% call contextual_cell_trigger(session, 'staffing', 'Manage staffing', staffing_only=true) %}
+          {{ staffing_table_cell(view.staffing, view.schedule_gate, false, view.staffing_deadline_badge, true) }}
+        {% endcall %}</td>
+      </tr>
+    {% else %}<tr><td colspan="3" class="empty-state">No online exam sessions for the selected year.</td></tr>{% endfor %}
+    </tbody>
+  </table>
+</section>
 {% elif selected_view in ['sessions', 'bundle'] %}
 {% if selected_view == 'bundle' and selected_bundle %}
   <section class="bundle-detail-header" aria-label="Selected shipment bundle">
@@ -1992,6 +2039,7 @@
               {{ session_concat_indicator(session.id) }}
               <small class="bundle-session-date">{{ session.session_date|session_date }}</small>
               {{ schedule_approval_notification_chip(session, view.schedule_approval_notification_event_id) }}
+              {{ concat_tower_navigation(view) }}
               {% if selected_view != 'bundle' and view.shipments.bundle_view %}
                 {% set session_shipment_status = view.shipments.bundle_view.status %}
                 {% if session_shipment_status in ['Delivered successfully', 'Recipient review successful', 'Recipient review with discrepancy'] %}
@@ -2013,6 +2061,7 @@
               {% call contextual_cell_trigger(session, 'schedule-actions', 'Review schedule', true, interactive=not view.bundle_schedule.is_secondary) %}
                 {{ schedule_table_cell(view.bundle_schedule.status, view.schedule_gate, view.review_round, view.schedule_preparation_unlocked, view.deadline_badge, view.schedule_auto_confirmed) }}
               {% endcall %}
+              {% if view.primary_schedule_link %}<a class="concat-primary-schedule-link" href="{{ view.primary_schedule_link.url }}">Manage schedule: {{ view.primary_schedule_link.name }}</a>{% endif %}
             </td>
             <td>
               {% call contextual_cell_trigger(session, 'staffing', 'Manage staffing', staffing_only=true) %}

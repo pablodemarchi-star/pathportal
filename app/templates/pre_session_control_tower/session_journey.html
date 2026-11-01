@@ -208,6 +208,7 @@
                   {% endif %}
                   <fieldset class="journey-schedule-checklist">
                     <legend>{{ t('Verify the following information before approving the session schedule:') }}</legend>
+                    {% if not journey.online_layout %}
                     <label>
                       <input type="checkbox" data-journey-schedule-checkbox data-view-only-allowed="true"{% if journey.schedule_confirmed %} checked disabled{% endif %}>
                       <span>{{ ('las ' if journey.is_concatenated else 'la ') if spanish else 'the ' }}<strong>{{ t('exam venue address') }}</strong></span>
@@ -220,9 +221,10 @@
                       <input type="checkbox" data-journey-schedule-checkbox data-view-only-allowed="true"{% if journey.schedule_confirmed %} checked disabled{% endif %}>
                       <span>{{ 'la ' if spanish else 'the ' }}<strong>{{ t('maximum capacity of each room') }}</strong>{{ ', verificando que coincida con el número de candidatos asignados a esa aula' if spanish else ', ensuring it matches the number of candidates assigned to that room' }}</span>
                     </label>
+                    {% endif %}
                     <label>
                       <input type="checkbox" data-journey-schedule-checkbox data-view-only-allowed="true"{% if journey.schedule_confirmed %} checked disabled{% endif %}>
-                      <span>{{ 'el ' if spanish else 'the ' }}<strong>{{ t('start and end time') }}</strong>{{ t(' for each exam room within the session') if journey.is_concatenated else (' de cada aula de examen de la sesión' if spanish else ' for each exam room within the session') }}</span>
+                      <span>{{ 'el ' if spanish else 'the ' }}<strong>{{ t('start and end time') }}</strong>{{ t(' for each module') if journey.online_layout else t(' for each exam room within the session') if journey.is_concatenated else (' de cada aula de examen de la sesión' if spanish else ' for each exam room within the session') }}</span>
                     </label>
                     <label>
                       <input type="checkbox" data-journey-schedule-checkbox data-view-only-allowed="true"{% if journey.schedule_confirmed %} checked disabled{% endif %}>
@@ -285,7 +287,7 @@
 
     {% if journey.audience == 'institution' %}
       <section class="journey-next-steps" aria-label="{{ t('Next steps') }}">
-        <h2>{{ t('Exam centre readiness checklist') }}</h2>
+        <h2>{{ t('Exam session readiness checklist' if journey.online_layout else 'Exam centre readiness checklist') }}</h2>
         <ol>
           <li class="journey-milestone is-upcoming">
             <span class="journey-milestone-marker" aria-hidden="true">&gt;</span>
@@ -310,7 +312,7 @@
               <form class="journey-public-access-form" data-journey-public-access method="post" action="{{ url_for('staff.update_shared_journey_public_access', token=share.token, audience=share.audience) if share else url_for('staff.update_journey_public_access', session_id=journey.session_id) }}" data-saved-message="{{ 'Guardado' if spanish else 'Saved' }}" data-error-message="{{ 'No se pudieron guardar los permisos. Inténtalo de nuevo.' if spanish else 'Unable to save access settings. Please try again.' }}">
                 <input type="hidden" name="csrf_token" value="{{ csrf_token or '' }}">
                 <label><input type="checkbox" name="allow_public_schedule" value="1" data-view-only-allowed="true"{% if journey.public_schedule_access %} checked{% endif %}{% if not journey.schedule_confirmed %} disabled aria-disabled="true"{% endif %}><span>{{ t('Allow candidates and their families to access the exam session schedule.') }}</span></label>
-                <label><input type="checkbox" name="allow_public_entry_slips" value="1" data-view-only-allowed="true"{% if journey.public_entry_slips_access %} checked{% endif %}{% if not journey.entry_slips_confirmed %} disabled aria-disabled="true"{% endif %}><span>{{ ts('Allow candidates and their families to access the Exam entry slips.') }}</span></label>
+                {% if not journey.online_layout %}<label><input type="checkbox" name="allow_public_entry_slips" value="1" data-view-only-allowed="true"{% if journey.public_entry_slips_access %} checked{% endif %}{% if not journey.entry_slips_confirmed %} disabled aria-disabled="true"{% endif %}><span>{{ ts('Allow candidates and their families to access the Exam entry slips.') }}</span></label>{% endif %}
                 <p class="journey-public-access-feedback" role="status" aria-live="polite"></p>
               </form>
               {% endif %}
@@ -325,7 +327,7 @@
               <p><a class="journey-inline-link" href="https://drive.google.com/file/d/1iJ-y1uYeVSSqrXDU8dSFSaXE_WQZWslx/view?usp=drive_link" target="_blank" rel="noopener noreferrer">{{ t('Click here') }}</a>{{ t(' to download the instructions for candidates') }}</p>
             </div>
           </li>
-          {% if not journey.is_external %}
+          {% if not journey.is_external and not journey.online_layout %}
           <li class="journey-milestone is-upcoming">
             <span class="journey-milestone-marker" aria-hidden="true">&gt;</span>
             <div>
@@ -392,6 +394,7 @@
     </footer>
 
     {% if journey.audience == 'institution' %}
+    {% if not journey.online_layout %}
     <div class="modal journey-entry-slip-modal" id="journey-entry-slip-modal" aria-hidden="true" role="dialog" aria-modal="true" aria-labelledby="journey-entry-slip-title">
       <div class="modal-panel journey-image-modal-panel">
         <div class="modal-header">
@@ -404,6 +407,7 @@
       </div>
     </div>
 
+    {% endif %}
     <div class="modal journey-attendance-request-modal" id="journey-attendance-request-modal" aria-hidden="true" role="dialog" aria-modal="true" aria-labelledby="journey-attendance-request-title">
       <div class="modal-panel confirm-panel">
         <div class="modal-header">

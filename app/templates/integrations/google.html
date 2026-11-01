@@ -1,0 +1,18 @@
+{% extends "base.html" %}
+{% block title %}Email connection | Path Examinations{% endblock %}
+{% block content %}
+<header class="page-header"><div><p class="eyebrow">Notifications</p><h1>Email connection</h1><p>Connect the institutional Google account used for notification emails.</p></div></header>
+<section class="staff-detail-section">
+  <h2>{{ 'Google account connected' if connected else 'Connect Google account' }}</h2>
+  <p><strong>Account:</strong> {{ account }}</p>
+  <p><strong>Sender:</strong> {{ sender }}</p>
+  <p>The sender alias must be enabled under “Send mail as” in the connected Gmail account.</p>
+  {% if not configured %}<p>Google credentials have not been configured on this server yet.</p>{% endif %}
+  <form method="post" action="{{ url_for('google_mail.connect') }}">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <button type="submit" class="primary-button"{% if not configured %} disabled{% endif %}>{{ 'Reconnect Google' if connected else 'Connect Google' }}</button>
+  </form>
+  <p>Connecting does not send any email. Automatic notification rules will be configured separately.</p>
+  <details><summary>Connection setup</summary><p>Add this exact address to the OAuth client’s authorized redirect URIs in Google Cloud:</p><code>{{ callback_uri or 'Not configured' }}</code></details>
+</section>
+{% endblock %}

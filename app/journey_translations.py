@@ -1,6 +1,9 @@
 """Spanish copy for session journeys."""
 
 SPANISH_JOURNEY_TEXT = {
+ 'We’re getting everything ready to make this a meaningful, organised and memorable experience for students! 💪': '¡Estamos preparando todo para que esta sea una experiencia significativa, organizada e inolvidable para los estudiantes! 💪',
+ 'Exam session readiness checklist': 'Lista de preparación de la sesión de examen',
+ ' for each module': ' de cada módulo',
  'Path emergency contact': 'Contacto de emergencia de Path',
  'Available on exam day only': 'Disponible solo el día del examen',
  'Calls only – No messages': 'Solo llamadas – No mensajes',

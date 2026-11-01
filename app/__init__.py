@@ -148,6 +148,8 @@ def create_app():
     from app.routes import staff_bp, SINAPSIS_CHECKLIST_ITEMS
 
     app.register_blueprint(staff_bp)
+    from app.google_mail import google_mail_bp
+    app.register_blueprint(google_mail_bp)
 
     @app.before_request
     def load_user():

@@ -112,6 +112,36 @@ admin / admin123
 
 ## Security Notes
 
+### Google notification account connection
+
+The administrator-only **Email connection** page is available at
+`/integrations/google`. It authorizes the designated Google Workspace mailbox
+with offline access and the `gmail.send`, `openid`, and `email` scopes. Connecting
+does not send messages or enable automatic notification rules.
+
+Configure these environment variables on each server:
+
+```text
+GOOGLE_OAUTH_CLIENT_ID=<OAuth web client ID>
+GOOGLE_OAUTH_CLIENT_SECRET=<OAuth web client secret>
+GOOGLE_OAUTH_REDIRECT_URI=https://portal.pathinternalportal.com/integrations/google/callback
+GMAIL_ACCOUNT_EMAIL=pablo.demarchi@pathexaminations.com
+GMAIL_FROM_EMAIL=no-reply@pathexaminations.com
+GMAIL_TOKEN_FILE=<absolute path on persistent server storage>
+```
+
+For local authorization, register
+`http://127.0.0.1:5001/integrations/google/callback` as an additional authorized
+redirect URI in Google Cloud, and use that value locally. Keep the production URI
+registered too. Open the connection page on the same host as the configured URI.
+
+The connection uses a private token file with mode `0600`; locally this defaults
+to `instance/google_gmail_token.json` and is excluded from Git. Production needs
+persistent storage and a stable `SECRET_KEY`; an ephemeral Render filesystem
+will lose the connection on restart or redeploy. Reconnecting replaces the stored
+authorization only after verifying the account and send permission. The alias
+must already be enabled in Gmail's **Accounts → Send mail as** settings.
+
 - The app binds to `127.0.0.1` by default for local isolation.
 - Access requires login.
 - Passwords are checked with Werkzeug password hashing.

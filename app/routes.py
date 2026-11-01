@@ -276,7 +276,7 @@ MENU_PERMISSION_PATHS = (
     ("supervisor_certification", ("/supervisor-certification",)),
     ("internship_stages", ("/intern-stages",)),
     ("exam_session_planner", ("/exam-session-planner",)),
-    ("pre_session_control_tower", ("/pre-session-control-tower", "/my-actions")),
+    ("pre_session_control_tower", ("/pre-session-control-tower", "/pre-online-session-control-tower", "/my-actions")),
     ("path_session_journey", ("/path-session-journeys",)),
     ("monthly_exam_session_registrations", ("/monthly-exam-session-registrations",)),
     ("staff_payments", ("/staff-payments",)),
@@ -6491,7 +6491,7 @@ def latest_active_exam_session_year():
 
 def exam_session_year_redirect(year=None):
     endpoint = request.form.get("return_to_endpoint", "").strip()
-    if endpoint in {"staff.exam_session_planner", "staff.monthly_exam_session_registrations", "staff.pre_session_control_tower"}:
+    if endpoint in {"staff.exam_session_planner", "staff.monthly_exam_session_registrations", "staff.pre_session_control_tower", "staff.pre_online_session_control_tower"}:
         return redirect(url_for(endpoint, session_year=year) if year else url_for(endpoint))
     return_to = request.form.get("return_to", "").strip()
     if return_to.startswith(url_for("staff.monthly_exam_session_registrations")):
@@ -6567,6 +6567,7 @@ def bundle_schedule_presentations(session_records):
         secondary = len(ids) > 1 and record.id != primary_id
         status = statuses.get(primary_id, "Not started")
         result[record.id] = {
+            "primary_session_id": primary_id,
             "is_secondary": secondary,
             "is_secondary_by_date": len(ids) > 1 and record.id != first_id,
             "status": "Concatenated" if secondary and status in {"Not started", "Ready to send"} else status,
@@ -14669,6 +14670,12 @@ def journey_emergency_contact(session_record, audience, is_external=False, now=N
     }
 
 
+def journey_online_format_group(session_record):
+    ids = monthly_unified_total_session_ids(session_record)
+    formats = [value for (value,) in db.session.query(ExamSession.format).filter(ExamSession.id.in_(ids)).all()]
+    return bool(formats) and all(value in PRE_SESSION_SESSIONS_VIEW_EXCLUDED_FORMATS for value in formats)
+
+
 def path_session_journey_contract(session_record, audience, today=None, sources=None, now=None):
     audience = journey_clean_text(audience)
     is_external_public = audience == "external_public"
@@ -14747,6 +14754,10 @@ def path_session_journey_contract(session_record, audience, today=None, sources=
     final_message = "Path International Examinations"
     next_steps = [] if session_ready else ["Path International Examinations"]
     concat_ids = monthly_unified_total_session_ids(session_record)
+    online_group = journey_online_format_group(session_record)
+    online_layout = audience == "institution" and not is_external and online_group
+    if online_layout:
+        milestones = [item for item in milestones if item["key"] not in {"entry_slips", "staffing", "material_shipment"}]
     public_access_rows = ExamSession.query.with_entities(
         ExamSession.public_journey_schedule_access, ExamSession.public_journey_entry_slips_access,
     ).filter(ExamSession.id.in_(concat_ids)).all()
@@ -14754,6 +14765,8 @@ def path_session_journey_contract(session_record, audience, today=None, sources=
     public_entry_slips_access = not is_external_public and bool(public_access_rows) and all(row[1] for row in public_access_rows)
     if audience == "public":
         hidden_milestones = {"staffing"}
+        if online_group:
+            hidden_milestones.add("material_shipment")
         if not public_schedule_access:
             hidden_milestones.add("schedule")
         if not public_entry_slips_access:
@@ -14797,7 +14810,7 @@ def path_session_journey_contract(session_record, audience, today=None, sources=
         session_record,
         [item["session_id"] for item in concatenated_countdowns] or [session_record.id],
         staff_summary, staff_status, now,
-    ) if audience == "institution" else []
+    ) if audience == "institution" and not online_layout else []
     if is_external:
         staff_summary = {**staff_summary, "dietary_count": 0, "dietary_requirements": []}
         for card in staff_cards:
@@ -14822,6 +14835,7 @@ def path_session_journey_contract(session_record, audience, today=None, sources=
     return {
         "audience": audience,
         "is_external": is_external,
+        "online_layout": online_layout,
         "emergency_contact": journey_emergency_contact(session_record, audience, is_external=is_external, now=now),
         "public_schedule_access": public_schedule_access,
         "public_entry_slips_access": public_entry_slips_access,
@@ -14864,7 +14878,7 @@ def path_session_journey_contract(session_record, audience, today=None, sources=
         "countdown": countdown,
         "concatenated_countdowns": concatenated_countdowns,
         "hero_message": "Your Path exam day is getting closer 💙" if audience == "public" else hero_message,
-        "supporting_message": "We’re getting everything ready to make this a meaningful, organised and memorable experience for students and the school team! 💪" if audience == "public" else "",
+        "supporting_message": ("We’re getting everything ready to make this a meaningful, organised and memorable experience for students! 💪" if online_group else "We’re getting everything ready to make this a meaningful, organised and memorable experience for students and the school team! 💪") if audience == "public" else "",
         "overall_label": "Everything ready" if session_ready else "Getting ready",
         "last_updated": last_updated,
         "milestones": milestones,
@@ -15543,7 +15557,7 @@ def parse_schedule_deadline(value):
 
 def pre_session_control_tower_return_args(session_record, default_view="sessions"):
     requested_view = request.form.get("view", default_view) or default_view
-    if requested_view not in {"bundles", "sessions", "bundle", "my-actions", "department-actions"}:
+    if requested_view not in {"bundles", "sessions", "bundle", "my-actions", "department-actions", "online"}:
         requested_view = default_view
     args = {
         "session_year": session_record.session_date.year,
@@ -15773,7 +15787,7 @@ def session_box_sealing_prerequisites_completed(session_record):
 
 def shipment_control_redirect(session_record, status_filter="", bundle_id=None, assisted_action_key=""):
     requested_view = request.form.get("view", "sessions") or "sessions"
-    if requested_view not in {"bundles", "sessions", "bundle", "my-actions", "department-actions"}:
+    if requested_view not in {"bundles", "sessions", "bundle", "my-actions", "department-actions", "online"}:
         requested_view = "sessions"
     args = {
         "session_year": session_record.session_date.year,
@@ -17973,10 +17987,14 @@ def my_actions_count():
     return pre_session_control_tower(_count_only=True)
 
 
+@staff_bp.route("/pre-online-session-control-tower", endpoint="pre_online_session_control_tower")
 @staff_bp.route("/my-actions", endpoint="my_actions")
 @staff_bp.route("/pre-session-control-tower")
 @login_required
 def pre_session_control_tower(_count_only=False):
+    is_online_tower = request.endpoint == "staff.pre_online_session_control_tower"
+    if not is_online_tower and request.args.get("view") == "online":
+        return redirect(url_for("staff.pre_online_session_control_tower", **request.args.to_dict(flat=False)))
     selected_year, session_years = selected_exam_session_year()
     staff_payment_next_payment_date = staff_payment_settings_values(staff_payment_settings())["next_payment_date"]
     is_my_actions_page = request.endpoint in {"staff.my_actions", "staff.my_actions_count"} or request.args.get("view") == "department-actions"
@@ -17990,8 +18008,8 @@ def pre_session_control_tower(_count_only=False):
         department_actions_sort = ""
     department_actions_order = "desc" if request.args.get("actions_order") == "desc" else "asc"
 
-    selected_view = "department-actions" if is_my_actions_page else request.args.get("view", "bundles").strip()
-    if selected_view not in {"bundles", "sessions", "bundle", "my-actions", "department-actions"}:
+    selected_view = "online" if is_online_tower else "department-actions" if is_my_actions_page else request.args.get("view", "bundles").strip()
+    if selected_view not in {"bundles", "sessions", "bundle", "my-actions", "department-actions", "online"}:
         selected_view = "bundles"
     bundle_search_filter = request.args.get("bundle_q", "").strip()
     bundle_department_filter = request.args.get("bundle_department", "").strip().upper()
@@ -18047,7 +18065,7 @@ def pre_session_control_tower(_count_only=False):
     status_filter = request.args.get("schedule_status", "").strip()
     if status_filter not in SCHEDULE_WORKFLOW_STATUSES:
         status_filter = ""
-    if selected_view in {"sessions", "bundle", "department-actions"}:
+    if selected_view in {"sessions", "bundle", "department-actions", "online"}:
         status_filter = ""
     my_action_source_filter = request.args.get("action_source", "").strip()
     my_action_responsible_filter = request.args.get("action_responsible", "").strip()
@@ -18059,7 +18077,7 @@ def pre_session_control_tower(_count_only=False):
     )
     today = pre_session_control_tower_today()
     now = pre_session_control_tower_now()
-    if selected_view in {"bundles", "sessions", "bundle", "my-actions", "department-actions"} and not request.args.get("open_schedule_modal"):
+    if not is_online_tower and selected_view in {"bundles", "sessions", "bundle", "my-actions", "department-actions"} and not request.args.get("open_schedule_modal"):
         reconcile_auto_shipment_bundles(sessions, today=today)
     session_ids = [session_record.id for session_record in sessions]
     sessions_by_id = {session_record.id: session_record for session_record in sessions}
@@ -19026,7 +19044,7 @@ def pre_session_control_tower(_count_only=False):
         for session_id, component_ids in concat_components.items()
     }
 
-    if selected_view == "bundle":
+    if selected_view in {"bundle", "online", "sessions"}:
         bundle_schedules = bundle_schedule_presentations([view["session"] for view in all_schedule_views])
         for view in all_schedule_views:
             view["bundle_schedule"] = bundle_schedules[view["session"].id]
@@ -19083,10 +19101,7 @@ def pre_session_control_tower(_count_only=False):
     if selected_view == "sessions":
         schedule_views = [
             view for view in schedule_views
-            if (
-                pre_session_sessions_view_visible(view["session"])
-                or pre_session_session_view_has_operational_context(view)
-            ) and session_view_matches_filters(view)
+            if view["session"].format == "Onsite" and session_view_matches_filters(view)
         ]
     def bundle_session_schedule_state(view):
         if bool((view.get("schedule_gate") or {}).get("is_ready")):
@@ -19160,7 +19175,7 @@ def pre_session_control_tower(_count_only=False):
             summary["Schedule ready"] += 1
         else:
             summary["Schedule blocked"] += 1
-    modal_views = list(all_schedule_views if selected_view == "sessions" else schedule_views)
+    modal_views = list(schedule_views)
     my_actions = []
     for view in schedule_views:
         my_actions.extend(my_action_rows_from_schedule_view(view, today=today))
@@ -19200,11 +19215,17 @@ def pre_session_control_tower(_count_only=False):
         selected_bundle_session_ids = set(selected_bundle_view["included_session_ids"])
         schedule_views = [view for view in schedule_views if view["session"].id in selected_bundle_session_ids]
         schedule_views = [view for view in schedule_views if bundle_session_view_matches_filters(view)]
+    if is_online_tower:
+        schedule_views = [view for view in schedule_views
+                          if view["session"].format in PRE_SESSION_SESSIONS_VIEW_EXCLUDED_FORMATS
+                          and (not session_search_filter or session_search_filter.lower() in view["session"].exam_session_name.lower())]
+    elif selected_view == "bundle":
+        schedule_views = [view for view in schedule_views if view["session"].format == "Onsite"]
     schedule_views.sort(key=lambda view: (
         view["session"].session_date or max_date,
         view["session"].exam_session_name.lower(),
     ))
-    modal_views = list(all_schedule_views if selected_view == "sessions" else schedule_views)
+    modal_views = list(schedule_views)
     if is_my_actions_page:
         action_session_ids = {row["session"].id for row in department_rows}
         modal_views = [view for view in all_schedule_views if view["session"].id in action_session_ids]
@@ -19221,7 +19242,33 @@ def pre_session_control_tower(_count_only=False):
             link_args = {"session_year": related.session_date.year, "view": "sessions", "open_schedule_modal": related.id, "schedule_only": "1", "open_modal_target": "schedule-actions"}
             if selected_view == "bundle" and selected_bundle_view and related.id in selected_bundle_view["included_session_ids"]:
                 link_args.update(view="bundle", bundle_id=selected_bundle_view["id"])
-            view["schedule_concat_sessions"].append({"name": related.exam_session_name, "url": url_for("staff.pre_session_control_tower", **link_args)})
+            linked_endpoint = "staff.pre_online_session_control_tower" if related.format in PRE_SESSION_SESSIONS_VIEW_EXCLUDED_FORMATS else "staff.pre_session_control_tower"
+            if linked_endpoint == "staff.pre_online_session_control_tower":
+                link_args["view"] = "online"
+                link_args.pop("bundle_id", None)
+            view["schedule_concat_sessions"].append({"name": related.exam_session_name, "url": url_for(linked_endpoint, **link_args)})
+    all_session_records = {record.id: record for record in sessions}
+    all_session_records.update(concat_sessions)
+    def tower_link(record):
+        online = record.format in PRE_SESSION_SESSIONS_VIEW_EXCLUDED_FORMATS
+        return url_for("staff.pre_online_session_control_tower" if online else "staff.pre_session_control_tower",
+                       session_year=record.session_date.year, view="online" if online else "sessions",
+                       open_schedule_modal=record.id, open_modal_target="schedule-actions", schedule_only="1")
+    for view in schedule_views:
+        view["concat_tower_links"] = [{"name": all_session_records[key].exam_session_name, "url": tower_link(all_session_records[key])}
+            for key in sorted(concat_components.get(view["session"].id, set()))
+            if key != view["session"].id and key in all_session_records]
+        presentation = view.get("bundle_schedule") or {}
+        primary = all_session_records.get(presentation.get("primary_session_id"))
+        view["primary_schedule_link"] = {"name": primary.exam_session_name, "url": tower_link(primary)} if primary and presentation.get("is_secondary") else None
+    if not is_my_actions_page and not is_online_tower:
+        bundle_views = [{**bundle, "session_chips": [chip for chip in bundle["session_chips"]
+                         if all_session_records.get(chip["id"]) and all_session_records[chip["id"]].format == "Onsite"]}
+                        for bundle in bundle_views if any(record.format == "Onsite" for record in bundle.get("included_sessions", []))]
+        if pending_shipment_bundle:
+            pending_shipment_bundle = {**pending_shipment_bundle, "session_chips": [chip for chip in pending_shipment_bundle["session_chips"]
+                if all_session_records.get(chip["id"]) and all_session_records[chip["id"]].format == "Onsite"]}
+            pending_shipment_bundle_visible = pending_shipment_bundle_visible and bool(pending_shipment_bundle["session_chips"])
     ensure_default_finance_concepts()
     finance_contacts = FinanceContact.query.order_by(FinanceContact.is_active.desc(), FinanceContact.display_name.asc()).all()
     finance_concepts = FinanceConcept.query.order_by(FinanceConcept.name.asc()).all()
@@ -19244,6 +19291,7 @@ def pre_session_control_tower(_count_only=False):
         selected_view=selected_view,
         my_actions=department_rows if is_my_actions_page else filtered_my_actions,
         is_my_actions_page=is_my_actions_page,
+        is_online_tower=is_online_tower,
         department_actions_query=department_actions_query,
         department_actions_overdue=department_actions_overdue,
         department_actions_section=department_actions_section,
@@ -19374,9 +19422,14 @@ def save_journey_public_access(session_record):
             message = "Schedule access can only be enabled after the exam session schedule is confirmed." if schedule_access else "Exam entry slips access can only be enabled after Entry slips for candidates is confirmed."
             return jsonify({"ok": False, "message": message}), 409
     component_ids = monthly_unified_total_session_ids(session_record)
-    for related in ExamSession.query.filter(ExamSession.id.in_(component_ids)).all():
+    preserve_entry_slips = journey_online_format_group(session_record) and "allow_public_entry_slips" not in request.form
+    related_records = ExamSession.query.filter(ExamSession.id.in_(component_ids)).all()
+    if preserve_entry_slips:
+        entry_slips_access = bool(related_records) and all(record.public_journey_entry_slips_access for record in related_records)
+    for related in related_records:
         related.public_journey_schedule_access = schedule_access
-        related.public_journey_entry_slips_access = entry_slips_access
+        if not preserve_entry_slips:
+            related.public_journey_entry_slips_access = entry_slips_access
     db.session.commit()
     return jsonify({"ok": True, "schedule_access": schedule_access, "entry_slips_access": entry_slips_access})
 
