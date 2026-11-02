@@ -1062,6 +1062,9 @@ const focusModalHeading = (modal) => {
 const openModal = (id, { opener = null, focus = true } = {}) => {
   const modal = document.getElementById(id);
   if (!modal) return;
+  if (modal.matches("[data-tower-session]")) {
+    queueMicrotask(() => window.loadTowerModal?.(modal, opener));
+  }
   if (id.startsWith("exam-session-members-") && opener) {
     const form = modal.querySelector("[data-session-members-form]");
     const table = document.querySelector("[data-exam-session-list]");
@@ -1342,6 +1345,10 @@ const focusModalTarget = (targetId, { scroll = true } = {}) => {
 };
 
 const closeModal = (modal) => {
+  if (modal.matches('[data-tower-session]')) {
+    const frame = modal.querySelector('iframe');
+    if (frame?.contentDocument?.body?.hasAttribute('data-tower-modal-document') && frame.contentWindow.towerHasUnsavedChanges?.() && !window.confirm('Close this session? Unsaved changes will be lost.')) return;
+  }
   modal.querySelectorAll("[data-session-save-feedback]").forEach((feedback) => {
     window.clearTimeout(feedback.dismissTimer);
     feedback.remove();
@@ -1352,6 +1359,10 @@ const closeModal = (modal) => {
   modal.querySelectorAll("[data-return-materials-form]").forEach(syncReturnMaterialsOptions);
   modal.classList.remove("is-open");
   modal.setAttribute("aria-hidden", "true");
+  if (modal.matches('[data-tower-session]')) {
+    const frame = modal.querySelector('iframe');
+    frame.onload = null; frame.removeAttribute('src'); frame.hidden = true;
+  }
   clearFocusedMode(modal);
   resetControlSectionsToDefault(modal);
   modal.querySelectorAll("[data-interview-confirm-root]").forEach((root) => syncInterviewInvitationConfirmation(root.closest("form")));
@@ -14542,3 +14553,5 @@ document.addEventListener("click", (event) => {
     event.stopImmediatePropagation();
   }
 }, true);
+
+window.initTowerSummaryControls = (root) => { initCopyTextButtons(root); applyViewOnlyMode(); };

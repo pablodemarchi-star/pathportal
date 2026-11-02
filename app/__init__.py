@@ -165,12 +165,20 @@ def create_app():
             if current_user and current_user.email == session.get("user_email"):
                 g.current_user = current_user
 
+    from app.tower_live import live_bp, guard_tower_edit, finish_tower_edit
+    app.register_blueprint(live_bp)
+    app.before_request(guard_tower_edit)
+    app.after_request(finish_tower_edit)
+
     @app.after_request
     def set_security_headers(response):
         response.headers["X-Content-Type-Options"] = "nosniff"
+        if request.args.get("session_modal"):
+            response.headers["Cache-Control"] = "no-store"
         response.headers["X-Frame-Options"] = (
-            "SAMEORIGIN" if request.endpoint == "staff.exam_session_planner"
-            and request.args.get("session_fullscreen") == "1" and request.args.get("staff_card")
+            "SAMEORIGIN" if (request.endpoint == "staff.exam_session_planner"
+            and request.args.get("session_fullscreen") == "1" and request.args.get("staff_card"))
+            or (request.endpoint in {"staff.pre_session_control_tower", "staff.pre_online_session_control_tower", "staff.my_actions"} and request.args.get("session_modal"))
             else "DENY"
         )
         response.headers["Referrer-Policy"] = "no-referrer" if request.endpoint == "staff.staff_exam_sessions" else "strict-origin-when-cross-origin"

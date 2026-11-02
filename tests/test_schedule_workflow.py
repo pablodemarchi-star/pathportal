@@ -1027,6 +1027,49 @@ class ScheduleWorkflowTest(unittest.TestCase):
                 self.assertEqual(response.status_code, 404)
         self.assertEqual(client.get(f"/path-session-journey/{external.token}/institution").status_code, 404)
 
+    def test_existing_enabled_journey_share_does_not_commit_on_read(self):
+        from unittest.mock import patch
+        from app.routes import ensure_journey_share_token
+        share = ensure_journey_share_token(self.session_record, "institution")
+        token = share.token
+        with patch.object(db.session, "commit", wraps=db.session.commit) as commit:
+            for _ in range(3):
+                self.assertEqual(ensure_journey_share_token(self.session_record, "institution").token, token)
+            commit.assert_not_called()
+        share.is_enabled = False
+        db.session.commit()
+        with patch.object(db.session, "commit", wraps=db.session.commit) as commit:
+            enabled = ensure_journey_share_token(self.session_record, "institution")
+            self.assertTrue(enabled.is_enabled)
+            self.assertEqual(enabled.token, token)
+            commit.assert_called_once()
+        enabled.revoked_at = datetime.now(timezone.utc)
+        db.session.commit()
+        with patch.object(db.session, "commit", wraps=db.session.commit) as commit:
+            renewed = ensure_journey_share_token(self.session_record, "institution")
+            self.assertNotEqual(renewed.token, token)
+            self.assertIsNone(renewed.revoked_at)
+            commit.assert_called_once()
+
+    def test_note_recipient_options_are_reused_only_within_each_get(self):
+        from sqlalchemy import event
+        from app.routes import note_to_user_options
+        statements = []
+        def track(conn, cursor, statement, parameters, context, executemany):
+            if "FROM app_user" in statement:
+                statements.append(statement)
+        engine = db.engine
+        event.listen(engine, "before_cursor_execute", track)
+        try:
+            for method in ("GET", "GET", "POST"):
+                statements.clear()
+                with self.app.test_request_context(method=method):
+                    first = note_to_user_options()
+                    self.assertEqual(note_to_user_options(), first)
+                    self.assertEqual(len(statements), 1 if method == "GET" else 2)
+        finally:
+            event.remove(engine, "before_cursor_execute", track)
+
     def test_external_journey_only_links_confirmed_schedules_and_respects_disabled_token(self):
         from app.routes import ensure_journey_share_token
         db.session.add(ExamSessionScheduleWorkflow(exam_session_id=self.session_record.id, status="Sent for review"))
@@ -1585,7 +1628,8 @@ class ScheduleWorkflowTest(unittest.TestCase):
         self.assertNotIn('control-tower-view-tabs', page)
         self.assertIn('data-modal-schedule-only="true"', table)
         self.assertIn('data-modal-staffing-only="true"', table)
-        self.assertIn('name="view" value="online"', page)
+        modal = client.get(f"/pre-online-session-control-tower?session_year=2026&session_modal={online_records[0].id}&open_schedule_modal={online_records[0].id}&schedule_only=1").get_data(as_text=True)
+        self.assertIn('name="view" value="online"', modal)
         self.assertLess(page.index('<span>Pre onsite session control tower</span>'), page.index('<span>Pre online session control tower</span>'))
         onsite = client.get("/pre-session-control-tower?session_year=2026&view=sessions").get_data(as_text=True)
         self.assertIn("June exam session", onsite)
@@ -13950,9 +13994,7 @@ assert.equal(storage.size, 0);
         response = client.get(f"/pre-session-control-tower?session_year=2026&view=bundle&bundle_id={selected_link.bundle_id}")
         html = response.get_data(as_text=True)
         table = html[html.index('aria-label="Schedule preparation and approval"'):html.index('<div class="modal"', html.index('aria-label="Schedule preparation and approval"'))]
-        modal_start = html.index(f'id="schedule-workflow-{first.id}"')
-        next_modal = html.find('<div class="modal"', modal_start + 1)
-        modal = html[modal_start:next_modal if next_modal != -1 else len(html)]
+        modal = client.get(f"/pre-session-control-tower?session_year=2026&view=bundle&bundle_id={selected_link.bundle_id}&session_modal={first.id}&open_schedule_modal={first.id}&schedule_only=1").get_data(as_text=True)
         schedule_button_start = table.index(f'data-modal-scroll-target="schedule-notes-{first.id}"')
         schedule_button = table[table.rfind("<button", 0, schedule_button_start):table.index("</button>", schedule_button_start)]
         staffing_button_start = table.index(f'data-modal-scroll-target="staffing-{first.id}"')
@@ -13997,9 +14039,7 @@ assert.equal(storage.size, 0);
 
         bundle_response = client.get(f"/pre-session-control-tower?session_year=2026&view=bundle&bundle_id={selected_link.bundle_id}")
         bundle_html = bundle_response.get_data(as_text=True)
-        modal_start = bundle_html.index(f'id="schedule-workflow-{first.id}"')
-        next_modal = bundle_html.find('<div class="modal" id=', modal_start + 1)
-        modal = bundle_html[modal_start:next_modal if next_modal != -1 else len(bundle_html)]
+        modal = client.get(f"/pre-session-control-tower?session_year=2026&view=bundle&bundle_id={selected_link.bundle_id}&session_modal={first.id}&open_schedule_modal={first.id}").get_data(as_text=True)
         package_form_index = modal.index(f"/pre-session-control-tower/sessions/{first.id}/packages/label-verification")
         package_form = modal[modal.rfind("<form", 0, package_form_index):modal.index("</form>", package_form_index)]
 

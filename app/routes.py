@@ -4070,10 +4070,19 @@ def note_actor_label():
 
 def note_to_user_options():
     actor = current_note_actor()
+    # Every note modal uses the same recipients; reuse them within this GET only.
+    cache = None
+    if has_request_context() and request.method == "GET":
+        cache = request.environ.setdefault("path.note_recipient_options", {})
+        if actor["user_id"] in cache:
+            return list(cache[actor["user_id"]])
     query = User.query.filter_by(is_active=True)
     if actor["user_id"]:
         query = query.filter(User.id != actor["user_id"])
-    return query.order_by(User.full_name.asc(), User.department.asc()).all()
+    options = query.order_by(User.full_name.asc(), User.department.asc()).all()
+    if cache is not None:
+        cache[actor["user_id"]] = tuple(options)
+    return options
 
 
 def selected_note_recipient(form):
@@ -14893,14 +14902,19 @@ def ensure_journey_share_token(session_record, audience, created_by=None):
     share = journey_share_for_session(session_record.id, audience)
     now = datetime.now(timezone.utc)
     if share:
+        changed = False
         if share.revoked_at:
             share.token = generate_unique_journey_token()
             share.revoked_at = None
             share.revoked_by = None
             share.regenerated_at = now
             share.regenerated_by = created_by
-        share.is_enabled = True
-        db.session.commit()
+            changed = True
+        if not share.is_enabled:
+            share.is_enabled = True
+            changed = True
+        if changed:
+            db.session.commit()
         return share
     share = ExamSessionJourneyShare(
         exam_session_id=session_record.id,
@@ -17981,6 +17995,11 @@ def my_actions_count():
 @login_required
 def pre_session_control_tower(_count_only=False):
     is_online_tower = request.endpoint == "staff.pre_online_session_control_tower"
+    modal_session_id = request.args.get("session_modal", type=int)
+    if request.args.get("session_modal") and not modal_session_id:
+        abort(400)
+    if modal_session_id and db.session.get(ExamSession, modal_session_id) is None:
+        abort(404)
     if not is_online_tower and request.args.get("view") == "online":
         return redirect(url_for("staff.pre_online_session_control_tower", **request.args.to_dict(flat=False)))
     selected_year, session_years = selected_exam_session_year()
@@ -18490,10 +18509,10 @@ def pre_session_control_tower(_count_only=False):
         )
         .options(
             joinedload(ExamSessionShipmentBundleSession.bundle).joinedload(ExamSessionShipmentBundle.supervisor),
-            joinedload(ExamSessionShipmentBundleSession.bundle).joinedload(ExamSessionShipmentBundle.checklist_items),
-            joinedload(ExamSessionShipmentBundleSession.bundle).joinedload(ExamSessionShipmentBundle.events),
+            joinedload(ExamSessionShipmentBundleSession.bundle).selectinload(ExamSessionShipmentBundle.checklist_items),
+            joinedload(ExamSessionShipmentBundleSession.bundle).selectinload(ExamSessionShipmentBundle.events),
             joinedload(ExamSessionShipmentBundleSession.bundle)
-            .joinedload(ExamSessionShipmentBundle.session_links)
+            .selectinload(ExamSessionShipmentBundle.session_links)
             .joinedload(ExamSessionShipmentBundleSession.exam_session),
         )
         .populate_existing()
@@ -19218,6 +19237,11 @@ def pre_session_control_tower(_count_only=False):
         action_session_ids = {row["session"].id for row in department_rows}
         modal_views = [view for view in all_schedule_views if view["session"].id in action_session_ids]
 
+    if modal_session_id:
+        modal_views = [view for view in all_schedule_views if view["session"].id == modal_session_id]
+        if not modal_views:
+            abort(404)
+
     concat_components = exam_session_concat_component_map()
     concat_ids = set().union(*(concat_components.get(view["session"].id, set()) for view in modal_views)) if modal_views else set()
     concat_sessions = {
@@ -19263,6 +19287,7 @@ def pre_session_control_tower(_count_only=False):
     show_session_package_column = False
     show_session_shipment_column = False
 
+    from app.tower_live import session_revision
     return render_template(
         "pre_session_control_tower/index.html",
         concat_session_names_by_session=concat_session_names_by_session,
@@ -19270,6 +19295,8 @@ def pre_session_control_tower(_count_only=False):
         schedule_views=schedule_views,
         schedule_approval_notifications={view["session"].id: view.get("schedule_approval_notification_event_id") for view in all_schedule_views},
         modal_views=modal_views,
+        modal_session_id=modal_session_id,
+        tower_revision=(session_revision(modal_session_id) if modal_session_id else ""),
         show_session_package_column=show_session_package_column,
         show_session_shipment_column=show_session_shipment_column,
         bundle_views=bundle_views,

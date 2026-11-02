@@ -1,0 +1,12 @@
+.modal-panel.tower-lazy-panel { padding: 0; overflow: hidden; width: min(1200px, calc(100vw - 32px)); }
+.tower-lazy-panel > header { display: flex; align-items: center; justify-content: space-between; padding: 20px 24px; }
+.tower-lazy-panel > p, .tower-lazy-panel > button { margin: 20px 24px; }
+.tower-lazy-panel > iframe { display: block; width: 100%; height: min(86vh, 1000px); border: 0; background: white; }
+.tower-lazy-panel > iframe[hidden], .tower-lazy-panel > header[hidden] { display: none; }
+.tower-modal-document { margin: 0; background: white; }
+.tower-modal-document .tower-session-content.is-open { position: relative; inset: auto; padding: 0; background: transparent; min-height: 100vh; overflow: visible; }
+.tower-modal-document .schedule-workflow-panel { width: 100%; max-width: none; max-height: none; margin: 0; box-shadow: none; border: 0; border-radius: 0; }
+.tower-update-notice { display: flex; align-items: center; justify-content: space-between; gap: 12px; position: sticky; top: 0; z-index: 100; padding: 12px 20px; background: #fff4ce; color: #704b00; border-bottom: 1px solid #e7c876; }
+.tower-update-notice[hidden] { display: none; }
+.tower-update-notice button { flex-shrink: 0; }
+@media (max-width: 650px) { .tower-lazy-modal { padding: 8px; } .tower-lazy-panel { width: 100%; } .tower-lazy-panel > iframe { height: calc(100dvh - 32px); } .tower-update-notice { flex-wrap: wrap; } }
