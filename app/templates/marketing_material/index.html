@@ -1,0 +1,91 @@
+{% extends 'marketing_material/public_base.html' if public else 'base.html' %}
+{% block title %}Marketing material | Path Examinations{% endblock %}
+{% block content %}
+{% if not public %}<link rel="stylesheet" href="{{ url_for('static', filename='css/marketing_material.css') }}">{% endif %}
+<header class="marketing-header">
+  <img src="{{ url_for('static', filename='img/path-logo-white-transparent.png') }}" alt="Path International Examinations" class="marketing-logo">
+  <div><p class="marketing-eyebrow">SESSION RESOURCES · {{ year }}</p><h1>Marketing material</h1><p>Photos and information for our marketing team.</p></div>
+</header>
+{% if not public %}
+<section class="marketing-share-panel" aria-label="External sharing">
+  <div><h2>External marketing link</h2><p>Read-only access. Editing stays inside the portal.</p>
+    {% if share %}
+    <div class="marketing-share-link-row">
+      <input id="marketing-share-link" type="text" aria-label="Marketing share link" value="{{ share_url }}" readonly>
+      <button class="copy-icon-button" type="button" data-copy-text-target="marketing-share-link" data-copy-success="Link copied" aria-label="Copy marketing share link" title="Copy marketing share link">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="9" y="9" width="10" height="10" rx="2"></rect><path d="M5 15V7a2 2 0 0 1 2-2h8"></path></svg>
+        <span class="copy-button-feedback" role="status" aria-live="polite">Link copied</span>
+      </button>
+    </div>
+    <span class="marketing-share-status {{ 'is-enabled' if share.enabled else 'is-disabled' }}">{{ 'Enabled' if share.enabled else 'Disabled' }}</span>
+    {% endif %}
+  </div>
+  {% if can_edit %}<form method="post" action="{{ url_for('marketing.manage_share') }}">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    {% if share %}
+      <button class="secondary-button" name="action" value="{{ 'disable' if share.enabled else 'enable' }}">{{ 'Disable link' if share.enabled else 'Enable link' }}</button>
+      <button class="secondary-button" name="action" value="regenerate" onclick="return confirm('Replace the marketing link? The previous link will stop working.');">Regenerate link</button>
+    {% else %}<button class="primary-button" name="action" value="enable">Create shared link</button>{% endif %}
+  </form>{% endif %}
+</section>
+{% if rows|selectattr('folder_error')|list %}<p class="marketing-error" role="alert">Some concatenated sessions have conflicting or invalid photo folders. Access is blocked for those groups until corrected.</p>{% endif %}
+{% endif %}
+<form class="marketing-filters" method="get" action="{{ request.path }}" role="search" aria-label="Filter marketing sessions">
+  <input type="hidden" name="sort" value="{{ sort_column }}">
+  <input type="hidden" name="dir" value="{{ sort_direction }}">
+  <label for="marketing-session-search">Exam session
+    <input id="marketing-session-search" type="search" name="q" value="{{ search }}" placeholder="Search by session name">
+  </label>
+  <label for="marketing-format-filter">Format
+    <select id="marketing-format-filter" name="format">
+      <option value="">All formats</option>
+      {% for format in format_options %}<option value="{{ format }}"{% if selected_format == format %} selected{% endif %}>{{ format }}</option>{% endfor %}
+    </select>
+  </label>
+  {% if search or selected_format %}<a class="secondary-button" href="{{ request.path }}">Clear filters</a>{% endif %}
+</form>
+{% if not public and can_edit %}<form class="marketing-editor-context" method="post" onsubmit="return false;"><input type="hidden" name="csrf_token" value="{{ csrf_token }}">{% endif %}
+<section class="table-wrap marketing-table-wrap" aria-label="Marketing session resources">
+<table class="marketing-table"><thead><tr>
+{% for key, label in [('exam_session', 'Exam session'), ('date', 'Date'), ('format', 'Format'), ('city', 'City')] %}
+  <th aria-sort="{{ ('ascending' if sort_direction == 'asc' else 'descending') if sort_column == key else 'none' }}">
+    <a class="table-sort{% if sort_column == key %} is-active{% endif %}" href="{{ sort_url(key) }}">{{ label }} <span>{{ '↑' if sort_column == key and sort_direction == 'asc' else '↓' if sort_column == key else '↕' }}</span></a>
+  </th>
+{% endfor %}
+<th>Session pictures</th><th>More info</th></tr></thead><tbody>
+{% for row in rows %}
+<tr data-marketing-row="{{ row.id }}"{% if not public and can_edit %} data-logistics-concept-row{% endif %}>
+  <td>{% for name in row.names %}<strong class="marketing-line">{{ name }}</strong>{% endfor %}</td>
+  <td>{% for date in row.dates %}<time class="marketing-line" datetime="{{ date.isoformat() }}">{{ date.strftime('%d/%m/%Y') }}</time>{% endfor %}</td>
+  <td>{% for format in row.formats %}<span class="marketing-format">{{ format }}</span>{% endfor %}</td>
+  <td>{% for city in row.cities %}<span class="marketing-line">{{ city }}</span>{% else %}<span class="muted">Not available</span>{% endfor %}</td>
+  <td>{% if row.folder %}<a class="marketing-access" href="{{ row.folder }}" target="_blank" rel="noopener noreferrer">Access ↗</a>
+    {% else %}<span class="muted">Not available</span>{% endif %}
+    {% if not public and row.folder_error %}<p class="marketing-error">{{ row.folder_error }}</p>{% for item in row.sessions %}<a class="marketing-line" href="{{ url_for('staff.exam_session_planner', session_year=item.year, open_session_modal=item.id) }}" target="_blank" rel="noopener noreferrer">Edit {{ item.name }} ↗</a>{% endfor %}{% endif %}
+  </td>
+  <td>
+    {% if not public and can_edit %}
+      <input type="hidden" name="logistics_concept_id_{{ row.id }}" value="{{ row.id }}">
+      <input type="hidden" value="{{ row.title }}" data-logistics-instructions-title-value>
+      <input type="hidden" value="{{ row.content }}" data-logistics-instructions-value>
+      <button type="button" class="logistics-instructions-button{% if row.content %} has-instructions{% endif %}" data-logistics-instructions-open data-instructions-url="{{ url_for('marketing.save_info', session_id=row.id) }}" aria-label="{{ 'View or edit More info' if row.content else 'Add More info' }}">{{ 'View' if row.content else '✎' }}</button>
+    {% elif row.content %}<button type="button" class="marketing-view" data-marketing-open="marketing-info-{{ row.id }}">View</button>
+    {% else %}<span class="muted">—</span>{% endif %}
+    {% if row.content or (not public and can_edit) %}<button type="button" class="marketing-copy" data-marketing-copy="marketing-info-{{ row.id }}" aria-label="Copy More info" title="Copy More info"{% if not row.content %} disabled{% endif %}>⧉</button>{% endif %}
+    <span class="marketing-copy-feedback" role="status" aria-live="polite"></span>
+  </td>
+</tr>
+{% else %}<tr><td colspan="6" class="empty-state">{{ 'No exam sessions match your filters.' if search or selected_format else 'No exam sessions for the current year.' }}</td></tr>{% endfor %}
+</tbody></table></section>
+{% if not public and can_edit %}</form>{% endif %}
+{% for row in rows %}
+<dialog id="marketing-info-{{ row.id }}" class="marketing-info-dialog" aria-label="More info">
+  <header><span class="marketing-eyebrow">MORE INFO</span><button type="button" class="staff-detail-close" data-marketing-close aria-label="Close More info">&times;</button></header>
+  <div class="marketing-rich-content" data-marketing-rich-content><h2>{{ row.title or 'Session information' }}</h2><div data-marketing-body>{{ row.content|safe }}</div></div>
+  <div class="marketing-dialog-actions"><button type="button" class="secondary-button" data-marketing-copy="marketing-info-{{ row.id }}"{% if not row.content %} disabled{% endif %}>⧉ Copy information</button><button type="button" class="secondary-button" data-marketing-close>Close</button><span class="marketing-copy-feedback" role="status" aria-live="polite"></span></div>
+</dialog>
+{% endfor %}
+{% if not public and can_edit %}{% set instructions_can_edit = true %}{% set instructions_heading = 'More info' %}{% include '_instructions_editor.html' %}{% endif %}
+<footer class="marketing-footer">Path International Examinations · Marketing material</footer>
+<script src="{{ url_for('static', filename='js/marketing_material.js') }}" defer></script>
+{% endblock %}

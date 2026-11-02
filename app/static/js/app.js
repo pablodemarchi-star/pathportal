@@ -14512,7 +14512,8 @@ document.addEventListener("submit", (event) => {
         body.set('csrf_token', form.querySelector('[name="csrf_token"]').value);
         body.set('instructions', value);
         body.set('title', titleValue);
-        const response = await fetch(`/exam-session-planner/logistics-concepts/${encodeURIComponent(conceptId)}/instructions`, {method: 'POST', body, headers: {'Accept': 'application/json'}});
+        const endpoint = opener.dataset.instructionsUrl || `/exam-session-planner/logistics-concepts/${encodeURIComponent(conceptId)}/instructions`;
+        const response = await fetch(endpoint, {method: 'POST', body, headers: {'Accept': 'application/json'}});
         const payload = await response.json();
         if (!response.ok || !payload.ok) throw new Error(payload.error || 'Could not save instructions.');
         value = payload.instructions;
@@ -14523,6 +14524,7 @@ document.addEventListener("submit", (event) => {
       if (conceptId) { input.defaultValue = value; titleInput.defaultValue = titleValue; }
       opener.textContent = value ? 'View' : '✎';
       opener.classList.toggle('has-instructions', Boolean(value));
+      row.dispatchEvent(new CustomEvent('instructions:saved', { bubbles: true, detail: { title: titleValue, html: value } }));
       opener.setAttribute('aria-label', value ? 'View or edit instructions' : 'Add instructions');
       if (!conceptId) markStaffChangesUnsaved(row.closest('form'));
       dialog.close();

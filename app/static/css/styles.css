@@ -18030,3 +18030,6 @@ body.staff-session-detail-open { overflow: hidden; }
 .package-incident-dismiss:hover:not(:disabled) { background: #00000012; }
 .package-incident-dismiss:focus-visible { outline: 2px solid currentColor; outline-offset: 2px; }
 .package-incident-dismiss:disabled { cursor: default; }
+
+.marketing-material-chip{display:inline-flex;align-items:center;background:#e7f2ed;border:1px solid #bcd6c8;color:#00506b;border-radius:20px;padding:7px 14px;text-decoration:none;font-size:13px;font-weight:600;margin-top:8px}
+.control-tower-title-row{display:flex;align-items:center;gap:16px;flex-wrap:wrap}.control-tower-title-row .marketing-material-chip{margin-top:0}

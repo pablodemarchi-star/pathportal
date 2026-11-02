@@ -1443,7 +1443,9 @@
 <header class="page-header">
   <div>
     <p class="eyebrow">{{ tower_title }}</p>
-    <h1>{{ 'My actions (' ~ department_actions_count ~ ')' if is_my_actions_page else tower_title }}</h1>
+    <div class="control-tower-title-row"><h1>{{ 'My actions (' ~ department_actions_count ~ ')' if is_my_actions_page else tower_title }}</h1>
+    {% if not is_online_tower and not is_my_actions_page %}<a class="marketing-material-chip" href="{{ url_for('marketing.index') }}" target="_blank" rel="noopener noreferrer">Marketing material ↗</a>{% endif %}
+    </div>
     <p>{{ 'Pending actions for your department: ' ~ current_user_department if is_my_actions_page else 'Control schedule preparation, review and approval for each exam session.' }}</p>
   </div>
 </header>
