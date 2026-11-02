@@ -463,6 +463,37 @@ class FinanceRequestsTest(unittest.TestCase):
         self.assertIn('<option value="UK bank transfer"', payment_body)
         self.assertIn('<option value="UK bank transfer"', finance_actions_body)
 
+    def test_new_payment_request_includes_direct_debit_in_both_creation_views(self):
+        user = self.create_user("superadmin@example.com", is_superadmin=True)
+        client = self.client_for(user)
+        for tab in ("payment_requests", "finance_payments"):
+            page = client.get(f"/finance-requests?tab={tab}").get_data(as_text=True)
+            self.assertIn('<option value="Direct debit"', page)
+            self.assertIn('<option value="Electronic Payment Slip (EPS)"', page)
+
+    def test_direct_debit_creation_matches_eps_validation_and_workflow(self):
+        requester = self.create_user("requester@example.com")
+        finance = self.create_user("finance@example.com", department="Finance")
+        for source_tab, user, amount in [("payment_requests", requester, "2500"),
+                                         ("finance_payments", finance, "2500"),
+                                         ("finance_payments", finance, "")]:
+            results = []
+            for method in ("Electronic Payment Slip (EPS)", "Direct debit"):
+                description = f"{method} {source_tab} {amount or 'pending'}"
+                with patch("app.payment_notifications.deliver_management_notification"):
+                    response = self.client_for(user).post("/finance-requests/payment-requests", data={
+                        "source_tab": source_tab, "description": description,
+                        "concept_id": str(self.concept.id), "currency": "ARS", "amount": amount,
+                        "payment_method": method, "payment_date_mode": "asap",
+                    })
+                self.assertEqual(response.status_code, 302)
+                payment = PaymentRequest.query.filter_by(description=description).one()
+                self.assertEqual(payment.payment_method, method)
+                self.assertEqual(payment.payment_proof_url, "")
+                results.append((payment.status, payment.amount, payment.currency,
+                                payment.scheduled_payment_date, payment.bank_details_snapshot))
+            self.assertEqual(results[0], results[1])
+
     def test_contacts_tab_redirects_to_default_payment_requests(self):
         user = self.create_user("requester@example.com")
         body = self.client_for(user).get("/finance-requests?tab=contacts").get_data(as_text=True)
