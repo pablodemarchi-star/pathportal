@@ -55,15 +55,16 @@
 <th>Session pictures</th><th>More info</th></tr></thead><tbody>
 {% for row in rows %}
 <tr data-marketing-row="{{ row.id }}"{% if not public and can_edit %} data-logistics-concept-row{% endif %}>
-  <td>{% for name in row.names %}<strong class="marketing-line">{{ name }}</strong>{% endfor %}</td>
-  <td>{% for date in row.dates %}<time class="marketing-line" datetime="{{ date.isoformat() }}">{{ date.strftime('%d/%m/%Y') }}</time>{% endfor %}</td>
-  <td>{% for format in row.formats %}<span class="marketing-format">{{ format }}</span>{% endfor %}</td>
-  <td>{% for city in row.cities %}<span class="marketing-line">{{ city }}</span>{% else %}<span class="muted">Not available</span>{% endfor %}</td>
-  <td>{% if row.folder %}<a class="marketing-access" href="{{ row.folder }}" target="_blank" rel="noopener noreferrer">Access ↗</a>
+  <td><span class="marketing-mobile-label" aria-hidden="true">Exam session</span>{% for name in row.names %}<strong class="marketing-line">{{ name }}</strong>{% endfor %}</td>
+  <td><span class="marketing-mobile-label" aria-hidden="true">Date</span>{% for date in row.dates %}<time class="marketing-line" datetime="{{ date.isoformat() }}">{{ date.strftime('%d/%m/%Y') }}</time>{% endfor %}</td>
+  <td><span class="marketing-mobile-label" aria-hidden="true">Format</span>{% for format in row.formats %}<span class="marketing-format">{{ format }}</span>{% endfor %}</td>
+  <td><span class="marketing-mobile-label" aria-hidden="true">City</span>{% for city in row.cities %}<span class="marketing-line">{{ city }}</span>{% else %}<span class="muted">Not available</span>{% endfor %}</td>
+  <td><span class="marketing-mobile-label" aria-hidden="true">Session pictures</span>{% if row.folder %}<a class="marketing-access" href="{{ row.folder }}" target="_blank" rel="noopener noreferrer">Access ↗</a>
     {% else %}<span class="muted">Not available</span>{% endif %}
     {% if not public and row.folder_error %}<p class="marketing-error">{{ row.folder_error }}</p>{% for item in row.sessions %}<a class="marketing-line" href="{{ url_for('staff.exam_session_planner', session_year=item.year, open_session_modal=item.id) }}" target="_blank" rel="noopener noreferrer">Edit {{ item.name }} ↗</a>{% endfor %}{% endif %}
   </td>
   <td>
+    <span class="marketing-mobile-label" aria-hidden="true">More info</span>
     {% if not public and can_edit %}
       <input type="hidden" name="logistics_concept_id_{{ row.id }}" value="{{ row.id }}">
       <input type="hidden" value="{{ row.title }}" data-logistics-instructions-title-value>
