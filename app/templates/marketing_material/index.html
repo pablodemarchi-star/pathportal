@@ -42,6 +42,14 @@
       {% for format in format_options %}<option value="{{ format }}"{% if selected_format == format %} selected{% endif %}>{{ format }}</option>{% endfor %}
     </select>
   </label>
+  <div class="marketing-mobile-sort">
+    <label for="marketing-sort-column">Sort by
+      <select id="marketing-sort-column" data-marketing-sort>
+        {% for key, label in [('exam_session', 'Exam session'), ('date', 'Date'), ('format', 'Format'), ('city', 'City')] %}<option value="{{ key }}"{% if sort_column == key %} selected{% endif %}>{{ label }}</option>{% endfor %}
+      </select>
+    </label>
+    <button type="button" class="secondary-button" data-marketing-sort-direction aria-label="{{ 'Switch to descending order' if sort_direction == 'asc' else 'Switch to ascending order' }}">{{ '↑ Ascending' if sort_direction == 'asc' else '↓ Descending' }}</button>
+  </div>
   {% if search or selected_format %}<a class="secondary-button" href="{{ request.path }}">Clear filters</a>{% endif %}
 </form>
 {% if not public and can_edit %}<form class="marketing-editor-context" method="post" onsubmit="return false;"><input type="hidden" name="csrf_token" value="{{ csrf_token }}">{% endif %}

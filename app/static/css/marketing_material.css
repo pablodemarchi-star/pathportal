@@ -32,6 +32,7 @@
 @media (max-width: 600px) { .marketing-filters label { width: 100%; } }
 
 .marketing-mobile-label { display: none; }
+.marketing-mobile-sort { display: none; }
 
 /* Use the same rows and controls as desktop, laid out as cards on phones. */
 @media (max-width: 760px) {
@@ -50,13 +51,10 @@
   .marketing-share-panel form { margin-top: 16px; }
   .marketing-table-wrap { border: 0; border-radius: 0; background: transparent; overflow: visible; }
   .marketing-table { display: block; min-width: 0; width: 100%; }
-  .marketing-table thead { display: block; padding: 14px; margin-bottom: 16px; border: 1px solid #dbe5e8; border-radius: 12px; background: #eaf1f3; }
-  .marketing-table thead::before { content: 'Sort by'; display: block; margin-bottom: 8px; color: #526a75; font-size: 12px; font-weight: 600; }
-  .marketing-table thead tr { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
-  .marketing-table thead th { position: static; width: auto; padding: 0; border: 0; background: transparent; }
-  .marketing-table thead th:nth-child(n+5) { display: none; }
-  .marketing-table .table-sort { display: flex; justify-content: space-between; min-height: 44px; padding: 8px 10px; border: 1px solid #d2e0e5; border-radius: 8px; background: white; }
-  .marketing-table .table-sort span { flex-shrink: 0; }
+  .marketing-table thead { display: none; }
+  .marketing-mobile-sort { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: end; gap: 10px; width: 100%; padding-top: 16px; border-top: 1px solid #e4ecef; }
+  .marketing-mobile-sort label { width: auto; }
+  .marketing-mobile-sort button { min-height: 44px; padding: 9px 12px; white-space: nowrap; }
   .marketing-table tbody { display: grid; gap: 16px; }
   .marketing-table tbody tr { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; padding: 18px; border: 1px solid #dbe5e8; border-radius: 14px; background: white; box-shadow: 0 2px 8px #00344806; }
   .marketing-table tbody td { display: block; min-width: 0; padding: 0; border: 0; }

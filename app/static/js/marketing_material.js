@@ -27,6 +27,15 @@
     search.addEventListener('compositionstart', () => { composing = true; clearTimeout(timer); });
     search.addEventListener('compositionend', () => { composing = false; schedule(); });
     format.addEventListener('change', apply);
+    filters.querySelector('[data-marketing-sort]').addEventListener('change', event => {
+      filters.querySelector('[name="sort"]').value = event.target.value;
+      apply();
+    });
+    filters.querySelector('[data-marketing-sort-direction]').addEventListener('click', () => {
+      const direction = filters.querySelector('[name="dir"]');
+      direction.value = direction.value === 'asc' ? 'desc' : 'asc';
+      apply();
+    });
     filters.addEventListener('submit', () => clearTimeout(timer));
     try {
       const saved = sessionStorage.getItem(focusKey);
