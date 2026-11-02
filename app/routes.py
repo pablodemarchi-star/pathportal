@@ -11922,49 +11922,6 @@ def update_auto_bundle_deadline(bundle, today=None):
     return sync_schedule_preparation_deadline_for_bundle(bundle, today=today) or changed
 
 
-def split_overdue_auto_bundle_if_needed(bundle, today=None):
-    today = today or datetime.now(LOCAL_TZ).date()
-    if is_shipment_bundle_completed(bundle) or not bundle.auto_managed or bundle.status not in SHIPMENT_AUTO_MANAGED_STATUSES:
-        return False
-    included_sessions = shipment_bundle_sessions(bundle)
-    if len(included_sessions) <= 1 or not bundle.dispatch_due_at or today <= bundle.dispatch_due_at:
-        return False
-    confirmed_sessions = [session_record for session_record in included_sessions if session_packages_quality_checked(session_record)]
-    if len(confirmed_sessions) == len(included_sessions):
-        return False
-    pending_sessions = [session_record for session_record in included_sessions if session_record not in confirmed_sessions]
-    if not pending_sessions:
-        return False
-    original_keep = confirmed_sessions if confirmed_sessions else pending_sessions[:1]
-    sessions_to_move = pending_sessions if confirmed_sessions else pending_sessions[1:]
-    if not sessions_to_move:
-        return update_auto_bundle_deadline(bundle, today=today)
-    existing_links = {link.exam_session_id: link for link in list(bundle.session_links)}
-    for session_record in sessions_to_move:
-        link = existing_links.get(session_record.id)
-        if link:
-            db.session.delete(link)
-    bundle.auto_split_at = bundle.auto_split_at or datetime.now(timezone.utc)
-    bundle.updated_by = "system"
-    update_auto_bundle_deadline(bundle, today=today)
-    split_note = "Bundle automatically split because the unified deadline had expired and not all packages were confirmed."
-    shipment_event_once(bundle, "AUTO_BUNDLE_SPLIT", bundle.status, bundle.status, split_note)
-    supervisor = bundle.supervisor
-    bundle_year = bundle.bundle_year or shipment_bundle_year_from_sessions(bundle)
-    for session_record in sessions_to_move:
-        new_bundle = create_auto_shipment_bundle(
-            supervisor,
-            [session_record],
-            bundle_year,
-            split_from_bundle=bundle,
-            event_note="Session moved to split bundle after the unified deadline expired.",
-            today=today,
-        )
-        new_bundle.auto_split_at = datetime.now(timezone.utc)
-        shipment_event(new_bundle, "SESSION_MOVED_TO_SPLIT_BUNDLE", None, new_bundle.status, session_record.exam_session_name)
-    return True
-
-
 def reconcile_auto_shipment_bundles(year_or_sessions, today=None):
     today = today or datetime.now(LOCAL_TZ).date()
     if isinstance(year_or_sessions, int):
@@ -12012,26 +11969,8 @@ def reconcile_auto_shipment_bundles(year_or_sessions, today=None):
         if session_ids else []
     )
     links_by_session = {link.exam_session_id: link for link in shipment_links}
-    auto_bundles = {
-        link.bundle for link in shipment_links
-        if link.bundle and link.bundle.auto_managed and link.bundle.status in SHIPMENT_AUTO_MANAGED_STATUSES
-    }
+    # Overdue bundles remain grouped; deadlines never trigger automatic splitting.
     changed = False
-    for bundle in sorted(auto_bundles, key=lambda item: (item.dispatch_due_at or datetime.max.date(), item.id or 0)):
-        changed = split_overdue_auto_bundle_if_needed(bundle, today=today) or changed
-    if changed:
-        db.session.flush()
-        shipment_links = (
-            ExamSessionShipmentBundleSession.query.filter(ExamSessionShipmentBundleSession.exam_session_id.in_(session_ids))
-            .options(joinedload(ExamSessionShipmentBundleSession.bundle).joinedload(ExamSessionShipmentBundle.supervisor))
-            .all()
-            if session_ids else []
-        )
-        links_by_session = {link.exam_session_id: link for link in shipment_links}
-        auto_bundles = {
-            link.bundle for link in shipment_links
-            if link.bundle and link.bundle.auto_managed and link.bundle.status in SHIPMENT_AUTO_MANAGED_STATUSES
-        }
     for session_record in sessions:
         supervisor, reason = auto_bundle_supervisor_for_session(session_record, supervisor_assignments_by_session)
         if not reason and supervisor:
@@ -12049,7 +11988,6 @@ def reconcile_auto_shipment_bundles(year_or_sessions, today=None):
             update_auto_bundle_deadline(bundle, today=today)
         else:
             db.session.delete(bundle)
-            auto_bundles.discard(bundle)
     eligible_by_supervisor = {}
     for session_record in sessions:
         supervisor, reason = auto_bundle_supervisor_for_session(session_record, supervisor_assignments_by_session)
@@ -12093,7 +12031,6 @@ def reconcile_auto_shipment_bundles(year_or_sessions, today=None):
         else:
             new_bundle = create_auto_shipment_bundle(supervisor, group_sessions, selected_year, today=today)
             db.session.flush()
-            split_overdue_auto_bundle_if_needed(new_bundle, today=today)
             changed = True
     if changed:
         db.session.commit()

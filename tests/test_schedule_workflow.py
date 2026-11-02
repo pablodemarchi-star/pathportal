@@ -13062,23 +13062,29 @@ assert.equal(storage.size, 0);
         self.assertIn(".bundles-table td:nth-child(3) .bundle-action-description-stack > span > span:first-child", css)
         self.assertIn("overflow-wrap: anywhere;", css)
 
-    def test_auto_shipment_bundle_overdue_split_is_idempotent_and_keeps_confirmed_unblocked(self):
+    def test_auto_shipment_bundle_overdue_stays_grouped_with_mixed_package_readiness(self):
         self.create_supervisor(staff_id=1, name="Laura Mendez")
         confirmed = self.create_planning_ready_session("Axis English", date(2026, 7, 9), supervisor_id=1, packages_ready=True)
         pending_one = self.create_planning_ready_session("Lincoln", date(2026, 7, 12), supervisor_id=1, packages_ready=False)
         pending_two = self.create_planning_ready_session("North Institute", date(2026, 7, 15), supervisor_id=1, packages_ready=False)
 
+        reconcile_auto_shipment_bundles([confirmed, pending_one, pending_two], today=date(2026, 6, 20))
+        original = ExamSessionShipmentBundle.query.one()
+        original_id, original_number = original.id, original.bundle_number
+        original_links = {link.id for link in original.session_links}
+
         reconcile_auto_shipment_bundles([confirmed, pending_one, pending_two], today=date(2026, 6, 30))
         reconcile_auto_shipment_bundles([confirmed, pending_one, pending_two], today=date(2026, 6, 30))
 
         bundles = ExamSessionShipmentBundle.query.order_by(ExamSessionShipmentBundle.id.asc()).all()
-        self.assertEqual(len(bundles), 3)
+        self.assertEqual(len(bundles), 1)
+        self.assertEqual(bundles[0].id, original_id)
+        self.assertEqual(bundles[0].bundle_number, original_number)
+        self.assertEqual({link.id for link in bundles[0].session_links}, original_links)
+        self.assertEqual(bundles[0].dispatch_due_at, date(2026, 6, 27))
+        self.assertIsNone(bundles[0].auto_split_at)
         self.assertEqual(ExamSessionShipmentBundleSession.query.count(), 3)
-        confirmed_link = ExamSessionShipmentBundleSession.query.filter_by(exam_session_id=confirmed.id).one()
-        confirmed_contract = session_shipment_contract(confirmed, confirmed_link)
-        self.assertNotEqual(confirmed_contract["label"], "BLOCKED")
-        self.assertEqual(ExamSessionShipmentEvent.query.filter_by(event_type="AUTO_BUNDLE_SPLIT").count(), 1)
-        self.assertEqual(len({bundle.bundle_number for bundle in bundles}), 3)
+        self.assertEqual(ExamSessionShipmentEvent.query.filter_by(event_type="AUTO_BUNDLE_SPLIT").count(), 0)
 
     def test_auto_shipment_bundle_deadline_today_does_not_split(self):
         self.create_supervisor(staff_id=1, name="Laura Mendez")
@@ -13092,7 +13098,7 @@ assert.equal(storage.size, 0);
         self.assertEqual(ExamSessionShipmentBundleSession.query.filter_by(bundle_id=bundle.id).count(), 2)
         self.assertEqual(ExamSessionShipmentEvent.query.filter_by(event_type="AUTO_BUNDLE_SPLIT").count(), 0)
 
-    def test_auto_shipment_bundle_overdue_split_with_no_confirmed_creates_individual_bundles(self):
+    def test_auto_shipment_bundle_created_overdue_with_no_confirmed_stays_grouped(self):
         self.create_supervisor(staff_id=1, name="Laura Mendez")
         first = self.create_planning_ready_session("Pending split A", date(2026, 7, 9), supervisor_id=1, packages_ready=False)
         second = self.create_planning_ready_session("Pending split B", date(2026, 7, 12), supervisor_id=1, packages_ready=False)
@@ -13102,10 +13108,10 @@ assert.equal(storage.size, 0);
         reconcile_auto_shipment_bundles([first, second, third], today=date(2026, 6, 30))
 
         bundles = ExamSessionShipmentBundle.query.order_by(ExamSessionShipmentBundle.id.asc()).all()
-        self.assertEqual(len(bundles), 3)
+        self.assertEqual(len(bundles), 1)
         self.assertEqual(ExamSessionShipmentBundleSession.query.count(), 3)
-        self.assertEqual(sorted(len(bundle.session_links) for bundle in bundles), [1, 1, 1])
-        self.assertEqual(ExamSessionShipmentEvent.query.filter_by(event_type="AUTO_BUNDLE_SPLIT").count(), 1)
+        self.assertEqual(sorted(len(bundle.session_links) for bundle in bundles), [3])
+        self.assertEqual(ExamSessionShipmentEvent.query.filter_by(event_type="AUTO_BUNDLE_SPLIT").count(), 0)
 
     def test_auto_shipment_bundle_uses_first_supervisor_when_multiple_are_assigned(self):
         self.create_supervisor(staff_id=1, name="Laura Mendez")
