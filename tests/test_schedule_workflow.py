@@ -22964,7 +22964,7 @@ for (const role of ["Examiner", "Supervisor", "Intern", "Emergency contact"]) {
         db.session.commit()
         bundle = self.create_shipment_bundle_record(session_record=self.session_record)
         client = self.login_client()
-        response = client.get(f"/pre-session-control-tower?session_year=2026&view=bundle&bundle_id={bundle.id}")
+        response = client.get(f"/pre-session-control-tower?session_year=2026&view=bundle&bundle_id={bundle.id}&session_modal={self.session_record.id}&open_schedule_modal={self.session_record.id}&staffing_only=1")
         html = response.get_data(as_text=True)
         self.assertIn('data-staffing-member-card=', html)
         self.assertIn(f'staff_card=examiner:{assignment.id}', html)

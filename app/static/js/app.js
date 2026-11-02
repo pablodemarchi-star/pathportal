@@ -11110,6 +11110,18 @@ const refreshPlannerSessionRow = async (form) => {
 document.querySelectorAll("[data-session-members-form]").forEach((form) => {
   if (form.dataset.logisticsSubmitInitialized === "true") return;
   form.dataset.logisticsSubmitInitialized = "true";
+  form.addEventListener("formdata", (event) => {
+    // Disabled selected options are not successful controls, even though their
+    // select displays Confirmed. Include the displayed value for unchanged cards.
+    const controls = Array.from(form.elements);
+    controls.filter(control => control.matches("[data-participation-select]") && !control.disabled)
+      .forEach(control => event.formData.set(control.name, control.value));
+    const emergency = controls.filter(control => control.matches("[data-emergency-contact-status-select]") && !control.disabled);
+    if (emergency.length) {
+      event.formData.delete("emergency_contact_participation_status");
+      emergency.forEach(control => event.formData.append("emergency_contact_participation_status", control.value));
+    }
+  });
   form.addEventListener("submit", async (event) => {
     syncSessionNonAvailableFields(form);
     const logisticsSection = form.querySelector("[data-logistics-section]");
@@ -11172,6 +11184,7 @@ document.querySelectorAll("[data-session-members-form]").forEach((form) => {
         if (input) input.value = String(id);
       });
       Object.assign(form.dataset, payload.form_state || {});
+      form.querySelectorAll("[data-participation-select]").forEach(syncParticipationSelect);
       form.querySelectorAll("[name^='deleted_'], input[name^='logistics_note_']").forEach((input) => input.remove());
       Array.from(form.elements).forEach((control) => {
         if (control.tagName === "INPUT") {

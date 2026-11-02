@@ -24701,16 +24701,22 @@ def save_exam_session_assignment_section(
         )
         team_member_value = request.form.get(f"{section_key}_team_member_id_{row_key}", "").strip()
         team_member_id, potential_entry_id, selected_person_token = parse_assignment_person_value(team_member_value)
+        previous_participation_status = normalize_participation_status(assignment.participation_status if assignment else "")
+        same_person = bool(assignment and (team_member_id is not None or potential_entry_id is not None)
+                           and assignment.team_member_id == team_member_id
+                           and assignment.potential_entry_id == potential_entry_id)
+        # A selected, disabled Confirmed option is omitted by browser form submission.
+        # Missing status must not erase an existing person's accepted invitation.
+        default_status = previous_participation_status if same_person else "Pending"
         participation_status = normalize_participation_status(
-            request.form.get(f"{section_key}_participation_status_{row_key}", "Pending")
+            request.form.get(f"{section_key}_participation_status_{row_key}", default_status)
         )
         if participation_status not in EXAM_SESSION_PARTICIPATION_OPTIONS:
             flash("Please select a valid Participation status.", "error")
             return None
-        previous_participation_status = normalize_participation_status(assignment.participation_status if assignment else "")
         if (
             participation_status not in EXAM_SESSION_PLANNER_PARTICIPATION_OPTIONS
-            and participation_status != previous_participation_status
+            and (participation_status != previous_participation_status or not same_person)
         ):
             flash("Exam session planner can only set Pending, Pre-confirmation sent or Pre-confirmed participation status.", "error")
             return None
@@ -25488,9 +25494,13 @@ def update_exam_session_members(session_id):
         emergency_contact_rows = []
         for index in range(row_count):
             member_value = emergency_contact_member_values[index] if index < len(emergency_contact_member_values) else ""
-            status_value = normalize_participation_status(
-                emergency_contact_status_values[index] if index < len(emergency_contact_status_values) else "Pending"
-            )
+            # Repeated disabled selects may be missing from legacy submissions.
+            # Never shift a later contact's status onto a different person.
+            if index < len(emergency_contact_status_values) and len(emergency_contact_status_values) == len(emergency_contact_member_values):
+                status_input = emergency_contact_status_values[index]
+            else:
+                status_input = previous_emergency_contact_status_by_member.get(member_value, "Pending")
+            status_value = normalize_participation_status(status_input)
             start_time = emergency_contact_start_values[index] if index < len(emergency_contact_start_values) else ""
             end_time = emergency_contact_end_values[index] if index < len(emergency_contact_end_values) else ""
             preserve_time_without_member = (
