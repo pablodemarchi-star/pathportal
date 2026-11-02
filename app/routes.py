@@ -11922,6 +11922,39 @@ def update_auto_bundle_deadline(bundle, today=None):
     return sync_schedule_preparation_deadline_for_bundle(bundle, today=today) or changed
 
 
+def merge_empty_shipment_bundle(source, target):
+    """Retain the absorbed bundle's history and configuration before removing it."""
+    snapshot = {column.name: getattr(source, column.name) for column in source.__table__.columns}
+    snapshot["checklist"] = [
+        {column.name: getattr(item, column.name) for column in item.__table__.columns}
+        for item in source.checklist_items
+    ]
+    number = shipment_bundle_display_number(source)
+    for event in list(source.events):
+        event.note = f"[Bundle {number}] {event.note or ''}".strip()
+        event.bundle = target
+    shipment_event(target, "AUTO_BUNDLE_MERGED", source.status, target.status,
+                   f"Bundle {number} consolidated into {shipment_bundle_display_number(target)}. "
+                   + json.dumps(snapshot, default=str, ensure_ascii=False))
+    for child in ExamSessionShipmentBundle.query.filter_by(split_from_bundle_id=source.id).all():
+        child.split_from_bundle = None if child.id == target.id else target
+    db.session.delete(source)
+
+
+def reset_regrouped_bundle_checks(bundle):
+    checked = [item for item in bundle.checklist_items if item.is_checked]
+    if checked or bundle.status == "Ready to dispatch":
+        snapshot = [{column.name: getattr(item, column.name) for column in item.__table__.columns} for item in checked]
+        shipment_event(bundle, "BUNDLE_CONTENTS_CHANGED", bundle.status, "Preparing bundle",
+                       "Bundle contents changed; repeat shipment checks. Previous checks: "
+                       + json.dumps(snapshot, default=str, ensure_ascii=False))
+        bundle.status = "Preparing bundle"
+        for item in checked:
+            item.is_checked = False
+            item.checked_at = item.checked_by = None
+    bundle.updated_by = "system"
+
+
 def reconcile_auto_shipment_bundles(year_or_sessions, today=None):
     today = today or datetime.now(LOCAL_TZ).date()
     if isinstance(year_or_sessions, int):
@@ -11988,50 +12021,64 @@ def reconcile_auto_shipment_bundles(year_or_sessions, today=None):
             update_auto_bundle_deadline(bundle, today=today)
         else:
             db.session.delete(bundle)
-    eligible_by_supervisor = {}
+    eligible_groups = {}
     for session_record in sessions:
         supervisor, reason = auto_bundle_supervisor_for_session(session_record, supervisor_assignments_by_session)
         if reason or not supervisor:
             continue
         current_link = links_by_session.get(session_record.id)
-        if current_link and current_link.bundle:
-            bundle = current_link.bundle
-            if is_shipment_bundle_completed(bundle) or bundle.status in SHIPMENT_PROTECTED_STATUSES or not bundle.auto_managed:
-                continue
-            if bundle.split_from_bundle_id:
-                changed = update_auto_bundle_deadline(bundle, today=today) or changed
-                continue
-            if bundle.supervisor_staff_id == supervisor.id:
-                changed = update_auto_bundle_deadline(bundle, today=today) or changed
-                continue
-            db.session.delete(current_link)
-            shipment_event(bundle, "SESSION_REMOVED_FROM_AUTO_BUNDLE", bundle.status, bundle.status, session_record.exam_session_name)
-            changed = True
-        eligible_by_supervisor.setdefault(supervisor.id, {"supervisor": supervisor, "sessions": []})["sessions"].append(session_record)
-    for group in eligible_by_supervisor.values():
-        supervisor = group["supervisor"]
-        group_sessions = sorted(group["sessions"], key=lambda item: (item.session_date or datetime.max.date(), item.exam_session_name.lower(), item.id or 0))
-        if not group_sessions:
+        if current_link and current_link.bundle.status not in SHIPMENT_AUTO_MANAGED_STATUSES:
             continue
-        existing_bundle = (
+        key = (supervisor.id, session_record.session_date.year)
+        eligible_groups.setdefault(key, {"supervisor": supervisor, "sessions": []})["sessions"].append(session_record)
+    for (_staff_id, bundle_year), group in eligible_groups.items():
+        supervisor = group["supervisor"]
+        group_sessions = sorted(group["sessions"], key=lambda item: (item.session_date, item.id))
+        target = (
             ExamSessionShipmentBundle.query
-            .filter_by(auto_managed=True, supervisor_staff_id=supervisor.id, bundle_year=selected_year, split_from_bundle_id=None)
+            .filter_by(supervisor_staff_id=supervisor.id, bundle_year=bundle_year)
             .filter(ExamSessionShipmentBundle.status.in_(list(SHIPMENT_AUTO_MANAGED_STATUSES)))
-            .order_by(ExamSessionShipmentBundle.dispatch_due_at.asc(), ExamSessionShipmentBundle.id.asc())
+            .order_by(ExamSessionShipmentBundle.split_from_bundle_id.isnot(None), ExamSessionShipmentBundle.id.asc())
             .first()
         )
-        if existing_bundle:
-            existing_ids = {link.exam_session_id for link in existing_bundle.session_links}
-            for session_record in group_sessions:
-                if session_record.id not in existing_ids:
-                    db.session.add(ExamSessionShipmentBundleSession(bundle=existing_bundle, exam_session_id=session_record.id))
-                    shipment_event(existing_bundle, "SESSION_ADDED_TO_AUTO_BUNDLE", existing_bundle.status, existing_bundle.status, session_record.exam_session_name)
-                    changed = True
-            changed = update_auto_bundle_deadline(existing_bundle, today=today) or changed
-        else:
-            new_bundle = create_auto_shipment_bundle(supervisor, group_sessions, selected_year, today=today)
-            db.session.flush()
+        created = target is None
+        if created:
+            target = create_auto_shipment_bundle(supervisor, [], bundle_year, today=today)
             changed = True
+        elif not target.auto_managed:
+            target.auto_managed = True
+            changed = True
+        sources = set()
+        contents_changed = False
+        for session_record in group_sessions:
+            link = links_by_session.get(session_record.id)
+            if link and link.bundle == target:
+                continue
+            if link:
+                source = link.bundle
+                sources.add(source)
+                shipment_event(source, "SESSION_REMOVED_FROM_AUTO_BUNDLE", source.status, source.status,
+                               session_record.exam_session_name)
+                link.bundle = target
+            else:
+                link = ExamSessionShipmentBundleSession(bundle=target, exam_session_id=session_record.id)
+                db.session.add(link)
+                links_by_session[session_record.id] = link
+            shipment_event(target, "SESSION_ADDED_TO_AUTO_BUNDLE", target.status, target.status,
+                           session_record.exam_session_name)
+            contents_changed = changed = True
+        if contents_changed and not created:
+            reset_regrouped_bundle_checks(target)
+        # Flush membership changes before checking for empty absorbed bundles.
+        db.session.flush()
+        for source in sorted(sources, key=lambda item: item.id):
+            if (not source.session_links and source.supervisor_staff_id == target.supervisor_staff_id
+                    and source.bundle_year == target.bundle_year):
+                merge_empty_shipment_bundle(source, target)
+            else:
+                reset_regrouped_bundle_checks(source)
+                update_auto_bundle_deadline(source, today=today)
+        changed = update_auto_bundle_deadline(target, today=today) or changed
     if changed:
         db.session.commit()
     else:

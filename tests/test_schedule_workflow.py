@@ -13113,6 +13113,75 @@ assert.equal(storage.size, 0);
         self.assertEqual(sorted(len(bundle.session_links) for bundle in bundles), [3])
         self.assertEqual(ExamSessionShipmentEvent.query.filter_by(event_type="AUTO_BUNDLE_SPLIT").count(), 0)
 
+    def test_auto_reconciliation_reunites_historical_splits_preserving_history(self):
+        self.create_supervisor(staff_id=1, name="Ayelen Miwszuk")
+        sessions = [self.create_planning_ready_session(f"Reunite {index}", date(2026, 7, 9 + index),
+                    supervisor_id=1, packages_ready=False) for index in range(3)]
+        bundles = [self.create_shipment_bundle_record(session_record=record) for record in sessions]
+        root = bundles[0]
+        root.status = "Ready to dispatch"
+        for bundle in bundles:
+            bundle.auto_managed = True
+            bundle.bundle_year = 2026
+        for bundle in bundles[1:]:
+            bundle.split_from_bundle = root
+            bundle.auto_split_at = datetime(2026, 6, 28, tzinfo=timezone.utc)
+        bundles[2].split_from_bundle = bundles[1]
+        bundles[1].note = "Keep this delivery instruction"
+        check = root.checklist_items[0]
+        check.is_checked = True
+        check.checked_by = "logistics@example.com"
+        check.checked_at = datetime(2026, 6, 29, tzinfo=timezone.utc)
+        bundles[1].checklist_items[0].note = "Previous checklist note"
+        event = ExamSessionShipmentEvent(bundle=bundles[1], event_type="PREVIOUS_EVENT", note="Original history", created_by="original-user")
+        db.session.add(event)
+        db.session.commit()
+        root_id = root.id
+        original_link_ids = {link.id for link in ExamSessionShipmentBundleSession.query.all()}
+
+        reconcile_auto_shipment_bundles(sessions, today=date(2026, 6, 30))
+        bundle = ExamSessionShipmentBundle.query.one()
+        self.assertEqual(bundle.id, root_id)
+        self.assertEqual({link.exam_session_id for link in bundle.session_links}, {record.id for record in sessions})
+        self.assertEqual({link.id for link in bundle.session_links}, original_link_ids)
+        self.assertEqual(bundle.status, "Preparing bundle")
+        self.assertFalse(any(item.is_checked for item in bundle.checklist_items))
+        self.assertEqual(bundle.dispatch_due_at, date(2026, 6, 27))
+        history = ExamSessionShipmentEvent.query.filter_by(event_type="PREVIOUS_EVENT").one()
+        self.assertEqual(history.bundle_id, root_id)
+        self.assertEqual(history.created_by, "original-user")
+        self.assertIn("Original history", history.note)
+        merged = ExamSessionShipmentEvent.query.filter_by(event_type="AUTO_BUNDLE_MERGED").all()
+        self.assertEqual(len(merged), 2)
+        self.assertIn("Keep this delivery instruction", " ".join(item.note for item in merged))
+        self.assertIn("Previous checklist note", " ".join(item.note for item in merged))
+        count = ExamSessionShipmentEvent.query.count()
+        reconcile_auto_shipment_bundles(sessions, today=date(2026, 7, 1))
+        self.assertEqual(ExamSessionShipmentBundle.query.count(), 1)
+        self.assertEqual(ExamSessionShipmentEvent.query.count(), count)
+
+    def test_auto_reconciliation_groups_by_actual_year_and_all_recipient_roles(self):
+        self.create_supervisor(staff_id=1, name="Ayelen Miwszuk")
+        first = self.create_planning_ready_session("Supervisor shipment", date(2026, 7, 9), packages_ready=False)
+        second = self.create_planning_ready_session("Examiner shipment", date(2026, 7, 10), packages_ready=False)
+        third = self.create_planning_ready_session("Intern shipment", date(2026, 7, 11), packages_ready=False)
+        next_year = self.create_planning_ready_session("Next year", date(2027, 7, 12), packages_ready=False)
+        for record, model in [(second, ExamSessionExaminerAssignment), (third, ExamSessionInternAssignment)]:
+            ExamSessionSupervisorAssignment.query.filter_by(exam_session_id=record.id).one().is_shipment_recipient = False
+            db.session.add(model(exam_session_id=record.id, team_member_id=1,
+                                participation_status="Confirmed", is_shipment_recipient=True))
+        # Existing manually created preparation bundles obey the same grouping rule.
+        for record in (first, second):
+            self.create_shipment_bundle_record(session_record=record)
+        db.session.commit()
+        records = [first, second, third, next_year]
+        reconcile_auto_shipment_bundles(records, today=date(2026, 6, 30))
+        bundles = ExamSessionShipmentBundle.query.order_by(ExamSessionShipmentBundle.bundle_year).all()
+        self.assertEqual([bundle.bundle_year for bundle in bundles], [2026, 2027])
+        self.assertEqual({link.exam_session_id for link in bundles[0].session_links}, {first.id, second.id, third.id})
+        self.assertEqual({link.exam_session_id for link in bundles[1].session_links}, {next_year.id})
+        self.assertTrue(all(bundle.auto_managed for bundle in bundles))
+
     def test_auto_shipment_bundle_uses_first_supervisor_when_multiple_are_assigned(self):
         self.create_supervisor(staff_id=1, name="Laura Mendez")
         self.create_supervisor(staff_id=4, name="Mateo Silva")
