@@ -88,8 +88,9 @@ function childContext() {
   const reader = childContext();
   reader.setRemote('fresh-information');
   await reader.timers[0]();
-  assert.equal(reader.reloads(), 1, 'Read-only modals should refresh automatically');
-  assert.equal(reader.messages[0].type, 'tower-session-refreshed');
+  assert.equal(reader.reloads(), 0, 'Automatic refresh must keep the current document until its replacement is ready');
+  assert.ok(reader.messages.some(message => message.type === 'tower-session-refresh-request'), 'Read-only modals ask the parent for a staged refresh');
+  assert.equal(reader.messages[0].type, 'tower-session-refresh-request');
   console.log('Tower live: autosave serialization, stale draft preservation, and reader refresh passed.');
 })().catch(error => {console.error(error); process.exitCode = 1;});
 

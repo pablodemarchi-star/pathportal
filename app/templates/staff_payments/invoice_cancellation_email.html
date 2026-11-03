@@ -1,0 +1,19 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Your invoice has been cancelled</title></head>
+<body style="margin:0;background:#00506b;font-family:Arial,Helvetica,sans-serif;color:#111115;">
+<table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="background:#00506b;"><tr><td align="center" style="padding:28px 12px;">
+<table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="max-width:680px;background:#fff;border-radius:16px;">
+<tr><td style="padding:28px 26px 20px;">
+<p style="margin:0 0 20px;color:#00506b;font-size:11px;font-weight:700;letter-spacing:1px;">PATH INTERNATIONAL EXAMINATIONS</p>
+<span style="display:inline-block;padding:6px 12px;background:#fff3d6;color:#825b0c;border-radius:20px;font-size:12px;font-weight:700;">Action required</span>
+<h1 style="margin:16px 0;color:#00506b;font-size:27px;line-height:1.25;">Your invoice has been cancelled.</h1>
+<p style="font-size:15px;line-height:1.6;">Dear {{ notice.recipient_name }},</p>
+<p style="font-size:14px;line-height:1.6;color:#62727a;">Your invoice for your <strong>{{ notice.year }} exam sessions</strong> has been cancelled because <strong>errors were identified in it</strong>.</p>
+<p style="margin:16px 0;padding:14px 16px;background:#f1f6f7;border-radius:10px;color:#00506b;font-size:14px;line-height:1.6;overflow-wrap:anywhere;"><strong>Invoice:</strong> {{ notice.filename }}</p>
+<p style="font-size:14px;line-height:1.6;color:#62727a;">Please <strong>contact Administration</strong> to review the errors and confirm the corrections required.</p>
+<p style="font-size:14px;line-height:1.6;color:#62727a;">Once this review has been completed, please upload your corrected invoice through the <strong><em style="color:#233a78;">Invoicing instructions</em></strong> section of your staff portal <strong>within the established deadlines</strong>.</p>
+<p style="margin:18px 0;padding:12px 14px;border:1px solid #e8cf75;border-left:4px solid #d6aa28;border-radius:8px;background:#fff6d8;color:#705514;font-size:14px;line-height:1.6;"><strong>Important:</strong> Upload your corrected invoice once all your assigned exam sessions have been completed, and <strong>at least 2 business days before the scheduled payment date and time</strong>. Otherwise, your payment will be rescheduled.</p>
+<a href="{{ portal_url }}" style="display:inline-block;margin:4px 0 8px;padding:13px 20px;background:#00506b;color:#fff;border-radius:8px;text-decoration:none;font-size:14px;font-weight:700;">Open your staff portal</a>
+</td></tr>
+<tr><td style="padding:20px 26px;border-top:1px solid #d9dfdc;color:#62727a;font-size:11px;line-height:1.6;">Path International Examinations<br>Staff payments · Automated notification</td></tr>
+</table></td></tr></table></body></html>

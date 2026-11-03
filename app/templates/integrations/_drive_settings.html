@@ -12,7 +12,7 @@
   <div class="drive-destination-grid">
   {% for item in drive_destinations %}
     <article class="drive-destination-card" data-drive-destination="{{ item.key }}" data-save-url="{{ url_for('google_drive.save_folder', key=item.key) }}" data-suggested-id="{{ item.folder.folder_id if item.folder else item.suggested_id }}">
-      <h3>Finance requests · {{ item.label }}</h3>
+      <h3>{{ item.section|default('Finance requests') }} · {{ item.label }}</h3>
       <p data-drive-current>{% if item.folder %}<a href="https://drive.google.com/drive/folders/{{ item.folder.folder_id }}" target="_blank" rel="noopener noreferrer">{{ item.folder.folder_name }}</a>{% else %}Not configured — uploads currently use portal storage.{% endif %}</p>
       {% if not item.folder %}<p><a href="https://drive.google.com/drive/folders/{{ item.suggested_id }}" target="_blank" rel="noopener noreferrer">Open the proposed folder ↗</a></p>{% endif %}
       <button class="secondary-button" type="button" data-drive-choose{% if not drive_connected or not picker_configured %} disabled{% endif %}>{{ 'Change folder' if item.folder else 'Choose and authorize folder' }}</button>

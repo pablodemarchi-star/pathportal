@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="robots" content="noindex, nofollow">
   <title>Your exam sessions | Path Examinations</title>
-  <link rel="stylesheet" href="{{ url_for('static', filename='css/styles.css', v='20261026-staff-travel-instructions-1') }}">
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/styles.css', v='20261103-invoice-upload-9') }}">
 </head>
 <body>
 <main class="staff-exam-sessions-shell">
@@ -98,7 +98,7 @@
         </table>
       </div>
       <aside class="staff-invoice-information" aria-labelledby="invoice-information-title">
-        <h3 id="invoice-information-title">Invoice information</h3>
+        <h3 id="invoice-information-title">Invoicing instructions</h3>
         <p>Please issue <strong>one consolidated invoice</strong> once all your exam sessions have been completed.</p>
         <h4>BILLING DETAILS FOR PATH EXAMINATIONS IN ARGENTINA</h4>
         <ul>
@@ -106,9 +106,28 @@
           <li><strong>CUIT (Tax ID):</strong> 30-71601631-1</li>
           <li><strong>Registered address:</strong> Av. Corrientes 1383 (1043), CABA</li>
           <li><strong>VAT status:</strong> Responsable Inscripto (VAT-Registered)</li>
+          <li><strong>Concept description:</strong> Honorarios profesionales para las sesiones de examen 2026</li>
         </ul>
-        <p>Please send your final invoice to <a href="https://mail.google.com/mail/?view=cm&amp;fs=1&amp;to=finance%40pathexaminations.com&amp;su={{ ('Exam session invoice - ' ~ staff_name)|urlencode }}" target="_blank" rel="noopener noreferrer">finance@pathexaminations.com</a> at least 3 business days before the scheduled payment date: <strong>{{ next_payment_date or 'To be confirmed' }} -</strong> 5:00 pm · GMT-3</p>
-        <a class="staff-detail-link" href="https://drive.google.com/drive/u/0/my-drive" target="_blank" rel="noopener noreferrer">View sample invoice ↗</a>
+        <p>Please <strong>upload your invoice here</strong> once all your assigned exam sessions have been completed, and <strong>at least two business days before</strong> the scheduled payment date and time: <strong>{{ next_payment_date ~ ' at 5:00 pm (GMT-3)' if next_payment_date else 'To be confirmed' }}</strong>.</p>
+        {% with messages = get_flashed_messages(with_categories=true, category_filter=['staff-invoice-success', 'staff-invoice-error']) %}
+          {% for category, message in messages %}<p class="staff-invoice-feedback {{ category }}" role="status">{{ message }}</p>{% endfor %}
+        {% endwith %}
+        {% if staff_invoice_upload %}
+          <p class="staff-invoice-uploaded"><strong>Uploaded invoice:</strong> <a href="{{ url_for('staff_invoices.download', token=share_token, file_id=staff_invoice_upload.file_id) }}" target="_blank" rel="noopener noreferrer">{{ staff_invoice_upload.filename }}</a></p>
+        {% endif %}
+        {% if not staff_invoice_upload %}
+        <form method="post" action="{{ url_for('staff_invoices.upload', token=share_token) }}" enctype="multipart/form-data" data-staff-invoice-form>
+          <input type="hidden" name="csrf_token" value="{{ invoice_csrf }}">
+          <input type="hidden" name="session_year" value="{{ selected_session_year }}">
+          <label class="staff-invoice-dropzone" data-staff-invoice-dropzone>
+            <input type="file" name="invoice_file" aria-label="Select one invoice file" required data-staff-invoice-input>
+            <span data-staff-invoice-label>Select one invoice file or drop it here</span>
+          </label>
+          <div class="staff-invoice-selected" data-staff-invoice-selected hidden><span data-staff-invoice-filename></span><button type="button" class="staff-invoice-remove" data-staff-invoice-remove aria-label="Remove selected invoice">×</button></div>
+          <p class="staff-invoice-feedback staff-invoice-error" data-staff-invoice-error role="alert" hidden></p>
+          <button type="submit" class="primary-button" data-staff-invoice-submit>Upload invoice</button>
+        </form>
+        {% else %}<p>Your invoice has been received. Contact Path Examinations if it needs to be replaced.</p>{% endif %}
       </aside>
       </div>
     </section>
@@ -122,7 +141,8 @@
     </footer>
   </section>
 </main>
-<script src="{{ url_for('static', filename='js/app.js', v='20261024-staff-session-details-1') }}"></script>
-<script src="{{ url_for('static', filename='js/staff_exam_sessions.js', v='20261026-staff-travel-instructions-1') }}"></script>
+<script src="{{ url_for('static', filename='js/app.js', v='20261103-invoice-information-6') }}"></script>
+<script src="{{ url_for('static', filename='js/staff_exam_sessions.js', v='20261103-invoice-upload-9') }}"></script>
+<script src="{{ url_for('static', filename='js/staff_invoice_upload.js', v='20261103-staff-invoice-upload-1') }}"></script>
 </body>
 </html>

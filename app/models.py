@@ -55,6 +55,33 @@ class GoogleDriveInvoiceUpload(db.Model):
     billing_request = db.relationship("BillingRequest", backref=db.backref("drive_uploads", cascade="all, delete-orphan"))
 
 
+class GoogleDriveStaffInvoiceUpload(db.Model):
+    __table_args__ = (db.Index("uq_staff_invoice_share_year", "share_id", "year", unique=True),)
+    file_id = db.Column(db.String(160), primary_key=True)
+    share_id = db.Column(db.Integer, db.ForeignKey("staff_exam_sessions_share.id"), nullable=False, index=True)
+    year = db.Column(db.Integer, nullable=False, index=True)
+    destination_key = db.Column(db.String(100), nullable=False)
+    filename = db.Column(db.String(500), nullable=False)
+    mime_type = db.Column(db.String(160), nullable=False)
+    created_at = db.Column(db.DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))
+
+
+class StaffInvoiceCancellationNotification(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    file_id = db.Column(db.String(160), nullable=False, unique=True)
+    share_id = db.Column(db.Integer, db.ForeignKey("staff_exam_sessions_share.id"), nullable=False)
+    member_id = db.Column(db.Integer, nullable=False)
+    year = db.Column(db.Integer, nullable=False)
+    filename = db.Column(db.String(500), nullable=False)
+    recipient = db.Column(db.String(254), nullable=False)
+    recipient_name = db.Column(db.String(254), nullable=False)
+    status = db.Column(db.String(24), nullable=False, default="pending", index=True)
+    gmail_message_id = db.Column(db.String(200), nullable=True)
+    last_error = db.Column(db.String(250), nullable=True)
+    created_at = db.Column(db.DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))
+    sent_at = db.Column(db.DateTime(timezone=True), nullable=True)
+
+
 class MarketingMaterialInfo(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     session_id = db.Column(db.Integer, db.ForeignKey("exam_session.id", ondelete="CASCADE"), nullable=False, unique=True)
@@ -396,6 +423,10 @@ class CertificationYearConfiguration(db.Model):
     remote_training_start_date = db.Column(db.Date)
     remote_training_end_date = db.Column(db.Date)
     supervisor_guideline_url = db.Column(db.String(500), nullable=False, default="")
+    supervisor_online_guideline_url = db.Column(db.String(500), nullable=False, default="")
+    supervisor_online_centre_guideline_url = db.Column(db.String(500), nullable=False, default="")
+    emergency_contact_guideline_url = db.Column(db.String(500), nullable=False, default="")
+    remote_supervisor_guideline_url = db.Column(db.String(500), nullable=False, default="")
     backup_material_for_examiners_url = db.Column(db.String(500), nullable=False, default="")
     examiner_guideline_url = db.Column(db.String(500), nullable=False, default="")
     material_for_examiners_url = db.Column(db.String(500), nullable=False, default="")

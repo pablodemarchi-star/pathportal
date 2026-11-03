@@ -320,17 +320,15 @@
       <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
       <input type="hidden" name="certification_year" value="{{ selected_certification_year }}">
       <div class="certification-guideline-fields">
-        <label>
-          Supervisor guidelines
-          <input
-            type="url"
-            name="supervisor_guideline_url"
-            value="{{ supervisor_guideline_url|default('') }}"
-            placeholder="https://..."
-            aria-label="Supervisor guidelines link"
-          >
-        </label>
-        <label>
+        <div class="supervisor-guideline-group">
+          <p class="supervisor-guideline-heading">Supervisor guidelines</p>
+          <ul class="supervisor-guideline-list">
+            <li><label><span>for onsite sessions</span><input type="url" name="supervisor_guideline_url" value="{{ supervisor_guideline_url|default('') }}" placeholder="https://..." aria-label="Supervisor guidelines for onsite sessions link"></label></li>
+            <li><label><span>for online sessions</span><input type="url" name="supervisor_online_guideline_url" value="{{ supervisor_online_guideline_url|default('') }}" placeholder="https://..." aria-label="Supervisor guidelines for online sessions link"></label></li>
+            <li><label><span>for online sessions at exam centre</span><input type="url" name="supervisor_online_centre_guideline_url" value="{{ supervisor_online_centre_guideline_url|default('') }}" placeholder="https://..." aria-label="Supervisor guidelines for online sessions at exam centre link"></label></li>
+          </ul>
+        </div>
+        <label class="supervisor-backup-material-field">
           Back-up material for examiners
           <input
             type="url"
@@ -339,6 +337,21 @@
             placeholder="https://..."
             aria-label="Back-up material for examiners link"
           >
+        </label>
+        <button class="secondary-button compact-action" type="submit">Save settings</button>
+      </div>
+    </form>
+  </section>
+  <section class="certification-year-settings certification-guideline-settings" aria-label="Emergency contact and remote supervisor guidelines">
+    <form method="post" action="{{ url_for('staff.update_supervisor_support_material_settings') }}" class="certification-year-settings-form certification-year-settings-block-form">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+      <input type="hidden" name="certification_year" value="{{ selected_certification_year }}">
+      <div class="certification-guideline-fields">
+        <label>Emergency contact guidelines
+          <input type="url" name="emergency_contact_guideline_url" value="{{ emergency_contact_guideline_url|default('') }}" placeholder="https://..." aria-label="Emergency contact guidelines link">
+        </label>
+        <label>Remote supervisor guidelines
+          <input type="url" name="remote_supervisor_guideline_url" value="{{ remote_supervisor_guideline_url|default('') }}" placeholder="https://..." aria-label="Remote supervisor guidelines link">
         </label>
         <button class="secondary-button compact-action" type="submit">Save settings</button>
       </div>

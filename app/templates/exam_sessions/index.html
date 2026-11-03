@@ -386,7 +386,7 @@
             <span class="staff-picker-empty" data-team-member-search-empty hidden>No staff members found</span>
           </div>
         </details>
-        {% if section_key == 'supervisor' %}
+        {% if section_key == 'supervisor' and session.format not in ['Online', 'Online at exam centre'] %}
           <label class="supervisor-remote-checkbox">
             <input type="checkbox" name="{{ section_key }}_remote_{{ row_key }}" value="1" {% if assignment and assignment.is_remote %}checked{% endif %} data-supervisor-remote-checkbox>
             <span>Remote</span>
@@ -420,6 +420,7 @@
         </span>
       </div>
       </div>
+      {% if session.format != 'Online' %}
       <div class="staff-card-field centered-table-cell">
       <span class="staff-card-field-label">Logistics</span>
       <select name="{{ section_key }}_logistics_type_{{ row_key }}" class="staff-logistics-select staff-logistics-{{ logistics_type_class }}" data-logistics-control>
@@ -430,6 +431,7 @@
       </select>
       <input type="hidden" name="{{ section_key }}_logistics_enabled_{{ row_key }}" value="{{ '1' if logistics_type and logistics_type != 'Does not apply' else '' }}" data-logistics-enabled-input>
       </div>
+      {% endif %}
       </div>
     </section>
 
@@ -441,6 +443,7 @@
         </button>
       </div>
       <div class="staff-card-section-content" data-staff-section-content>
+      {% if session.format != 'Online' %}
       <div class="staff-card-field">
       <span class="staff-card-field-label">Km.</span>
       <div class="km-field" data-km-field>
@@ -454,6 +457,7 @@
         {% endif %}
       </div>
       </div>
+      {% endif %}
       <div class="staff-card-field staff-card-field-wide">
       <span class="staff-card-field-label">Time range</span>
       <div class="time-range-stack" data-time-range-stack>
@@ -509,6 +513,7 @@
       <input type="hidden" name="{{ section_key }}_device_dep_unit_{{ row_key }}" value="{{ assignment.device_dep_unit if assignment and not (section_key == 'supervisor' and assignment.is_remote) and assignment.device_dep_unit else '' }}" data-device-dep-unit-input>
       <span class="calculated-role-fee" data-device-dep-display title="{{ assignment.device_dep if assignment and not (section_key == 'supervisor' and assignment.is_remote) and assignment.device_dep else '' }}">{{ assignment.device_dep if assignment and not (section_key == 'supervisor' and assignment.is_remote) and assignment.device_dep else ('-' if assignment and section_key == 'supervisor' and assignment.is_remote else 'No Device dep. fee configured') }}</span>
       </div>
+      {% if session.format != 'Online' %}
       <div class="staff-card-field" data-commuting-cell>
       <span class="staff-card-field-label">Commuting</span>
       {% if assignment and assignment.km is not none %}
@@ -553,6 +558,7 @@
         <span class="assignment-disabled-dash" data-vehicle-dash data-vehicle-name="{{ section_key }}_vehicle_dep_{{ row_key }}">-</span>
       {% endif %}
       </div>
+      {% endif %}
       <div class="staff-card-field">
       <span class="staff-card-field-label">Seniority</span>
       <input type="hidden" name="{{ section_key }}_seniority_fee_{{ row_key }}" value="{{ assignment.seniority_fee if assignment and assignment.seniority_fee else '' }}" data-seniority-input>

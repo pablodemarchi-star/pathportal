@@ -1,3 +1,4 @@
+{% set online_supervisor = detail.role == 'Supervisor' and detail.format == 'Online' %}
 <section class="staff-detail-section staff-end-checks" aria-label="End-of-session checks" data-staff-end-checks data-opens-at="{{ detail.end_checks.opens_at }}" data-save-url="{{ detail.end_checks.url }}" data-csrf="{{ detail.confirmation_csrf }}">
   <div class="staff-end-checks-heading">
     <h3 data-end-checks-title>End-of-session checks ({{ detail.end_checks['values'].values()|select|list|length }}/{{ detail.end_checks['values']|length }})</h3>
@@ -10,7 +11,14 @@
     ('recordings', 'I confirm that I have reminded all examiners to upload their Listening and Speaking module recordings within one business day after the exam session ends.'),
     ('audiovisual', 'I confirm that I have uploaded all audiovisual materials from the exam session, including photographs and videos.')
   ] %}
-  {% if detail.role == 'Examiner' and detail.examiner_receives_shipment %}
+  {% if online_supervisor %}
+    {% set check_items = [
+      ('attendance', 'I confirm that all examiners have registered candidate attendance in Sinapsis, and that no candidates remain with Pending status.'),
+      ('return_papers', 'I confirm that all submitted exam modules have been successfully uploaded to the Digitalised Exams folder.'),
+      ('recordings', 'I confirm that I have reminded all examiners to upload their Speaking recordings within one business day after the exam session ends.'),
+      ('audiovisual', 'I confirm that I have uploaded all audiovisual materials from the exam session, including photographs and videos.')
+    ] %}
+  {% elif detail.role == 'Examiner' and detail.examiner_receives_shipment %}
     {% set check_items = [
       ('printed_attendance', 'I confirm that all examiners have registered candidate attendance on all the printed candidate lists attached to the exam packages.'),
       ('return_papers', 'I confirm that all submitted exam papers and those belonging to absent candidates have been securely placed in their respective return exam packages, which have been sealed and signed by the Head of the Exam centre.'),
@@ -26,9 +34,12 @@
     ] %}
   {% endif %}
   <div class="staff-end-checks-items">
-    {% for key, text in check_items %}
+    {% for key, text in check_items if key in detail.end_checks['values'] %}
     <div class="staff-end-check-row{% if not detail.end_checks.available %} is-disabled{% endif %}">
       <label><input type="checkbox" data-end-check="{{ key }}"{% if detail.end_checks['values'][key] %} checked{% endif %}{% if not detail.end_checks.available %} disabled{% endif %}><span>{{ text }}</span></label>
+      {% if online_supervisor and key == 'return_papers' %}
+      <a class="staff-detail-link staff-end-checks-folder{% if not detail.end_checks.digitalised_available or not detail.end_checks.digitalised_url %} is-disabled{% endif %}" data-end-checks-folder data-folder-exam-day-only data-folder-url="{{ detail.end_checks.digitalised_url }}" href="{{ detail.end_checks.digitalised_url if detail.end_checks.digitalised_available and detail.end_checks.digitalised_url else '#' }}" target="_blank" rel="noopener noreferrer"{% if not detail.end_checks.digitalised_available or not detail.end_checks.digitalised_url %} aria-disabled="true" tabindex="-1"{% endif %}>Digitalised exams ↗</a>
+      {% endif %}
       {% if key == 'audiovisual' %}
       <a class="staff-detail-link staff-end-checks-folder{% if not detail.end_checks.available or not detail.end_checks.folder_url %} is-disabled{% endif %}" data-end-checks-folder data-folder-url="{{ detail.end_checks.folder_url }}" href="{{ detail.end_checks.folder_url if detail.end_checks.available and detail.end_checks.folder_url else '#' }}" target="_blank" rel="noopener noreferrer"{% if not detail.end_checks.available or not detail.end_checks.folder_url %} aria-disabled="true" tabindex="-1"{% endif %}>Audiovisual material ↗</a>
       {% endif %}
@@ -36,14 +47,16 @@
     {% endfor %}
   </div>
   <div class="staff-end-checks-final-items">
+    {% if not online_supervisor %}
     <div class="staff-end-check-row{% if not detail.end_checks.available %} is-disabled{% endif %}">
       <label><input type="checkbox" data-end-check="centre_feedback"{% if detail.end_checks['values']['centre_feedback'] %} checked{% endif %}{% if not detail.end_checks.available %} disabled{% endif %}><span>I confirm that the exam centre has completed the Exam session feedback form.</span></label>
       <span class="staff-end-checks-feedback-pending">Session feedback pending</span>
     </div>
+    {% endif %}
     <div class="staff-end-check-row{% if not detail.end_checks.available %} is-disabled{% endif %}">
-      {% set end_report_text = 'I confirmed with the Examiner that the End-of-session report has been completed.' if detail.is_remote else 'I confirm that I have completed the End-of-session report.' %}
+      {% set end_report_text = 'I confirmed with the Examiner that the End-of-session report has been completed.' if detail.is_remote and not online_supervisor else 'I confirm that I have completed the End-of-session report.' %}
       <label><input type="checkbox" data-end-check="end_report" aria-label="{{ end_report_text }}"{% if detail.end_checks['values']['end_report'] %} checked{% endif %}{% if not detail.end_checks.available %} disabled{% endif %}><span>{{ end_report_text }}</span></label>
-      {% if detail.is_remote %}
+      {% if detail.is_remote and not online_supervisor %}
       <span class="staff-end-checks-feedback-pending">End-of-session report pending</span>
       {% else %}
       <a class="staff-detail-link staff-end-checks-folder{% if not detail.end_checks.available or not detail.end_checks.report_url %} is-disabled{% endif %}" data-end-checks-folder data-folder-url="{{ detail.end_checks.report_url }}" href="{{ detail.end_checks.report_url if detail.end_checks.available and detail.end_checks.report_url else '#' }}" target="_blank" rel="noopener noreferrer"{% if not detail.end_checks.available or not detail.end_checks.report_url %} aria-disabled="true" tabindex="-1"{% endif %}>End-of-session report ↗</a>

@@ -298,3 +298,39 @@ Request and event IDs also use persistent counters, seeded from current records 
 retained notification/Drive references. This prevents a deleted request's previous
 notification coverage from suppressing a new request's email if SQLite would
 otherwise reuse its primary key.
+
+### Staff portal invoices
+
+Invoicing instructions in the staff portal accept exactly one file per upload,
+validated in the browser and on the server. Each upload is linked to the portal
+share and exam year; the share must include a confirmed matching assignment for
+that year. CSRF is required. Files use a separately authorized Staff invoices
+Drive destination (proposed folder 1_VrUoXNBbVT_hSo_vAbL7prSj8hBAUNV).
+Authorize it once in Email connection, using Google Picker, after deployment.
+Uploads fail visibly if it is not configured; they never silently use local
+storage or a Finance payment/invoice folder. Staff can access their own uploaded
+file through the private portal. Only one active invoice per staff portal and year is allowed, including a database
+unique constraint. Staff payments shows Invoice (View ×) and Verification. Viewing
+opens a same-origin preview modal, dismissible via its × or the backdrop. Removing
+an invoice requires staff_payments edit permission and CSRF, moves the file to the
+Drive trash, and only then deletes the record and unlocks a new portal upload. A
+failed trash operation keeps the association and upload lock intact.
+
+The displayed deadline is two business days before the configured next staff
+payment date, at the portal's existing standard time of 5:00 pm GMT-3. The same
+two-business-day instruction is used in all invitation details and generated
+official email copies. If no payment date is configured, it says To be confirmed.
+
+### Staff invoice annulment notifications
+
+After Drive confirms moving a staff invoice to the trash, its removal and an email
+notification record are committed together. The English Path email tells the staff
+member that errors were found, asks them to contact Administration for verification
+and directs them to reload the corrected invoice in their portal within the stated
+deadlines. It goes to the member's configured email, not to Finance.
+
+There is one notification per Drive file ID, claimed atomically before sending.
+Failed Drive operations retain the invoice and never queue this email. Email
+failures keep the completed annulment and appear in Email connection. Confirmed
+failures can be retried there; ambiguous delivery must be checked in Gmail Sent
+before any retry. Missing staff email is reported as a failed notification.

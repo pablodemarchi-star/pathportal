@@ -1,0 +1,23 @@
+const assert=require('node:assert/strict'),fs=require('node:fs'),vm=require('node:vm');
+const source=fs.readFileSync('app/static/js/tower_live.js','utf8');
+const frame={contentWindow:{focus(){}}},loading={},header={},retry={};
+const selectors={'[data-tower-frame]':frame,'[data-tower-loading]':loading,'[data-tower-loading-header]':header,'[data-tower-retry]':retry};
+const modal={dataset:{towerSession:'7'},classList:{contains:()=>false},querySelector:selector=>selectors[selector]};
+const window={location:{href:'https://portal.test/pre-online-session-control-tower',origin:'https://portal.test'},fetch:async()=>{},addEventListener(){}};
+const document={body:{matches:()=>false},currentScript:{src:'https://portal.test/static/js/tower_live.js'}};
+vm.runInNewContext(source,{window,document,URL});
+window.loadTowerModal(modal);
+assert.equal(frame.hidden,true);
+frame.contentDocument={body:{matches:()=>true},querySelector:()=>({})};frame.onload();
+assert.equal(frame.hidden,false);assert.equal(header.hidden,true);assert.equal(loading.hidden,true);
+// A later iframe reload fails: the title and explanation must become visible again.
+frame.contentDocument={body:{matches:()=>false},querySelector:()=>null};frame.onload();
+assert.equal(frame.hidden,true);assert.equal(header.hidden,false);assert.equal(loading.hidden,false);assert.equal(retry.hidden,false);
+assert.match(loading.textContent,/could not be loaded/);
+retry.onclick();assert.equal(retry.hidden,true);assert.match(loading.textContent,/Loading/);
+frame.contentDocument={body:{matches:()=>false},querySelector:()=>({})};frame.onload();
+assert.match(loading.textContent,/sign-in session has expired/);
+assert.equal(loading.hidden,false);
+frame.contentDocument={body:{matches:()=>true},querySelector:()=>({})};frame.onload();
+assert.equal(frame.hidden,false);assert.equal(retry.hidden,true);
+console.log('Modal reload failures restore visible title and explanation; retry, expired login and recovery verified.');

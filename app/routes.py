@@ -5793,7 +5793,18 @@ def calculate_role_fee_from_ranges(time_ranges, fee):
     return calculate_timed_fee_from_ranges(time_ranges, fee)
 
 
+def supervisor_fee_for_session(session_record, fee):
+    if not fee or not session_record or session_record.format != "Online":
+        return fee
+    from types import SimpleNamespace
+    return SimpleNamespace(currency=fee.currency,
+        fee_value=format(decimal_from_fee_value(fee.fee_value) * Decimal("0.65"), "f").replace(".", ","),
+        unit_of_measure=fee.unit_of_measure)
+
+
 def apply_role_fee_calculation(assignment, fee, now, *, recalculated=False):
+    if isinstance(assignment, ExamSessionSupervisorAssignment):
+        fee = supervisor_fee_for_session(assignment.exam_session or db.session.get(ExamSession, assignment.exam_session_id), fee)
     result = calculate_role_fee_from_ranges(assignment.time_ranges_list(), fee)
     if not result:
         assignment.role_fee = ""
@@ -5844,7 +5855,7 @@ def apply_device_dep_calculation(assignment, device_dep_fee, now, *, recalculate
 
 
 def apply_commuting_calculation(assignment, commuting_fee, now, *, recalculated=False):
-    result = calculate_km_fee(assignment.km, commuting_fee)
+    result = None if assignment.exam_session.format == "Online" else calculate_km_fee(assignment.km, commuting_fee)
     if not result:
         assignment.commuting = ""
         assignment.commuting_currency = ""
@@ -5875,7 +5886,8 @@ def calculate_km_fee(km, fee):
 
 def apply_fuel_calculation(assignment, fuel_fee, now, *, recalculated=False):
     if (
-        not getattr(assignment, "fuel_enabled", False)
+        assignment.exam_session.format == "Online"
+        or not getattr(assignment, "fuel_enabled", False)
         or not fuel_fee
         or fuel_fee.unit_of_measure != "per km"
         or assignment.km is None
@@ -5905,7 +5917,8 @@ def apply_fuel_calculation(assignment, fuel_fee, now, *, recalculated=False):
 
 def apply_vehicle_dep_calculation(assignment, vehicle_dep_fee, now, *, recalculated=False):
     if (
-        not getattr(assignment, "fuel_enabled", False)
+        assignment.exam_session.format == "Online"
+        or not getattr(assignment, "fuel_enabled", False)
         or not vehicle_dep_fee
         or vehicle_dep_fee.unit_of_measure != "per km"
         or assignment.km is None
@@ -6294,16 +6307,36 @@ def certification_year_configuration(module_key, selected_year):
     return CertificationYearConfiguration.query.filter_by(module_key=module_key, year=selected_year).first()
 
 
+SUPERVISOR_GUIDELINE_FIELDS = {
+    "supervisor_guideline_url": "Supervisor guidelines for onsite sessions",
+    "supervisor_online_guideline_url": "Supervisor guidelines for online sessions",
+    "supervisor_online_centre_guideline_url": "Supervisor guidelines for online sessions at exam centre",
+}
+
+
+def supervisor_guideline_settings_errors():
+    return [f"{label} link must be a valid URL." for field, label in SUPERVISOR_GUIDELINE_FIELDS.items()
+            if request.form.get(field, "").strip() and not is_valid_url(request.form[field].strip())]
+
+
+def apply_supervisor_guideline_settings(config):
+    for field in SUPERVISOR_GUIDELINE_FIELDS:
+        if field in request.form:
+            setattr(config, field, request.form[field].strip())
+
+
 def save_certification_year_configuration(module_key, selected_year):
     has_supervisor_material_fields = (
-        "supervisor_guideline_url" in request.form
+        any(field in request.form for field in SUPERVISOR_GUIDELINE_FIELDS)
         or "backup_material_for_examiners_url" in request.form
     )
     supervisor_guideline_url = request.form.get("supervisor_guideline_url", "").strip()
     backup_material_for_examiners_url = request.form.get("backup_material_for_examiners_url", "").strip()
     if module_key == SUPERVISOR_CERTIFICATION_MODULE_KEY and has_supervisor_material_fields:
-        if supervisor_guideline_url and not is_valid_url(supervisor_guideline_url):
-            flash("Supervisor guidelines link must be a valid URL.", "error")
+        errors = supervisor_guideline_settings_errors()
+        if errors:
+            for error in errors:
+                flash(error, "error")
             return False
         if backup_material_for_examiners_url and not is_valid_url(backup_material_for_examiners_url):
             flash("Back-up material for examiners link must be a valid URL.", "error")
@@ -6341,7 +6374,7 @@ def save_certification_year_configuration(module_key, selected_year):
     config.remote_training_start_date = remote_start
     config.remote_training_end_date = remote_end
     if module_key == SUPERVISOR_CERTIFICATION_MODULE_KEY and has_supervisor_material_fields:
-        config.supervisor_guideline_url = supervisor_guideline_url
+        apply_supervisor_guideline_settings(config)
         config.backup_material_for_examiners_url = backup_material_for_examiners_url
     elif module_key != SUPERVISOR_CERTIFICATION_MODULE_KEY:
         config.supervisor_guideline_url = ""
@@ -6353,8 +6386,10 @@ def save_certification_year_configuration(module_key, selected_year):
 
 def save_supervisor_certification_material_settings(selected_year):
     supervisor_guideline_url = request.form.get("supervisor_guideline_url", "").strip()
-    if supervisor_guideline_url and not is_valid_url(supervisor_guideline_url):
-        flash("Supervisor guidelines link must be a valid URL.", "error")
+    errors = supervisor_guideline_settings_errors()
+    if errors:
+        for error in errors:
+            flash(error, "error")
         return False
     backup_material_for_examiners_url = request.form.get("backup_material_for_examiners_url", "").strip()
     if backup_material_for_examiners_url and not is_valid_url(backup_material_for_examiners_url):
@@ -6364,7 +6399,7 @@ def save_supervisor_certification_material_settings(selected_year):
     if config is None:
         config = CertificationYearConfiguration(module_key=SUPERVISOR_CERTIFICATION_MODULE_KEY, year=selected_year)
         db.session.add(config)
-    config.supervisor_guideline_url = supervisor_guideline_url
+    apply_supervisor_guideline_settings(config)
     config.backup_material_for_examiners_url = backup_material_for_examiners_url
     db.session.commit()
     flash("Supervisor certification material links saved successfully.", "success")
@@ -7295,8 +7330,10 @@ def staffing_email_supervisor_certification_material_links(session_record):
         module_key=SUPERVISOR_CERTIFICATION_MODULE_KEY,
         year=session_year,
     ).first()
+    field = {"Online": "supervisor_online_guideline_url", "Online at exam centre": "supervisor_online_centre_guideline_url"}.get(
+        getattr(session_record, "format", ""), "supervisor_guideline_url")
     return {
-        "supervisor_guideline_url": (getattr(config, "supervisor_guideline_url", "") or "").strip() if config else "",
+        "supervisor_guideline_url": (getattr(config, field, "") or "").strip() if config else "",
         "backup_material_for_examiners_url": (getattr(config, "backup_material_for_examiners_url", "") or "").strip() if config else "",
     }
 
@@ -17909,8 +17946,14 @@ def staff_payments():
     payment_rows = build_staff_payment_rows(selected_year)
     payment_rows, pagination = paginate_items(payment_rows)
     payment_settings = staff_payment_settings()
+    from app.models import GoogleDriveStaffInvoiceUpload
+    invoice_rows = (db.session.query(GoogleDriveStaffInvoiceUpload, StaffExamSessionsShare.person_ref)
+        .join(StaffExamSessionsShare, GoogleDriveStaffInvoiceUpload.share_id == StaffExamSessionsShare.id)
+        .filter(GoogleDriveStaffInvoiceUpload.year == selected_year).all())
+    invoices_by_member = {person_ref: document for document, person_ref in invoice_rows}
     return render_template(
         "staff_payments/index.html",
+        invoices_by_member=invoices_by_member,
         rows=payment_rows,
         pagination=pagination,
         session_years=session_years,
@@ -17958,6 +18001,7 @@ def update_staff_payment_settings():
 @staff_bp.route("/staff-payments/<int:member_id>/<int:payment_year>", methods=["POST"])
 @login_required
 def update_staff_payment(member_id, payment_year):
+    require_menu_edit("staff_payments")
     if not validate_csrf():
         return jsonify({"ok": False, "message": "Security token expired. Please try again."}), 400
     member = AcademicStaff.query.get_or_404(member_id)
@@ -17965,6 +18009,13 @@ def update_staff_payment(member_id, payment_year):
         return jsonify({"ok": False, "message": "This member is not eligible for staff payments."}), 400
     invoice_verified = request.form.get("invoice_verified", "").strip() == "1"
     payment_completed = request.form.get("payment_completed", "").strip() == "1"
+    if invoice_verified:
+        from app.models import GoogleDriveStaffInvoiceUpload
+        invoice = (GoogleDriveStaffInvoiceUpload.query.join(StaffExamSessionsShare,
+            GoogleDriveStaffInvoiceUpload.share_id == StaffExamSessionsShare.id)
+            .filter(StaffExamSessionsShare.person_ref == str(member_id), GoogleDriveStaffInvoiceUpload.year == payment_year).first())
+        if invoice is None:
+            return jsonify({"ok": False, "message": "Upload an invoice before completing verification."}), 400
     if payment_completed and not invoice_verified:
         return jsonify({"ok": False, "message": "Payment can only be completed after invoice verification."}), 400
     payment_record = StaffPayment.query.filter_by(member_id=member.id, year=payment_year).first()
@@ -20235,7 +20286,7 @@ def submit_staff_exam_session(session_id, assignment_type, assignment_id):
     assignment, person_ref = staff_submission_assignment(record, assignment_type, assignment_id)
     if not assignment or not person_ref:
         abort(404)
-    if assignment_type != "emergency_contact":
+    if assignment_type != "emergency_contact" and record.format != "Online":
         logistics_type = (assignment.logistics_type or "").strip()
         logistics_error = ""
         if assignment_type == "supervisor" and assignment.is_remote:
@@ -20277,13 +20328,31 @@ def submit_staff_exam_session(session_id, assignment_type, assignment_id):
 
 
 STAFF_END_CHECK_FIELDS = ("attendance", "return_papers", "recordings", "audiovisual", "end_report", "centre_feedback")
+ONLINE_STAFF_END_CHECK_FIELDS = ("attendance", "return_papers", "recordings", "audiovisual", "end_report")
 REMOTE_STAFF_END_CHECK_FIELDS = STAFF_END_CHECK_FIELDS + ("printed_attendance",)
 EXAMINER_RECIPIENT_END_CHECK_FIELDS = ("printed_attendance", "return_papers", "audiovisual", "centre_feedback", "end_report")
 
 
+def staff_session_has_recording_candidates(record):
+    latest_month = db.session.query(db.func.max(ExamSessionMonthlyRegistration.month)).filter_by(
+        exam_session_id=record.id).scalar()
+    if latest_month is None:
+        return False
+    return ExamSessionMonthlyRegistration.query.filter(
+        ExamSessionMonthlyRegistration.exam_session_id == record.id,
+        ExamSessionMonthlyRegistration.month == latest_month,
+        ExamSessionMonthlyRegistration.module.in_(("Listening and speaking", "Speaking")),
+        ExamSessionMonthlyRegistration.registration_number > 0,
+    ).first() is not None
+
+
 def staff_assignment_end_check_fields(record, role, assignment):
     if role == "supervisor":
-        return REMOTE_STAFF_END_CHECK_FIELDS if assignment.is_remote else STAFF_END_CHECK_FIELDS
+        fields = ONLINE_STAFF_END_CHECK_FIELDS if record.format == "Online" else (
+            REMOTE_STAFF_END_CHECK_FIELDS if assignment.is_remote else STAFF_END_CHECK_FIELDS)
+        if record.format in {"Online", "Onsite"} and not staff_session_has_recording_candidates(record):
+            fields = tuple(key for key in fields if key != "recordings")
+        return fields
     if role == "examiner" and assignment.is_shipment_recipient:
         person_ref = staffing_assignment_person_ref(assignment)
         supervisors = ExamSessionSupervisorAssignment.query.filter_by(exam_session_id=record.id).all()
@@ -20310,6 +20379,8 @@ def staff_end_checks_view(record, role, status, submission, share):
         "opens_at": datetime.combine(record.session_date, time.min, tzinfo=LOCAL_TZ).isoformat() if record.session_date else "",
         "values": {key: bool(getattr(saved, key, False)) for key in check_fields},
         "folder_url": (record.session_pictures_folder_url or "").strip(),
+        "digitalised_url": (record.digitalised_exams_url or "").strip(),
+        "digitalised_available": datetime.now(LOCAL_TZ).date() == record.session_date,
         "report_url": "" if role == "examiner" else current_app.config.get("STAFF_END_OF_SESSION_REPORT_URL", ""),
         "url": url_for("staff.update_staff_end_checks", token=share.token, submission_id=submission.id),
     }}
@@ -20449,12 +20520,16 @@ def staff_exam_sessions(token):
     for row in fee_rows:
         for currency, amount in parse_formatted_currency_totals(row["detail"]["total_fee"]).items():
             add_currency_total(session_fee_totals, currency, amount)
+    from app.models import GoogleDriveStaffInvoiceUpload
+    staff_invoice_upload = GoogleDriveStaffInvoiceUpload.query.filter_by(share_id=share.id, year=selected_year).order_by(GoogleDriveStaffInvoiceUpload.created_at.desc()).first()
     response = current_app.make_response(render_template("pre_session_control_tower/staff_exam_sessions.html",
         staff_name=person.full_name, staff_is_senior=bool(getattr(person, "seniority", False)),
         session_details=session_details, exam_sessions=ordered_sessions,
         share_token=share.token, session_years=session_years, selected_session_year=selected_year,
         fee_rows=fee_rows, total_session_fees=format_currency_totals(session_fee_totals),
         next_payment_date=next_payment,
+        invoice_csrf=confirmation_csrf,
+        staff_invoice_upload=staff_invoice_upload,
         awaiting_sessions=[item for item in ordered_sessions if item.id in awaiting_ids],
         confirmed_sessions=[item for item in ordered_sessions if item.id not in awaiting_ids],
         confirmed_regular_sessions=[item for item in ordered_sessions if item.id not in awaiting_ids
@@ -24737,7 +24812,12 @@ def save_exam_session_assignment_section(
         if team_member_id is None:
             logistics_enabled = False
             logistics_type = "Does not apply"
-        is_remote = section_key == "supervisor" and request.form.get(f"{section_key}_remote_{row_key}") == "1"
+        if session_record.format == "Online":
+            logistics_type = "Does not apply"
+            logistics_enabled = False
+        is_remote = (section_key == "supervisor"
+                     and session_record.format not in PRE_SESSION_SESSIONS_VIEW_EXCLUDED_FORMATS
+                     and request.form.get(f"{section_key}_remote_{row_key}") == "1")
         if is_remote:
             logistics_type = "Does not apply"
             logistics_enabled = False
@@ -24748,7 +24828,7 @@ def save_exam_session_assignment_section(
         )
 
         km_value = request.form.get(f"{section_key}_km_{row_key}", "").strip()
-        km = int(km_value) if km_value.isdigit() else None
+        km = int(km_value) if km_value.isdigit() and session_record.format != "Online" else None
         if is_remote and km is not None:
             flash("Remote and Km cannot be selected at the same time.", "error")
             return None
@@ -24765,7 +24845,8 @@ def save_exam_session_assignment_section(
         commuting_base_value = request.form.get(f"{section_key}_commuting_base_value_{row_key}", "").strip() if km is not None or manual_fee_override else ""
         commuting_unit = request.form.get(f"{section_key}_commuting_unit_{row_key}", "").strip() if km is not None or manual_fee_override else ""
         fuel_enabled = (request.form.get(f"{section_key}_fuel_enabled_{row_key}", "").strip() == "1"
-                        and logistics_type not in {"Uber ride", "Complex Uber ride"})
+                        and logistics_type not in {"Uber ride", "Complex Uber ride"}
+                        and session_record.format != "Online")
         fuel = request.form.get(f"{section_key}_fuel_{row_key}", "").strip() if fuel_enabled else ""
         fuel_currency = request.form.get(f"{section_key}_fuel_currency_{row_key}", "").strip() if fuel_enabled else ""
         fuel_base_value = request.form.get(f"{section_key}_fuel_base_value_{row_key}", "").strip() if fuel_enabled else ""
@@ -24821,6 +24902,8 @@ def save_exam_session_assignment_section(
 
         if has_live_calculation and not manual_fee_override:
             role_fee_source = (remote_supervisor_fee if is_remote else supervisor_fee) if section_key == "supervisor" else examiner_fee if section_key == "examiner" else None
+            if section_key == "supervisor":
+                role_fee_source = supervisor_fee_for_session(session_record, role_fee_source)
             if role_fee_source:
                 role_fee_result = calculate_role_fee_from_ranges(time_ranges, role_fee_source)
                 if role_fee_result:
@@ -24894,6 +24977,12 @@ def save_exam_session_assignment_section(
             seniority_percentage = request.form.get(f"{section_key}_seniority_percentage_{row_key}", "").strip()
             seniority_currency = request.form.get(f"{section_key}_seniority_currency_{row_key}", "").strip()
 
+        if session_record.format == "Online":
+            km = None
+            fuel_enabled = False
+            commuting = commuting_currency = commuting_base_value = commuting_unit = ""
+            fuel = fuel_currency = fuel_base_value = fuel_unit = ""
+            vehicle_dep = vehicle_dep_currency = vehicle_dep_base_value = vehicle_dep_unit = ""
         if is_remote:
             device_dep = device_dep_currency = device_dep_base_value = device_dep_unit = ""
         role_fee = normalize_money_display_value(role_fee)
@@ -29549,6 +29638,10 @@ def annual_certification_programme():
         examiner_guideline_url=(year_configuration.examiner_guideline_url if year_configuration else ""),
         material_for_examiners_url=(year_configuration.material_for_examiners_url if year_configuration else ""),
         supervisor_guideline_url=(year_configuration.supervisor_guideline_url if year_configuration else ""),
+        supervisor_online_guideline_url=(year_configuration.supervisor_online_guideline_url if year_configuration else ""),
+        supervisor_online_centre_guideline_url=(year_configuration.supervisor_online_centre_guideline_url if year_configuration else ""),
+        emergency_contact_guideline_url=(year_configuration.emergency_contact_guideline_url if year_configuration else ""),
+        remote_supervisor_guideline_url=(year_configuration.remote_supervisor_guideline_url if year_configuration else ""),
         backup_material_for_examiners_url=(year_configuration.backup_material_for_examiners_url if year_configuration else ""),
         certification_allowed=certification_allowed,
         current_year=current_year(),
@@ -30409,6 +30502,10 @@ def supervisor_certification():
         certification_annual_meeting_time_value=annual_meeting_time_value,
         certification_remote_training_period_value=certification_remote_training_period_value(year_configuration),
         supervisor_guideline_url=(year_configuration.supervisor_guideline_url if year_configuration else ""),
+        supervisor_online_guideline_url=(year_configuration.supervisor_online_guideline_url if year_configuration else ""),
+        supervisor_online_centre_guideline_url=(year_configuration.supervisor_online_centre_guideline_url if year_configuration else ""),
+        emergency_contact_guideline_url=(year_configuration.emergency_contact_guideline_url if year_configuration else ""),
+        remote_supervisor_guideline_url=(year_configuration.remote_supervisor_guideline_url if year_configuration else ""),
         backup_material_for_examiners_url=(year_configuration.backup_material_for_examiners_url if year_configuration else ""),
         certification_allowed=certification_allowed,
         current_year=current_year(),
@@ -30576,6 +30673,33 @@ def update_supervisor_certification_material_settings():
     selected_certification_year, _ = selected_supervisor_certification_year()
     save_supervisor_certification_material_settings(selected_certification_year)
     return redirect(url_for("staff.supervisor_certification", certification_year=selected_certification_year))
+
+
+@staff_bp.route("/supervisor-certification/support-material-settings", methods=["POST"])
+@login_required
+def update_supervisor_support_material_settings():
+    require_menu_edit("supervisor_certification")
+    if not validate_csrf():
+        flash("Security token expired. Please try again.", "error")
+        return redirect(url_for("staff.supervisor_certification"))
+    selected_year, _ = selected_supervisor_certification_year()
+    fields = {"emergency_contact_guideline_url": "Emergency contact guidelines",
+              "remote_supervisor_guideline_url": "Remote supervisor guidelines"}
+    values = {key: request.form.get(key, "").strip() for key in fields}
+    errors = [f"{fields[key]} link must be a valid URL." for key, value in values.items() if value and not is_valid_url(value)]
+    if errors:
+        for error in errors:
+            flash(error, "error")
+    else:
+        config = certification_year_configuration(SUPERVISOR_CERTIFICATION_MODULE_KEY, selected_year)
+        if config is None:
+            config = CertificationYearConfiguration(module_key=SUPERVISOR_CERTIFICATION_MODULE_KEY, year=selected_year)
+            db.session.add(config)
+        for key, value in values.items():
+            setattr(config, key, value)
+        db.session.commit()
+        flash("Support role guideline links saved successfully.", "success")
+    return redirect(url_for("staff.supervisor_certification", certification_year=selected_year))
 
 
 @staff_bp.route("/supervisor-certification/years/<int:year>/archive", methods=["POST"])

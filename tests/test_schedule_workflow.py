@@ -10242,7 +10242,7 @@ for (const days of [2, 3, 4]) {
         shared = shared[shared.index('const cleanEmailValue'):shared.index('const initInvitationEmailCopyButtons')]
         cases = [self.official_confirmation_base_payload(**change) for change in [
             {'time_ranges': []}, {'total_fee': '-'}, {'schedule_folder_url': ''},
-            {'backup_material_for_examiners_url': ''}, {'supervisor_guideline_url': ''},
+            {'backup_material_for_examiners_url': ''},
             {'logistics_url': ''}, {'next_payment_date': ''}, {'address': ''},
             {'role': 'Examiner', 'examiner_guideline_url': ''},
             {'role': 'Examiner', 'material_for_examiners_url': ''},
@@ -10341,7 +10341,8 @@ assert.equal(portal.closed,true);
         self.assertEqual(examiner_missing_guidelines["error"], "Examiner guidelines link is required for official confirmation emails.")
         self.assertEqual(examiner_missing_material["error"], "Material for examiners link is required for official confirmation emails.")
         self.assertEqual(missing_backup_material["error"], "Back-up material for examiners link is required for official confirmation emails.")
-        self.assertEqual(missing_supervisor_guidelines["error"], "Supervisor guidelines link is required for official confirmation emails.")
+        self.assertFalse(missing_supervisor_guidelines.get("error"))
+        self.assertIn("Available soon", missing_supervisor_guidelines["html"])
         self.assertEqual(missing_logistics_url["error"], "Logistics folder link is required for Uber.")
         self.assertEqual(missing_next_payment_date["error"], "Next payment date is required for official confirmation emails.")
 

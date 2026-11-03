@@ -23,28 +23,30 @@
     const element = link(label, href);
     if (element) parent.append(element);
   };
+  const appendMaterialResource = (item, title, url) => {
+        if (url) appendLink(item, "Open resource ↗", url);
+        else if (title.includes("Supervisor guidelines")) {
+          const unavailable = make("span", "staff-detail-link staff-detail-resource-disabled", "Open resource ↗");
+          unavailable.setAttribute("aria-disabled", "true");
+          item.append(unavailable, make("span", "staff-detail-resource-soon", "Available soon"));
+        } else if (!title.includes("shipment")) item.append(make("small", "staff-detail-muted", "Link to be confirmed"));
+  };
   const hydrate = (dialog) => {
     if (dialog.dataset.initialized) return;
     dialog.querySelectorAll("[data-staff-session-payload]").forEach((root) => {
       const data = JSON.parse(root.dataset.staffSessionPayload);
       const role = data.role;
       const remote = role === "Emergency contact" || (role === "Supervisor" && data.is_remote);
-      const arrival = root.querySelector("[data-staff-arrival]");
-      if (remote) {
-        arrival.textContent = "Remote assignment · no venue attendance required";
-      } else {
-        arrival.textContent = "Arrive ";
-        const minimum = make("em");
-        minimum.append(make("u", "", "at least"));
-        arrival.append(minimum, ` ${officialArrivalMinutesForRole(role)} minutes before the start.`);
-      }
       const materials = root.querySelector("[data-staff-materials]");
+      const zoomAccess = materials.querySelector("[data-staff-zoom-access]");
       const rows = role === "Emergency contact"
         ? [["Emergency contact manual", "Read and fully understand the manual before the session. Raise any questions with Path Examinations in advance.", EMERGENCY_CONTACT_MANUAL_URL]]
         : officialMaterialRows(role, data).filter(([title]) =>
           (!title.includes("Back-up material for examiners")
-            || (role === "Supervisor" && data.participation_confirmed))
+            || (role === "Supervisor" && data.participation_confirmed && !zoomAccess))
           && !(role === "Examiner" && title.includes("Material for examiners"))
+          && !(role === "Supervisor" && ["Online", "Online at exam centre"].includes(data.format)
+            && title.includes("Exam box shipment"))
           && !(role === "Supervisor" && data.is_remote
             && (title.includes("Supervisor guidelines") || title.includes("Exam box shipment"))));
       if (role === "Examiner" && data.examiner_receives_shipment) {
@@ -53,11 +55,10 @@
       rows.forEach(([title, description, url]) => {
         const item = make("div", "staff-detail-material");
         item.append(make("h4", "", title), make("p", "", description));
-        if (url) appendLink(item, "Open resource ↗", url);
-        else if (!title.includes("shipment")) item.append(make("small", "staff-detail-muted", "Link to be confirmed"));
-        materials.append(item);
+        appendMaterialResource(item, title, url);
+        materials.insertBefore(item, zoomAccess);
       });
-      if (!rows.length) root.querySelector("[data-staff-materials-section]").hidden = true;
+      if (!rows.length && !zoomAccess) root.querySelector("[data-staff-materials-section]").hidden = true;
       const duties = role === "Emergency contact" ? {
         title: "Your responsibilities",
         items: ["Remain available and monitor your phone throughout the session, particularly at the beginning and end.",
@@ -69,7 +70,8 @@
         root.querySelector("[data-staff-responsibilities-title]").textContent = duties.title.toLowerCase().replace(/^./, (c) => c.toUpperCase());
         duties.items.forEach((text) => root.querySelector("[data-staff-responsibilities]").append(make("li", "", text)));
       } else root.querySelector("[data-staff-responsibilities-section]").hidden = true;
-      if (remote) root.querySelector("[data-staff-travel-section]").hidden = true;
+      const travelSection = root.querySelector("[data-staff-travel-section]");
+      if (remote && travelSection) travelSection.hidden = true;
       root.querySelectorAll("[data-staff-logistics-instructions-item]").forEach((item) => {
         const instructionsDialog = item.querySelector("[data-staff-logistics-instructions-dialog]");
         const instructionsButton = item.querySelector("[data-staff-logistics-instructions-open]");
@@ -235,7 +237,9 @@
       input.closest(".staff-end-check-row").classList.toggle("is-disabled", !available);
     });
     section.querySelectorAll("[data-end-checks-folder]").forEach((folder) => {
-      const folderAvailable = available && Boolean(folder.dataset.folderUrl);
+      const examDayOnly = folder.hasAttribute("data-folder-exam-day-only");
+      const beforeNextDay = Date.now() < opensAt + 24 * 60 * 60 * 1000;
+      const folderAvailable = available && (!examDayOnly || beforeNextDay) && Boolean(folder.dataset.folderUrl);
       folder.href = folderAvailable ? folder.dataset.folderUrl : "#";
       folder.classList.toggle("is-disabled", !folderAvailable);
       folder.setAttribute("aria-disabled", String(!folderAvailable));
@@ -280,7 +284,11 @@
   const refresh = () => sections.forEach(updateAvailability);
   const scheduleUnlock = () => {
     const now = Date.now();
-    const upcoming = sections.map((section) => Date.parse(section.dataset.opensAt)).filter((at) => at > now);
+    const upcoming = sections.flatMap((section) => {
+      const opensAt = Date.parse(section.dataset.opensAt);
+      return section.querySelector("[data-folder-exam-day-only]")
+        ? [opensAt, opensAt + 24 * 60 * 60 * 1000] : [opensAt];
+    }).filter((at) => at > now);
     if (!upcoming.length) return;
     window.setTimeout(() => { refresh(); scheduleUnlock(); }, Math.min(Math.min(...upcoming) - now, 2147483647));
   };

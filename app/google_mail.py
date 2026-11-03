@@ -146,13 +146,15 @@ def private_response(response):
 @administrator
 def settings():
     session.setdefault("csrf_token", secrets.token_urlsafe(32))
-    from app.models import PaymentReviewNotification, FinanceCompletionNotification, FinanceAgendaNotification
+    from app.models import PaymentReviewNotification, FinanceCompletionNotification, FinanceAgendaNotification, StaffInvoiceCancellationNotification
     retry_count = PaymentReviewNotification.query.filter(PaymentReviewNotification.status.in_(["pending", "failed"])).count()
     uncertain_count = PaymentReviewNotification.query.filter(PaymentReviewNotification.status.in_(["sending", "unknown"])).count()
     retry_count += FinanceCompletionNotification.query.filter(FinanceCompletionNotification.status.in_(["pending", "failed"])).count()
     uncertain_count += FinanceCompletionNotification.query.filter(FinanceCompletionNotification.status.in_(["sending", "unknown"])).count()
     retry_count += FinanceAgendaNotification.query.filter(FinanceAgendaNotification.status.in_(["pending", "failed"])).count()
     uncertain_count += FinanceAgendaNotification.query.filter(FinanceAgendaNotification.status.in_(["sending", "unknown"])).count()
+    retry_count += StaffInvoiceCancellationNotification.query.filter(StaffInvoiceCancellationNotification.status.in_(["pending", "failed"])).count()
+    uncertain_count += StaffInvoiceCancellationNotification.query.filter(StaffInvoiceCancellationNotification.status.in_(["sending", "unknown"])).count()
     try:
         saved = read_connection()
         connected = bool(saved.get("refresh_token"))
@@ -173,7 +175,7 @@ def settings():
 @google_mail_bp.post("/integrations/google/retry-payment-notifications")
 @administrator
 def retry_payment_notifications():
-    from app.models import PaymentReviewNotification, FinanceCompletionNotification, FinanceAgendaNotification
+    from app.models import PaymentReviewNotification, FinanceCompletionNotification, FinanceAgendaNotification, StaffInvoiceCancellationNotification
     from app.payment_notifications import deliver_management_notification
     if not validate_csrf():
         abort(400)
@@ -191,6 +193,11 @@ def retry_payment_notifications():
         FinanceAgendaNotification.status.in_(["pending", "failed"])
     ).order_by(FinanceAgendaNotification.id).limit(50).all()]
     sent += sum(deliver_agenda(notice_id) for notice_id in agenda_ids)
+    from app.staff_invoice_notifications import deliver_invoice_cancellation
+    cancellation_ids = [row.id for row in StaffInvoiceCancellationNotification.query.filter(
+        StaffInvoiceCancellationNotification.status.in_(["pending", "failed"])
+    ).order_by(StaffInvoiceCancellationNotification.id).limit(50).all()]
+    sent += sum(deliver_invoice_cancellation(notice_id) for notice_id in cancellation_ids)
     flash(f"{sent} finance notifications sent. Unconfirmed deliveries were not retried.", "success")
     return redirect(url_for("google_mail.settings"))
 

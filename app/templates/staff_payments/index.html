@@ -79,6 +79,7 @@
         <th>Currency</th>
         <th>Sessions</th>
         <th>Invoice</th>
+        <th>Verification</th>
         <th>Payment</th>
       </tr>
     </thead>
@@ -119,10 +120,22 @@
               </div>
             </div>
           </td>
+          <td class="staff-payment-invoice-document">
+            {% set invoice = invoices_by_member.get(row.member.id|string) %}
+            {% if invoice %}
+              <a class="staff-payment-invoice-view" href="{{ url_for('staff_invoices.preview', member_id=row.member.id, year=selected_session_year) }}" data-staff-invoice-view data-invoice-name="{{ invoice.filename }}" data-invoice-previewable="{{ 'true' if invoice.mime_type in ['application/pdf', 'image/jpeg', 'image/png', 'image/gif', 'image/webp', 'text/plain'] else 'false' }}">View</a>
+              {% if user_can_edit('staff_payments') %}
+              <form class="staff-payment-invoice-remove-form" method="post" action="{{ url_for('staff_invoices.remove', member_id=row.member.id, year=selected_session_year) }}">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                <button type="submit" class="staff-payment-invoice-remove" aria-label="Move invoice for {{ row.member.full_name }} to the Drive trash" title="Move invoice to the Drive trash">×</button>
+              </form>
+              {% endif %}
+            {% else %}<span class="muted">Not yet</span>{% endif %}
+          </td>
           <td>
-            <label class="staff-payment-checkbox">
-              <input type="checkbox" data-staff-payment-invoice {% if row.invoice_verified %}checked{% endif %}>
-              <span>Verified</span>
+            <label class="staff-payment-checkbox{% if not invoice %} is-disabled{% endif %}"{% if not invoice %} title="Upload an invoice before completing verification."{% endif %}>
+              <input type="checkbox" data-staff-payment-invoice {% if row.invoice_verified %}checked{% endif %}{% if not invoice %} disabled{% endif %}>
+              <span>Completed</span>
             </label>
           </td>
           <td>
@@ -134,12 +147,19 @@
         </tr>
       {% else %}
         <tr>
-          <td colspan="8" class="empty-state">No confirmed staff payments found for this year.</td>
+          <td colspan="9" class="empty-state">No confirmed staff payments found for this year.</td>
         </tr>
       {% endfor %}
     </tbody>
   </table>
 </section>
+
+<dialog class="staff-invoice-preview" data-staff-invoice-preview aria-labelledby="staff-invoice-preview-title">
+  <header class="staff-invoice-preview-header"><h2 id="staff-invoice-preview-title">Invoice</h2><button type="button" class="icon-button" data-staff-invoice-preview-close aria-label="Close invoice preview">×</button></header>
+  <iframe title="Invoice document" data-staff-invoice-preview-frame></iframe>
+  <div class="staff-invoice-preview-fallback" data-staff-invoice-preview-fallback hidden><p>This file type cannot be previewed in your browser.</p><a class="secondary-button" data-staff-invoice-preview-download>Download invoice</a></div>
+</dialog>
+<script src="{{ url_for('static', filename='js/staff_payment_invoices.js', v='20261103-staff-payment-invoices-1') }}" defer></script>
 
 {% include "_pagination.html" %}
 {% endblock %}

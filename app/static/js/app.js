@@ -5534,7 +5534,8 @@ const roleFeeSettings = (row) => {
   return rowIsRemoteSupervisor(row) ? {
     roleFeeLabel: "remote supervisor", roleFeeCurrency: data.remoteRoleFeeCurrency,
     roleFeeValue: data.remoteRoleFeeValue, roleFeeUnit: data.remoteRoleFeeUnit,
-  } : data;
+  } : (row?.dataset.sectionKey === "supervisor" && row.closest("[data-session-modal-panel]")?.dataset.sessionFormat === "Online"
+    ? { ...data, roleFeeFactor: 0.65 } : data);
 };
 
 const clearRemoteDeviceDep = (row) => {
@@ -5609,15 +5610,16 @@ const syncSupervisorRoleFee = (row, { forceEmpty = false } = {}) => {
     syncAssignmentTotalFee(row);
     return;
   }
-  const amount = unit === "per hour" ? (minutes / 60) * base : minutes * base;
+  const factor = feeData.roleFeeFactor || 1;
+  const amount = (unit === "per hour" ? (minutes / 60) * base : minutes * base) * factor;
   const formatted = `${currency} ${formatMoney(amount)}`;
   const durationLabel = unit === "per hour" ? `${formatDecimalNumber(minutes / 60)} hours` : `${minutes} minutes`;
   input.value = formatted;
   currencyInput.value = currency;
-  baseInput.value = feeData.roleFeeValue || "";
+  baseInput.value = factor === 1 ? (feeData.roleFeeValue || "") : String(base * factor).replace(".", ",");
   unitInput.value = unit;
   display.textContent = formatted;
-  display.title = `Calculation: ${durationLabel} × ${currency} ${feeData.roleFeeValue || ""} = ${formatted}`;
+  display.title = `Calculation: ${durationLabel} × ${currency} ${feeData.roleFeeValue || ""}${factor === 0.65 ? " × 65%" : ""} = ${formatted}`;
   syncSeniority(row);
   syncAssignmentTotalFee(row);
 };
@@ -8175,15 +8177,18 @@ const getStaffOfficialConfirmationEmailPayload = (button) => {
 	  };
 	};
 
-const validateStaffOfficialConfirmationEmailPayload = (payload) => {
+const validateStaffOfficialConfirmationEmailPayload = (payload, { portalSubmission = false } = {}) => {
+  const onlinePortal = portalSubmission && ["Online", "Online at exam centre"].includes(cleanEmailValue(payload?.format));
   if (!cleanEmailValue(payload?.full_name || payload?.fullName)) return "Staff member full name is required.";
-  if (cleanEmailValue(payload?.format) !== "Onsite") return "Official confirmation email is only available for onsite sessions.";
+  if (!onlinePortal && cleanEmailValue(payload?.format) !== "Onsite") return "Official confirmation email is only available for onsite sessions.";
   if (!cleanEmailValue(payload?.role) || !cleanEmailValue(payload?.session_name || payload?.sessionName) || !cleanEmailValue(payload?.session_date || payload?.sessionDate)) {
     return "Exam session information is incomplete.";
   }
   if (!Array.isArray(payload?.time_ranges || payload?.timeRanges) || !(payload.time_ranges || payload.timeRanges).length) {
     return "Staff member time range is required for official confirmation.";
   }
+  // Portal invitations use their own format-specific details, not the legacy onsite email.
+  if (onlinePortal) return "";
   if (!cleanEmailValue(payload?.address)) return "Exam session address is required for onsite sessions.";
   const role = cleanEmailValue(payload?.role);
   if (["Examiner", "Supervisor"].includes(role)) {
@@ -8202,9 +8207,6 @@ const validateStaffOfficialConfirmationEmailPayload = (payload) => {
   if (role === "Supervisor") {
     if (!emailLinkIsUsable(payload?.backup_material_for_examiners_url || payload?.backupMaterialForExaminersUrl)) {
       return "Back-up material for examiners link is required for official confirmation emails.";
-    }
-    if (!emailLinkIsUsable(payload?.supervisor_guideline_url || payload?.supervisorGuidelineUrl)) {
-      return "Supervisor guidelines link is required for official confirmation emails.";
     }
   }
   const totalFee = cleanEmailValue(payload?.total_fee ?? payload?.totalFee);
@@ -8261,10 +8263,13 @@ const officialMaterialRows = (role, links = {}) => {
     ];
   }
 	  if (role === "Supervisor") {
+        const scheduleDescription = ["Online", "Online at exam centre"].includes(cleanEmailValue(links.format))
+          ? "Please access this folder in advance to understand the exam session you will be supervising, including timings, and the start and end times of each module. A careful review is required to ensure the session runs smoothly and to identify any details that may need attention beforehand."
+          : "Please access this folder in advance to understand the exam session you will be supervising, including timings, exam room layout, and the start and end times of each module. A careful review is required to ensure the session runs smoothly and to identify any details that may need attention beforehand.";
 	    return [
-	      ["🗓️ Exam session schedule", "Please access this folder in advance to understand the exam session you will be supervising, including timings, exam room layout, and the start and end times of each module. A careful review is required to ensure the session runs smoothly and to identify any details that may need attention beforehand.", scheduleFolderUrl || OFFICIAL_CONFIRMATION_MATERIAL_URL],
+	      ["🗓️ Exam session schedule", scheduleDescription, scheduleFolderUrl || OFFICIAL_CONFIRMATION_MATERIAL_URL],
 	      ["🎧🗣️ Back-up material for examiners", "This folder contains the materials for Examiners, including the Examiner guidelines, Listening and speaking module exams, and Listening audio files. Examiners must use the official materials available in Sinapsis. These files are provided solely as a contingency resource in the event of power or internet outages during the exam session.", backupMaterialForExaminersUrl],
-      ["✅ Supervisor guidelines", "Please read these guidelines carefully to fully understand your responsibilities during the exam session. This will help you respond appropriately at each stage or in case of unexpected situations, while ensuring compliance with Path Examinations’ quality policies and procedures.", supervisorGuidelineUrl],
+      [({ "Online": "✅ Supervisor guidelines for online sessions", "Online at exam centre": "✅ Supervisor guidelines for online sessions at exam centre", "Onsite": "✅ Supervisor guidelines for onsite sessions" })[cleanEmailValue(links.format)] || "✅ Supervisor guidelines", "Please read these guidelines carefully to fully understand your responsibilities during the exam session. This will help you respond appropriately at each stage or in case of unexpected situations, while ensuring compliance with Path Examinations’ quality policies and procedures.", supervisorGuidelineUrl],
 	      ["📦🚚 Exam box shipment", "Once you confirm your participation as a Supervisor, our Logistics team will contact you in due course to arrange the delivery of the materials for your assigned exam session(s). You will also receive instructions on how to handle the materials after the exam session has ended.", ""],
     ];
   }
@@ -8279,6 +8284,20 @@ const officialMaterialDescriptionHtml = (role, label, description) => {
     .replaceAll("Sinapsis", `<a href="${escapeEmailAttribute(SINAPSIS_LOGIN_URL)}" style="color:#00506b;font-weight:700;text-decoration:underline;">Sinapsis</a>`);
 };
 
+const staffInvoiceInformationHtml = () => `
+  <p style="margin:0 0 10px;color:#111115;font:400 13px/1.5 Arial, Helvetica, sans-serif;">Once all your exam sessions have been completed, please upload <strong>one consolidated invoice</strong> through the <strong><em style="color:#233a78;">Invoicing instructions</em></strong> section of your portal, including only the <strong>total fees for all your sessions</strong>.</p>
+  <p style="margin:0 0 10px;color:#111115;font:400 13px/1.5 Arial, Helvetica, sans-serif;"><strong>Do not include additional expenses</strong>, as only invoices matching the amount recorded in the system will be processed. The invoice may be issued in your name or someone else’s name.</p>
+  <p style="margin:0 0 10px;color:#111115;font:400 13px/1.5 Arial, Helvetica, sans-serif;">Payments will appear on your bank statement as <strong>Bellis Ignis Group SRL</strong>. First-time payments may take up to <strong>72 business hours</strong> to reach your account after processing, while previous recipients should receive payment immediately.</p>
+  <p style="margin:14px 0 0;padding:12px 14px;border:1px solid #e8cf75;border-left:4px solid #d6aa28;border-radius:8px;background:#fff6d8;color:#705514;font:400 13px/1.5 Arial, Helvetica, sans-serif;"><strong>Important:</strong> You must upload your invoice once all your assigned exam sessions have been completed, and <strong>at least 2 business days before the scheduled payment date and time</strong>. Otherwise, your payment will be rescheduled.</p>
+`;
+
+const staffInvoiceInformationText = () => [
+  "Once all your exam sessions have been completed, please upload one consolidated invoice through the Invoicing instructions section of your portal, including only the total fees for all your sessions.",
+  "Do not include additional expenses, as only invoices matching the amount recorded in the system will be processed. The invoice may be issued in your name or someone else’s name.",
+  "Payments will appear on your bank statement as Bellis Ignis Group SRL. First-time payments may take up to 72 business hours to reach your account after processing, while previous recipients should receive payment immediately.",
+  "Important: You must upload your invoice once all your assigned exam sessions have been completed, and at least 2 business days before the scheduled payment date and time. Otherwise, your payment will be rescheduled.",
+].join("\n\n");
+
 const officialConfirmationMaterialsHtml = (role, styles, links = {}) => {
   const rows = officialMaterialRows(role, links);
   if (!rows.length) return "";
@@ -8288,10 +8307,13 @@ const officialConfirmationMaterialsHtml = (role, styles, links = {}) => {
       <p style="${styles.paragraph}">Please find below:</p>
       ${rows.map(([label, description, url]) => {
         const materialLink = cleanEmailValue(url);
+        const availableSoon = !materialLink && label.includes("Supervisor guidelines")
+          ? '<p style="margin:10px 0 0;"><span aria-disabled="true" style="display:inline-block;padding:8px 12px;background:#eef0f1;border:1px solid #d5d9dc;border-radius:8px;color:#788187;font-size:12px;">Open resource ↗</span> <span style="display:inline-block;padding:4px 8px;border-radius:999px;background:#fff3c4;color:#8a5a00;font-size:11px;font-weight:600;">Available soon</span></p>' : '';
         return `
         <div style="margin:0 0 10px;padding:12px 14px;background:#f1f3f2;border:1px solid #d9dfdc;border-radius:10px;">
           <p style="margin:0 0 5px;color:#111115;font:700 14px/1.4 Arial, Helvetica, sans-serif;">${escapeEmailHtml(label)}${materialLink ? ` <a href="${escapeEmailAttribute(materialLink)}" style="float:right;color:#00506b;font-weight:700;text-decoration:none;">View material →</a>` : ""}</p>
           <p style="margin:0;color:#62727a;font:italic 12px/1.45 Arial, Helvetica, sans-serif;">${officialMaterialDescriptionHtml(role, label, description)}</p>
+          ${availableSoon}
         </div>
       `;
       }).join("")}
@@ -8304,7 +8326,7 @@ const officialConfirmationMaterialsText = (role, links = {}) => {
   if (!rows.length) return "";
   return `SESSION MATERIALS\n\nPlease find below:\n\n${rows.map(([label, description, url]) => {
     const materialLink = cleanEmailValue(url);
-    return `${label}${materialLink ? `\nView material: ${materialLink}` : ""}\n${description}`;
+    return `${label}${materialLink ? `\nView material: ${materialLink}` : label.includes("Supervisor guidelines") ? "\nAvailable soon" : ""}\n${description}`;
   }).join("\n\n")}`;
 };
 
@@ -8513,8 +8535,7 @@ const buildEmergencyContactOfficialConfirmationEmail = ({
           <p style="${styles.paragraph}">Below you’ll find the breakdown of your exam session fee:</p>
           <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="border-collapse:collapse;border:1px solid #d9dfdc;border-radius:10px;overflow:hidden;margin:0 0 14px;"><tr><td style="padding:12px;background:#e7f5f8;color:#00506b;font:800 15px Arial, Helvetica, sans-serif;">TOTAL FEE:</td><td align="right" style="padding:12px;background:#e7f5f8;color:#00506b;font:800 15px Arial, Helvetica, sans-serif;">${escapeEmailHtml(totalFee)}</td></tr></table>
           <div style="margin:0;padding:13px 15px;background:#f1f3f2;border:1px solid #d9dfdc;border-radius:10px;">
-            <p style="margin:0 0 10px;color:#111115;font:400 13px/1.5 Arial, Helvetica, sans-serif;"><em><u>Once all your exam sessions are over</u></em>, please send one consolidated invoice to <a href="mailto:finance@pathexaminations.com" style="color:#00506b;font-weight:700;text-decoration:underline;"><strong><u>finance@pathexaminations.com</u></strong></a>, including only the <strong>sum of the total fees</strong> for all your sessions. Do not include additional expenses, as only invoices matching the system amount will be processed. The invoice may be issued in your name or someone else’s name. Please follow the <a href="https://drive.google.com/drive/u/0/my-drive" style="color:#00506b;font-weight:700;text-decoration:underline;"><strong>attached sample</strong></a> with the required company details.</p>
-            <p style="margin:0;color:#111115;font:400 13px/1.5 Arial, Helvetica, sans-serif;">Payments will be processed on <strong>${escapeEmailHtml(nextPaymentDate)}</strong> <strong>at 5:00 pm (GMT-3)</strong> and will appear as Bellis Ignis Group SRL. First-time payments may take up to 72 working hours after processing; previous recipients should receive payment immediately.</p>
+            ${staffInvoiceInformationHtml()}
           </div>
         </div>
         ${officialStaffMembersHtml(contacts, styles)}
@@ -8566,8 +8587,7 @@ const buildEmergencyContactOfficialConfirmationEmail = ({
     "FEES AND INVOICE",
     "Below you’ll find the breakdown of your exam session fee:",
     `TOTAL FEE: ${totalFee}`,
-    "Once all your exam sessions are over, please send one consolidated invoice to finance@pathexaminations.com, including only the sum of the total fees for all your sessions. Do not include additional expenses, as only invoices matching the system amount will be processed. The invoice may be issued in your name or someone else’s name. Please follow the attached sample with the required company details: https://drive.google.com/drive/u/0/my-drive",
-    `Payments will be processed on ${nextPaymentDate} at 5:00 pm (GMT-3) and will appear as Bellis Ignis Group SRL. First-time payments may take up to 72 working hours after processing; previous recipients should receive payment immediately.`,
+    staffInvoiceInformationText(),
     officialStaffMembersText(contacts),
     responsibilitiesText,
     "Thank you very much for your collaboration and commitment! 💙",
@@ -8676,8 +8696,7 @@ const buildStaffOfficialConfirmationEmail = (button) => {
           <p style="${styles.paragraph}">Below you’ll find the breakdown of your exam session fee:</p>
           <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="border-collapse:collapse;border:1px solid #d9dfdc;border-radius:10px;overflow:hidden;margin:0 0 14px;">${feeRowsHtml}<tr><td style="padding:12px;background:#e7f5f8;color:#00506b;font:800 15px Arial, Helvetica, sans-serif;">TOTAL FEE:</td><td align="right" style="padding:12px;background:#e7f5f8;color:#00506b;font:800 15px Arial, Helvetica, sans-serif;">${escapeEmailHtml(totalFee)}</td></tr></table>
 	          <div style="margin:0;padding:13px 15px;background:#f1f3f2;border:1px solid #d9dfdc;border-radius:10px;">
-	            <p style="margin:0 0 10px;color:#111115;font:400 13px/1.5 Arial, Helvetica, sans-serif;"><em><u>Once all your exam sessions are over</u></em>, please send one consolidated invoice to <a href="mailto:finance@pathexaminations.com" style="color:#00506b;font-weight:700;text-decoration:underline;"><strong><u>finance@pathexaminations.com</u></strong></a>, including only the <strong>sum of the total fees</strong> for all your sessions. Do not include additional expenses, as only invoices matching the system amount will be processed. The invoice may be issued in your name or someone else’s name. Please follow the <a href="https://drive.google.com/drive/u/0/my-drive" style="color:#00506b;font-weight:700;text-decoration:underline;"><strong>attached sample</strong></a> with the required company details.</p>
-	            <p style="margin:0;color:#111115;font:400 13px/1.5 Arial, Helvetica, sans-serif;">Payments will be processed on <strong>${escapeEmailHtml(nextPaymentDate)}</strong> <strong>at 5:00 pm (GMT-3)</strong> and will appear as Bellis Ignis Group SRL. First-time payments may take up to 72 working hours after processing; previous recipients should receive payment immediately.</p>
+            ${staffInvoiceInformationHtml()}
 	          </div>
 	        </div>
         ${officialConfirmationMaterialsHtml(role, styles, materialLinks)}
@@ -8717,8 +8736,7 @@ const buildStaffOfficialConfirmationEmail = (button) => {
     "Below you’ll find the breakdown of your exam session fee:",
     feeText,
     `TOTAL FEE: ${totalFee}`,
-	    "Once all your exam sessions are over, please send one consolidated invoice to finance@pathexaminations.com, including only the sum of the total fees for all your sessions. Do not include additional expenses, as only invoices matching the system amount will be processed. The invoice may be issued in your name or someone else’s name. Please follow the attached sample with the required company details: https://drive.google.com/drive/u/0/my-drive",
-	    `Payments will be processed on ${nextPaymentDate} at 5:00 pm (GMT-3) and will appear as Bellis Ignis Group SRL. First-time payments may take up to 72 working hours after processing; previous recipients should receive payment immediately.`,
+    staffInvoiceInformationText(),
     materialsText,
     officialContactsText(contacts, role, emergencyContacts),
     "TRAVEL AND COMMUTING",
@@ -8791,12 +8809,13 @@ const validateStaffSessionSubmit = (form, submitter = null) => {
   const role = cleanEmailValue(payload?.role);
   const logisticsStatus = cleanEmailValue(payload?.logistics_status || payload?.logisticsStatus);
   let error = "";
-  if (role === "Supervisor" && payload?.is_remote && logisticsStatus !== "Does not apply") {
+  const requiresLogistics = cleanEmailValue(payload?.format) !== "Online";
+  if (requiresLogistics && role === "Supervisor" && payload?.is_remote && logisticsStatus !== "Does not apply") {
     error = "Remote supervisors must have Logistics set to Does not apply before adding the session.";
-  } else if (role !== "Emergency contact" && !["Does not apply", "Uber", "Simple logistics", "Uber ride", "Complex Uber ride", "Complex logistics", "Carpooling"].includes(logisticsStatus)) {
+  } else if (requiresLogistics && role !== "Emergency contact" && !["Does not apply", "Uber", "Simple logistics", "Uber ride", "Complex Uber ride", "Complex logistics", "Carpooling"].includes(logisticsStatus)) {
     error = "Select Logistics for this staff member in Exam session planner before adding the session.";
   }
-  error = error || validateStaffOfficialConfirmationEmailPayload(payload);
+  error = error || validateStaffOfficialConfirmationEmailPayload(payload, { portalSubmission: true });
   if (!error) return true;
   const button = submitter || form.querySelector('button[type="submit"]');
   if (button) showStaffOfficialConfirmationEmailFeedback(button, error, true);

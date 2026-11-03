@@ -30,6 +30,28 @@
       } catch (_) { /* Keep the current table until the next successful refresh. */ }
       finally { summaryBusy = false; }
     };
+    const displayLoadedFrame = (modal, frame) => {
+      const loading = modal.querySelector('[data-tower-loading]');
+      const header = modal.querySelector('[data-tower-loading-header]');
+      const retry = modal.querySelector('[data-tower-retry]');
+          try {
+            if (!frame.contentDocument?.body.matches('[data-tower-modal-document]') || !frame.contentDocument.querySelector('.modal.is-open')) throw new Error('Load failed');
+            loading.hidden = true; retry.hidden = true; header.hidden = true; frame.hidden = false;
+            frame.contentWindow.focus();
+          } catch (_) {
+            // A failed refresh must restore the error panel too, not leave the
+            // failed iframe visible with only an unexplained retry button.
+            frame.hidden = true;
+            header.hidden = false;
+            loading.hidden = false;
+            let loginPage = false;
+            try { loginPage = Boolean(frame.contentDocument?.querySelector('form[action="/login"], input[name="password"]')); } catch (_) {}
+            loading.textContent = loginPage
+              ? 'Your sign-in session has expired. Reload the page and sign in again.'
+              : 'Session details could not be loaded. Please try again. If the problem persists, reload the page.';
+            retry.hidden = false;
+          }
+    };
     window.loadTowerModal = (modal, opener) => {
       const frame = modal.querySelector('[data-tower-frame]');
       const loading = modal.querySelector('[data-tower-loading]');
@@ -52,24 +74,60 @@
         }
         frame.hidden = true; header.hidden = false; loading.hidden = false; retry.hidden = true;
         loading.textContent = 'Loading session details…';
-        frame.onload = () => {
-          try {
-            if (!frame.contentDocument?.body.matches('[data-tower-modal-document]') || !frame.contentDocument.querySelector('.modal.is-open')) throw new Error('Load failed');
-            loading.hidden = true; retry.hidden = true; header.hidden = true; frame.hidden = false;
-            frame.contentWindow.focus();
-          } catch (_) {
-            loading.textContent = 'Session details could not be loaded. Please try again.';
-            retry.hidden = false;
-          }
-        };
+        frame.onload = () => displayLoadedFrame(modal, frame);
         frame.src = url.href;
       };
       retry.onclick = load;
       load();
     };
+    const refreshModalSafely = modal => {
+      if (modal.dataset.refreshPending) return;
+      const previous = modal.querySelector('[data-tower-frame]');
+      if (!previous || previous.hidden) return;
+      modal.dataset.refreshPending = '1';
+      const candidate = document.createElement('iframe');
+      candidate.hidden = true;
+      candidate.title = previous.title;
+      let finished = false;
+      const finish = () => { finished = true; delete modal.dataset.refreshPending; };
+      const keepCurrent = () => {
+        if (finished) return;
+        finish(); candidate.remove();
+        previous.contentWindow.postMessage({type: 'tower-refresh-failed'}, window.location.origin);
+      };
+      candidate.onload = () => {
+        if (finished) return;
+        try {
+          if (!candidate.contentDocument?.body.matches('[data-tower-modal-document]') || !candidate.contentDocument.querySelector('.modal.is-open')) {
+            keepCurrent(); return;
+          }
+          const editing = previous.contentWindow.towerHasUnsavedChanges?.()
+            || previous.contentDocument.activeElement?.matches('input, textarea, select, [contenteditable="true"]');
+          if (editing || !modal.classList.contains('is-open')) {
+            finish(); candidate.remove();
+            if (editing) previous.contentWindow.postMessage({type: 'tower-refresh-deferred'}, window.location.origin);
+            return;
+          }
+          const scroll = previous.contentWindow.scrollY;
+          candidate.setAttribute('data-tower-frame', '');
+          previous.replaceWith(candidate);
+          candidate.hidden = false;
+          candidate.onload = () => displayLoadedFrame(modal, candidate);
+          modal.querySelector('[data-tower-retry]').onclick = () => window.loadTowerModal(modal);
+          finish();
+          candidate.contentWindow.scrollTo(0, scroll);
+          refreshSummary();
+        } catch (_) { keepCurrent(); }
+      };
+      candidate.onerror = keepCurrent;
+      previous.parentElement.append(candidate);
+      candidate.src = previous.contentWindow.location.href;
+      window.setTimeout(() => { if (!finished) keepCurrent(); }, 20000);
+    };
     window.addEventListener('message', event => {
       if (event.origin !== window.location.origin) return;
       const modal = [...document.querySelectorAll('[data-tower-session]')].find(item => item.querySelector('iframe')?.contentWindow === event.source);
+      if (modal && event.data?.type === 'tower-session-refresh-request') { refreshModalSafely(modal); return; }
       if (!modal || !['tower-session-close', 'tower-session-saved', 'tower-session-refreshed'].includes(event.data?.type)) return;
       if (event.data.type === 'tower-session-close') modal.querySelector('[data-close-modal]')?.click();
       else refreshSummary();
@@ -94,9 +152,11 @@
   const active = () => !document.hidden && window.frameElement?.closest('.modal')?.classList.contains('is-open');
   const dirty = () => [...dirtyForms].some(form => form.isConnected) || Boolean(document.querySelector('.nested-modal.is-open, dialog[open]'));
   window.towerHasUnsavedChanges = dirty;
-  const reload = () => {
+  const reload = (explicit = false) => {
     try { sessionStorage.setItem(`tower-modal-scroll:${body.dataset.sessionId}`, String(window.scrollY)); } catch (_) {}
-    notifyParent('tower-session-refreshed'); window.location.reload();
+    needsRefresh = false;
+    if (explicit || body.hasAttribute('data-tower-staff-card')) window.location.reload();
+    else notifyParent('tower-session-refresh-request');
   };
   window.addEventListener('load', () => {
     try {
@@ -109,6 +169,16 @@
     if (needsRefresh && active() && !writes && !dirty() && !document.activeElement?.matches('input, textarea, select, [contenteditable="true"]')) reload();
   };
   document.addEventListener('focusout', () => setTimeout(refreshIfClean, 250));
+
+  window.addEventListener('message', event => {
+    if (event.origin !== window.location.origin || event.source !== window.parent) return;
+    if (event.data?.type === 'tower-refresh-failed') {
+      notice.hidden = false; reloadButton.hidden = false;
+      message.textContent = 'The session could not be refreshed. Your current view and changes have been kept. You can retry or reload when ready.';
+    } else if (event.data?.type === 'tower-refresh-deferred') {
+      conflict();
+    }
+  });
 
   const conflict = () => {
     stale = true; notice.hidden = false; reloadButton.hidden = false;
@@ -160,7 +230,7 @@
   document.addEventListener('visibilitychange', () => { if (!document.hidden) check(); });
   reloadButton.addEventListener('click', () => {
     if (dirty() && !window.confirm('Reload this session? Unsaved changes will be lost.')) return;
-    reload();
+    reload(true);
   });
   document.addEventListener('click', event => {
     const closer = event.target.closest('[data-close-modal]');

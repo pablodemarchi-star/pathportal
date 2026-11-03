@@ -1,0 +1,81 @@
+"""Data-preserving upgrades for older SQLite application databases."""
+import json
+import re
+from sqlalchemy import text
+from sqlalchemy.schema import CreateTable, CreateIndex
+from app import db
+
+
+def migrate_finance_completion_events():
+    from app.models import FinanceCompletionNotification
+    if db.engine.dialect.name != 'sqlite':
+        return
+    name = FinanceCompletionNotification.__tablename__
+    columns = {row[1] for row in db.session.execute(text(f'PRAGMA table_info({name})'))}
+    legacy_unique = False
+    for index in db.session.execute(text(f'PRAGMA index_list({name})')).all():
+        if index[2]:
+            quoted = index[1].replace('"', '""')
+            fields = [row[2] for row in db.session.execute(text(f'PRAGMA index_info("{quoted}")'))]
+            if fields == ['request_kind', 'request_id']:
+                legacy_unique = True
+    if not columns or ('event_id' in columns and not legacy_unique):
+        return
+    connection = db.session.connection()
+    if not connection.connection.driver_connection.in_transaction:
+        connection.exec_driver_sql('BEGIN IMMEDIATE')
+    try:
+        rows = [dict(row) for row in db.session.execute(text(f'SELECT * FROM {name}')).mappings()]
+        triggers = db.session.execute(text(
+            "SELECT sql FROM sqlite_master WHERE type='trigger' AND tbl_name=:name AND sql IS NOT NULL"
+        ), {'name': name}).scalars().all()
+        used = set()
+        for row in rows:
+            event_id = row.get('event_id')
+            if event_id is None:
+                payment = row['request_kind'] == 'payment'
+                table = 'payment_request' if payment else 'billing_request'
+                event_table = table + '_event'
+                complete = 'Payment completed' if payment else 'Invoice issued'
+                event_id = db.session.execute(text(f'''
+                    SELECT event.id FROM {event_table} AS event
+                    JOIN {table} AS request ON request.id=event.{table}_id
+                    WHERE request.id=:request_id AND request.request_number=:number
+                    AND event.new_status=:complete AND event.created_on <= :notice_created
+                    ORDER BY event.id LIMIT 1
+                '''), {'request_id': row['request_id'], 'number': row['request_number'], 'complete': complete, 'notice_created': row['created_at']}).scalar()
+            if event_id is None or (row['request_kind'], event_id) in used:
+                # Deleted requests may have no surviving status event. Negative IDs
+                # preserve those historical notices without colliding with new events.
+                event_id = -row['id']
+                while (row['request_kind'], event_id) in used:
+                    event_id -= len(rows) + 1
+            row['event_id'] = event_id
+            used.add((row['request_kind'], event_id))
+            try:
+                payload = json.loads(row['payload'])
+                if isinstance(payload, dict):
+                    payload.setdefault('status', 'Completed')
+                    payload.setdefault('reason', '')
+                    row['payload'] = json.dumps(payload)
+            except (ValueError, TypeError):
+                pass
+        temporary = name + '_migration'
+        ddl = str(CreateTable(FinanceCompletionNotification.__table__).compile(dialect=db.engine.dialect))
+        ddl = re.sub(r'CREATE TABLE\s+' + re.escape(name) + r'\b', 'CREATE TABLE ' + temporary, ddl, count=1)
+        db.session.execute(text(ddl))
+        if rows:
+            fields = [column.name for column in FinanceCompletionNotification.__table__.columns]
+            quoted = ', '.join('"' + field + '"' for field in fields)
+            parameters = ', '.join(':' + field for field in fields)
+            db.session.execute(text(f'INSERT INTO {temporary} ({quoted}) VALUES ({parameters})'), rows)
+        db.session.execute(text(f'DROP TABLE {name}'))
+        db.session.execute(text(f'ALTER TABLE {temporary} RENAME TO {name}'))
+        for index in FinanceCompletionNotification.__table__.indexes:
+            db.session.execute(CreateIndex(index))
+        for trigger in triggers:
+            db.session.execute(text(trigger))
+        db.session.commit()
+    except Exception:
+        db.session.rollback()
+        raise

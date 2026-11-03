@@ -152,6 +152,8 @@ def create_app():
     app.register_blueprint(google_mail_bp)
     from app.google_drive import drive_bp
     app.register_blueprint(drive_bp)
+    from app.staff_invoices import staff_invoices_bp
+    app.register_blueprint(staff_invoices_bp)
     from app.finance_completion import completion_bp
     app.register_blueprint(completion_bp)
     from app.finance_agenda import agenda_bp
@@ -185,9 +187,10 @@ def create_app():
             "SAMEORIGIN" if (request.endpoint == "staff.exam_session_planner"
             and request.args.get("session_fullscreen") == "1" and request.args.get("staff_card"))
             or (request.endpoint in {"staff.pre_session_control_tower", "staff.pre_online_session_control_tower", "staff.my_actions"} and request.args.get("session_modal"))
+            or request.endpoint == "staff_invoices.preview"
             else "DENY"
         )
-        response.headers["Referrer-Policy"] = "no-referrer" if request.endpoint == "staff.staff_exam_sessions" else "strict-origin-when-cross-origin"
+        response.headers["Referrer-Policy"] = "no-referrer" if request.endpoint in {"staff.staff_exam_sessions", "staff_invoices.upload", "staff_invoices.download", "staff_invoices.preview", "staff_invoices.remove"} else "strict-origin-when-cross-origin"
         response.headers["Permissions-Policy"] = "camera=(), microphone=(), geolocation=()"
         if request.endpoint in {"staff.shared_path_session_journey", "staff.path_session_journey", "staff.preview_path_session_journey"}:
             response.headers["Cache-Control"] = "no-store"
@@ -286,6 +289,10 @@ def create_app():
 
     with app.app_context():
         db.create_all()
+        from app.schema_migrations import migrate_finance_completion_events
+        migrate_finance_completion_events()
+        db.session.execute(text("CREATE UNIQUE INDEX IF NOT EXISTS uq_staff_invoice_share_year ON google_drive_staff_invoice_upload (share_id, year)"))
+        db.session.commit()
         schedule_event_columns = {row[1] for row in db.session.execute(text("PRAGMA table_info(exam_session_schedule_event)"))}
         if "approval_notification_acknowledged" not in schedule_event_columns:
             db.session.execute(text("ALTER TABLE exam_session_schedule_event ADD COLUMN approval_notification_acknowledged BOOLEAN NOT NULL DEFAULT 0"))
@@ -462,6 +469,10 @@ def create_app():
         if certification_year_configuration_columns and "supervisor_guideline_url" not in certification_year_configuration_columns:
             db.session.execute(text("ALTER TABLE certification_year_configuration ADD COLUMN supervisor_guideline_url VARCHAR(500) DEFAULT '' NOT NULL"))
             db.session.commit()
+        for column_name in ("supervisor_online_guideline_url", "supervisor_online_centre_guideline_url", "emergency_contact_guideline_url", "remote_supervisor_guideline_url"):
+            if certification_year_configuration_columns and column_name not in certification_year_configuration_columns:
+                db.session.execute(text(f"ALTER TABLE certification_year_configuration ADD COLUMN {column_name} VARCHAR(500) DEFAULT '' NOT NULL"))
+                db.session.commit()
         if certification_year_configuration_columns and "backup_material_for_examiners_url" not in certification_year_configuration_columns:
             db.session.execute(text("ALTER TABLE certification_year_configuration ADD COLUMN backup_material_for_examiners_url VARCHAR(500) DEFAULT '' NOT NULL"))
             db.session.commit()
@@ -1064,6 +1075,8 @@ def create_app():
         if supervisor_assignment_columns and "is_remote" not in supervisor_assignment_columns:
             db.session.execute(text("ALTER TABLE exam_session_supervisor_assignment ADD COLUMN is_remote BOOLEAN NOT NULL DEFAULT 0"))
             db.session.commit()
+        from app.staffing_rules import normalize_existing_online_supervisors
+        normalize_existing_online_supervisors()
         for column_name in ("role_fee", "device_dep", "commuting", "fuel", "vehicle_dep", "seniority_fee"):
             if supervisor_assignment_columns and column_name not in supervisor_assignment_columns:
                 db.session.execute(text(f"ALTER TABLE exam_session_supervisor_assignment ADD COLUMN {column_name} VARCHAR(80)"))
@@ -1383,6 +1396,10 @@ def create_app():
                 synchronize_session=False,
             )
         db.session.commit()
+        from app.staffing_rules import normalize_existing_online_travel_fees
+        normalize_existing_online_travel_fees()
+        from app.staffing_rules import normalize_online_supervisor_role_fees
+        normalize_online_supervisor_role_fees()
     return app
 
 

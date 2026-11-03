@@ -14,12 +14,14 @@ from werkzeug.utils import secure_filename
 
 from app import db, login_required, validate_csrf
 from app.google_mail import administrator, configuration, configured, google_json, read_connection, save_connection, EXPECTED_ACCOUNT
-from app.models import GoogleDriveDestination, GoogleDriveUpload, GoogleDriveInvoiceUpload, BillingRequest
+from app.models import GoogleDriveDestination, GoogleDriveUpload, GoogleDriveInvoiceUpload, GoogleDriveStaffInvoiceUpload, BillingRequest
 
 DRIVE_SCOPE = 'https://www.googleapis.com/auth/drive.file'
 API = 'https://www.googleapis.com/drive/v3'
 FOLDER_MIME = 'application/vnd.google-apps.folder'
 DESTINATIONS = {
+    'staff_portal_invoices': {'label': 'Staff invoices', 'section': 'Staff portal', 'category': 'staff_invoices',
+        'suggested_id': '1_VrUoXNBbVT_hSo_vAbL7prSj8hBAUNV'},
     'finance_supporting_documents': {'label': 'Supporting documentation', 'category': 'payment_requests',
         'suggested_id': '1HcsKcutlFFGchNeVQASqhijb78OfIXhr'},
     'finance_invoice_proofs': {'label': 'Invoice proofs', 'category': 'invoice_proofs',
@@ -221,9 +223,15 @@ def upload_document(upload, payment, destination):
             offset = end + 1
         if not result or result.get('id') != file_id:
             raise ValueError('Upload not confirmed')
-        model, owner = (GoogleDriveInvoiceUpload, {"billing_request_id": payment.id}) if isinstance(payment, BillingRequest) else (GoogleDriveUpload, {"payment_request_id": payment.id})
+        from app.staff_invoices import StaffInvoiceTarget
+        if isinstance(payment, StaffInvoiceTarget):
+            model, owner = GoogleDriveStaffInvoiceUpload, {"share_id": payment.share_id, "year": payment.year}
+        else:
+            model, owner = (GoogleDriveInvoiceUpload, {"billing_request_id": payment.id}) if isinstance(payment, BillingRequest) else (GoogleDriveUpload, {"payment_request_id": payment.id})
         db.session.add(model(file_id=file_id, **owner,
             destination_key=destination.key, filename=filename, mime_type=mime))
+        if isinstance(payment, StaffInvoiceTarget):
+            return url_for('staff_invoices.download', token=payment.token, file_id=file_id, _external=True)
         return url_for('google_drive.download', file_id=file_id, _external=True)
     except DriveStorageError:
         raise
@@ -244,6 +252,11 @@ def download(file_id):
         allowed = document is not None and document.billing_request is not None and can_view_billing_request(getattr(g, 'current_user', None), document.billing_request)
     if not allowed:
         abort(404)
+    return stream_document(document)
+
+
+def stream_document(document):
+    file_id = document.file_id
     try:
         upstream = urlopen(Request(API + '/files/' + file_id + '?alt=media&supportsAllDrives=true',
             headers={'Authorization': 'Bearer ' + access_token()}), timeout=30)
@@ -261,6 +274,8 @@ def download(file_id):
     safe_inline = document.mime_type in {'application/pdf', 'image/jpeg', 'image/png', 'image/gif', 'image/webp', 'text/plain'}
     response = Response(stream_with_context(chunks()), mimetype=document.mime_type if safe_inline else 'application/octet-stream')
     response.headers['Content-Disposition'] = ('inline' if safe_inline else 'attachment') + "; filename*=UTF-8''" + quote(document.filename, safe='')
+    response.headers['Cache-Control'] = 'private, no-store'
+    response.headers['Referrer-Policy'] = 'no-referrer'
     response.headers['X-Content-Type-Options'] = 'nosniff'
     response.headers['Content-Security-Policy'] = 'sandbox allow-downloads'
     return response

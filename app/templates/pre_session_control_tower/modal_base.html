@@ -3,5 +3,5 @@
 <body class="tower-modal-document" data-tower-modal-document data-session-id="{{ modal_session_id }}" data-revision="{{ tower_revision }}" data-revision-url="{{ url_for('tower_live.revision', session_id=modal_session_id) }}">
   <aside class="tower-update-notice" data-tower-update-notice hidden role="status" aria-live="polite"><span data-tower-update-message></span><button type="button" class="secondary-button" data-tower-reload>Reload session</button></aside>
   <main data-current-menu-can-edit="{{ 'true' if user_can_edit('pre_session_control_tower') else 'false' }}">{% block content %}{% endblock %}</main>
-  <script src="{{ url_for('static', filename='js/app.js', v='20261102-confirmation-preservation-1') }}"></script>
+  <script src="{{ url_for('static', filename='js/app.js', v='20261103-invoice-information-6') }}"></script>
 </body></html>
