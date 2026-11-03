@@ -801,15 +801,18 @@ class FinanceRequestsTest(unittest.TestCase):
         ))
         db.session.commit()
 
-        body = self.client_for(superadmin).get("/finance-requests?tab=payment_requests").get_data(as_text=True)
-
-        self.assertIn("finance-supporting-document-row", body)
-        self.assertIn("data-finance-card-receipt-row", body)
-        self.assertIn('name="payment_proof_url"', body)
-        self.assertIn("Receipt", body)
-        self.assertIn('name="supporting_documentation_file"', body)
-        self.assertIn("Select file or drop it here", body)
-        self.assertNotIn('href="https://example.com/new-payment-folder"', body)
+        client = self.client_for(superadmin)
+        for tab in ("payment_requests", "finance_payments"):
+            with self.subTest(tab=tab):
+                body = client.get(f"/finance-requests?tab={tab}").get_data(as_text=True)
+                self.assertIn("finance-supporting-document-row", body)
+                self.assertIn("data-finance-card-receipt-row", body)
+                self.assertIn('name="payment_proof_url"', body)
+                self.assertIn("Receipt", body)
+                self.assertIn('name="supporting_documentation_file" multiple', body)
+                self.assertIn("Select files or drop them here", body)
+                self.assertIn('enctype="multipart/form-data"', body)
+                self.assertNotIn('href="https://example.com/new-payment-folder"', body)
 
     def test_payment_request_currency_field_is_dropdown_with_ars_default(self):
         user = self.create_user("requester@example.com")
@@ -1039,6 +1042,49 @@ class FinanceRequestsTest(unittest.TestCase):
         self.assertEqual(response.status_code, 302)
         self.assertIn("tab=management_review", response.headers["Location"])
         self.assertEqual(payment.status, "Resubmitted")
+
+    def test_edit_and_resubmit_append_multiple_documents_and_preserve_existing(self):
+        user = self.create_user("attachments@example.com", is_superadmin=True)
+        client = self.client_for(user)
+        for status, endpoint in (("Submitted", "edit"), ("Needs correction", "resubmit")):
+            with self.subTest(endpoint=endpoint):
+                payment = self.payment(user, status=status)
+                payment.supporting_documentation_url = "https://example.com/original.pdf"
+                db.session.commit()
+                with patch("app.routes.save_finance_supporting_document", side_effect=[
+                    "https://example.com/first.pdf", "https://example.com/second.pdf"
+                ]) as upload:
+                    response = client.post(f"/finance-requests/payment-requests/{payment.id}/{endpoint}", data={
+                        "description": payment.description, "concept_id": str(self.concept.id),
+                        "currency": "ARS", "amount": "100", "payment_method": "Cash",
+                        "supporting_documentation_file": [(BytesIO(b"first"), "first.pdf"), (BytesIO(b"second"), "second.pdf")],
+                    }, content_type="multipart/form-data")
+                self.assertEqual(response.status_code, 302)
+                db.session.refresh(payment)
+                self.assertEqual(upload.call_count, 2)
+                self.assertEqual(payment.supporting_documentation_url.splitlines(), [
+                    "https://example.com/original.pdf", "https://example.com/first.pdf", "https://example.com/second.pdf"
+                ])
+                if endpoint == "resubmit":
+                    self.assertEqual(payment.status, "Resubmitted")
+                body = client.get("/finance-requests?tab=payment_requests").get_data(as_text=True)
+                self.assertIn("View existing document 1", body)
+
+    def test_edit_upload_failure_preserves_saved_payment(self):
+        user = self.create_user("failed-upload@example.com")
+        payment = self.payment(user)
+        payment.supporting_documentation_url = "https://example.com/original.pdf"
+        db.session.commit()
+        with patch("app.routes.save_finance_supporting_document", side_effect=OSError("Upload failed")):
+            response = self.client_for(user).post(f"/finance-requests/payment-requests/{payment.id}/edit", data={
+                "description": "Should not be saved", "concept_id": str(self.concept.id),
+                "currency": "ARS", "amount": "100", "payment_method": "Cash",
+                "supporting_documentation_file": (BytesIO(b"test"), "test.pdf"),
+            }, content_type="multipart/form-data")
+        self.assertEqual(response.status_code, 302)
+        db.session.refresh(payment)
+        self.assertEqual(payment.description, "Pay accounting service")
+        self.assertEqual(payment.supporting_documentation_url, "https://example.com/original.pdf")
 
     def test_requester_payment_card_renders_edit_and_hold_buttons_for_editable_statuses(self):
         user = self.create_user("requester@example.com")
@@ -2584,7 +2630,7 @@ class FinanceRequestsTest(unittest.TestCase):
         self.assertIn('enctype="multipart/form-data"', page)
         self.assertIn('name="supporting_documentation_file"', page)
         self.assertIn('name="supporting_documentation_file" multiple', page)
-        self.assertIn("Select file or drop it here", page)
+        self.assertIn("Select files or drop them here", page)
 
         response = client.post(
             "/finance-requests/payment-requests",

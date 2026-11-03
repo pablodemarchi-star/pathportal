@@ -28173,6 +28173,17 @@ def create_payment_request():
     return finance_request_redirect("payment_requests")
 
 
+def append_payment_supporting_uploads(payment, existing_documents):
+    """Keep saved attachments when adding files while editing or resubmitting."""
+    links = (existing_documents or "").splitlines()
+    links.extend(
+        save_finance_supporting_document(upload, payment)
+        for upload in request.files.getlist("supporting_documentation_file")
+        if upload.filename
+    )
+    payment.supporting_documentation_url = "\n".join(links)
+
+
 @staff_bp.route("/finance-requests/payment-requests/<int:payment_id>/edit", methods=["POST"])
 @login_required
 def update_payment_request(payment_id):
@@ -28181,10 +28192,18 @@ def update_payment_request(payment_id):
     user = getattr(g, "current_user", None)
     if not can_edit_payment_request(user, payment):
         abort(403, description="Your account does not have permission to edit this payment request.")
+    existing_documents = payment.supporting_documentation_url
     errors = apply_payment_form(payment, request.form)
     if errors:
         for error in errors:
             flash(error, "error")
+        return finance_request_redirect(request.form.get("tab") or "payment_requests", open_staff_modal=f"edit-payment-request-{payment.id}")
+    try:
+        append_payment_supporting_uploads(payment, existing_documents)
+    except OSError as exc:
+        from app.google_drive import DriveStorageError
+        db.session.rollback()
+        flash(str(exc) if isinstance(exc, DriveStorageError) else "Supporting documentation file could not be saved. Please try again.", "error")
         return finance_request_redirect(request.form.get("tab") or "payment_requests", open_staff_modal=f"edit-payment-request-{payment.id}")
     db.session.commit()
     flash("Payment request updated.", "success")
@@ -28216,11 +28235,19 @@ def resubmit_payment_request(payment_id):
     if not can_edit_payment_request(user, payment) or payment.status != "Needs correction":
         abort(403, description="This payment request cannot be resubmitted.")
     previous = payment.status
+    existing_documents = payment.supporting_documentation_url
     errors = apply_payment_form(payment, request.form)
     if errors:
         for error in errors:
             flash(error, "error")
         return finance_request_redirect("payment_requests")
+    try:
+        append_payment_supporting_uploads(payment, existing_documents)
+    except OSError as exc:
+        from app.google_drive import DriveStorageError
+        db.session.rollback()
+        flash(str(exc) if isinstance(exc, DriveStorageError) else "Supporting documentation file could not be saved. Please try again.", "error")
+        return finance_request_redirect(request.form.get("tab") or "payment_requests", open_staff_modal=f"edit-payment-request-{payment.id}")
     payment.status = "Resubmitted"
     add_payment_event(payment, "Resubmitted", previous_status=previous, new_status="Resubmitted", comment=request.form.get("requester_comments"))
     from app.payment_notifications import queue_management_notification, deliver_management_notification

@@ -97,9 +97,16 @@
     <span class="finance-supporting-document-label">Supporting documentation</span>
     {% if show_supporting_upload %}
       <input type="hidden" name="supporting_documentation_url" value="{{ payment.supporting_documentation_url if payment else '' }}">
+      {% if payment and payment.supporting_documentation_url %}
+        <div class="finance-upload-file-list">
+          {% for document_url in payment.supporting_documentation_url.splitlines() %}
+            <a href="{{ document_url }}" target="_blank" rel="noopener noreferrer">View existing document {{ loop.index }}</a>
+          {% endfor %}
+        </div>
+      {% endif %}
       <label class="finance-upload-dropzone" data-finance-upload-dropzone>
-        <input type="file" name="supporting_documentation_file" multiple data-finance-upload-input>
-        <span data-finance-upload-text>Select file or drop it here</span>
+        <input type="file" name="supporting_documentation_file" multiple aria-label="Upload supporting documentation files" data-finance-upload-input>
+        <span data-finance-upload-text data-finance-upload-placeholder="Select files or drop them here">Select files or drop them here</span>
       </label>
       <div class="finance-upload-file-list" data-finance-upload-list></div>
     {% else %}

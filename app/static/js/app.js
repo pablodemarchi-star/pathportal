@@ -9395,7 +9395,7 @@ const renderFinanceUploadFiles = (input) => {
   if (text) {
     text.textContent = files.length
       ? `${files.length} file${files.length === 1 ? "" : "s"} selected`
-      : "Select file or drop it here";
+      : (text.dataset.financeUploadPlaceholder || "Select file or drop it here");
   }
   if (!list) return;
   list.replaceChildren(...files.map((file, index) => {
