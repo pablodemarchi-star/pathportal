@@ -23,4 +23,5 @@
   {% if uncertain_count %}<p>{{ uncertain_count }} deliveries could not be confirmed. Check the account’s Sent folder before retrying them; they are excluded from automatic retries.</p>{% endif %}
   <details><summary>Connection setup</summary><p>Add this exact address to the OAuth client’s authorized redirect URIs in Google Cloud:</p><code>{{ callback_uri or 'Not configured' }}</code></details>
 </section>
+{% include 'integrations/_drive_settings.html' %}
 {% endblock %}

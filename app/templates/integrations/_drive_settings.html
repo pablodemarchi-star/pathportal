@@ -1,0 +1,26 @@
+<section class="staff-detail-section google-drive-settings" data-drive-settings data-token-url="{{ url_for('google_drive.picker_token') }}" data-csrf="{{ csrf_token }}">
+  <h2>Google Drive file storage</h2>
+  <p><strong>Account:</strong> {{ account }}</p>
+  <p>{{ 'Drive authorization connected.' if drive_connected else 'Authorize Google Drive to choose destination folders.' }}</p>
+  <form method="post" action="{{ url_for('google_mail.connect') }}">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <input type="hidden" name="enable_drive" value="1">
+    <button type="submit" class="primary-button"{% if not configured %} disabled{% endif %}>{{ 'Reconnect Google Drive' if drive_connected else 'Connect Google Drive' }}</button>
+  </form>
+  {% if not picker_configured %}<p class="muted">The Google Picker API key and project number must be configured on this server.</p>{% endif %}
+  <p>Choose a folder for each document type. Once a destination is configured, new uploads go to Drive. Existing documents keep working from their current location.</p>
+  <div class="drive-destination-grid">
+  {% for item in drive_destinations %}
+    <article class="drive-destination-card" data-drive-destination="{{ item.key }}" data-save-url="{{ url_for('google_drive.save_folder', key=item.key) }}" data-suggested-id="{{ item.folder.folder_id if item.folder else item.suggested_id }}">
+      <h3>Finance requests · {{ item.label }}</h3>
+      <p data-drive-current>{% if item.folder %}<a href="https://drive.google.com/drive/folders/{{ item.folder.folder_id }}" target="_blank" rel="noopener noreferrer">{{ item.folder.folder_name }}</a>{% else %}Not configured — uploads currently use portal storage.{% endif %}</p>
+      {% if not item.folder %}<p><a href="https://drive.google.com/drive/folders/{{ item.suggested_id }}" target="_blank" rel="noopener noreferrer">Open the proposed folder ↗</a></p>{% endif %}
+      <button class="secondary-button" type="button" data-drive-choose{% if not drive_connected or not picker_configured %} disabled{% endif %}>{{ 'Change folder' if item.folder else 'Choose and authorize folder' }}</button>
+      <p data-drive-message role="status" aria-live="polite"></p>
+    </article>
+  {% endfor %}
+  </div>
+  <p>Documents stay accessible through Finance requests using the portal's existing permissions.</p>
+</section>
+<link rel="stylesheet" href="{{ url_for('static', filename='css/google_drive.css') }}">
+<script src="{{ url_for('static', filename='js/google_drive.js') }}" defer></script>

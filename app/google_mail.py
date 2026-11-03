@@ -138,7 +138,7 @@ def send_notification_email(recipient, subject, text, html, message_id):
 @google_mail_bp.after_request
 def private_response(response):
     response.headers["Cache-Control"] = "private, no-store"
-    response.headers["Referrer-Policy"] = "no-referrer"
+    response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin" if request.endpoint == "google_mail.settings" else "no-referrer"
     return response
 
 
@@ -156,11 +156,12 @@ def settings():
         saved, connected = {}, False
         flash("The saved Google connection could not be read. Check the server configuration.", "error")
     values = configuration()
+    from app.google_drive import settings_context
     return render_template("integrations/google.html", configured=configured(), connected=connected,
         account=saved.get("account") if connected else os.getenv("GMAIL_ACCOUNT_EMAIL", EXPECTED_ACCOUNT),
         sender=os.getenv("GMAIL_FROM_EMAIL", "no-reply@pathexaminations.com"),
         callback_uri=values["GOOGLE_OAUTH_REDIRECT_URI"], csrf_token=session.get("csrf_token"),
-        retry_count=retry_count, uncertain_count=uncertain_count)
+        retry_count=retry_count, uncertain_count=uncertain_count, **settings_context(saved))
 
 
 @google_mail_bp.post("/integrations/google/retry-payment-notifications")
@@ -191,13 +192,21 @@ def connect():
     if target.netloc != request.host:
         flash("Open the portal at the configured callback domain before connecting Google.", "error")
         return redirect(url_for("google_mail.settings"))
+    from app.google_drive import DRIVE_SCOPE, drive_connected
+    try:
+        was_drive_connected = drive_connected()
+    except (OSError, ValueError):
+        was_drive_connected = False
+    want_drive = request.form.get("enable_drive") == "1" or was_drive_connected
+    scopes = SCOPES + (" " + DRIVE_SCOPE if want_drive else "")
     state, verifier = secrets.token_urlsafe(32), secrets.token_urlsafe(64)
-    session["google_mail_oauth"] = {"state": state, "verifier": verifier, "started": time.time()}
+    session["google_mail_oauth"] = {"state": state, "verifier": verifier, "started": time.time(), "drive": want_drive}
     challenge = base64.urlsafe_b64encode(hashlib.sha256(verifier.encode()).digest()).decode().rstrip("=")
     return redirect("https://accounts.google.com/o/oauth2/v2/auth?" + urlencode({
         "client_id": configuration()["GOOGLE_OAUTH_CLIENT_ID"],
         "redirect_uri": configuration()["GOOGLE_OAUTH_REDIRECT_URI"],
-        "response_type": "code", "scope": SCOPES, "access_type": "offline", "prompt": "consent",
+        "response_type": "code", "scope": scopes, "access_type": "offline", "prompt": "consent",
+        "include_granted_scopes": "true",
         "state": state, "code_challenge": challenge, "code_challenge_method": "S256",
         "login_hint": os.getenv("GMAIL_ACCOUNT_EMAIL", EXPECTED_ACCOUNT), "hd": "pathexaminations.com",
     }))
@@ -227,6 +236,10 @@ def callback():
         if SEND_SCOPE not in granted:
             flash("Permission to send email was not granted. Please connect again and allow it.", "error")
             return redirect(url_for("google_mail.settings"))
+        from app.google_drive import DRIVE_SCOPE
+        if pending.get("drive") and DRIVE_SCOPE not in granted:
+            flash("Drive permission was not granted. The existing connection has not changed.", "error")
+            return redirect(url_for("google_mail.settings"))
         identity = google_json("https://openidconnect.googleapis.com/v1/userinfo", bearer=tokens["access_token"])
         expected = os.getenv("GMAIL_ACCOUNT_EMAIL", EXPECTED_ACCOUNT).lower()
         if identity.get("email", "").lower() != expected or identity.get("email_verified") is not True:
@@ -236,7 +249,7 @@ def callback():
             flash("Google did not provide offline authorization. Please reconnect and grant consent.", "error")
             return redirect(url_for("google_mail.settings"))
         save_connection({"account": expected, "refresh_token": tokens["refresh_token"], "connected_at": time.time(),
-                         "client_id": values["GOOGLE_OAUTH_CLIENT_ID"]})
+                         "client_id": values["GOOGLE_OAUTH_CLIENT_ID"], "scopes": sorted(granted)})
     except (HTTPError, URLError, OSError, ValueError, KeyError):
         flash("Google could not be connected. Please retry or check the server configuration.", "error")
         return redirect(url_for("google_mail.settings"))

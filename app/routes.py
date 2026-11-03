@@ -26825,6 +26825,10 @@ def finance_upload_root():
 def save_finance_supporting_document(upload, payment, category="payment_requests"):
     if not upload or not upload.filename:
         return ""
+    from app.google_drive import destination_for_category, upload_document
+    destination = destination_for_category(category)
+    if destination is not None:
+        return upload_document(upload, payment, destination)
     filename = secure_filename(upload.filename)
     if not filename:
         filename = f"supporting-document-{secrets.token_hex(4)}"
@@ -28141,9 +28145,10 @@ def create_payment_request():
                 save_finance_supporting_document(upload, payment)
                 for upload in uploaded_documents
             )
-        except OSError:
+        except OSError as exc:
+            from app.google_drive import DriveStorageError
             db.session.rollback()
-            flash("Supporting documentation file could not be saved. Please try again.", "error")
+            flash(str(exc) if isinstance(exc, DriveStorageError) else "Supporting documentation file could not be saved. Please try again.", "error")
             if return_url:
                 return redirect(return_url)
             redirect_params = {"open_staff_modal": "new-payment-request-modal"}
@@ -28371,8 +28376,9 @@ def process_payment_request(payment_id):
                 for upload in uploaded_proofs
             )
         payment.payment_proof_url = clean_optional_url(proof_url, "Payment proof")
-    except OSError:
-        flash("Payment proof file could not be saved. Please try again.", "error")
+    except OSError as exc:
+        from app.google_drive import DriveStorageError
+        flash(str(exc) if isinstance(exc, DriveStorageError) else "Payment proof file could not be saved. Please try again.", "error")
         return finance_request_redirect("finance_payments", finance_filter=request.form.get("finance_filter") or None)
     except ValueError as exc:
         flash(str(exc), "error")

@@ -150,6 +150,8 @@ def create_app():
     app.register_blueprint(staff_bp)
     from app.google_mail import google_mail_bp
     app.register_blueprint(google_mail_bp)
+    from app.google_drive import drive_bp
+    app.register_blueprint(drive_bp)
     from app.marketing_material import marketing_bp
     app.register_blueprint(marketing_bp)
 

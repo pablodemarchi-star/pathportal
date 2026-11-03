@@ -213,3 +213,30 @@ Both were generated from the original `.ai` preview for web display and are refe
 `PotentialEntry` stores pre-selection candidates before they become academic staff members. Potential entries can be edited, annotated with timestamped interview notes, rejected into a hidden audit view, or accepted into the main academic staff list.
 
 Dates are stored in UTC and displayed in GMT-3 using `DD/MM/YYYY HH`.
+
+
+## Finance files in Google Drive
+
+Drive storage is optional and uses the existing Google connection. Enable Google
+Drive API and Google Picker API in the OAuth client's Cloud project. Configure
+`GOOGLE_PICKER_API_KEY` and `GOOGLE_CLOUD_PROJECT_NUMBER` on each server. Restrict
+the browser key to Google Picker API and the portal's origin plus
+`https://docs.google.com/*` (add localhost origins separately for local Picker use).
+
+A superadmin opens **Email connection**, selects **Connect Google Drive**, and
+authorizes the designated account with the additional `drive.file` scope. Existing
+Gmail authorization remains in place if this authorization is cancelled or refused.
+Then use **Choose and authorize folder** for the two independent Finance destinations:
+**Supporting documentation** and **Payment receipts**. The selected folder must allow
+this Google account to add children. Folder settings persist in the portal database
+and can be changed later without changing application code. Future menus can register
+separate destination keys using the same connection.
+
+Until a destination is selected, that document category keeps using portal storage.
+Once configured, a Drive failure rejects the upload instead of silently saving it
+locally. New Drive files are prefixed with the payment request number. They retain
+the folder's Drive permissions; the application does not make documents public.
+Finance users open documents through authenticated portal download links which also
+check the payment request's visibility. Earlier local files are not migrated and
+continue to use the existing download route. Uploads from rolled-back transactions
+are moved to Drive trash; committed documents remain in Drive when a request is deleted.

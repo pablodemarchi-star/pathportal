@@ -27,6 +27,24 @@ VALID_MENU_PERMISSION_KEYS = tuple(key for key, _label in MENU_PERMISSIONS)
 VALID_MENU_PERMISSION_KEY_SQL = ", ".join(f"'{key}'" for key in VALID_MENU_PERMISSION_KEYS)
 
 
+class GoogleDriveDestination(db.Model):
+    key = db.Column(db.String(100), primary_key=True)
+    folder_id = db.Column(db.String(160), nullable=False)
+    folder_name = db.Column(db.String(300), nullable=False)
+    updated_by = db.Column(db.String(254), nullable=True)
+    updated_at = db.Column(db.DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))
+
+
+class GoogleDriveUpload(db.Model):
+    file_id = db.Column(db.String(160), primary_key=True)
+    payment_request_id = db.Column(db.Integer, db.ForeignKey("payment_request.id"), nullable=False, index=True)
+    destination_key = db.Column(db.String(100), nullable=False)
+    filename = db.Column(db.String(500), nullable=False)
+    mime_type = db.Column(db.String(160), nullable=False)
+    created_at = db.Column(db.DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))
+    payment_request = db.relationship("PaymentRequest", backref=db.backref("drive_uploads", cascade="all, delete-orphan"))
+
+
 class MarketingMaterialInfo(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     session_id = db.Column(db.Integer, db.ForeignKey("exam_session.id", ondelete="CASCADE"), nullable=False, unique=True)
