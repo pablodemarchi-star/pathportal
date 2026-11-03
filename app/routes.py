@@ -28555,6 +28555,18 @@ def create_billing_request():
         return finance_request_redirect("billing_requests")
     db.session.add(billing)
     db.session.flush()
+    try:
+        uploaded_documents = [upload for upload in request.files.getlist("supporting_documentation_file") if upload.filename]
+        if uploaded_documents:
+            billing.supporting_documentation_url = "\n".join(
+                save_finance_supporting_document(upload, billing, category="billing_requests")
+                for upload in uploaded_documents
+            )
+    except OSError as exc:
+        from app.google_drive import DriveStorageError
+        db.session.rollback()
+        flash(str(exc) if isinstance(exc, DriveStorageError) else "Supporting documentation file could not be saved. Please try again.", "error")
+        return finance_request_redirect("billing_requests")
     add_billing_event(billing, "Requested", new_status="Requested")
     db.session.commit()
     flash("Invoice request created.", "success")
@@ -28626,14 +28638,25 @@ def process_billing_request(billing_id):
         abort(403)
     if request.form.get("finance_filter") is not None:
         invoice_link = (request.form.get("invoice_link") or "").strip()
-        if status in {"Invoice cancelled", "Processing invoice"} and invoice_link:
+        uploaded_proofs = [upload for upload in request.files.getlist("invoice_proof_file") if upload.filename]
+        if status in {"Invoice cancelled", "Processing invoice"} and (invoice_link or uploaded_proofs):
             flash("Invoice proof must be empty to cancel or process an invoice.", "error")
             return finance_request_redirect("finance_payments", finance_filter=request.form.get("finance_filter") or None)
-        if status == "Invoice issued" and not invoice_link:
+        if status == "Invoice issued" and not (invoice_link or uploaded_proofs):
             flash("Invoice proof is required to issue an invoice.", "error")
             return finance_request_redirect("finance_payments", finance_filter=request.form.get("finance_filter") or None)
         try:
+            if uploaded_proofs:
+                from app.google_drive import destination_for_category, DriveStorageError
+                if destination_for_category("invoice_proofs") is None:
+                    raise DriveStorageError("Choose and authorize the Invoice proofs folder in Email connection before uploading invoice proofs.")
+                invoice_link = "\n".join(save_finance_supporting_document(upload, billing, category="invoice_proofs") for upload in uploaded_proofs)
             billing.invoice_link = clean_optional_url(invoice_link, "Invoice proof")
+        except OSError as exc:
+            from app.google_drive import DriveStorageError
+            db.session.rollback()
+            flash(str(exc) if isinstance(exc, DriveStorageError) else "Invoice proof could not be saved. Please try again.", "error")
+            return finance_request_redirect("finance_payments", finance_filter=request.form.get("finance_filter") or None)
         except ValueError as exc:
             flash(str(exc), "error")
             return finance_request_redirect("finance_payments", finance_filter=request.form.get("finance_filter") or None)

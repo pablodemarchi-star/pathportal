@@ -825,7 +825,7 @@ class FinanceRequestsTest(unittest.TestCase):
             self.assertIn(f'<option value="{currency}" >{currency}</option>', body)
         self.assertNotIn('<input name="currency"', body)
 
-    def test_new_invoice_request_form_shows_access_folder_link(self):
+    def test_new_invoice_request_form_shows_multiple_uploads(self):
         superadmin = self.create_user("admin@example.com", is_superadmin=True)
         db.session.add(FinanceLinkFolder(
             link_type="New invoice request",
@@ -837,10 +837,25 @@ class FinanceRequestsTest(unittest.TestCase):
         body = self.client_for(superadmin).get("/finance-requests?tab=billing_requests").get_data(as_text=True)
 
         self.assertIn("finance-supporting-document-row", body)
-        self.assertIn(
-            '<a class="finance-access-folder-link" href="https://example.com/new-invoice-folder" target="_blank" rel="noopener noreferrer">Access folder</a>',
-            body,
-        )
+        self.assertNotIn('href="https://example.com/new-invoice-folder"', body)
+        self.assertIn('name="supporting_documentation_file" multiple', body)
+        self.assertIn('enctype="multipart/form-data"', body)
+        self.assertIn("Select files or drop them here", body)
+
+    def test_new_invoice_request_saves_multiple_supporting_files(self):
+        user = self.create_user("invoice-upload@example.com")
+        with patch("app.routes.save_finance_supporting_document", side_effect=["https://example.com/one.pdf", "https://example.com/two.pdf"]) as upload:
+            response = self.client_for(user).post("/finance-requests/billing-requests", data={
+                "concept_id": str(self.concept.id), "client_name": "Client",
+                "currency": "ARS", "amount": "100", "client_tax_id": "20-11111111-1",
+                "vat_status_invoice_type": "Consumidor Final (factura B)",
+                "supporting_documentation_file": [(BytesIO(b"one"), "one.pdf"), (BytesIO(b"two"), "two.pdf")],
+            }, content_type="multipart/form-data", follow_redirects=True)
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(BillingRequest.query.one().supporting_documentation_url.splitlines(), ["https://example.com/one.pdf", "https://example.com/two.pdf"])
+        self.assertEqual(upload.call_count, 2)
+        self.assertEqual(upload.call_args.kwargs["category"], "billing_requests")
+        self.assertIn('href="https://example.com/two.pdf"', response.get_data(as_text=True))
 
     def test_invoice_request_currency_field_is_dropdown_with_ars_default(self):
         user = self.create_user("requester@example.com")
@@ -1516,6 +1531,26 @@ class FinanceRequestsTest(unittest.TestCase):
         self.assertIn(f'data-open-modal="edit-payment-request-{payment.id}"', card)
         self.assertIn(f'id="edit-payment-request-{payment.id}"', body)
         self.assertIn('name="tab" value="finance_payments"', body)
+
+    def test_finance_invoice_proof_upload_requires_folder_and_saves_multiple_files(self):
+        user = self.create_user("invoice-proof@example.com", department="Finance")
+        billing = self.billing(user)
+        client = self.client_for(user)
+        def submit():
+            return client.post(f"/finance-requests/billing-requests/{billing.id}/finance", data={
+                "status": "Invoice issued", "finance_filter": "today",
+                "invoice_proof_file": [(BytesIO(b"one"), "one.pdf"), (BytesIO(b"two"), "two.pdf")],
+            }, content_type="multipart/form-data")
+        with patch("app.google_drive.destination_for_category", return_value=None):
+            self.assertEqual(submit().status_code,302)
+        db.session.refresh(billing)
+        self.assertEqual(billing.status,"Requested")
+        with patch("app.google_drive.destination_for_category", return_value=object()), patch("app.routes.save_finance_supporting_document", side_effect=["https://example.com/one.pdf", "https://example.com/two.pdf"]) as upload:
+            self.assertEqual(submit().status_code,302)
+        db.session.refresh(billing)
+        self.assertEqual(billing.status,"Invoice issued")
+        self.assertEqual(len(billing.invoice_link.splitlines()),2)
+        self.assertEqual(upload.call_args.kwargs["category"],"invoice_proofs")
 
     def test_finance_actions_issue_invoice_requires_invoice_proof(self):
         user = self.create_user("finance@example.com", department="Finance")
@@ -3704,8 +3739,8 @@ class FinanceRequestsTest(unittest.TestCase):
         self.assertIn('name="client_name" value="" autocomplete="off" data-finance-payee-input required', form_body)
         self.assertIn('name="client_tax_id" value="" required', form_body)
         self.assertIn('name="vat_status_invoice_type" data-finance-vat-status required', form_body)
-        self.assertIn('name="supporting_documentation_url"', form_body)
-        self.assertNotIn('name="supporting_documentation_url" required', form_body)
+        self.assertIn('name="supporting_documentation_file" multiple', form_body)
+        self.assertNotIn('name="supporting_documentation_file" multiple required', form_body)
         self.assertIn('name="requester_comments"', form_body)
         self.assertNotIn('name="requester_comments" rows="3" required', form_body)
 

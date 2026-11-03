@@ -45,6 +45,16 @@ class GoogleDriveUpload(db.Model):
     payment_request = db.relationship("PaymentRequest", backref=db.backref("drive_uploads", cascade="all, delete-orphan"))
 
 
+class GoogleDriveInvoiceUpload(db.Model):
+    file_id = db.Column(db.String(160), primary_key=True)
+    billing_request_id = db.Column(db.Integer, db.ForeignKey("billing_request.id"), nullable=False, index=True)
+    destination_key = db.Column(db.String(100), nullable=False)
+    filename = db.Column(db.String(500), nullable=False)
+    mime_type = db.Column(db.String(160), nullable=False)
+    created_at = db.Column(db.DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))
+    billing_request = db.relationship("BillingRequest", backref=db.backref("drive_uploads", cascade="all, delete-orphan"))
+
+
 class MarketingMaterialInfo(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     session_id = db.Column(db.Integer, db.ForeignKey("exam_session.id", ondelete="CASCADE"), nullable=False, unique=True)

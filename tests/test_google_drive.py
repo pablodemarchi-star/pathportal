@@ -12,7 +12,7 @@ from flask import jsonify, request
 from app import db
 from app.google_drive import DRIVE_SCOPE, FOLDER_MIME, DriveStorageError, upload_document
 from app.google_mail import SEND_SCOPE, save_connection, read_connection
-from app.models import GoogleDriveDestination, GoogleDriveUpload, FinanceConcept, PaymentRequest, User
+from app.models import GoogleDriveDestination, GoogleDriveUpload, FinanceConcept, PaymentRequest, User, BillingRequest, GoogleDriveInvoiceUpload
 from tests import test_google_mail as mail_tests
 
 
@@ -143,6 +143,25 @@ class GoogleDriveTest(unittest.TestCase):
             self.assertEqual(opened.headers['Cache-Control'],'private, no-store')
         self.assertEqual(GoogleDriveUpload.query.count(),2)
         self.assertEqual(self.trashed,[])
+
+    def test_invoice_documents_use_supporting_folder_and_invoice_access(self):
+        self.folder()
+        invoice=BillingRequest(request_number="INVOICE-2026-0001", requester_user_id=self.payment.requester_user_id,
+            requester_department="Admissions", client_name_snapshot="Client", concept_id=self.payment.concept_id,
+            concept_name_snapshot="Drive test", description="Invoice", amount=Decimal("100"), currency="ARS", status="Requested")
+        db.session.add(invoice);db.session.commit()
+        self.payment=invoice
+        response=self.client.post('/test-drive-upload/billing_requests',data={'files':(io.BytesIO(b'pdf'),'invoice.pdf')},content_type='multipart/form-data')
+        self.assertEqual(response.status_code,200,response.json)
+        self.assertEqual(self.metadata[-1]['parents'],['chosen-folder-12345'])
+        self.assertEqual(GoogleDriveUpload.query.count(),0)
+        self.assertEqual(GoogleDriveInvoiceUpload.query.one().billing_request_id,invoice.id)
+        url=response.json['urls'][0]
+        with self.client.get(url) as opened:
+            self.assertEqual(opened.data,b'private document')
+        self.assertEqual(self.app.test_client().get(url).status_code,302)
+        with patch('app.routes.can_view_billing_request',return_value=False):
+            self.assertEqual(self.client.get(url).status_code,404)
 
     def test_missing_drive_authorization_never_silently_falls_back_to_local_storage(self):
         self.folder()

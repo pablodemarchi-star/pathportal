@@ -14,7 +14,7 @@ from werkzeug.utils import secure_filename
 
 from app import db, login_required, validate_csrf
 from app.google_mail import administrator, configuration, configured, google_json, read_connection, save_connection, EXPECTED_ACCOUNT
-from app.models import GoogleDriveDestination, GoogleDriveUpload
+from app.models import GoogleDriveDestination, GoogleDriveUpload, GoogleDriveInvoiceUpload, BillingRequest
 
 DRIVE_SCOPE = 'https://www.googleapis.com/auth/drive.file'
 API = 'https://www.googleapis.com/drive/v3'
@@ -22,6 +22,8 @@ FOLDER_MIME = 'application/vnd.google-apps.folder'
 DESTINATIONS = {
     'finance_supporting_documents': {'label': 'Supporting documentation', 'category': 'payment_requests',
         'suggested_id': '1HcsKcutlFFGchNeVQASqhijb78OfIXhr'},
+    'finance_invoice_proofs': {'label': 'Invoice proofs', 'category': 'invoice_proofs',
+        'suggested_id': '1gc-nDU2H5eEG98FWb6B7X7ZAJ1ajZYBq'},
     'finance_payment_receipts': {'label': 'Payment receipts', 'category': 'payment_proofs',
         'suggested_id': '1OlfHITet8YS2HU07y1GUkvCFE6GGF0_X'},
 }
@@ -135,6 +137,8 @@ def save_folder(key):
 
 
 def destination_for_category(category):
+    if category == "billing_requests":
+        category = "payment_requests"
     key = next((key for key, details in DESTINATIONS.items() if details['category'] == category), None)
     return db.session.get(GoogleDriveDestination, key) if key else None
 
@@ -217,7 +221,8 @@ def upload_document(upload, payment, destination):
             offset = end + 1
         if not result or result.get('id') != file_id:
             raise ValueError('Upload not confirmed')
-        db.session.add(GoogleDriveUpload(file_id=file_id, payment_request_id=payment.id,
+        model, owner = (GoogleDriveInvoiceUpload, {"billing_request_id": payment.id}) if isinstance(payment, BillingRequest) else (GoogleDriveUpload, {"payment_request_id": payment.id})
+        db.session.add(model(file_id=file_id, **owner,
             destination_key=destination.key, filename=filename, mime_type=mime))
         return url_for('google_drive.download', file_id=file_id, _external=True)
     except DriveStorageError:
@@ -229,10 +234,15 @@ def upload_document(upload, payment, destination):
 @drive_bp.get('/finance-requests/drive-documents/<file_id>')
 @login_required
 def download(file_id):
-    from app.routes import require_menu_view, can_view_payment_request
+    from app.routes import require_menu_view, can_view_payment_request, can_view_billing_request
     require_menu_view('finance_requests')
     document = db.session.get(GoogleDriveUpload, file_id)
-    if document is None or document.payment_request is None or not can_view_payment_request(getattr(g, 'current_user', None), document.payment_request):
+    if document is not None:
+        allowed = document.payment_request is not None and can_view_payment_request(getattr(g, 'current_user', None), document.payment_request)
+    else:
+        document = db.session.get(GoogleDriveInvoiceUpload, file_id)
+        allowed = document is not None and document.billing_request is not None and can_view_billing_request(getattr(g, 'current_user', None), document.billing_request)
+    if not allowed:
         abort(404)
     try:
         upstream = urlopen(Request(API + '/files/' + file_id + '?alt=media&supportsAllDrives=true',

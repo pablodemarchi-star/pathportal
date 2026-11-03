@@ -127,7 +127,7 @@
           <span>Requested: {{ billing.created_on|status_track_dt if billing.created_on else 'Not set' }}</span>
           <span>Requester: {{ billing.requester.full_name if billing.requester else 'Unknown' }} · {{ billing.requester.department if billing.requester else billing.requester_department or 'Unknown' }}</span>
           <span>Completed: {{ billing_completed_on|status_track_dt if billing_completed_on else 'not yet' }}</span>
-          <span>Invoice: {% if billing.invoice_link %}<a href="{{ billing.invoice_link }}" target="_blank" rel="noopener">click here</a>{% else %}not yet{% endif %}</span>
+          <span>Invoice: {% if billing.invoice_link %}{% for proof_url in billing.invoice_link.splitlines() %}<a href="{{ proof_url }}" target="_blank" rel="noopener">View proof{% if not loop.first or not loop.last %} {{ loop.index }}{% endif %}</a> {% endfor %}{% else %}not yet{% endif %}</span>
         </div>
       </div>
     </div>
@@ -138,7 +138,9 @@
     {% if billing.supporting_documentation_url %}
       <details class="finance-detail-panel">
         <summary>Supporting documents</summary>
-        <a href="{{ billing.supporting_documentation_url }}" target="_blank" rel="noopener">View documents here</a>
+        {% for document_url in billing.supporting_documentation_url.splitlines() %}
+          <a href="{{ document_url }}" target="_blank" rel="noopener">View document{% if not loop.first or not loop.last %} {{ loop.index }}{% endif %}</a>
+        {% endfor %}
       </details>
     {% endif %}
     {% if billing.requester_comments or billing.finance_comments %}
@@ -349,7 +351,7 @@
             <td>{{ status_chip(billing.status) }}</td>
             <td class="finance-archive-invoice-client-col">{{ billing.client_name_snapshot or 'Not specified' }}</td>
             <td>{{ billing.concept_name_snapshot }}</td>
-            <td>{% if billing.invoice_link %}<a href="{{ billing.invoice_link }}" target="_blank" rel="noopener">View proof</a>{% else %}not yet{% endif %}</td>
+            <td>{% if billing.invoice_link %}{% for proof_url in billing.invoice_link.splitlines() %}<a href="{{ proof_url }}" target="_blank" rel="noopener">View proof{% if not loop.first or not loop.last %} {{ loop.index }}{% endif %}</a> {% endfor %}{% else %}not yet{% endif %}</td>
             <td><button class="finance-archive-view-button" type="button" data-open-modal="archived-billing-request-{{ billing.id }}">View</button></td>
             {% if show_copy_actions %}
               <td>
@@ -667,7 +669,7 @@
   {% endif %}
 {% endmacro %}
 
-{% macro billing_form_fields(billing=none, show_supporting_folder_link=false) %}
+{% macro billing_form_fields(billing=none, show_supporting_folder_link=false, show_supporting_upload=false) %}
   {% set selected_vat_status = billing.vat_status_invoice_type if billing else '' %}
   {% set needs_full_address = selected_vat_status in vat_status_requires_full_address %}
   {% set selected_currency = billing.currency if billing and billing.currency else 'ARS' %}
@@ -724,12 +726,20 @@
   <label data-finance-full-address-field {% if not needs_full_address %}hidden{% endif %}>Full address <input name="client_full_address" value="{{ billing.client_full_address or '' if billing else '' }}" {% if not needs_full_address %}disabled{% else %}required{% endif %}></label>
   <div class="finance-supporting-document-row">
     <span class="finance-supporting-document-label">Supporting documentation</span>
+    {% if show_supporting_upload %}
+      <label class="finance-upload-dropzone" data-finance-upload-dropzone>
+        <input type="file" name="supporting_documentation_file" multiple aria-label="Upload supporting documentation files" data-finance-upload-input>
+        <span data-finance-upload-text data-finance-upload-placeholder="Select files or drop them here">Select files or drop them here</span>
+      </label>
+      <div class="finance-upload-file-list" data-finance-upload-list></div>
+    {% else %}
     <div class="finance-supporting-document-control-row">
       <input name="supporting_documentation_url" value="{{ billing.supporting_documentation_url or '' if billing else '' }}" aria-label="Supporting documentation">
       {% if show_supporting_folder_link and new_invoice_request_folder_link %}
         <a class="finance-access-folder-link" href="{{ new_invoice_request_folder_link }}" target="_blank" rel="noopener noreferrer">Access folder</a>
       {% endif %}
     </div>
+    {% endif %}
   </div>
   <label>Requester comments <textarea name="requester_comments" rows="3">{{ billing.requester_comments or '' if billing else '' }}</textarea></label>
 {% endmacro %}
@@ -950,16 +960,16 @@
               {{ billing_card(billing, false, true, false) }}
               {{ billing_edit_modal(billing, 'finance_payments') }}
               {% if can_manage_finance %}
-                <form class="finance-payment-execution-actions" method="post" action="{{ url_for('staff.process_billing_request', billing_id=billing.id) }}" data-required-payment-proof-message="Invoice proof is required to issue an invoice." data-empty-payment-proof-message="Invoice proof must be empty to cancel or process an invoice.">
+                <form class="finance-payment-execution-actions" method="post" action="{{ url_for('staff.process_billing_request', billing_id=billing.id) }}" enctype="multipart/form-data" data-required-payment-proof-message="Invoice proof is required to issue an invoice." data-empty-payment-proof-message="Invoice proof must be empty to cancel or process an invoice.">
                   <input type="hidden" name="finance_filter" value="{{ active_finance_filter }}">
                   <div class="finance-supporting-document-row">
                     <span class="finance-supporting-document-label">Invoice proof</span>
-                    <div class="finance-supporting-document-control-row">
-                      <input name="invoice_link" value="{{ billing.invoice_link or '' }}" placeholder="https://" data-payment-proof-input aria-label="Invoice proof">
-                      {% if invoice_proof_folder_link %}
-                        <a class="finance-access-folder-link" href="{{ invoice_proof_folder_link }}" target="_blank" rel="noopener noreferrer">Access folder</a>
-                      {% endif %}
-                    </div>
+                    <input type="hidden" name="invoice_link" value="{{ billing.invoice_link or '' }}" data-payment-proof-input>
+                    <label class="finance-upload-dropzone" data-finance-upload-dropzone>
+                      <input type="file" name="invoice_proof_file" multiple aria-label="Upload invoice proof files" data-finance-upload-input data-payment-proof-file-input>
+                      <span data-finance-upload-text data-finance-upload-placeholder="Select files or drop them here">Select files or drop them here</span>
+                    </label>
+                    <div class="finance-upload-file-list" data-finance-upload-list></div>
                   </div>
                   <div class="finance-payment-execution-buttons">
                     <button class="finance-review-button reject" type="submit" name="status" value="Invoice cancelled" data-requires-empty-payment-proof>Cancel invoice</button>
@@ -1005,9 +1015,9 @@
 {% elif active_tab == 'billing_requests' %}
   <section{% if not show_archived_invoices %} class="finance-layout"{% endif %}>
     {% if current_menu_can_edit and not show_archived_invoices %}
-    <form class="finance-panel finance-form-panel" method="post" action="{{ url_for('staff.create_billing_request') }}">
+    <form class="finance-panel finance-form-panel" method="post" action="{{ url_for('staff.create_billing_request') }}" enctype="multipart/form-data">
       <h2>New invoice request</h2>
-      {{ billing_form_fields(show_supporting_folder_link=true) }}
+      {{ billing_form_fields(show_supporting_upload=true) }}
       <button class="primary-button" type="submit">Create invoice request</button>
     </form>
     {% endif %}
