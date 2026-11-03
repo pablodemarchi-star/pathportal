@@ -18,6 +18,11 @@ for (const format of ['Online','Online at exam centre']) {
   for (const role of ['Supervisor','Examiner']) {
     const payload = {full_name:'Test staff',role,format,session_name:'Online session',session_date:'3 November 2026',time_ranges:['09:00 - 12:00'],logistics_status:'Does not apply'};
     const form={payload,querySelector:()=>({})};
+    if (format === 'Online at exam centre' && role === 'Examiner') {
+      assert.equal(context.validate(form), false);
+      assert.match(lastError, /Examiners cannot be assigned/);
+      continue;
+    }
     assert.equal(context.validate(form),true,`${format} ${role} should pass Add without onsite email resources`);
     assert.match(context.validateEmail(payload),/only available for onsite/);
     assert.equal(context.validate({...form,payload:{...payload,time_ranges:[]}}),false);

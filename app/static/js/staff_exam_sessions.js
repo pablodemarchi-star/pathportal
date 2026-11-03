@@ -25,7 +25,7 @@
   };
   const appendMaterialResource = (item, title, url) => {
         if (url) appendLink(item, "Open resource ↗", url);
-        else if (title.includes("Supervisor guidelines")) {
+        else if (title.includes("Supervisor guidelines") || title.includes("Examiner guidelines")) {
           const unavailable = make("span", "staff-detail-link staff-detail-resource-disabled", "Open resource ↗");
           unavailable.setAttribute("aria-disabled", "true");
           item.append(unavailable, make("span", "staff-detail-resource-soon", "Available soon"));
@@ -44,7 +44,6 @@
         : officialMaterialRows(role, data).filter(([title]) =>
           (!title.includes("Back-up material for examiners")
             || (role === "Supervisor" && data.participation_confirmed && !zoomAccess))
-          && !(role === "Examiner" && title.includes("Material for examiners"))
           && !(role === "Supervisor" && ["Online", "Online at exam centre"].includes(data.format)
             && title.includes("Exam box shipment"))
           && !(role === "Supervisor" && data.is_remote
@@ -54,9 +53,27 @@
       }
       rows.forEach(([title, description, url]) => {
         const item = make("div", "staff-detail-material");
-        item.append(make("h4", "", title), make("p", "", description));
-        appendMaterialResource(item, title, url);
-        materials.insertBefore(item, zoomAccess);
+        const examinerMaterial = role === "Examiner" && title.includes("Material for examiners");
+        const onlineMaterial = examinerMaterial && data.format === "Online";
+        const heading = onlineMaterial ? "🗣️ Material for examiners" : title;
+        const paragraph = make("p");
+        if (onlineMaterial) {
+          paragraph.append("This folder contains the speaking module materials for all levels. Please note that ",
+            make("strong", "", "you must not conduct the Listening component online."));
+        } else if (examinerMaterial) {
+          const [before, after] = description.split("Sinapsis");
+          const sinapsis = link("Sinapsis", SINAPSIS_LOGIN_URL);
+          sinapsis.style.color = "#00506b";
+          sinapsis.style.fontWeight = "700";
+          sinapsis.style.textDecoration = "underline";
+          paragraph.append(before, sinapsis, after || "");
+        } else paragraph.textContent = description;
+        item.append(make("h4", "", heading), paragraph);
+        appendMaterialResource(item, heading, examinerMaterial ? data.material_for_examiners_url : url);
+        materials.insertBefore(item, role === "Examiner" ? null : zoomAccess);
+        if (role === "Examiner" && title.includes("Examiner guidelines") && zoomAccess) {
+          item.after(zoomAccess);
+        }
       });
       if (!rows.length && !zoomAccess) root.querySelector("[data-staff-materials-section]").hidden = true;
       const duties = role === "Emergency contact" ? {

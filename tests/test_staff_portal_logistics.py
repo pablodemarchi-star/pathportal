@@ -67,6 +67,8 @@ class StaffPortalLogisticsTest(unittest.TestCase):
                 ("supervisor", ExamSessionSupervisorAssignment, "Start the Zoom session <em><u>at least</u></em> 15 minutes before the start."),
                 ("examiner", ExamSessionExaminerAssignment, "Join the Zoom session <em><u>at least</u></em> 10 minutes before the start."),
             ):
+                if session_format == 'Online at exam centre' and role == 'examiner':
+                    continue
                 with self.subTest(session_format=session_format, role=role):
                     self.record.format = session_format
                     assignment = model(exam_session_id=self.record.id, team_member_id=self.person.id,
@@ -87,16 +89,21 @@ class StaffPortalLogisticsTest(unittest.TestCase):
                         from html import unescape
                         payload = json.loads(unescape(re.search(r"data-staff-session-payload='([^']*)'", article).group(1)))
                         is_supervisor = payload['role'] == 'Supervisor'
-                        has_zoom = is_supervisor and session_format == 'Online'
+                        has_zoom = session_format == 'Online' and payload['role'] in ('Supervisor', 'Examiner')
                         self.assertEqual('data-staff-zoom-access' in article, has_zoom)
                         self.assertEqual('data-staff-travel-section' in article, session_format == 'Online at exam centre')
                         self.assertEqual('Travel and logistics' in article, session_format == 'Online at exam centre')
-                        if has_zoom:
+                        if has_zoom and is_supervisor:
                             self.assertIn('💻 Zoom access details', article)
                             self.assertIn('<strong>two-step verification</strong>', article)
                             self.assertIn('<strong>Password:</strong> Path&amp;23646', article)
                         else:
                             self.assertNotIn('Path&amp;23646', article)
+                            if has_zoom:
+                                self.assertIn('join the Zoom meeting at least 10 minutes before your scheduled start time', article)
+                                self.assertIn('href="https://zoom.us/j/7284728472"', article)
+                                self.assertIn('<strong>ID: 728 472 8472</strong>', article)
+                                self.assertIn('<strong>Passcode: path</strong>', article)
                     if session_format == 'Online':
                         self.assertNotIn('Arrive <em><u>at least</u></em>', portal.get_data(as_text=True))
 
@@ -159,6 +166,11 @@ class StaffPortalLogisticsTest(unittest.TestCase):
         from app.routes import staff_assignment_end_check_fields
         self.record.format='Online at exam centre'
         self.assertIn('centre_feedback',staff_assignment_end_check_fields(self.record,'supervisor',assignment))
+        db.session.commit()
+        centre_html=self.app.test_client().get(added.json['url']).get_data(as_text=True)
+        self.assertIn('I confirm that all submitted exam modules have been successfully uploaded to the Digitalised exams folder.',centre_html)
+        self.assertNotIn('Digitalised Exams folder',centre_html)
+        self.assertIn('Digitalised exams ↗',centre_html)
 
     def test_recording_check_depends_on_candidates_in_latest_registration_month(self):
         assignment = ExamSessionSupervisorAssignment(exam_session_id=self.record.id, team_member_id=self.person.id,
@@ -253,11 +265,16 @@ class StaffPortalLogisticsTest(unittest.TestCase):
             cards=re.findall(r'<article class="staff-assignment-card".*?</article>',response.get_data(as_text=True),re.S)
             for role,assignment in assignments:
                 matches=[card for card in cards if f'data-assignment-id="{assignment.id}"' in card and f'data-section-key="{role}"' in card]
+                if session_format == 'Online at exam centre' and role == 'examiner':
+                    self.assertFalse(matches)
+                    continue
                 self.assertTrue(matches,role)
                 for card in matches:
                     for selector in ('data-km-field','data-commuting-cell','data-fuel-cell','data-vehicle-cell','data-logistics-control'):
                         self.assertEqual(selector in card,session_format != 'Online')
             for role,assignment in assignments:
+                if session_format == 'Online at exam centre' and role == 'examiner':
+                    continue
                 assignment.km=90
                 assignment.commuting='ARS 100'
                 assignment.fuel='ARS 200'
@@ -265,6 +282,8 @@ class StaffPortalLogisticsTest(unittest.TestCase):
                 assignment.fuel_enabled=True
             db.session.commit()
             for role,assignment in assignments:
+                if session_format == 'Online at exam centre' and role == 'examiner':
+                    continue
                 db.session.refresh(assignment)
                 self.assertEqual(assignment.km,90 if session_format != 'Online' else None)
                 self.assertEqual(assignment.commuting,'ARS 100' if session_format != 'Online' else '')
@@ -281,6 +300,8 @@ class StaffPortalLogisticsTest(unittest.TestCase):
             self.record.format=session_format
             db.session.commit()
             for model in (ExamSessionSupervisorAssignment,ExamSessionExaminerAssignment,ExamSessionInternAssignment):
+                if session_format == 'Online at exam centre' and model is ExamSessionExaminerAssignment:
+                    continue
                 with self.subTest(session_format=session_format,model=model.__name__):
                     assignment=model(exam_session_id=self.record.id,team_member_id=self.person.id,
                         participation_status='Confirmed',logistics_type='Does not apply',
@@ -301,6 +322,57 @@ class StaffPortalLogisticsTest(unittest.TestCase):
         assignment.manual_fee_override=True
         db.session.commit()
         self.assertEqual(assignment.role_fee,'ARS 99.000')
+
+    def test_examiner_guidelines_by_format_and_missing_online_link(self):
+        from app.models import CertificationYearConfiguration
+        from app.routes import staffing_email_examiner_certification_material_links
+        data = {'csrf_token': 'test', 'certification_year': '2026',
+                'examiner_guideline_url': 'https://example.com/onsite',
+                'examiner_online_guideline_url': 'https://example.com/online'}
+        endpoint = '/annual-certification-programme/material-settings'
+        self.assertEqual(self.client.post(endpoint, data=data).status_code, 302)
+        config = CertificationYearConfiguration.query.filter_by(module_key='examiner_certification', year=2026).one()
+        for format_name, expected in [('Onsite', 'onsite'), ('Online', 'online')]:
+            self.record.format = format_name
+            self.assertEqual(staffing_email_examiner_certification_material_links(self.record)['examiner_guideline_url'], 'https://example.com/' + expected)
+        self.client.post(endpoint, data={**data, 'examiner_online_guideline_url': 'bad-url'})
+        db.session.refresh(config)
+        self.assertEqual(config.examiner_online_guideline_url, data['examiner_online_guideline_url'])
+        self.client.post(endpoint, data={**data, 'examiner_online_guideline_url': ''})
+        self.assertEqual(staffing_email_examiner_certification_material_links(self.record)['examiner_guideline_url'], '')
+
+    def test_online_centre_removes_examiner_and_portal_submission(self):
+        from app.models import StaffExamSessionEndChecks
+        examiner = ExamSessionExaminerAssignment(exam_session_id=self.record.id, team_member_id=self.person.id,
+            staffing_role_check_verified=True, participation_status='Confirmed', logistics_type='Does not apply')
+        supervisor = ExamSessionSupervisorAssignment(exam_session_id=self.record.id, team_member_id=self.person.id)
+        intern = ExamSessionInternAssignment(exam_session_id=self.record.id, team_member_id=self.person.id)
+        db.session.add_all([examiner, supervisor, intern]); db.session.commit()
+        examiner_id = examiner.id
+        self.assertEqual(self.add('examiner', examiner_id).status_code, 200)
+        submission = StaffExamSessionSubmission.query.one()
+        db.session.add(StaffExamSessionEndChecks(submission_id=submission.id)); db.session.commit()
+        self.record.format = 'Online at exam centre'
+        db.session.commit()
+        self.assertEqual(ExamSessionExaminerAssignment.query.count(), 0)
+        self.assertEqual(StaffExamSessionSubmission.query.count(), 0)
+        self.assertEqual(StaffExamSessionEndChecks.query.count(), 0)
+        self.assertEqual(ExamSessionSupervisorAssignment.query.count(), 1)
+        self.assertEqual(ExamSessionInternAssignment.query.count(), 1)
+        self.assertEqual(self.add('examiner', examiner_id).status_code, 404)
+
+    def test_online_centre_cleanup_handles_existing_legacy_assignments(self):
+        from sqlalchemy import text
+        from app.staffing_rules import remove_existing_online_centre_examiners
+        db.session.add(ExamSessionExaminerAssignment(exam_session_id=self.record.id, team_member_id=self.person.id))
+        db.session.commit()
+        db.session.execute(text("UPDATE exam_session SET format='Online at exam centre' WHERE id=:id"), {'id': self.record.id})
+        db.session.commit(); db.session.expire_all()
+        remove_existing_online_centre_examiners()
+        self.assertEqual(ExamSessionExaminerAssignment.query.count(), 0)
+        forbidden = ExamSessionExaminerAssignment(exam_session_id=self.record.id, team_member_id=self.person.id)
+        db.session.add(forbidden); db.session.commit()
+        self.assertEqual(ExamSessionExaminerAssignment.query.count(), 0)
 
     def test_supervisor_guidelines_are_saved_and_selected_by_format_and_year(self):
         from app.models import CertificationYearConfiguration
@@ -385,7 +457,7 @@ class StaffPortalLogisticsTest(unittest.TestCase):
             self.record.format=session_format;db.session.commit()
             html=self.app.test_client().get(emergency.json['url']).get_data(as_text=True)
             articles=re.findall(r'<article class="staff-detail-assignment".*?</article>',html,re.S)
-            self.assertEqual(len(articles),4)
+            self.assertEqual(len(articles),3 if session_format in ("Online at exam centre", "Onsite") else 4)
             for article in articles:
                 section=re.search(r'<details class="staff-detail-invoice">.*?</details>',article,re.S).group(0)
                 self.assertIn('upload <strong>one consolidated invoice</strong>',section)

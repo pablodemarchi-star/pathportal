@@ -1957,6 +1957,7 @@
           <strong>{{ session.exam_session_name }}</strong>
           {{ session_concat_indicator(session.id) }}
           <small class="bundle-session-date">{{ session.session_date|session_date }}</small>
+          {% if session.format == 'Online at exam centre' %}<span class="badge exam-format-online-at-exam-centre control-tower-format-chip">at exam centre</span>{% endif %}
           {{ schedule_approval_notification_chip(session, view.schedule_approval_notification_event_id) }}
           {{ concat_tower_navigation(view) }}
         </span></td>

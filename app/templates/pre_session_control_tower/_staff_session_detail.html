@@ -23,6 +23,17 @@
               <p><strong>Zoom login details:</strong></p>
               <ul><li><strong>Username:</strong> admin@pathexaminations.com</li><li><strong>Password:</strong> Path&amp;23646</li></ul>
             </div>
+            {% elif detail.role == 'Examiner' and detail.format == 'Online' %}
+            <div class="staff-detail-material" data-staff-zoom-access>
+              <h4>💻 Zoom access details</h4>
+              <p>Please make sure you <strong>join the Zoom meeting at least 10 minutes before your scheduled start time</strong>.</p>
+              <p><strong>Meeting details:</strong></p>
+              <ul>
+                <li><strong>Link: <a href="https://zoom.us/j/7284728472" target="_blank" rel="noopener noreferrer">https://zoom.us/j/7284728472</a></strong></li>
+                <li><strong>ID: 728 472 8472</strong></li>
+                <li><strong>Passcode: path</strong></li>
+              </ul>
+            </div>
             {% endif %}
           </div></section>
           <section class="staff-detail-section" data-staff-responsibilities-section><h3 data-staff-responsibilities-title>Your responsibilities</h3><ul class="staff-detail-checklist" data-staff-responsibilities></ul></section>
@@ -76,7 +87,7 @@
             {% endfor %}
           </ul>
         {% else %}
-          <p>No emergency contact has been assigned to this exam session, as a permanent Path Examinations staff member will be present on-site.</p>
+          <p>No emergency contact has been assigned to this exam session, as a permanent Path Examinations staff member will be present {{ 'online' if detail.format == 'Online' else 'on-site' }}.</p>
         {% endif %}
       </section>
       {% endif %}

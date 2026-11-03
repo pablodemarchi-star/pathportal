@@ -479,6 +479,9 @@ def create_app():
         if certification_year_configuration_columns and "examiner_guideline_url" not in certification_year_configuration_columns:
             db.session.execute(text("ALTER TABLE certification_year_configuration ADD COLUMN examiner_guideline_url VARCHAR(500) DEFAULT '' NOT NULL"))
             db.session.commit()
+        if certification_year_configuration_columns and "examiner_online_guideline_url" not in certification_year_configuration_columns:
+            db.session.execute(text("ALTER TABLE certification_year_configuration ADD COLUMN examiner_online_guideline_url VARCHAR(500) DEFAULT '' NOT NULL"))
+            db.session.commit()
         if certification_year_configuration_columns and "material_for_examiners_url" not in certification_year_configuration_columns:
             db.session.execute(text("ALTER TABLE certification_year_configuration ADD COLUMN material_for_examiners_url VARCHAR(500) DEFAULT '' NOT NULL"))
             db.session.commit()
@@ -1398,6 +1401,8 @@ def create_app():
         db.session.commit()
         from app.staffing_rules import normalize_existing_online_travel_fees
         normalize_existing_online_travel_fees()
+        from app.staffing_rules import remove_existing_online_centre_examiners
+        remove_existing_online_centre_examiners()
         from app.staffing_rules import normalize_online_supervisor_role_fees
         normalize_online_supervisor_role_fees()
     return app

@@ -18076,3 +18076,5 @@ body.staff-session-detail-open { overflow: hidden; }
 .staff-invoice-preview iframe { display: block; width: 100%; height: min(75dvh, 800px); border: 0; }
 .staff-invoice-preview iframe[hidden], .staff-invoice-preview-fallback[hidden] { display: none; }
 .staff-invoice-preview-fallback { padding: 24px; }
+
+.control-tower-format-chip { align-self: start; width: fit-content; }

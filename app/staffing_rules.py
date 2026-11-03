@@ -100,3 +100,38 @@ def normalize_online_supervisor_role_fees():
     for assignment in ExamSessionSupervisorAssignment.query.join(ExamSession).filter(ExamSession.format == 'Online').all():
         update_online_supervisor_role_fee(assignment)
     db.session.commit()
+
+
+def remove_examiner_assignment(unit, assignment):
+    from app.models import StaffExamSessionSubmission
+    if assignment in unit.deleted:
+        return
+    if assignment in unit.new:
+        unit.expunge(assignment)
+        return
+    submissions = unit.query(StaffExamSessionSubmission).filter_by(
+        exam_session_id=assignment.exam_session_id, assignment_type='examiner', assignment_id=assignment.id).all()
+    for submission in submissions:
+        unit.delete(submission)
+    unit.delete(assignment)
+
+
+@event.listens_for(Session, 'before_flush')
+def prevent_online_centre_examiners(unit, *_):
+    for item in list(unit.new) + list(unit.dirty):
+        if isinstance(item, ExamSessionExaminerAssignment):
+            record = item.exam_session or unit.get(ExamSession, item.exam_session_id)
+            if record and record.format == 'Online at exam centre':
+                remove_examiner_assignment(unit, item)
+        elif isinstance(item, ExamSession) and item.format == 'Online at exam centre' and item.id:
+            if inspect(item).attrs.format.history.has_changes():
+                for assignment in unit.query(ExamSessionExaminerAssignment).filter_by(exam_session_id=item.id).all():
+                    remove_examiner_assignment(unit, assignment)
+
+
+def remove_existing_online_centre_examiners():
+    from app import db
+    assignments = ExamSessionExaminerAssignment.query.join(ExamSession).filter(ExamSession.format == 'Online at exam centre').all()
+    for assignment in assignments:
+        remove_examiner_assignment(db.session(), assignment)
+    db.session.commit()

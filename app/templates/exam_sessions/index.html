@@ -1448,6 +1448,7 @@
             {{ staff_assignment_row(session, 'supervisor', '__KEY__', none, session_supervisors, supervisor_member_map, supervisor_states, member_session_counts, participation_options) }}
           </template>
         </section>
+        {% if session.format != 'Online at exam centre' %}
         <section class="session-member-section" data-role-fee-label="examiner" data-role-fee-currency="{{ examiner_fee.currency if examiner_fee else '' }}" data-role-fee-value="{{ examiner_fee.fee_value if examiner_fee else '' }}" data-role-fee-unit="{{ examiner_fee.unit_of_measure if examiner_fee else '' }}">
           {% set session_examiners = session_examiner_members.get(session.id, examiner_members) %}
           <div class="session-member-section-header">
@@ -1468,6 +1469,7 @@
             {{ staff_assignment_row(session, 'examiner', '__KEY__', none, session_examiners, examiner_member_map, examiner_states, examiner_member_session_counts, participation_options) }}
           </template>
         </section>
+        {% endif %}
         {% set session_interns = session_intern_members.get(session.id, intern_members) %}
         {% set has_intern_assignments = intern_assignments.get(session.id, [])|length > 0 %}
         <section class="session-member-section" id="intern-section-{{ session.id }}" data-optional-section="intern" data-role-fee-label="intern" data-role-fee-currency="{{ intern_fee.currency if intern_fee else '' }}" data-role-fee-value="{{ intern_fee.fee_value if intern_fee else '' }}" data-role-fee-unit="{{ intern_fee.unit_of_measure if intern_fee else '' }}" {% if not has_intern_assignments %}hidden{% endif %}>

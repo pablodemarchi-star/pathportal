@@ -3,7 +3,7 @@ const source=fs.readFileSync('app/static/js/staff_exam_sessions.js','utf8');
 const context={URL,document:{createElement:tag=>({tag,children:[],attributes:{},append(...items){this.children.push(...items);},setAttribute(name,value){this.attributes[name]=value;}})}};
 vm.createContext(context);
 vm.runInContext(source.slice(source.indexOf('  const make ='),source.indexOf('  const hydrate ='))+'\nthis.appendResource=appendMaterialResource;',context);
-for(const title of ['✅ Supervisor guidelines for onsite sessions','✅ Supervisor guidelines for online sessions','✅ Supervisor guidelines for online sessions at exam centre']){
+for(const title of ['✅ Examiner guidelines for online exams','✅ Examiner guidelines for onsite exams','✅ Supervisor guidelines for onsite sessions','✅ Supervisor guidelines for online sessions','✅ Supervisor guidelines for online sessions at exam centre']){
  const item={children:[],append(...nodes){this.children.push(...nodes);}};
  context.appendResource(item,title,'');
  assert.equal(item.children[0].tag,'span');assert.equal(item.children[0].attributes['aria-disabled'],'true');
@@ -14,4 +14,4 @@ for(const title of ['✅ Supervisor guidelines for onsite sessions','✅ Supervi
  assert.equal(configured.children.length,1);assert.equal(configured.children[0].tag,'a');
  assert.equal(configured.children[0].href,'https://example.com/resource');
 }
-console.log('Supervisor resources: disabled grey resource and Available soon when missing; active link once configured.');
+console.log('Staff resources: disabled grey resource and Available soon when missing; active link once configured.');

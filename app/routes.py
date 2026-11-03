@@ -6411,6 +6411,10 @@ def save_examiner_certification_material_settings(selected_year):
     if examiner_guideline_url and not is_valid_url(examiner_guideline_url):
         flash("Examiner guidelines link must be a valid URL.", "error")
         return False
+    examiner_online_guideline_url = request.form.get("examiner_online_guideline_url", "").strip()
+    if examiner_online_guideline_url and not is_valid_url(examiner_online_guideline_url):
+        flash("Examiner guidelines for online sessions link must be a valid URL.", "error")
+        return False
     material_for_examiners_url = request.form.get("material_for_examiners_url", "").strip()
     if material_for_examiners_url and not is_valid_url(material_for_examiners_url):
         flash("Material for examiners link must be a valid URL.", "error")
@@ -6420,6 +6424,8 @@ def save_examiner_certification_material_settings(selected_year):
         config = CertificationYearConfiguration(module_key=EXAMINER_CERTIFICATION_MODULE_KEY, year=selected_year)
         db.session.add(config)
     config.examiner_guideline_url = examiner_guideline_url
+    if "examiner_online_guideline_url" in request.form:
+        config.examiner_online_guideline_url = examiner_online_guideline_url
     config.material_for_examiners_url = material_for_examiners_url
     db.session.commit()
     flash("Examiner certification material links saved successfully.", "success")
@@ -7351,7 +7357,7 @@ def staffing_email_examiner_certification_material_links(session_record):
         year=session_year,
     ).first()
     return {
-        "examiner_guideline_url": (getattr(config, "examiner_guideline_url", "") or "").strip() if config else "",
+        "examiner_guideline_url": (getattr(config, "examiner_online_guideline_url" if getattr(session_record, "format", "") == "Online" else "examiner_guideline_url", "") or "").strip() if config else "",
         "material_for_examiners_url": (getattr(config, "material_for_examiners_url", "") or "").strip() if config else "",
     }
 
@@ -20158,6 +20164,8 @@ def update_staff_final_confirmation(session_id, assignment_type, assignment_id):
 
 
 def staff_submission_assignment(session_record, assignment_type, assignment_id):
+    if assignment_type == "examiner" and session_record.format == "Online at exam centre":
+        return None, ""
     if assignment_type == "emergency_contact":
         if assignment_id == session_record.id and session_record.emergency_contact_member_id:
             return session_record, str(session_record.emergency_contact_member_id)
@@ -24702,6 +24710,11 @@ def save_exam_session_assignment_section(
     selected_shipment_recipient_value="",
     saved_fields=None,
 ):
+    if section_key == "examiner" and session_record.format == "Online at exam centre":
+        if any(request.form.getlist("examiner_row_keys")):
+            flash("Examiners cannot be assigned to Online at exam centre sessions.", "error")
+            return None
+        return 0
     member_map = {member.id: member for member in member_options}
     valid_member_ids = set(member_map)
     valid_potential_entry_ids = {
@@ -24786,6 +24799,11 @@ def save_exam_session_assignment_section(
         participation_status = normalize_participation_status(
             request.form.get(f"{section_key}_participation_status_{row_key}", default_status)
         )
+        # A general card save must not revoke an accepted invitation through a
+        # stale or browser-default status. Explicit status edits are sent separately.
+        if (same_person and previous_participation_status == "Confirmed"
+                and request.form.get(f"{section_key}_participation_status_changed_{row_key}") != "1"):
+            participation_status = previous_participation_status
         if participation_status not in EXAM_SESSION_PARTICIPATION_OPTIONS:
             flash("Please select a valid Participation status.", "error")
             return None
@@ -25599,6 +25617,9 @@ def update_exam_session_members(session_id):
                 flash("Please select a valid Emergency contact participation status.", "error")
                 return session_members_redirect(keep_open=True)
             previous_status_for_member = previous_emergency_contact_status_by_member.get(member_value, "")
+            if (previous_status_for_member == "Confirmed"
+                    and member_value not in request.form.getlist("emergency_contact_status_changed_member")):
+                status_value = previous_status_for_member
             if (
                 status_value not in EXAM_SESSION_PLANNER_PARTICIPATION_OPTIONS
                 and status_value != previous_status_for_member
@@ -25724,6 +25745,8 @@ def update_exam_session_members(session_id):
             "notices": [message for _, message in messages],
             "saved_fields": {name: record.id for name, record in saved_fields.items()},
             "saved_values": saved_values,
+            "emergency_contact_statuses": {str(row["member_id"]): row["status"]
+                                           for row in session_record.emergency_contact_rows() if row["member_id"]},
             "form_state": {
                 "staffingStatus": staffing["status"],
                 "staffingFinalEmailReady": str(bool(staffing.get("final_email_ready"))).lower(),
@@ -29636,6 +29659,7 @@ def annual_certification_programme():
         certification_annual_meeting_time_value=annual_meeting_time_value,
         certification_remote_training_period_value=certification_remote_training_period_value(year_configuration),
         examiner_guideline_url=(year_configuration.examiner_guideline_url if year_configuration else ""),
+        examiner_online_guideline_url=(year_configuration.examiner_online_guideline_url if year_configuration else ""),
         material_for_examiners_url=(year_configuration.material_for_examiners_url if year_configuration else ""),
         supervisor_guideline_url=(year_configuration.supervisor_guideline_url if year_configuration else ""),
         supervisor_online_guideline_url=(year_configuration.supervisor_online_guideline_url if year_configuration else ""),

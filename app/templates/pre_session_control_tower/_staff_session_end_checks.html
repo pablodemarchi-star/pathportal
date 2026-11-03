@@ -1,4 +1,5 @@
 {% set online_supervisor = detail.role == 'Supervisor' and detail.format == 'Online' %}
+{% set digitalised_supervisor = detail.role == 'Supervisor' and detail.format in ['Online', 'Online at exam centre'] %}
 <section class="staff-detail-section staff-end-checks" aria-label="End-of-session checks" data-staff-end-checks data-opens-at="{{ detail.end_checks.opens_at }}" data-save-url="{{ detail.end_checks.url }}" data-csrf="{{ detail.confirmation_csrf }}">
   <div class="staff-end-checks-heading">
     <h3 data-end-checks-title>End-of-session checks ({{ detail.end_checks['values'].values()|select|list|length }}/{{ detail.end_checks['values']|length }})</h3>
@@ -14,7 +15,7 @@
   {% if online_supervisor %}
     {% set check_items = [
       ('attendance', 'I confirm that all examiners have registered candidate attendance in Sinapsis, and that no candidates remain with Pending status.'),
-      ('return_papers', 'I confirm that all submitted exam modules have been successfully uploaded to the Digitalised Exams folder.'),
+      ('return_papers', 'I confirm that all submitted exam modules have been successfully uploaded to the Digitalised exams folder.'),
       ('recordings', 'I confirm that I have reminded all examiners to upload their Speaking recordings within one business day after the exam session ends.'),
       ('audiovisual', 'I confirm that I have uploaded all audiovisual materials from the exam session, including photographs and videos.')
     ] %}
@@ -36,8 +37,9 @@
   <div class="staff-end-checks-items">
     {% for key, text in check_items if key in detail.end_checks['values'] %}
     <div class="staff-end-check-row{% if not detail.end_checks.available %} is-disabled{% endif %}">
-      <label><input type="checkbox" data-end-check="{{ key }}"{% if detail.end_checks['values'][key] %} checked{% endif %}{% if not detail.end_checks.available %} disabled{% endif %}><span>{{ text }}</span></label>
-      {% if online_supervisor and key == 'return_papers' %}
+      {% set display_text = 'I confirm that all submitted exam modules have been successfully uploaded to the Digitalised exams folder.' if digitalised_supervisor and key == 'return_papers' else text %}
+      <label><input type="checkbox" data-end-check="{{ key }}"{% if detail.end_checks['values'][key] %} checked{% endif %}{% if not detail.end_checks.available %} disabled{% endif %}><span>{{ display_text }}</span></label>
+      {% if digitalised_supervisor and key == 'return_papers' %}
       <a class="staff-detail-link staff-end-checks-folder{% if not detail.end_checks.digitalised_available or not detail.end_checks.digitalised_url %} is-disabled{% endif %}" data-end-checks-folder data-folder-exam-day-only data-folder-url="{{ detail.end_checks.digitalised_url }}" href="{{ detail.end_checks.digitalised_url if detail.end_checks.digitalised_available and detail.end_checks.digitalised_url else '#' }}" target="_blank" rel="noopener noreferrer"{% if not detail.end_checks.digitalised_available or not detail.end_checks.digitalised_url %} aria-disabled="true" tabindex="-1"{% endif %}>Digitalised exams ↗</a>
       {% endif %}
       {% if key == 'audiovisual' %}

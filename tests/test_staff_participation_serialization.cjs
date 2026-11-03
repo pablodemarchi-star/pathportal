@@ -4,7 +4,7 @@ const vm = require('node:vm');
 const source = fs.readFileSync('app/static/js/app.js','utf8');
 const start = source.indexOf('  form.addEventListener("formdata", (event) => {');
 const end = source.indexOf('  form.addEventListener("submit", async (event) => {',start);
-const control = (name,value,kind,disabled=false) => ({name,value,disabled,matches:selector=>selector===kind});
+const control = (name,value,kind,disabled=false) => ({name,value,disabled,dataset:{},matches:selector=>selector===kind});
 let listener;
 const form = {elements:[
   control('examiner_participation_status_existing-1','Confirmed','[data-participation-select]'),
@@ -23,3 +23,9 @@ assert.equal(formData.get('intern_participation_status_existing-2'),'Official co
 assert.equal(formData.has('supervisor_participation_status_existing-3'),false);
 assert.deepEqual(formData.getAll('emergency_contact_participation_status'),['Confirmed','Pre-confirmed']);
 console.log('Participation serialization preserves locked statuses and emergency contact row alignment.');
+
+form.elements[1].dataset.participationStatusEdited = 'true';
+listener({formData});
+assert.equal(formData.get('examiner_participation_status_changed_existing-1'), '0');
+assert.equal(formData.get('intern_participation_status_changed_existing-2'), '1');
+console.log('Only deliberate status changes carry reset intent.');

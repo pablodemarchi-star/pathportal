@@ -10130,7 +10130,7 @@ for (const days of [2, 3, 4]) {
         self.assertIn("Examiner guidelines", result["html"])
         self.assertIn("Material for examiners", result["html"])
         self.assertIn('href="https://example.com/examiner-guidelines"', result["html"])
-        self.assertIn("Examiner guidelines\nView material: https://example.com/examiner-guidelines", result["text"])
+        self.assertIn("Examiner guidelines for onsite exams\nView material: https://example.com/examiner-guidelines", result["text"])
         self.assertIn('href="https://example.com/material-for-examiners"', result["html"])
         self.assertIn("Material for examiners\nView material: https://example.com/material-for-examiners", result["text"])
         self.assertNotIn("🎧🗣️ Listening and speaking module", result["html"])
@@ -10244,7 +10244,6 @@ for (const days of [2, 3, 4]) {
             {'time_ranges': []}, {'total_fee': '-'}, {'schedule_folder_url': ''},
             {'backup_material_for_examiners_url': ''},
             {'logistics_url': ''}, {'next_payment_date': ''}, {'address': ''},
-            {'role': 'Examiner', 'examiner_guideline_url': ''},
             {'role': 'Examiner', 'material_for_examiners_url': ''},
         ]]
         prefix = r'''
@@ -10338,7 +10337,8 @@ assert.equal(portal.closed,true);
         self.assertEqual(missing_total["error"], "Total fee is required for official confirmation emails.")
         self.assertEqual(missing_schedule["error"], "Exam session schedule link is required for official confirmation emails.")
         self.assertEqual(examiner_missing_schedule["error"], "Exam session schedule link is required for official confirmation emails.")
-        self.assertEqual(examiner_missing_guidelines["error"], "Examiner guidelines link is required for official confirmation emails.")
+        self.assertFalse(examiner_missing_guidelines.get("error"))
+        self.assertIn("Available soon", examiner_missing_guidelines["html"])
         self.assertEqual(examiner_missing_material["error"], "Material for examiners link is required for official confirmation emails.")
         self.assertEqual(missing_backup_material["error"], "Back-up material for examiners link is required for official confirmation emails.")
         self.assertFalse(missing_supervisor_guidelines.get("error"))

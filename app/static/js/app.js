@@ -8197,9 +8197,6 @@ const validateStaffOfficialConfirmationEmailPayload = (payload, { portalSubmissi
     }
   }
   if (role === "Examiner") {
-    if (!emailLinkIsUsable(payload?.examiner_guideline_url || payload?.examinerGuidelineUrl)) {
-      return "Examiner guidelines link is required for official confirmation emails.";
-    }
     if (!emailLinkIsUsable(payload?.material_for_examiners_url || payload?.materialForExaminersUrl)) {
       return "Material for examiners link is required for official confirmation emails.";
     }
@@ -8257,9 +8254,9 @@ const officialMaterialRows = (role, links = {}) => {
   const backupMaterialForExaminersUrl = cleanEmailValue(links.backupMaterialForExaminersUrl || links.backup_material_for_examiners_url);
   if (role === "Examiner") {
     return [
-      ["🗓️ Exam session schedule", "Please access this section in advance to check your assigned exam rooms and ensure your schedule information is complete. You may have been assigned to the Listening and speaking module, the Reading and writing module, or both. To verify this, compare the start and end times in this email with those shown in the PDFs. Please also review the session timings, rooms and layout in advance.", scheduleFolderUrl],
+      ["🗓️ Exam session schedule", cleanEmailValue(links.format) === "Online" ? "Please access this section in advance to check your assigned levels, the session timings and ensure your schedule information is complete." : "Please access this section in advance to check your assigned exam rooms and ensure your schedule information is complete. You may have been assigned to the Listening and speaking module, the Reading and writing module, or both. To verify this, compare the start and end times in this email with those shown in the PDFs. Please also review the session timings, rooms and layout in advance.", scheduleFolderUrl],
       ["🎧🗣️ Material for examiners", "This folder contains the Listening and speaking module materials for all levels. Please note that the Listening audio files will only become available in Sinapsis once you have confirmed your participation. Well before the exam session, please access the platform to ensure that your assigned exam session is listed and that the required audio files are available and working properly.", materialForExaminersUrl || OFFICIAL_CONFIRMATION_MATERIAL_URL],
-      ["✅ Examiner guidelines", "Please read the examiner instructions carefully and in advance to ensure that all required procedures and protocols are followed in line with Path Examinations’ quality policies.", examinerGuidelineUrl || OFFICIAL_CONFIRMATION_MATERIAL_URL],
+      [cleanEmailValue(links.format) === "Online" ? "✅ Examiner guidelines for online exams" : "✅ Examiner guidelines for onsite exams", "Please read the examiner instructions carefully and in advance to ensure that all required procedures and protocols are followed in line with Path Examinations’ quality policies.", examinerGuidelineUrl],
     ];
   }
 	  if (role === "Supervisor") {
@@ -8307,7 +8304,7 @@ const officialConfirmationMaterialsHtml = (role, styles, links = {}) => {
       <p style="${styles.paragraph}">Please find below:</p>
       ${rows.map(([label, description, url]) => {
         const materialLink = cleanEmailValue(url);
-        const availableSoon = !materialLink && label.includes("Supervisor guidelines")
+        const availableSoon = !materialLink && (label.includes("Supervisor guidelines") || label.includes("Examiner guidelines"))
           ? '<p style="margin:10px 0 0;"><span aria-disabled="true" style="display:inline-block;padding:8px 12px;background:#eef0f1;border:1px solid #d5d9dc;border-radius:8px;color:#788187;font-size:12px;">Open resource ↗</span> <span style="display:inline-block;padding:4px 8px;border-radius:999px;background:#fff3c4;color:#8a5a00;font-size:11px;font-weight:600;">Available soon</span></p>' : '';
         return `
         <div style="margin:0 0 10px;padding:12px 14px;background:#f1f3f2;border:1px solid #d9dfdc;border-radius:10px;">
@@ -8326,7 +8323,7 @@ const officialConfirmationMaterialsText = (role, links = {}) => {
   if (!rows.length) return "";
   return `SESSION MATERIALS\n\nPlease find below:\n\n${rows.map(([label, description, url]) => {
     const materialLink = cleanEmailValue(url);
-    return `${label}${materialLink ? `\nView material: ${materialLink}` : label.includes("Supervisor guidelines") ? "\nAvailable soon" : ""}\n${description}`;
+    return `${label}${materialLink ? `\nView material: ${materialLink}` : (label.includes("Supervisor guidelines") || label.includes("Examiner guidelines")) ? "\nAvailable soon" : ""}\n${description}`;
   }).join("\n\n")}`;
 };
 
@@ -8810,7 +8807,9 @@ const validateStaffSessionSubmit = (form, submitter = null) => {
   const logisticsStatus = cleanEmailValue(payload?.logistics_status || payload?.logisticsStatus);
   let error = "";
   const requiresLogistics = cleanEmailValue(payload?.format) !== "Online";
-  if (requiresLogistics && role === "Supervisor" && payload?.is_remote && logisticsStatus !== "Does not apply") {
+  if (role === "Examiner" && cleanEmailValue(payload?.format) === "Online at exam centre") {
+    error = "Examiners cannot be assigned to Online at exam centre sessions.";
+  } else if (requiresLogistics && role === "Supervisor" && payload?.is_remote && logisticsStatus !== "Does not apply") {
     error = "Remote supervisors must have Logistics set to Does not apply before adding the session.";
   } else if (requiresLogistics && role !== "Emergency contact" && !["Does not apply", "Uber", "Simple logistics", "Uber ride", "Complex Uber ride", "Complex logistics", "Carpooling"].includes(logisticsStatus)) {
     error = "Select Logistics for this staff member in Exam session planner before adding the session.";
@@ -11126,6 +11125,25 @@ const refreshPlannerSessionRow = async (form) => {
   });
 };
 
+const restoreSavedParticipationStatus = (select, value) => {
+  if (!Array.from(select.options).some(option => option.value === value)) {
+    const option = document.createElement("option");
+    option.value = value;
+    option.textContent = value;
+    option.disabled = true;
+    option.dataset.externalParticipationStatus = "true";
+    select.appendChild(option);
+  }
+  select.value = value;
+};
+
+// Track deliberate status edits separately from values restored by form hydration.
+document.addEventListener("change", (event) => {
+  if (event.target.matches("[data-participation-select], [data-emergency-contact-status-select]")) {
+    event.target.dataset.participationStatusEdited = "true";
+  }
+});
+
 document.querySelectorAll("[data-session-members-form]").forEach((form) => {
   if (form.dataset.logisticsSubmitInitialized === "true") return;
   form.dataset.logisticsSubmitInitialized = "true";
@@ -11135,10 +11153,21 @@ document.querySelectorAll("[data-session-members-form]").forEach((form) => {
     const controls = Array.from(form.elements);
     controls.filter(control => control.matches("[data-participation-select]") && !control.disabled)
       .forEach(control => event.formData.set(control.name, control.value));
+    controls.filter(control => control.matches("[data-participation-select]") && !control.disabled)
+      .forEach(control => {
+        const changedName = control.name.replace("_participation_status_", "_participation_status_changed_");
+        event.formData.set(changedName, control.dataset.participationStatusEdited === "true" ? "1" : "0");
+      });
     const emergency = controls.filter(control => control.matches("[data-emergency-contact-status-select]") && !control.disabled);
     if (emergency.length) {
       event.formData.delete("emergency_contact_participation_status");
-      emergency.forEach(control => event.formData.append("emergency_contact_participation_status", control.value));
+      emergency.forEach(control => {
+        event.formData.append("emergency_contact_participation_status", control.value);
+        if (control.dataset.participationStatusEdited === "true") {
+          const member = control.closest("[data-emergency-contact-row]")?.querySelector("[data-emergency-contact-select]");
+          if (member?.value) event.formData.append("emergency_contact_status_changed_member", member.value);
+        }
+      });
     }
   });
   form.addEventListener("submit", async (event) => {
@@ -11200,9 +11229,24 @@ document.querySelectorAll("[data-session-members-form]").forEach((form) => {
       if (!response.ok || !payload.ok) throw new Error(payload.error || "The session could not be saved.");
       Object.entries({ ...payload.saved_fields, ...payload.saved_values }).forEach(([name, id]) => {
         const input = form.elements.namedItem(name);
-        if (input) input.value = String(id);
+        if (input?.matches("[data-participation-select]")) restoreSavedParticipationStatus(input, String(id));
+        else if (input) input.value = String(id);
       });
+      Array.from(form.elements).filter(control => control.matches("[data-emergency-contact-status-select]"))
+        .forEach(control => {
+          const row = control.closest("[data-emergency-contact-row]");
+          const memberId = row?.querySelector("[data-emergency-contact-select]")?.value;
+          const status = payload.emergency_contact_statuses?.[memberId];
+          if (status) {
+            restoreSavedParticipationStatus(control, status);
+            row.dataset.emergencyContactSavedMemberId = memberId;
+            row.dataset.emergencyContactSavedStatus = status;
+            syncEmergencyContactControl(row.closest("[data-emergency-contact-control]"));
+          }
+        });
       Object.assign(form.dataset, payload.form_state || {});
+      form.querySelectorAll("[data-participation-select], [data-emergency-contact-status-select]")
+        .forEach(control => { delete control.dataset.participationStatusEdited; });
       form.querySelectorAll("[data-participation-select]").forEach(syncParticipationSelect);
       form.querySelectorAll("[name^='deleted_'], input[name^='logistics_note_']").forEach((input) => input.remove());
       Array.from(form.elements).forEach((control) => {

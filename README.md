@@ -334,3 +334,10 @@ Failed Drive operations retain the invoice and never queue this email. Email
 failures keep the completed annulment and appear in Email connection. Confirmed
 failures can be retried there; ambiguous delivery must be checked in Gmail Sent
 before any retry. Missing staff email is reported as a failed notification.
+
+Examiner guidelines are configured per certification year with separate Onsite
+and Online URLs. Existing guideline URLs remain assigned to Onsite. Missing
+format-specific links show a disabled Open resource and Available soon in the
+staff portal, without preventing invitations. Online at exam centre permits
+Supervisors and Interns, but no Examiners. Startup cleanup and session format
+changes remove Examiner assignments and their portal submissions for that format.

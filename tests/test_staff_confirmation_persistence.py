@@ -59,6 +59,35 @@ class StaffConfirmationPersistenceTest(unittest.TestCase):
                 self.assertIn(f'data-confirmed-session="{self.record.id}"',page)
                 self.assertEqual(self.record.status,'Pending')  # Other session requirements are separate.
 
+    def test_stale_pending_does_not_revoke_confirmation_for_unchanged_people(self):
+        for role, model in [('supervisor', ExamSessionSupervisorAssignment),
+                            ('examiner', ExamSessionExaminerAssignment), ('intern', ExamSessionInternAssignment)]:
+            person = self.member('Confirmed ' + role, role.title())
+            assignment = model(exam_session_id=self.record.id, team_member_id=person.id, participation_status='Confirmed')
+            db.session.add(assignment); db.session.commit()
+            key = f'existing-{assignment.id}'
+            response = self.save({f'{role}_row_keys': [key, 'new-empty'],
+                f'{role}_assignment_id_{key}': str(assignment.id),
+                f'{role}_team_member_id_{key}': str(person.id),
+                f'{role}_participation_status_{key}': 'Pending',
+                f'{role}_participation_status_new-empty': 'Pending'})
+            self.assertEqual(response.status_code, 200, response.json)
+            self.assertEqual(assignment.participation_status, 'Confirmed')
+            self.assertEqual(response.json['saved_values'][f'{role}_participation_status_{key}'], 'Confirmed')
+
+    def test_stale_pending_preserves_emergency_contact_confirmation(self):
+        person = self.member('Confirmed emergency', 'Emergency contact')
+        self.record.emergency_contact_required = True
+        self.record.emergency_contact_member_id = person.id
+        self.record.emergency_contact_participation_status = 'Confirmed'
+        db.session.commit()
+        data = {'emergency_contact_required': '1', 'emergency_contact_member_id': str(person.id),
+                'emergency_contact_participation_status': 'Pending'}
+        self.assertEqual(self.save(data).status_code, 200)
+        self.assertEqual(self.record.emergency_contact_participation_status, 'Confirmed')
+        self.assertEqual(self.save({**data, 'emergency_contact_status_changed_member': str(person.id)}).status_code, 200)
+        self.assertEqual(self.record.emergency_contact_participation_status, 'Pending')
+
     def test_missing_status_does_not_transfer_confirmation_to_a_replacement(self):
         first=self.member('Original examiner','Examiner');second=self.member('Replacement examiner','Examiner')
         assignment=ExamSessionExaminerAssignment(exam_session_id=self.record.id,team_member_id=first.id,participation_status='Confirmed')
@@ -73,7 +102,8 @@ class StaffConfirmationPersistenceTest(unittest.TestCase):
         assignment=ExamSessionExaminerAssignment(exam_session_id=self.record.id,team_member_id=person.id,participation_status='Confirmed')
         db.session.add(assignment);db.session.commit();key=f'existing-{assignment.id}'
         response=self.save({'examiner_row_keys':key,f'examiner_assignment_id_{key}':str(assignment.id),
-            f'examiner_team_member_id_{key}':str(person.id),f'examiner_participation_status_{key}':'Pending'})
+            f'examiner_team_member_id_{key}':str(person.id),f'examiner_participation_status_{key}':'Pending',
+            f'examiner_participation_status_changed_{key}':'1'})
         self.assertEqual(response.status_code,200,response.json)
         self.assertEqual(assignment.participation_status,'Pending')
 

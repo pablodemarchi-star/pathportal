@@ -290,17 +290,14 @@
       <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
       <input type="hidden" name="certification_year" value="{{ selected_certification_year }}">
       <div class="certification-guideline-fields">
-        <label>
-          Examiner guidelines
-          <input
-            type="url"
-            name="examiner_guideline_url"
-            value="{{ examiner_guideline_url|default('') }}"
-            placeholder="https://..."
-            aria-label="Examiner guidelines link"
-          >
-        </label>
-        <label>
+        <div class="supervisor-guideline-group">
+          <p class="supervisor-guideline-heading">Examiner guidelines</p>
+          <ul class="supervisor-guideline-list">
+            <li><label><span>for onsite sessions</span><input type="url" name="examiner_guideline_url" value="{{ examiner_guideline_url|default('') }}" placeholder="https://..." aria-label="Examiner guidelines for onsite sessions link"></label></li>
+            <li><label><span>for online sessions</span><input type="url" name="examiner_online_guideline_url" value="{{ examiner_online_guideline_url|default('') }}" placeholder="https://..." aria-label="Examiner guidelines for online sessions link"></label></li>
+          </ul>
+        </div>
+        <label class="supervisor-backup-material-field">
           Material for examiners
           <input
             type="url"
