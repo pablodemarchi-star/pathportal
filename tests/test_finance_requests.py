@@ -2995,6 +2995,36 @@ class FinanceRequestsTest(unittest.TestCase):
         payment = PaymentRequest.query.one()
         self.assertEqual(payment.scheduled_payment_date, payment_date)
 
+    def test_specific_payment_date_uses_argentina_day_after_utc_midnight(self):
+        class FixedDateTime(datetime):
+            @classmethod
+            def now(cls, tz=None):
+                instant = datetime(2026, 11, 4, 1, 7, tzinfo=timezone.utc)
+                return instant.astimezone(tz) if tz else instant.replace(tzinfo=None)
+
+        user = self.create_user("gmt3@example.com")
+        client = self.client_for(user)
+        for tab in ("payment_requests", "finance_payments"):
+            with self.subTest(tab=tab), patch("app.routes.datetime", FixedDateTime):
+                response = client.post("/finance-requests/payment-requests", data={
+                    "source_tab": tab, "description": "Today at 22:07 GMT-3",
+                    "concept_id": str(self.concept.id), "currency": "ARS", "amount": "100",
+                    "payment_method": "Cash", "payment_date_mode": "specific",
+                    "scheduled_payment_date": "03/11/2026",
+                }, follow_redirects=True)
+                self.assertEqual(response.status_code, 200)
+                self.assertNotIn("Payment date cannot be in the past.", response.get_data(as_text=True))
+        self.assertEqual(PaymentRequest.query.count(), 2)
+        self.assertTrue(all(payment.scheduled_payment_date == date(2026, 11, 3) for payment in PaymentRequest.query.all()))
+        with patch("app.routes.datetime", FixedDateTime):
+            response = client.post("/finance-requests/payment-requests", data={
+                "description": "Yesterday", "concept_id": str(self.concept.id),
+                "currency": "ARS", "amount": "100", "payment_method": "Cash",
+                "payment_date_mode": "specific", "scheduled_payment_date": "02/11/2026",
+            }, follow_redirects=True)
+        self.assertIn("Payment date cannot be in the past.", response.get_data(as_text=True))
+        self.assertEqual(PaymentRequest.query.count(), 2)
+
     def test_specific_payment_date_rejects_past_date(self):
         user = self.create_user("requester@example.com")
         past_date = date.today() - timedelta(days=1)

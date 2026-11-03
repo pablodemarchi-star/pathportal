@@ -26967,7 +26967,7 @@ def ensure_default_finance_concepts():
 
 
 def next_finance_request_number(model, prefix, legacy_prefixes=()):
-    year = date.today().year
+    year = today_local().year
     prefixes = (prefix, *legacy_prefixes)
     latest_number = 0
     for lookup_prefix in prefixes:
@@ -27100,7 +27100,7 @@ def can_edit_archived_payment_receipt(user, payment):
 
 
 def payment_is_delayed(payment, today=None):
-    today = today or date.today()
+    today = today or today_local()
     return bool(
         payment
         and payment.scheduled_payment_date
@@ -27405,7 +27405,7 @@ def billing_whatsapp_copy_contract(billing, language="en"):
 
 
 def payment_calendar_groups(payments, today=None):
-    today = today or date.today()
+    today = today or today_local()
     tomorrow = today + timedelta(days=1)
     groups = {"today": [], "tomorrow": [], "upcoming": [], "delayed": []}
     for payment in payments:
@@ -27427,7 +27427,7 @@ def payment_calendar_groups(payments, today=None):
 
 
 def finance_action_filter_groups(payments, today=None):
-    today = today or date.today()
+    today = today or today_local()
     tomorrow = today + timedelta(days=1)
     groups = {"today": [], "tomorrow": [], "future": {}}
     for payment in payments:
@@ -27634,7 +27634,7 @@ def apply_payment_form(payment, form, allow_status=False, save_payee_contact=Fal
         scheduled_date = None
     if payment_date_mode == "specific" and not scheduled_date and not card_payment_already_paid:
         errors.append("Payment date is required when Specific date is selected.")
-    if payment_date_mode == "specific" and scheduled_date and not card_payment_already_paid and scheduled_date < date.today():
+    if payment_date_mode == "specific" and scheduled_date and not card_payment_already_paid and scheduled_date < today_local():
         errors.append("Payment date cannot be in the past.")
     if payment_date_mode == "specific" and scheduled_date and not card_payment_already_paid and not is_argentina_business_day(scheduled_date):
         errors.append(FINANCE_NON_BUSINESS_PAYMENT_DATE_MESSAGE)
@@ -28060,7 +28060,7 @@ def finance_requests():
         finance_filter_options=finance_filter_options,
         finance_tab_counts=finance_tab_counts,
         active_finance_filter=finance_action_filter,
-        today_date=date.today(),
+        today_date=today_local(),
         next_payment_run_date=finance_next_payment_run_date(),
         show_archived=show_archived,
         show_archived_invoices=show_archived_invoices,
