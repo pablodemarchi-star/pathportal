@@ -1396,7 +1396,7 @@ class FinanceRequestsTest(unittest.TestCase):
         self.assertNotIn("Pending approval (", finance_body)
         self.assertIn('<span class="finance-status-chip status-management-approved">Scheduled</span>', finance_body)
 
-    def test_management_approval_sends_scheduled_payment_email_to_finance(self):
+    def test_management_approval_uses_agenda_instead_of_legacy_smtp_notice(self):
         finance_user = self.create_user("finance@example.com", department="Finance")
         superadmin = self.create_user("superadmin@example.com", is_superadmin=True)
         scheduled_date = date(2026, 10, 5)
@@ -1414,11 +1414,7 @@ class FinanceRequestsTest(unittest.TestCase):
             )
 
         self.assertEqual(response.status_code, 200)
-        send_email.assert_called_once_with(
-            "finance@pathexaminations.com",
-            "New payment scheduled for 05/10/2026",
-            "Please review the payment details available in the internal portal to ensure that all information is accurate before processing the payment.",
-        )
+        send_email.assert_not_called()
 
     def test_management_rejection_moves_pending_approval_payment_to_finance_archived_payments(self):
         finance_user = self.create_user("finance@example.com", department="Finance")

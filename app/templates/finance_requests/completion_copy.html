@@ -1,0 +1,13 @@
+{% extends "base.html" %}
+{% block title %}{{ notice.request_number }} · Copy message{% endblock %}
+{% block content %}
+<header class="page-header"><div><p class="eyebrow">Finance requests · {{ status_label }}</p><h1>{{ notice.request_number }}</h1></div></header>
+<section class="staff-detail-section">
+  <h2>{{ 'English' if language == 'en' else 'Spanish' }} message</h2>
+  <p><a class="secondary-button" href="{{ url_for('finance_completion.copy_message', notice_id=notice.id, language='en') }}">EN</a> <a class="secondary-button" href="{{ url_for('finance_completion.copy_message', notice_id=notice.id, language='sp') }}">SP</a></p>
+  {% if contract.error %}<p role="alert">{{ contract.error }}</p>{% else %}
+  <p style="white-space:pre-wrap;overflow-wrap:anywhere;">{{ contract.message }}</p>
+  <button class="primary-button" type="button" data-copy-text="{{ contract.message|e }}" data-copy-success="Message copied."><span class="copy-icon">Copy message</span><span class="copy-button-feedback">Message copied.</span></button>
+  {% endif %}
+</section>
+{% endblock %}

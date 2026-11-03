@@ -1,0 +1,23 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>{{ title }}</title></head>
+<body style="margin:0;background:#00506b;font-family:Arial,Helvetica,sans-serif;color:#111115;">
+<table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="background:#00506b;"><tr><td align="center" style="padding:28px 12px;">
+<table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="max-width:740px;background:#fff;border-radius:16px;">
+<tr><td style="padding:28px 26px 20px;">
+<p style="margin:0 0 20px;color:#00506b;font-size:11px;font-weight:700;letter-spacing:1px;">PATH INTERNATIONAL EXAMINATIONS</p>
+<span style="display:inline-block;padding:6px 12px;border-radius:20px;background:#e7f5f8;color:#00506b;font-size:12px;font-weight:700;">{{ notice.agenda_date.strftime('%d/%m/%Y') }} · GMT-3</span>
+<h1 style="margin:16px 0;color:#00506b;font-size:27px;line-height:1.25;">{{ title }}</h1>
+<p style="font-size:14px;line-height:1.6;color:#62727a;">Dear Finance team,<br>{% if notice.category == 'daily' %}Here are the payments and invoices requiring action today, including any outstanding overdue items.{% else %}The following request was added to today’s agenda after the 06:30 notification cutoff.{% endif %}</p>
+<p style="margin:12px 0 0;font-size:14px;font-weight:700;color:#00506b;">{{ rows|length }} request{{ 's' if rows|length != 1 else '' }} to action</p>
+</td></tr>
+{% for row in rows %}<tr><td style="padding:0 26px 16px;">
+<table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="background:#f1f6f7;border-radius:10px;border-left:4px solid {{ '#0b8fb2' if row.kind == 'Payment' else '#8b5bb3' }};"><tr><td style="padding:18px;">
+<p style="margin:0 0 8px;font-size:12px;color:#62727a;">{{ row.kind }} · {{ row.number }} · {{ row.status }}</p>
+<p style="margin:0 0 8px;font-size:21px;color:#00506b;font-weight:700;">{{ row.amount }}</p>
+<p style="margin:0;font-size:14px;line-height:1.6;overflow-wrap:anywhere;"><strong>{{ row.name or 'Not specified' }}</strong><br>{{ row.concept }}<br>Scheduled: {{ row.scheduled_date }}<br>Requested by: {{ row.requester or 'Not specified' }}</p>
+</td></tr></table>
+</td></tr>{% endfor %}
+<tr><td style="padding:4px 26px 26px;"><a href="{{ link }}" style="display:inline-block;padding:13px 20px;border-radius:8px;background:#00506b;color:#fff;text-decoration:none;font-size:14px;font-weight:700;">Open Finance actions</a>
+<p style="font-size:12px;line-height:1.6;color:#62727a;">Sign in to view the current details and process the requests. Status and schedule changes made after this email will be reflected in the portal.</p></td></tr>
+<tr><td style="padding:20px 26px;border-top:1px solid #d9dfdc;font-size:11px;line-height:1.6;color:#62727a;">Path International Examinations<br>Finance requests · Automated agenda</td></tr>
+</table></td></tr></table></body></html>

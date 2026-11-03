@@ -2565,6 +2565,44 @@ class PaymentRequest(db.Model):
     payee_contact = db.relationship("FinanceContact")
 
 
+class FinanceAgendaNotification(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    notice_key = db.Column(db.String(140), nullable=False, unique=True)
+    category = db.Column(db.String(12), nullable=False)
+    agenda_date = db.Column(db.Date, nullable=False, index=True)
+    payload = db.Column(db.Text, nullable=False)
+    status = db.Column(db.String(24), nullable=False, default="pending", index=True)
+    gmail_message_id = db.Column(db.String(200), nullable=True)
+    last_error = db.Column(db.String(250), nullable=True)
+    sent_at = db.Column(db.DateTime(timezone=True), nullable=True)
+
+
+class FinanceAgendaCoverage(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    agenda_date = db.Column(db.Date, nullable=False)
+    request_kind = db.Column(db.String(12), nullable=False)
+    request_id = db.Column(db.Integer, nullable=False)
+    notification_id = db.Column(db.Integer, db.ForeignKey("finance_agenda_notification.id"), nullable=False)
+    __table_args__ = (db.UniqueConstraint("agenda_date", "request_kind", "request_id"),)
+
+
+class FinanceCompletionNotification(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    request_kind = db.Column(db.String(12), nullable=False)
+    event_id = db.Column(db.Integer, nullable=False)
+    request_id = db.Column(db.Integer, nullable=False)
+    request_number = db.Column(db.String(80), nullable=False)
+    requester_user_id = db.Column(db.Integer, db.ForeignKey("app_user.id"), nullable=True)
+    recipient = db.Column(db.String(254), nullable=False)
+    payload = db.Column(db.Text, nullable=False)
+    status = db.Column(db.String(24), nullable=False, default="pending", index=True)
+    gmail_message_id = db.Column(db.String(200), nullable=True)
+    last_error = db.Column(db.String(250), nullable=True)
+    created_at = db.Column(db.DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))
+    sent_at = db.Column(db.DateTime(timezone=True), nullable=True)
+    __table_args__ = (db.UniqueConstraint("request_kind", "event_id"),)
+
+
 class PaymentReviewNotification(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     payment_request_id = db.Column(db.Integer, db.ForeignKey("payment_request.id"), nullable=False, index=True)

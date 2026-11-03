@@ -1,0 +1,26 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Request status updated</title></head>
+<body style="margin:0;background:#00506b;font-family:Arial,Helvetica,sans-serif;color:#111115;">
+<table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="background:#00506b;"><tr><td align="center" style="padding:28px 12px;">
+<table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="max-width:680px;background:#fff;border-radius:16px;">
+<tr><td style="padding:28px 26px 12px;">
+<p style="margin:0 0 20px;color:#00506b;font-size:11px;font-weight:700;letter-spacing:1px;">PATH INTERNATIONAL EXAMINATIONS</p>
+<span style="display:inline-block;padding:6px 12px;background:{{ '#e4f2eb' if details.status == 'Completed' else '#fbecea' if details.status == 'Rejected' else '#fff3d6' }};color:{{ '#236447' if details.status == 'Completed' else '#b42318' if details.status == 'Rejected' else '#825b0c' }};border-radius:20px;font-size:12px;font-weight:700;">{{ details.status }}</span>
+<h1 style="margin:16px 0;color:#00506b;font-size:27px;line-height:1.25;">Your {{ 'payment' if notice.request_kind == 'payment' else 'invoice' }} request {{ 'is complete.' if details.status == 'Completed' else 'has been rejected.' if details.status == 'Rejected' else 'has a discrepancy.' }}</h1>
+<p style="font-size:15px;line-height:1.6;">Dear {{ details.requester }},</p>
+<p style="color:#62727a;font-size:14px;line-height:1.6;">{% if details.status == 'Rejected' %}Your request has been rejected. Please read the reason below.{% elif details.status == 'With discrepancy' %}A discrepancy has been identified in your request. Please review the details below and update the request in the portal.{% elif notice.request_kind == 'payment' %}The payment has been completed and its receipt is available in the portal.{% else %}The invoice has been issued and is available in the portal.{% endif %}</p>
+</td></tr>
+<tr><td style="padding:0 26px 20px;"><table role="presentation" width="100%" style="background:#e6f0f3;border-radius:10px;border-left:4px solid #0b8fb2;"><tr><td style="padding:18px;">
+<p style="margin:0 0 6px;color:#62727a;font-size:12px;">{{ notice.request_number }}</p>
+<p style="margin:0 0 12px;color:#00506b;font-size:28px;font-weight:700;">{{ details.amount }}</p>
+<p style="margin:0;color:#00506b;font-size:14px;line-height:1.6;">{{ details.name or 'Not specified' }}<br>{{ details.concept }}</p>
+</td></tr></table></td></tr>
+{% if details.reason %}<tr><td style="padding:0 26px 20px;"><h2 style="color:#00506b;font-size:12px;">{{ 'DISCREPANCY DETAILS' if details.status == 'With discrepancy' else 'REASON' }}</h2><p style="white-space:pre-wrap;overflow-wrap:anywhere;font-size:14px;line-height:1.6;">{{ details.reason }}</p></td></tr>{% endif %}
+<tr><td style="padding:0 26px 26px;">
+<h2 style="color:#00506b;font-size:12px;letter-spacing:.8px;">COPY A MESSAGE TO SHARE</h2>
+<p style="color:#62727a;font-size:14px;line-height:1.6;">Choose English or Spanish to open the same message available on the request card, including its document links.</p>
+{% for action in actions %}<a href="{{ action.url }}" style="display:inline-block;min-width:64px;margin:0 8px 8px 0;padding:13px 20px;background:#00506b;color:#fff;border-radius:8px;text-align:center;text-decoration:none;font-size:14px;font-weight:700;">{{ action.label }}</a>{% endfor %}
+<p style="margin:8px 0 0;color:#62727a;font-size:12px;line-height:1.6;">Sign in to the portal, then select Copy message. EN = English · SP = Spanish.</p>
+</td></tr>
+<tr><td style="padding:20px 26px;border-top:1px solid #d9dfdc;color:#62727a;font-size:11px;line-height:1.6;">Path International Examinations<br>Finance requests · Automated notification</td></tr>
+</table></td></tr></table></body></html>

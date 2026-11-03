@@ -27168,6 +27168,8 @@ def add_payment_event(payment, event_type, previous_status=None, new_status=None
         created_by_department=actor["department"],
     )
     db.session.add(event)
+    from app.finance_completion import queue_completion
+    queue_completion(payment, "payment", previous_status, new_status, event)
     if commit:
         db.session.commit()
     return event
@@ -27185,6 +27187,8 @@ def add_billing_event(billing, event_type, previous_status=None, new_status=None
         created_by_department=actor["department"],
     )
     db.session.add(event)
+    from app.finance_completion import queue_completion
+    queue_completion(billing, "invoice", previous_status, new_status, event)
     if commit:
         db.session.commit()
     return event
@@ -28330,7 +28334,6 @@ def manage_payment_request(payment_id):
     action = request.form.get("action")
     comment = (request.form.get("management_comments") or "").strip()
     previous = payment.status
-    notify_finance_scheduled_payment = False
     if action == "approve":
         if payment_amount_is_pending(payment):
             flash("Amount must be set before approving this payment request.", "error")
@@ -28344,7 +28347,6 @@ def manage_payment_request(payment_id):
             flash("Scheduled payment date must be valid.", "error")
             return finance_request_redirect("management_review")
         add_payment_event(payment, "Approved by Management", previous_status=previous, new_status=payment.status, comment=comment)
-        notify_finance_scheduled_payment = True
     elif action == "needs_correction":
         if not comment:
             flash("Management comments are required for Needs correction.", "error")
@@ -28362,8 +28364,6 @@ def manage_payment_request(payment_id):
     else:
         abort(403)
     db.session.commit()
-    if notify_finance_scheduled_payment:
-        send_finance_scheduled_payment_email(payment)
     flash("Management review saved.", "success")
     return finance_request_redirect("management_review")
 

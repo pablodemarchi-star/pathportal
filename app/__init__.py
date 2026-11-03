@@ -152,6 +152,10 @@ def create_app():
     app.register_blueprint(google_mail_bp)
     from app.google_drive import drive_bp
     app.register_blueprint(drive_bp)
+    from app.finance_completion import completion_bp
+    app.register_blueprint(completion_bp)
+    from app.finance_agenda import agenda_bp
+    app.register_blueprint(agenda_bp)
     from app.marketing_material import marketing_bp
     app.register_blueprint(marketing_bp)
 
@@ -198,7 +202,7 @@ def create_app():
         remembered_email = request.cookies.get(REMEMBER_LOGIN_COOKIE, "")
         if request.method == "POST":
             finance_review_next = session.get("finance_email_review_next", "")
-            if not re.fullmatch(r"/finance-requests/payment-requests/\d+/email-review/(approve|reject|needs_correction|set_amount)\?review_event_id=\d+", finance_review_next):
+            if not re.fullmatch(r"(?:/finance-requests/payment-requests/\d+/email-review/(approve|reject|needs_correction|set_amount)\?review_event_id=\d+|/finance-requests/completion/\d+/(en|sp))", finance_review_next):
                 finance_review_next = ""
             email_or_username = request.form.get("email", request.form.get("username", "")).strip()
             password = request.form.get("password", "")

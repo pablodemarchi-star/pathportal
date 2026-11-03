@@ -240,3 +240,44 @@ Finance users open documents through authenticated portal download links which a
 check the payment request's visibility. Earlier local files are not migrated and
 continue to use the existing download route. Uploads from rolled-back transactions
 are moved to Drive trash; committed documents remain in Drive when a request is deleted.
+
+### Finance completion emails
+
+Payment completed, Invoice issued, Rejected and Needs correction (displayed as
+With discrepancy) transitions queue an English status email to
+the requester's account email in the same database transaction. Delivery starts
+after commit using the existing Gmail connection. A unique record per transition event and
+an atomic sending claim prevent duplicate notices on repeated saves. A request resubmitted and marked
+with a discrepancy again receives a new notice for that transition.
+Existing completed requests are not backfilled. Email failures do not roll back
+the saved finance operation; pending/failed notices can be retried from Email
+connection. Unknown deliveries require checking Gmail Sent before any retry.
+
+EN and SP links open an authenticated portal page with the same messages generated
+by the request card's copy helpers, saved at completion time. Email clients cannot
+reliably execute clipboard scripts, so the actual Copy message button is on that
+page. The page is restricted to the original requester or a superadmin with access
+to the underlying request. Reasons are included in rejection/discrepancy emails when recorded on the event.
+Historical messages remain unchanged if document links
+are edited later.
+
+### Daily Finance agenda
+
+The authenticated `/internal/jobs/finance-agenda` job sends a single English agenda
+to finance@pathexaminations.com at/after 06:30 Argentina (fixed GMT-3). Render cron
+activation is described in DEPLOY_RENDER.md; it does not depend on portal visits.
+No email is sent on days without actionable work.
+
+The agenda includes unarchived approved/scheduled/delayed payments due today or
+overdue, and unarchived Requested/Processing invoice/Invoice scheduled invoices
+whose scheduled (or requested) date is today or overdue. Invoices without a date
+are treated as actionable now. Completed, cancelled, rejected, held, discrepancy
+and pending-management payments are excluded. The old SMTP approval-time notice
+is replaced by this agenda.
+
+After 06:30, creating or rescheduling an actionable request for today triggers an
+immediate Gmail notice after commit. Approving a previously pending payment for
+today also triggers it. Per-day coverage prevents duplicate mentions when the
+cron is repeated, when a card is edited, or when cron and a late notice overlap.
+Each day starts fresh for work still outstanding. Delivery errors and uncertain
+outcomes follow the same admin retry policy as other finance notifications.

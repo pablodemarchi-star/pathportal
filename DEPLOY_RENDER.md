@@ -129,3 +129,30 @@ Size: 1 GB
 ```
 
 Si Render no permite 1 GB, usar el minimo disponible.
+
+## Finance agenda: 06:30 Argentina (GMT-3)
+
+Create a Render Cron Job connected to this repository after deploying the Finance
+agenda implementation. This job calls the web app: it must not open its own SQLite
+database or copy Gmail credentials, because Render cron jobs cannot share the web
+service's persistent disk.
+
+1. Generate a random secret of at least 32 characters and set
+   `FINANCE_AGENDA_JOB_TOKEN` in **both** the existing portal web service and the
+   new cron job. Never put the secret in Git or in a URL.
+2. Cron schedule: `30 9 * * *` (09:30 UTC = 06:30 Argentina, every day).
+3. Build command: `pip install -r requirements.txt`.
+4. Command: `python scripts/send_finance_agenda.py`.
+5. Cron environment: `PORTAL_BASE_URL=https://portal.pathinternalportal.com`
+   and the same `FINANCE_AGENDA_JOB_TOKEN`. The cron needs no database/Google secret.
+6. The web service needs the existing authorized Gmail connection. Keep the current
+   Gmail credentials and persistent disk configuration.
+
+The endpoint refuses missing/incorrect secrets and never accepts a date or recipient
+from the caller. It runs against the current Argentina date, refuses to send before
+06:30, and reserves a unique daily notice. Repeated runs don't resend a sent or
+uncertain notice. An empty agenda does not send an email. Failed deliveries can be
+retried from Email connection; uncertain deliveries require checking Gmail Sent.
+New actionable same-day requests after 06:30 trigger immediate emails independently
+of the cron. Daily and immediate notices share per-day coverage records to avoid
+notifying Finance twice about the same request on the same day.
