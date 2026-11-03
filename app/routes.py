@@ -26967,21 +26967,8 @@ def ensure_default_finance_concepts():
 
 
 def next_finance_request_number(model, prefix, legacy_prefixes=()):
-    year = today_local().year
-    prefixes = (prefix, *legacy_prefixes)
-    latest_number = 0
-    for lookup_prefix in prefixes:
-        pattern = f"{lookup_prefix}-{year}-%"
-        latest = model.query.filter(model.request_number.like(pattern)).order_by(model.request_number.desc()).first()
-        if latest and latest.request_number:
-            try:
-                latest_number = max(latest_number, int(latest.request_number.rsplit("-", 1)[-1]))
-            except ValueError:
-                latest_number = max(latest_number, model.query.filter(model.request_number.like(pattern)).count())
-    next_number = 1
-    if latest_number:
-        next_number = latest_number + 1
-    return f"{prefix}-{year}-{next_number:04d}"
+    from app.finance_numbering import next_number
+    return next_number(model, prefix, today_local().year, legacy_prefixes)
 
 
 def can_view_payment_request(user, payment):
@@ -27158,7 +27145,9 @@ def add_payment_event(payment, event_type, previous_status=None, new_status=None
     ).first()
     if duplicate and event_type.startswith("Payment automatically marked as delayed"):
         return duplicate
+    from app.finance_numbering import next_identity
     event = PaymentRequestEvent(
+        id=next_identity(PaymentRequestEvent),
         payment_request=payment,
         event_type=event_type,
         previous_status=previous_status,
@@ -27177,7 +27166,9 @@ def add_payment_event(payment, event_type, previous_status=None, new_status=None
 
 def add_billing_event(billing, event_type, previous_status=None, new_status=None, comment=None, commit=False):
     actor = current_actor()
+    from app.finance_numbering import next_identity
     event = BillingRequestEvent(
+        id=next_identity(BillingRequestEvent),
         billing_request=billing,
         event_type=event_type,
         previous_status=previous_status,
@@ -28105,11 +28096,13 @@ def create_payment_request():
     require_menu_edit(FINANCE_REQUESTS_MENU_KEY)
     ensure_default_finance_concepts()
     actor = current_actor()
+    from app.finance_numbering import next_identity
     source_tab = request.form.get("source_tab") if request.form.get("source_tab") in {"payment_requests", "finance_payments"} else "payment_requests"
     is_finance_action_request = source_tab == "finance_payments"
     return_url = finance_payment_request_return_url()
     initial_status = "Pending approval" if is_finance_action_request else ("Management approved" if actor["is_superadmin"] else "Submitted")
     payment = PaymentRequest(
+        id=next_identity(PaymentRequest),
         request_number=next_finance_request_number(PaymentRequest, "PAY"),
         requester_user_id=actor["user_id"],
         requester_department=actor["department"],
@@ -28224,6 +28217,8 @@ def delete_payment_request(payment_id):
     return_show_archived = request.form.get("show_archived") == "1"
     if not can_delete_payment_request(user, payment):
         abort(403, description="This payment request cannot be deleted.")
+    from app.finance_numbering import remember_deleted_request
+    remember_deleted_request(payment)
     db.session.delete(payment)
     db.session.commit()
     flash("Payment request deleted.", "success")
@@ -28542,7 +28537,9 @@ def create_billing_request():
     require_menu_edit(FINANCE_REQUESTS_MENU_KEY)
     ensure_default_finance_concepts()
     actor = current_actor()
+    from app.finance_numbering import next_identity
     billing = BillingRequest(
+        id=next_identity(BillingRequest),
         request_number=next_finance_request_number(BillingRequest, "INVOICE", legacy_prefixes=("BILL",)),
         requester_user_id=actor["user_id"],
         requester_department=actor["department"],
@@ -28599,6 +28596,8 @@ def delete_billing_request(billing_id):
     user = getattr(g, "current_user", None)
     if billing.status != "Requested" or not can_edit_billing_request(user, billing):
         abort(403, description="This invoice request cannot be deleted.")
+    from app.finance_numbering import remember_deleted_request
+    remember_deleted_request(billing)
     db.session.delete(billing)
     db.session.commit()
     flash("Invoice request deleted.", "success")

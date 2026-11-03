@@ -2565,6 +2565,11 @@ class PaymentRequest(db.Model):
     payee_contact = db.relationship("FinanceContact")
 
 
+class FinanceSequence(db.Model):
+    scope = db.Column(db.String(100), primary_key=True)
+    last_value = db.Column(db.Integer, nullable=False)
+
+
 class FinanceAgendaNotification(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     notice_key = db.Column(db.String(140), nullable=False, unique=True)

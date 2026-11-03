@@ -38,14 +38,23 @@ class FinanceCompletionTest(unittest.TestCase):
                 recipient, subject, text, html, message_id = send.call_args.args
                 self.assertEqual(recipient, requester.email)
                 self.assertIn('completed', subject)
-                self.assertIn('>EN</a>', html)
-                self.assertIn('>SP</a>', html)
+                self.assertIn('English message', html)
+                self.assertIn('Copy the message below and paste it into WhatsApp to send it.', html)
+                self.assertNotIn('/finance-requests/completion/', html)
+                self.assertIn('Mensaje en español', html)
+                self.assertIn('Copiá el mensaje de abajo y pegalo en WhatsApp para enviarlo.', html)
                 notice = FinanceCompletionNotification.query.filter_by(request_kind=kind, request_id=item.id).one()
                 self.assertEqual(notice.status, 'sent')
                 contract = payment_whatsapp_copy_contract if kind == 'payment' else billing_whatsapp_copy_contract
                 payload = json.loads(notice.payload)
                 self.assertEqual(payload['en'], contract(item, 'en'))
                 self.assertEqual(payload['sp'], contract(item, 'sp'))
+                self.assertIn(payload['en']['message'], text)
+                self.assertIn(payload['sp']['message'], text)
+                from markupsafe import escape
+                for language in ('en', 'sp'):
+                    for line in payload[language]['message'].splitlines():
+                        self.assertIn(str(escape(line)), html)
                 self.assertTrue(payload['en']['message'])
                 for language in ('en', 'sp'):
                     page = self.client_for(requester).get(f'/finance-requests/completion/{notice.id}/{language}')
@@ -79,8 +88,8 @@ class FinanceCompletionTest(unittest.TestCase):
                     self.assertEqual(payload['status'],label)
                     self.assertEqual(send.call_args.args[0],requester.email)
                     self.assertIn(label.lower(),send.call_args.args[1])
-                    self.assertIn('>EN</a>',send.call_args.args[3])
-                    self.assertIn('>SP</a>',send.call_args.args[3])
+                    self.assertIn('English message',send.call_args.args[3])
+                    self.assertIn('Mensaje en español',send.call_args.args[3])
                     self.assertNotIn('request is complete.',send.call_args.args[3])
                     if kind == 'payment':
                         self.assertEqual(payload['amount'],'Amount pending')

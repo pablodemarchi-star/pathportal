@@ -1,8 +1,6 @@
 """Persist completion notices with the status change and send only after commit."""
 import json
-import os
 from datetime import datetime, timezone
-from urllib.parse import urlsplit
 
 from flask import Blueprint, abort, current_app, g, has_request_context, render_template, session, url_for
 from sqlalchemy import event
@@ -76,22 +74,20 @@ def deliver_completion(notice_id):
     if not claimed:
         return False
     try:
-        callback = urlsplit(os.getenv('GOOGLE_OAUTH_REDIRECT_URI', 'https://portal.pathinternalportal.com/integrations/google/callback'))
-        base = os.getenv('PORTAL_BASE_URL', f'{callback.scheme}://{callback.netloc}').rstrip('/')
-        origin = urlsplit(base)
-        local = origin.scheme == 'http' and origin.hostname in {'localhost', '127.0.0.1'}
-        if (origin.scheme != 'https' and not local) or not origin.netloc or origin.path or origin.query or origin.fragment:
-            raise MailNotSent('Set PORTAL_BASE_URL to the production HTTPS origin')
         payload = json.loads(notice.payload)
-        actions = [{'label': language.upper(), 'url': base + url_for('finance_completion.copy_message', notice_id=notice.id, language=language)} for language in ('en', 'sp')]
         status_label = payload['status']
         subject = f"{'Payment' if notice.request_kind == 'payment' else 'Invoice'} request {status_label.lower()} — {notice.request_number}"
         text = f"Dear {payload['requester']},\n\nYour {'payment' if notice.request_kind == 'payment' else 'invoice'} request {notice.request_number} has changed to {status_label}.\nAmount: {payload['amount']}\n\n"
         if payload['reason']:
             text += f"Reason: {payload['reason']}\n\n"
-        text += '\n'.join(f"{action['label']} — Open message to copy: {action['url']}" for action in actions)
-        text += '\n\nSign in to the portal to copy the message.\n\nPath International Examinations'
-        html = render_template('finance_requests/completion_email.html', notice=notice, details=payload, actions=actions)
+        for language, heading, instruction in (
+            ('en', 'ENGLISH MESSAGE', 'Copy the message below and paste it into WhatsApp to send it.'),
+            ('sp', 'MENSAJE EN ESPAÑOL', 'Copiá el mensaje de abajo y pegalo en WhatsApp para enviarlo.'),
+        ):
+            contract = payload[language]
+            text += f"{heading}\n{instruction}\n\n{contract['message'] or contract['error']}\n\n"
+        text += 'Path International Examinations'
+        html = render_template('finance_requests/completion_email.html', notice=notice, details=payload)
         notice.gmail_message_id = send_notification_email(notice.recipient, subject, text, html,
             f'<finance-completion-{notice.id}@pathexaminations.com>')
         notice.status, notice.last_error = 'sent', None

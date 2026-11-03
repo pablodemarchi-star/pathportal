@@ -99,6 +99,26 @@ class FinanceAgendaTest(unittest.TestCase):
         self.assertTrue(all(notice.status == 'sent' for notice in notices))
         self.assertEqual(FinanceAgendaCoverage.query.count(),2)
 
+    def test_deleting_last_payment_does_not_suppress_new_payment_notification(self):
+        from app.models import PaymentRequest
+        admin = self.create_user('deleted-payment@example.com', is_superadmin=True)
+        client = self.client_for(admin)
+        data = {'description':'Payment for today', 'concept_id':str(self.concept.id),
+            'currency':'ARS','amount':'100','payment_method':'Cash',
+            'payment_date_mode':'specific','scheduled_payment_date':self.today.strftime('%d/%m/%Y')}
+        with patch('app.finance_agenda.local_now',return_value=self.now(22,7)),patch('app.routes.today_local',return_value=self.today),patch('app.finance_agenda.send_notification_email',return_value='sent') as send:
+            self.assertEqual(client.post('/finance-requests/payment-requests',data=data).status_code,302)
+            first=PaymentRequest.query.one()
+            first_number,first_id=first.request_number,first.id
+            db.session.delete(first);db.session.commit()
+            self.assertEqual(client.post('/finance-requests/payment-requests',data=data).status_code,302)
+            second=PaymentRequest.query.one()
+            self.assertNotEqual(second.request_number,first_number)
+            self.assertNotEqual(second.id,first_id)
+            self.assertEqual(send.call_count,2)
+            self.assertIn(second.request_number,send.call_args.args[2])
+        self.assertEqual(FinanceAgendaCoverage.query.count(),2)
+
     def test_invoice_creation_after_cutoff_and_future_reschedule(self):
         user=self.create_user('requester@example.com')
         with patch('app.finance_agenda.local_now',return_value=self.now(8)),patch('app.finance_agenda.send_notification_email',return_value='sent') as send:
