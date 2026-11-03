@@ -18078,3 +18078,30 @@ body.staff-session-detail-open { overflow: hidden; }
 .staff-invoice-preview-fallback { padding: 24px; }
 
 .control-tower-format-chip { align-self: start; width: fit-content; }
+
+.staff-id-document-link { border: 0; padding: 0; background: transparent; font-family: inherit; text-decoration: underline; text-underline-offset: 2px; cursor: pointer; }
+.staff-id-document-dialog { width: min(900px, calc(100vw - 32px)); max-height: 90vh; box-sizing: border-box; overflow: auto; padding: 22px; border: 1px solid #d9dfdc; border-radius: 16px; color: #111115; }
+.staff-id-document-dialog::backdrop { background: rgb(20 30 40 / 55%); }
+.staff-id-document-viewport { height: min(54vh, 650px); min-height: 120px; width: 100%; overflow: hidden; border: 1px solid #d9dfdc; border-radius: 8px; background: #f4f8fa; box-sizing: border-box; }
+.staff-id-document-viewport iframe, .staff-id-document-viewport img { width: 100%; height: 100%; max-width: 100%; display: block; border: 0; box-sizing: border-box; }
+.staff-id-document-viewport img { object-fit: contain; }
+.staff-id-document-viewport [hidden] { display: none; }
+.staff-id-document-dialog [data-staff-id-filename] { text-decoration: none; }
+.staff-id-document-dialog [data-staff-id-person], .staff-id-document-dialog [data-staff-id-message], .staff-id-document-dialog [data-staff-id-preview] > p { margin: 8px 0; }
+.staff-id-document-dialog [data-staff-id-message]:empty { display: none; }
+.staff-id-document-actions { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 14px; }
+.staff-id-document-dialog [role="status"].is-error { color: #b42318; }
+
+.staff-id-document-dialog.has-document[open] { display: flex; flex-direction: column; height: min(90dvh, 950px); max-height: 90dvh; }
+.staff-id-document-dialog.has-document [data-staff-id-preview]:not([hidden]) { display: flex; flex-direction: column; flex: 1; min-height: 0; }
+.staff-id-document-dialog.has-document .staff-id-document-viewport { flex: 1; height: auto; min-height: 0; }
+.staff-id-document-dialog.has-document > :not([data-staff-id-preview]), .staff-id-document-dialog.has-document [data-staff-id-preview] > :not(.staff-id-document-viewport) { flex-shrink: 0; }
+
+.staff-id-document-link.has-document { color: var(--path-blue-303up, #00506b); }
+
+.staff-id-document-link.is-expired, .staff-id-document-dialog .is-expired { color: #b42318; }
+.staff-id-expiry-field { display: flex; flex-direction: column; gap: 6px; max-width: 240px; font-size: 13px; font-weight: 600; }
+
+.package-staff-id-download { color: var(--path-blue-303up, #00506b); text-decoration: underline; text-underline-offset: 2px; }
+
+.package-staff-id-download-disabled { color: #9aa6a2; text-decoration: underline; text-underline-offset: 2px; cursor: not-allowed; }

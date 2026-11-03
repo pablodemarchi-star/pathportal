@@ -66,6 +66,17 @@ class GoogleDriveStaffInvoiceUpload(db.Model):
     created_at = db.Column(db.DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))
 
 
+class StaffIdDocument(db.Model):
+    member_id = db.Column(db.Integer, db.ForeignKey("academic_staff.id"), primary_key=True)
+    file_id = db.Column(db.String(160), nullable=False, unique=True)
+    destination_key = db.Column(db.String(100), nullable=False)
+    filename = db.Column(db.String(500), nullable=False)
+    mime_type = db.Column(db.String(160), nullable=False)
+    expiry_date = db.Column(db.Date, nullable=True)
+    version = db.Column(db.Integer, nullable=False, default=1)
+    __mapper_args__ = {"version_id_col": version}
+
+
 class StaffInvoiceCancellationNotification(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     file_id = db.Column(db.String(160), nullable=False, unique=True)

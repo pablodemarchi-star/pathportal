@@ -154,6 +154,8 @@ def create_app():
     app.register_blueprint(drive_bp)
     from app.staff_invoices import staff_invoices_bp
     app.register_blueprint(staff_invoices_bp)
+    from app.staff_id_documents import staff_id_documents_bp
+    app.register_blueprint(staff_id_documents_bp)
     from app.finance_completion import completion_bp
     app.register_blueprint(completion_bp)
     from app.finance_agenda import agenda_bp
@@ -187,7 +189,7 @@ def create_app():
             "SAMEORIGIN" if (request.endpoint == "staff.exam_session_planner"
             and request.args.get("session_fullscreen") == "1" and request.args.get("staff_card"))
             or (request.endpoint in {"staff.pre_session_control_tower", "staff.pre_online_session_control_tower", "staff.my_actions"} and request.args.get("session_modal"))
-            or request.endpoint == "staff_invoices.preview"
+            or request.endpoint in {"staff_invoices.preview", "staff_id_documents.preview"}
             else "DENY"
         )
         response.headers["Referrer-Policy"] = "no-referrer" if request.endpoint in {"staff.staff_exam_sessions", "staff_invoices.upload", "staff_invoices.download", "staff_invoices.preview", "staff_invoices.remove"} else "strict-origin-when-cross-origin"
@@ -289,6 +291,8 @@ def create_app():
 
     with app.app_context():
         db.create_all()
+        from app.schema_migrations import migrate_staff_id_expiry
+        migrate_staff_id_expiry()
         from app.schema_migrations import migrate_finance_completion_events
         migrate_finance_completion_events()
         db.session.execute(text("CREATE UNIQUE INDEX IF NOT EXISTS uq_staff_invoice_share_year ON google_drive_staff_invoice_upload (share_id, year)"))

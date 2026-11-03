@@ -133,7 +133,7 @@
         </section>
       </section>
 
-      <section class="staffing-control-section schedule-overview-section" id="schedule-overview-{{ session.id }}" data-control-section data-default-collapsed="true" data-section-aliases="schedule" aria-labelledby="schedule-overview-title-{{ session.id }}">
+      <section class="staffing-control-section schedule-overview-section" id="schedule-overview-{{ session.id }}" data-control-section data-always-expanded="true" data-section-aliases="schedule" aria-labelledby="schedule-overview-title-{{ session.id }}">
         <div class="staffing-control-header">
           <div>
             <h3 id="schedule-overview-title-{{ session.id }}" tabindex="-1">Schedule</h3>
@@ -179,7 +179,7 @@
         </div>
       </section>
 
-      <section class="staffing-actions-section staffing-control-section" id="staffing-{{ session.id }}" data-control-section data-default-collapsed="true" aria-labelledby="staffing-title-{{ session.id }}">
+      <section class="staffing-actions-section staffing-control-section" id="staffing-{{ session.id }}" data-control-section data-always-expanded="true" aria-labelledby="staffing-title-{{ session.id }}">
         <div class="staffing-control-header">
           <div>
             <h3 id="staffing-title-{{ session.id }}" tabindex="-1">Staffing actions</h3>
@@ -440,7 +440,7 @@
       </section>
 
       {% set logistics_actions_disabled = not view.logistics_gate.is_unblocked %}
-      <section class="staffing-control-section logistics-control-section{% if logistics_actions_disabled %} is-logistics-blocked{% endif %}" id="logistics-{{ session.id }}" data-control-section data-default-collapsed="true"{% if logistics_actions_disabled %} data-logistics-actions-disabled="true" aria-disabled="true"{% endif %} aria-labelledby="logistics-title-{{ session.id }}">
+      <section class="staffing-control-section logistics-control-section{% if logistics_actions_disabled %} is-logistics-blocked{% endif %}" id="logistics-{{ session.id }}" data-control-section data-always-expanded="true"{% if logistics_actions_disabled %} data-logistics-actions-disabled="true" aria-disabled="true"{% endif %} aria-labelledby="logistics-title-{{ session.id }}">
         <div class="staffing-control-header">
           <div>
             <h3 id="logistics-title-{{ session.id }}" tabindex="-1">Logistics</h3>
@@ -832,7 +832,7 @@
         {% endif %}
       </section>
 
-      <section class="staffing-control-section packages-control-section" id="packages-{{ session.id }}" data-control-section data-default-collapsed="true" aria-labelledby="packages-title-{{ session.id }}">
+      <section class="staffing-control-section packages-control-section" id="packages-{{ session.id }}" data-control-section data-always-expanded="true" aria-labelledby="packages-title-{{ session.id }}">
         <div class="staffing-control-header">
           <div>
             <h3 class="package-actions-title" id="packages-title-{{ session.id }}" tabindex="-1">Package actions</h3>
@@ -1114,18 +1114,24 @@ This stage has already been marked as complete. Reopening it may affect package 
               <div>
                 {% set staff_member_ids_status = session.staff_member_ids_status or "not_started" %}
                 <div class="package-preparation-guidance-title">
-                  <strong>Staff member IDs</strong>
+                  <strong>Staff ID cards</strong>
                   {{ package_stage_state(session, staff_member_ids_status, 'staff_member_ids_status') }}
                 </div>
                 {% if not view.packages.staffing_ready %}
-                  <p class="staffing-schedule-notice">Staffing must be ready before staff member IDs can be issued.</p>
+                  <p class="staffing-schedule-notice">Staffing must be ready before staff ID cards can be issued.</p>
                 {% endif %}
                 <p>Include a lanyard, rigid ID card, and card holder for each of the following staff members:</p>
                 <ul class="package-staff-id-list">
                   {% for staff_member in view.packages.staff_member_id_requirements %}
                     <li>
                       <span class="package-staff-id-name">
-                        <span>{{ (staff_member.title ~ ' ' if staff_member.title else '') ~ staff_member.name }}</span>
+                        {% if staff_member.download_url and staff_member.is_confirmed %}
+                          <a class="package-staff-id-download" href="{{ staff_member.download_url }}"{% if staff_member.expired %} data-staff-id-expired-download{% endif %}>{{ (staff_member.title ~ ' ' if staff_member.title else '') ~ staff_member.name }}</a>
+                        {% elif staff_member.has_file %}
+                          <span class="package-staff-id-download-disabled" role="link" aria-disabled="true" title="The ID card file is available, but the staff member has not been confirmed yet.">{{ (staff_member.title ~ ' ' if staff_member.title else '') ~ staff_member.name }}</span>
+                        {% else %}
+                          <span>{{ (staff_member.title ~ ' ' if staff_member.title else '') ~ staff_member.name }}</span>
+                        {% endif %}
                         {% if staff_member.roles %}
                           <span class="role-badges package-staff-id-roles">
                             {% for role in staff_member.roles %}
@@ -1140,8 +1146,16 @@ This stage has already been marked as complete. Reopening it may affect package 
                     </li>
                   {% endfor %}
                 </ul>
+                {% set missing_id_cards = view.packages.staff_member_id_requirements|rejectattr('has_file')|list %}
+                {% set expired_id_cards = view.packages.staff_member_id_requirements|selectattr('expired')|list %}
+                {% if missing_id_cards or expired_id_cards %}
+                  <p class="staffing-schedule-notice">You may mark this section as Completed, but the following cards still require attention:
+                    {% if missing_id_cards %}Missing files: {{ missing_id_cards|map(attribute='name')|join(', ') }}.{% endif %}
+                    {% if expired_id_cards %}Expired files: {{ expired_id_cards|map(attribute='name')|join(', ') }}.{% endif %}
+                  </p>
+                {% endif %}
               </div>
-              <div class="package-preparation-actions" aria-label="Staff member IDs actions">
+              <div class="package-preparation-actions" aria-label="Staff ID cards actions">
                 <form method="post" action="{{ url_for('staff.update_staff_member_ids', session_id=session.id) }}" data-disable-on-submit>
                   <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
                   <input type="hidden" name="schedule_status" value="{{ selected_schedule_status }}">
@@ -1164,7 +1178,7 @@ This stage has already been marked as complete. Reopening it may affect package 
                   <button class="package-preparation-chip package-preparation-chip-incident" type="submit" {% if staff_member_ids_status in ["completed", "incident"] %}disabled{% endif %}>Mark incident</button>
                 </form>
                 {% if staff_member_ids_status == "completed" %}
-                  <form method="post" action="{{ url_for('staff.update_staff_member_ids', session_id=session.id) }}" data-confirm-password-submit="Are you sure you want to reopen editing for Staff member IDs?
+                  <form method="post" action="{{ url_for('staff.update_staff_member_ids', session_id=session.id) }}" data-confirm-password-submit="Are you sure you want to reopen editing for Staff ID cards?
 This stage has already been marked as complete. Reopening it may affect package preparation records and any previously confirmed staff ID checks. Please continue only if changes are required." data-confirm-password-value="EditOK" data-disable-on-submit>
                     <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
                     <input type="hidden" name="schedule_status" value="{{ selected_schedule_status }}">
@@ -1288,7 +1302,7 @@ This stage has already been marked as complete. Reopening it may affect package 
 
       </section>
 
-      <section class="staffing-control-section shipments-control-section" id="shipments-{{ session.id }}" data-control-section data-default-collapsed="true" aria-labelledby="shipments-title-{{ session.id }}">
+      <section class="staffing-control-section shipments-control-section" id="shipments-{{ session.id }}" data-control-section data-always-expanded="true" aria-labelledby="shipments-title-{{ session.id }}">
         <div class="staffing-control-header">
           <div>
             <h3 id="shipments-title-{{ session.id }}" tabindex="-1">Shipment actions</h3>
@@ -1950,7 +1964,7 @@ This stage has already been marked as complete. Reopening it may affect package 
         </div>
       </section>
 
-      <section class="staffing-control-section finance-control-section" id="finance-{{ session.id }}" data-control-section data-default-collapsed="true" aria-labelledby="finance-title-{{ session.id }}">
+      <section class="staffing-control-section finance-control-section" id="finance-{{ session.id }}" data-control-section data-always-expanded="true" aria-labelledby="finance-title-{{ session.id }}">
         <div class="staffing-control-header">
           <div>
             <h3 id="finance-title-{{ session.id }}" tabindex="-1">Finance</h3>
@@ -2081,7 +2095,7 @@ This stage has already been marked as complete. Reopening it may affect package 
         </section>
       </section>
 
-      <section class="staffing-control-section sinapsis-control-section" id="sinapsis-{{ session.id }}" data-control-section data-default-collapsed="true" aria-labelledby="sinapsis-title-{{ session.id }}">
+      <section class="staffing-control-section sinapsis-control-section" id="sinapsis-{{ session.id }}" data-control-section data-always-expanded="true" aria-labelledby="sinapsis-title-{{ session.id }}">
         <div class="staffing-control-header">
           <div>
             <h3 id="sinapsis-title-{{ session.id }}" tabindex="-1">Final checks</h3>
@@ -2993,7 +3007,7 @@ This stage has already been marked as complete. Reopening it may affect package 
         {% endif %}
       </section>
 
-      <section class="schedule-workflow-actions staffing-control-section {% if not view.schedule_preparation_unlocked %}is-monthly-blocked{% endif %}" id="schedule-actions-{{ session.id }}" data-control-section data-default-collapsed="true" data-section-aliases="schedule" aria-labelledby="schedule-actions-title-{{ session.id }}">
+      <section class="schedule-workflow-actions staffing-control-section {% if not view.schedule_preparation_unlocked %}is-monthly-blocked{% endif %}" id="schedule-actions-{{ session.id }}" data-control-section data-always-expanded="true" data-section-aliases="schedule" aria-labelledby="schedule-actions-title-{{ session.id }}">
         <span class="modal-anchor" id="schedule-{{ session.id }}" aria-hidden="true"></span>
         <div class="staffing-control-header">
           <div>

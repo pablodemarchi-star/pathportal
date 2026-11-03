@@ -1970,12 +1970,17 @@ def staff_members_pending_id_for_session(session_record, assignments=None):
         staff_member = getattr(assignment, "team_member", None)
         if staff_member:
             staff_members.append(staff_member)
+    from app.models import StaffIdDocument
+    from app.staff_id_documents import card_expired
+    documents = {document.member_id: document for document in StaffIdDocument.query.filter(
+        StaffIdDocument.member_id.in_([member.id for member in staff_members if member])).all()}
     pending_staff_members = []
     for staff_member in staff_members:
         if not staff_member or staff_member.id in seen_member_ids:
             continue
         seen_member_ids.add(staff_member.id)
-        if not getattr(staff_member, "id_issued", False):
+        if (not getattr(staff_member, "id_issued", False)
+                or (staff_member.id in documents and card_expired(documents[staff_member.id]))):
             pending_staff_members.append(staff_member)
     return sorted(pending_staff_members, key=lambda value: value.full_name.casefold())
 
@@ -2037,7 +2042,19 @@ def staff_member_id_requirements_for_session(session_record, assignments=None):
             staff_member,
             is_confirmed=confirmation_by_id.get(staff_member.id, False),
         ))
-    return requirements or staff_member_id_snapshot_for_session(session_record)
+    requirements = requirements or staff_member_id_snapshot_for_session(session_record)
+    from app.models import StaffIdDocument
+    from app.staff_id_documents import card_expired
+    documents = {document.member_id: document for document in StaffIdDocument.query.filter(
+        StaffIdDocument.member_id.in_([item['id'] for item in requirements if item.get('id')])).all()}
+    for item in requirements:
+        document = documents.get(item.get('id'))
+        item['is_confirmed'] = confirmation_by_id.get(item.get('id'), False)
+        item['has_file'] = document is not None
+        item['expired'] = bool(document and card_expired(document))
+        item['download_url'] = url_for('staff_id_documents.package_download', session_id=session_record.id,
+            member_id=item['id']) if document and item['is_confirmed'] else None
+    return requirements
 
 
 def inclusion_final_items_for_session(session_record, supervisor_assignments=None):
@@ -9711,7 +9728,7 @@ def package_preparation_stage_statuses(session_record, staff_member_id_requireme
         ("Return packages", session_record.return_packages_status),
     ]
     if staff_member_id_requirements:
-        stages.append(("Staff member IDs", session_record.staff_member_ids_status))
+        stages.append(("Staff ID cards", session_record.staff_member_ids_status))
     stages.extend([
         ("Inclusion of final items", session_record.inclusion_final_items_status),
         ("Session box sealing", session_record.session_box_sealing_status),
@@ -9816,7 +9833,7 @@ PACKAGE_STATUS_TRACK_FIELDS = (
     ("Candidate label printing and affixing", "package_label_printing_status", "package_label_printing_updated_at", "package_label_printing_updated_by"),
     ("Room package sealing", "room_package_sealing_status", "room_package_sealing_updated_at", "room_package_sealing_updated_by"),
     ("Return packages", "return_packages_status", "return_packages_updated_at", "return_packages_updated_by"),
-    ("Staff member IDs", "staff_member_ids_status", "staff_member_ids_updated_at", "staff_member_ids_updated_by"),
+    ("Staff ID cards", "staff_member_ids_status", "staff_member_ids_updated_at", "staff_member_ids_updated_by"),
     ("Inclusion of final items", "inclusion_final_items_status", "inclusion_final_items_updated_at", "inclusion_final_items_updated_by"),
     ("Session box sealing", "session_box_sealing_status", "session_box_sealing_updated_at", "session_box_sealing_updated_by"),
 )
@@ -22956,7 +22973,7 @@ def update_staff_member_ids(session_id):
 
     action = request.form.get("action", "").strip()
     if action == "reopen" and request.form.get("confirmation_password", request.form.get("deletion_password", "")) != "EditOK":
-        flash("Password authorisation is required to reopen Staff member IDs.", "error")
+        flash("Password authorisation is required to reopen Staff ID cards.", "error")
         return package_control_redirect(session_record, status_filter, target=package_focus_target)
 
     error = apply_package_stage_status_update(
@@ -22965,7 +22982,7 @@ def update_staff_member_ids(session_id):
         "staff_member_ids_status",
         "staff_member_ids_updated_at",
         "staff_member_ids_updated_by",
-        "Staff member IDs",
+        "Staff ID cards",
     )
     if error:
         flash(error, "error")
@@ -22979,10 +22996,26 @@ def update_staff_member_ids(session_id):
         pending_requirements = staff_member_id_requirements_for_session(session_record, session_assignments)
         if pending_requirements:
             session_record.staff_member_ids_snapshot = json.dumps(pending_requirements)
-        for staff_member in staff_members_pending_id_for_session(session_record, session_assignments):
-            staff_member.id_issued = True
+        from app.models import StaffIdDocument
+        from app.staff_id_documents import card_expired
+        members = staff_members_pending_id_for_session(session_record, session_assignments)
+        documents = {document.member_id: document for document in StaffIdDocument.query.filter(
+            StaffIdDocument.member_id.in_([member.id for member in members])).all()}
+        missing, expired = [], []
+        for staff_member in members:
+            document = documents.get(staff_member.id)
+            if document:
+                staff_member.id_issued = True
+                if card_expired(document):
+                    expired.append(staff_member.full_name)
+            else:
+                missing.append(staff_member.full_name)
+        if missing:
+            flash("Staff ID cards completed with missing files: " + ", ".join(missing) + ". Their ID issued status was not changed.", "warning")
+        if expired:
+            flash("Staff ID cards completed with expired files: " + ", ".join(expired) + ". ID card file update required before issuance.", "warning")
     db.session.commit()
-    flash(f"Staff member IDs marked as {package_label_verification_status_label(session_record.staff_member_ids_status)}.", "success")
+    flash(f"Staff ID cards marked as {package_label_verification_status_label(session_record.staff_member_ids_status)}.", "success")
     return package_control_redirect(session_record, status_filter, target=package_focus_target)
 
 
@@ -29170,10 +29203,17 @@ def index():
     create_member_draft = None
     if request.args.get("open_staff_modal") == "create-member":
         create_member_draft = member_from_draft_payload(session.pop("create_member_draft", None))
+    from app.models import StaffIdDocument
+    from app.staff_id_documents import document_data
+    staff_id_documents = {row.member_id: document_data(row) for row in StaffIdDocument.query
+                          .filter(StaffIdDocument.member_id.in_([member.id for member in members])).all()}
+    staff_id_document_members = set(staff_id_documents)
     return render_template(
         "staff/index.html",
         page_mode="staff",
         members=members,
+        staff_id_document_members=staff_id_document_members,
+        staff_id_documents=staff_id_documents,
         pagination=pagination,
         potential_entries=[],
         roles=ROLE_OPTIONS,
@@ -32091,9 +32131,23 @@ def bulk_update_members():
         if id_issued not in {"0", "1"}:
             flash("Please select a valid ID issued value.", "error")
             return redirect(url_for("staff.index"))
+        from app.staff_id_documents import set_member_id_issued
+        updated, failed = 0, []
         for member in members:
-            member.id_issued = id_issued == "1"
-        label = "ID marked as issued" if id_issued == "1" else "ID marked as not issued"
+            name = member.full_name
+            try:
+                set_member_id_issued(member, id_issued == "1")
+                db.session.commit()
+                updated += 1
+            except OSError:
+                db.session.rollback()
+                failed.append(name)
+        if updated:
+            label = "ID marked as issued" if id_issued == "1" else "ID marked as not issued"
+            flash(f"{label} for {updated} members.", "success")
+        if failed:
+            flash("The Staff ID card could not be moved to the Drive trash for: " + ", ".join(failed) + ". Their ID status and card were retained.", "error")
+        return redirect(url_for("staff.index"))
     else:
         flash("Please select a valid bulk action.", "error")
         return redirect(url_for("staff.index"))
@@ -32235,6 +32289,14 @@ def update_member(member_id):
     if request.form.get("status") in {"Inactive", "Archived"} and previous_status != request.form.get("status"):
         if flash_active_exam_session_status_blockers([member]):
             return redirect(url_for("staff.index", show_archived=1 if previous_status == "Archived" else 0))
+
+    from app.staff_id_documents import set_member_id_issued
+    try:
+        set_member_id_issued(member, request.form.get("id_issued") == "on")
+    except OSError:
+        db.session.rollback()
+        flash("The Staff ID card could not be moved to the Drive trash. The member was not updated; please try again.", "error")
+        return redirect(url_for("staff.index"))
 
     apply_form(member, request.form)
     db.session.commit()

@@ -1154,7 +1154,7 @@ const targetLabels = {
   "package-label-printing": "Candidate label printing and affixing",
   "package-room-package-sealing": "Room package sealing",
   "package-return-packages": "Return packages",
-  "package-staff-member-ids": "Staff member IDs",
+  "package-staff-member-ids": "Staff ID cards",
   "package-inclusion-final-items": "Inclusion of final items",
   "package-session-box-sealing": "Session box sealing",
   shipments: "Shipments",
@@ -1228,6 +1228,7 @@ const expandControlSection = (section) => {
 
 const setControlSectionCollapsed = (section, isCollapsed) => {
   if (!section) return;
+  isCollapsed = isCollapsed && section.dataset.alwaysExpanded !== "true";
   section.classList.toggle("is-collapsed", isCollapsed);
   const toggle = section.querySelector(":scope > .staffing-control-header [data-control-section-toggle]");
   if (toggle) {
@@ -1831,6 +1832,11 @@ const openCommunicationsControlForm = (form, trigger, { focus = true } = {}) => 
 const initializeControlSections = () => {
   document.querySelectorAll("[data-control-section]").forEach((section) => {
     const header = section.querySelector(":scope > .staffing-control-header");
+    if (section.dataset.alwaysExpanded === "true") {
+      section.classList.remove("is-collapsed");
+      header?.querySelector("[data-control-section-toggle]")?.remove();
+      return;
+    }
     if (!header || header.querySelector("[data-control-section-toggle]") || !section.id) return;
     const title = header.querySelector("h3")?.textContent?.trim() || "section";
     const button = document.createElement("button");
@@ -1859,6 +1865,11 @@ document.addEventListener("click", (event) => {
     event.preventDefault();
     const section = document.getElementById(sectionToggle.getAttribute("aria-controls"));
     if (!section) return;
+    if (section.dataset.alwaysExpanded === "true") {
+      expandControlSection(section);
+      sectionToggle.remove();
+      return;
+    }
     const isCollapsed = section.classList.toggle("is-collapsed");
     const title = section.querySelector(":scope > .staffing-control-header h3")?.textContent?.trim() || "section";
     sectionToggle.setAttribute("aria-expanded", String(!isCollapsed));
@@ -14631,3 +14642,10 @@ document.addEventListener("click", (event) => {
 }, true);
 
 window.initTowerSummaryControls = (root) => { initCopyTextButtons(root); applyViewOnlyMode(); };
+
+
+document.addEventListener('click', (event) => {
+  if (!event.target.closest('[data-staff-id-expired-download]')) return;
+  event.preventDefault();
+  window.alert('ID card file update required before issuance.');
+});

@@ -20,6 +20,8 @@ DRIVE_SCOPE = 'https://www.googleapis.com/auth/drive.file'
 API = 'https://www.googleapis.com/drive/v3'
 FOLDER_MIME = 'application/vnd.google-apps.folder'
 DESTINATIONS = {
+    'staff_id_documents': {'label': 'Staff ID documents', 'section': 'Staff members', 'category': 'staff_id_documents',
+        'suggested_id': '1Ff__Dc0ZirrtefiDlBw6ovZtION2OsnV'},
     'staff_portal_invoices': {'label': 'Staff invoices', 'section': 'Staff portal', 'category': 'staff_invoices',
         'suggested_id': '1_VrUoXNBbVT_hSo_vAbL7prSj8hBAUNV'},
     'finance_supporting_documents': {'label': 'Supporting documentation', 'category': 'payment_requests',
@@ -123,6 +125,8 @@ def save_folder(key):
         abort(400)
     if key not in DESTINATIONS:
         abort(404)
+    if key == 'staff_id_documents' and request.form.get('folder_id', '').strip() != DESTINATIONS[key]['suggested_id']:
+        return jsonify(ok=False, error='Select the designated Staff ID documents folder.'), 400
     try:
         folder = folder_metadata(request.form.get('folder_id', '').strip())
     except DriveStorageError as exc:
@@ -224,6 +228,15 @@ def upload_document(upload, payment, destination):
         if not result or result.get('id') != file_id:
             raise ValueError('Upload not confirmed')
         from app.staff_invoices import StaffInvoiceTarget
+        from app.staff_id_documents import StaffIdTarget
+        if isinstance(payment, StaffIdTarget):
+            from app.models import StaffIdDocument
+            document = payment.document or StaffIdDocument(member_id=payment.member_id)
+            document.file_id, document.destination_key = file_id, destination.key
+            document.filename, document.mime_type = filename, mime
+            document.expiry_date = payment.expiry_date
+            db.session.add(document)
+            return url_for('staff_id_documents.preview', member_id=payment.member_id, _external=True)
         if isinstance(payment, StaffInvoiceTarget):
             model, owner = GoogleDriveStaffInvoiceUpload, {"share_id": payment.share_id, "year": payment.year}
         else:

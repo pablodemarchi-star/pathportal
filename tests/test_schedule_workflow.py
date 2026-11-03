@@ -7602,20 +7602,20 @@ for (const days of [2, 3, 4]) {
         db.session.commit()
         client = self.login_client()
 
-        response = client.get("/pre-session-control-tower?session_year=2026&view=sessions")
+        response = client.get(f"/pre-session-control-tower?session_year=2026&view=sessions&session_modal={self.session_record.id}&open_schedule_modal={self.session_record.id}&packages_only=1")
         html = response.get_data(as_text=True)
         packages_section_start = html.index(f'<section class="staffing-control-section packages-control-section" id="packages-{self.session_record.id}"')
         packages_section = html[packages_section_start:packages_section_start + 22000]
         staff_ids_section = packages_section[
-            packages_section.index("Staff member IDs") : packages_section.index("Inclusion of final items")
+            packages_section.index("Staff ID cards") : packages_section.index("Inclusion of final items")
         ]
         final_items_section = packages_section[
             packages_section.index("Inclusion of final items") : packages_section.index("Session box sealing")
         ]
 
-        self.assertIn("Staff member IDs", staff_ids_section)
+        self.assertIn("Staff ID cards", staff_ids_section)
         self.assertIn("Not started yet", staff_ids_section)
-        self.assertIn("Staff member IDs actions", staff_ids_section)
+        self.assertIn("Staff ID cards actions", staff_ids_section)
         self.assertIn("Mark as in progress", staff_ids_section)
         self.assertIn("Mark as complete", staff_ids_section)
         self.assertIn("Mark incident", staff_ids_section)
@@ -7634,12 +7634,12 @@ for (const days of [2, 3, 4]) {
         pending_id_member.id_issued = True
         db.session.commit()
 
-        response = client.get("/pre-session-control-tower?session_year=2026&view=sessions")
+        response = client.get(f"/pre-session-control-tower?session_year=2026&view=sessions&session_modal={self.session_record.id}&open_schedule_modal={self.session_record.id}&packages_only=1")
         html = response.get_data(as_text=True)
         packages_section_start = html.index(f'<section class="staffing-control-section packages-control-section" id="packages-{self.session_record.id}"')
         packages_section = html[packages_section_start:packages_section_start + 22000]
 
-        self.assertNotIn("Staff member IDs", packages_section)
+        self.assertNotIn("Staff ID cards", packages_section)
         self.assertNotIn("Include a lanyard, rigid ID card, and card holder for each of the following staff members:", packages_section)
 
     def test_staff_member_ids_status_actions_are_independent(self):
@@ -7665,6 +7665,11 @@ for (const days of [2, 3, 4]) {
         self.session_record.staff_member_ids_status = "in_progress"
         db.session.commit()
 
+        from app.models import StaffIdDocument
+        db.session.add(StaffIdDocument(member_id=pending_id_member.id, file_id='package-ready-id-card',
+            destination_key='staff_id_documents', filename='staff-card.pdf', mime_type='application/pdf'))
+        db.session.commit()
+
         response = client.post(
             f"/pre-session-control-tower/sessions/{self.session_record.id}/packages/staff-member-ids",
             data={"csrf_token": "token", "action": "mark_complete"},
@@ -7688,14 +7693,14 @@ for (const days of [2, 3, 4]) {
 
         self.assertIn("Pulverio Garcia", html)
         self.assertIn("ID issued ✓", html)
-        self.assertNotIn("No ID issued", html)
+        self.assertNotIn(">No ID issued</button>", html)
 
-        response = client.get("/pre-session-control-tower?session_year=2026&view=sessions")
+        response = client.get(f"/pre-session-control-tower?session_year=2026&view=sessions&session_modal={self.session_record.id}&open_schedule_modal={self.session_record.id}&packages_only=1")
         html = response.get_data(as_text=True)
         packages_section_start = html.index(f'<section class="staffing-control-section packages-control-section" id="packages-{self.session_record.id}"')
         packages_section = html[packages_section_start:packages_section_start + 24000]
         staff_ids_section = packages_section[
-            packages_section.index("Staff member IDs") : packages_section.index("Inclusion of final items")
+            packages_section.index("Staff ID cards") : packages_section.index("Inclusion of final items")
         ]
 
         self.assertIn("Completed", staff_ids_section)
@@ -7735,12 +7740,12 @@ for (const days of [2, 3, 4]) {
         db.session.commit()
         client = self.login_client()
 
-        response = client.get("/pre-session-control-tower?session_year=2026&view=sessions")
+        response = client.get(f"/pre-session-control-tower?session_year=2026&view=sessions&session_modal={self.session_record.id}&open_schedule_modal={self.session_record.id}&packages_only=1")
         html = response.get_data(as_text=True)
         packages_section_start = html.index(f'<section class="staffing-control-section packages-control-section" id="packages-{self.session_record.id}"')
         packages_section = html[packages_section_start:packages_section_start + 26000]
         staff_ids_section = packages_section[
-            packages_section.index("Staff member IDs") : packages_section.index("Inclusion of final items")
+            packages_section.index("Staff ID cards") : packages_section.index("Inclusion of final items")
         ]
         final_items_section = packages_section[
             packages_section.index("Inclusion of final items") : packages_section.index("Session box sealing")
@@ -7752,7 +7757,7 @@ for (const days of [2, 3, 4]) {
             staff_ids_section.index("Pending Confirmation ID Staff") : staff_ids_section.index("</li>", staff_ids_section.index("Pending Confirmation ID Staff"))
         ]
 
-        self.assertIn("Staffing must be ready before staff member IDs can be issued.", staff_ids_section)
+        self.assertIn("Staffing must be ready before staff ID cards can be issued.", staff_ids_section)
         self.assertIn("disabled>Mark as complete", staff_ids_section)
         self.assertNotIn("Do not proceed with printing this ID. The staff member has not been confirmed yet", confirmed_row)
         self.assertIn("Do not proceed with printing this ID. The staff member has not been confirmed yet", pending_row)

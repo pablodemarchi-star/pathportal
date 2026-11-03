@@ -79,3 +79,13 @@ def migrate_finance_completion_events():
     except Exception:
         db.session.rollback()
         raise
+
+
+def migrate_staff_id_expiry():
+    """Existing cards without an expiry date remain valid."""
+    if db.engine.dialect.name != 'sqlite':
+        return
+    columns = {row[1] for row in db.session.execute(text("PRAGMA table_info(staff_id_document)"))}
+    if columns and "expiry_date" not in columns:
+        db.session.execute(text("ALTER TABLE staff_id_document ADD COLUMN expiry_date DATE"))
+        db.session.commit()
