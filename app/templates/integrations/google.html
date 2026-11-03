@@ -23,5 +23,28 @@
   {% if uncertain_count %}<p>{{ uncertain_count }} deliveries could not be confirmed. Check the account’s Sent folder before retrying them; they are excluded from automatic retries.</p>{% endif %}
   <details><summary>Connection setup</summary><p>Add this exact address to the OAuth client’s authorized redirect URIs in Google Cloud:</p><code>{{ callback_uri or 'Not configured' }}</code></details>
 </section>
+<section class="staff-detail-section">
+  <h2>Finance notification diagnostic</h2>
+  <form method="get" action="{{ url_for('google_mail.settings') }}">
+    <label>Request number<input name="finance_request" value="{{ request.args.get('finance_request', '') }}" placeholder="PAY-2026-0090" maxlength="80" required></label>
+    <button type="submit" class="secondary-button">Check notification</button>
+  </form>
+  {% if finance_diagnostic %}
+    {% if finance_diagnostic.error %}<p role="alert">{{ finance_diagnostic.error }}</p>{% else %}
+      <h3>{{ finance_diagnostic.number }}</h3>
+      <p><strong>Current Argentina time:</strong> {{ finance_diagnostic.now }} GMT-3<br>
+      <strong>Created:</strong> {{ finance_diagnostic.created }} GMT-3<br>
+      <strong>Request status:</strong> {{ finance_diagnostic.status }}<br>
+      <strong>Scheduled date:</strong> {{ finance_diagnostic.scheduled.strftime('%d/%m/%Y') if finance_diagnostic.scheduled else 'No date assigned' }}<br>
+      <strong>Eligible for today:</strong> {{ 'Yes' if finance_diagnostic.eligible else 'No' }}<br>
+      <strong>Today’s notification:</strong> {{ finance_diagnostic.notice.status if finance_diagnostic.notice else 'Not recorded' }}</p>
+      <p>{{ finance_diagnostic.explanation }}</p>
+      {% if finance_diagnostic.notice %}
+        {% if finance_diagnostic.notice.gmail_message_id %}<p><strong>Gmail message ID:</strong> {{ finance_diagnostic.notice.gmail_message_id }}</p>{% endif %}
+        {% if finance_diagnostic.notice.last_error %}<p><strong>Delivery detail:</strong> {{ finance_diagnostic.notice.last_error }}</p>{% endif %}
+      {% endif %}
+    {% endif %}
+  {% endif %}
+</section>
 {% include 'integrations/_drive_settings.html' %}
 {% endblock %}

@@ -80,6 +80,25 @@ class FinanceAgendaTest(unittest.TestCase):
         notice=FinanceAgendaNotification.query.filter_by(category='late').one()
         self.assertEqual(notice.status,'sent')
 
+    def test_two_new_same_day_payments_each_send_their_own_notice(self):
+        admin = self.create_user('new-payments@example.com', is_superadmin=True)
+        client = self.client_for(admin)
+        with patch('app.finance_agenda.local_now', return_value=self.now(22,7)), patch('app.routes.today_local', return_value=self.today), patch('app.finance_agenda.send_notification_email', return_value='sent') as send:
+            for description in ('First new payment', 'Second new payment'):
+                response = client.post('/finance-requests/payment-requests', data={
+                    'source_tab':'payment_requests', 'description':description,
+                    'concept_id':str(self.concept.id), 'currency':'ARS', 'amount':'100',
+                    'payment_method':'Cash', 'payment_date_mode':'specific',
+                    'scheduled_payment_date':self.today.strftime('%d/%m/%Y'),
+                })
+                self.assertEqual(response.status_code,302)
+            self.assertEqual(send.call_count,2)
+            self.assertNotEqual(send.call_args_list[0].args[4],send.call_args_list[1].args[4])
+        notices=FinanceAgendaNotification.query.filter_by(category='late').all()
+        self.assertEqual(len(notices),2)
+        self.assertTrue(all(notice.status == 'sent' for notice in notices))
+        self.assertEqual(FinanceAgendaCoverage.query.count(),2)
+
     def test_invoice_creation_after_cutoff_and_future_reschedule(self):
         user=self.create_user('requester@example.com')
         with patch('app.finance_agenda.local_now',return_value=self.now(8)),patch('app.finance_agenda.send_notification_email',return_value='sent') as send:
@@ -125,6 +144,34 @@ class FinanceAgendaTest(unittest.TestCase):
         with patch('app.finance_agenda.send_notification_email') as send:
             self.assertFalse(self.deliver(notice_id))
         send.assert_not_called()
+
+    def test_admin_diagnostic_distinguishes_missing_ineligible_and_sent_without_sending(self):
+        user = self.create_user('requester@example.com')
+        admin = self.create_user('diagnostic@example.com', is_superadmin=True)
+        item = self.payment(user, status='Management approved', scheduled_payment_date=self.today)
+        path = f'/integrations/google?finance_request={item.request_number}'
+        client = self.client_for(admin)
+        with patch('app.finance_agenda.local_now',return_value=self.now(22,7)), patch('app.finance_agenda.send_notification_email') as send:
+            page = client.get(path)
+            self.assertEqual(page.status_code,200)
+            self.assertIn('no notification coverage was recorded',page.get_data(as_text=True))
+            self.assertIn('03/11/2026 22:07:00',page.get_data(as_text=True))
+            self.assertEqual(FinanceAgendaNotification.query.count(),0)
+            item.scheduled_payment_date = self.today + timedelta(days=1)
+            db.session.commit()
+            page = client.get(path)
+            self.assertIn('does not qualify',page.get_data(as_text=True))
+            send.assert_not_called()
+        item.scheduled_payment_date = self.today
+        db.session.commit()
+        with patch('app.finance_agenda.send_notification_email',return_value='gmail-diagnostic-id'):
+            self.deliver(queue_daily(self.now()))
+        with patch('app.finance_agenda.local_now',return_value=self.now(22)),patch('app.finance_agenda.send_notification_email') as send:
+            page=client.get(path)
+            self.assertIn('Google confirmed sending',page.get_data(as_text=True))
+            self.assertIn('gmail-diagnostic-id',page.get_data(as_text=True))
+            send.assert_not_called()
+        self.assertEqual(self.client_for(user).get(path).status_code,403)
 
     def test_rollback_does_not_queue_or_send_and_job_requires_shared_secret(self):
         user=self.create_user('requester@example.com')

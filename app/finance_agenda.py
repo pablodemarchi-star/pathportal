@@ -177,6 +177,48 @@ def deliver_agenda(notice_id):
     return notice.status == 'sent'
 
 
+def request_delivery_diagnostic(number):
+    """Read-only view of the actual stored schedule, eligibility and delivery."""
+    from app.models import FinanceAgendaCoverage
+    number = (number or '').strip().upper()
+    if not number:
+        return None
+    if len(number) > 80:
+        return {'error': 'Enter a payment or invoice request number.'}
+    model = PaymentRequest if number.startswith('PAY-') else BillingRequest if number.startswith('INVOICE-') else None
+    item = model.query.filter_by(request_number=number).first() if model else None
+    if item is None:
+        return {'error': 'Request not found.'}
+    now = local_now()
+    kind = 'payment' if isinstance(item, PaymentRequest) else 'invoice'
+    coverage = FinanceAgendaCoverage.query.filter_by(agenda_date=now.date(), request_kind=kind, request_id=item.id).first()
+    notice = db.session.get(FinanceAgendaNotification, coverage.notification_id) if coverage else None
+    created = item.created_on
+    if created and created.tzinfo is None:
+        created = created.replace(tzinfo=timezone.utc)
+    if notice:
+        explanation = {
+            'sent': 'Google confirmed sending this notification. The Gmail message ID is recorded below.',
+            'pending': 'A notification was queued but has not been sent.',
+            'failed': 'The send attempt failed before delivery was confirmed. It can be retried from this page.',
+            'sending': 'Delivery was claimed but has not been confirmed. Check Gmail Sent before retrying.',
+            'unknown': 'Delivery could not be confirmed. Check Gmail Sent before retrying.',
+            'empty': 'The notification was stored without any requests to include.',
+        }.get(notice.status, 'Review the recorded notification status.')
+    elif item.is_archived:
+        explanation = 'This request is archived and is excluded from the agenda.'
+    elif not actionable(item, now.date()):
+        explanation = 'The current status or scheduled date does not qualify for today’s agenda.'
+    elif now.time() < CUTOFF:
+        explanation = 'The request qualifies for today, but the 06:30 GMT-3 cutoff has not been reached.'
+    else:
+        explanation = 'This request qualifies for today, but no notification coverage was recorded for today. The production send needs investigation.'
+    return {'number': item.request_number, 'status': item.status, 'scheduled': due_date(item),
+            'created': created.astimezone(LOCAL_TZ).strftime('%d/%m/%Y %H:%M:%S') if created else 'Not recorded',
+            'now': now.strftime('%d/%m/%Y %H:%M:%S'), 'eligible': actionable(item, now.date()),
+            'notice': notice, 'explanation': explanation}
+
+
 @agenda_bp.post('/internal/jobs/finance-agenda')
 def daily_job():
     expected = os.getenv('FINANCE_AGENDA_JOB_TOKEN', '')

@@ -161,11 +161,13 @@ def settings():
         flash("The saved Google connection could not be read. Check the server configuration.", "error")
     values = configuration()
     from app.google_drive import settings_context
+    from app.finance_agenda import request_delivery_diagnostic
     return render_template("integrations/google.html", configured=configured(), connected=connected,
         account=saved.get("account") if connected else os.getenv("GMAIL_ACCOUNT_EMAIL", EXPECTED_ACCOUNT),
         sender=os.getenv("GMAIL_FROM_EMAIL", "no-reply@pathexaminations.com"),
         callback_uri=values["GOOGLE_OAUTH_REDIRECT_URI"], csrf_token=session.get("csrf_token"),
-        retry_count=retry_count, uncertain_count=uncertain_count, **settings_context(saved))
+        retry_count=retry_count, uncertain_count=uncertain_count,
+        finance_diagnostic=request_delivery_diagnostic(request.args.get("finance_request")), **settings_context(saved))
 
 
 @google_mail_bp.post("/integrations/google/retry-payment-notifications")
