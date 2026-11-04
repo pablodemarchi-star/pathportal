@@ -142,6 +142,9 @@ def package_download(session_id, member_id):
     if record is None:
         abort(404)
     assignments = list(record.supervisor_assignments) + list(record.examiner_assignments) + list(record.intern_assignments)
+    from app.staff_id_allocation import staff_id_session_owners
+    if record.staff_member_ids_status != 'completed' and staff_id_session_owners().get(member_id) != record.id:
+        abort(409, description='Staff ID card preparation has moved to another eligible session.')
     if not staff_member_confirmation_by_id(record, assignments).get(member_id, False):
         abort(403, description='The staff member has not been confirmed yet.')
     document = db.session.get(StaffIdDocument, member_id)

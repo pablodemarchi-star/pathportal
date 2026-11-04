@@ -1960,16 +1960,14 @@ def return_package_label_payload(session_record):
 
 
 def staff_members_pending_id_for_session(session_record, assignments=None):
-    if not session_record and not assignments:
+    if not session_record:
         return []
+    from app.staff_id_allocation import staff_id_session_owners
+    member_ids = [member_id for member_id, owner in staff_id_session_owners().items() if owner == session_record.id]
+    if not member_ids:
+        return []
+    staff_members = AcademicStaff.query.filter(AcademicStaff.id.in_(member_ids)).all()
     seen_member_ids = set()
-    staff_members = []
-    if session_record and session_record.emergency_contact_member:
-        staff_members.append(session_record.emergency_contact_member)
-    for assignment in assignments or []:
-        staff_member = getattr(assignment, "team_member", None)
-        if staff_member:
-            staff_members.append(staff_member)
     from app.models import StaffIdDocument
     from app.staff_id_documents import card_expired
     documents = {document.member_id: document for document in StaffIdDocument.query.filter(
@@ -1986,9 +1984,13 @@ def staff_members_pending_id_for_session(session_record, assignments=None):
 
 
 def staff_member_confirmation_by_id(session_record, assignments=None):
+    if assignments is None and session_record:
+        assignments = (list(session_record.supervisor_assignments) + list(session_record.examiner_assignments)
+                       + list(session_record.intern_assignments))
     confirmation_by_id = {}
     if session_record and session_record.emergency_contact_member_id:
-        confirmation_by_id[session_record.emergency_contact_member_id] = False
+        confirmation_by_id[session_record.emergency_contact_member_id] = (
+            normalize_participation_status(session_record.emergency_contact_participation_status) == "Confirmed")
     for assignment in assignments or []:
         staff_member_id = getattr(assignment, "team_member_id", None)
         if not staff_member_id:
@@ -2035,14 +2037,16 @@ def staff_member_id_snapshot_for_session(session_record):
 
 
 def staff_member_id_requirements_for_session(session_record, assignments=None):
-    requirements = []
+    if not session_record:
+        return []
+    if session_record.staff_member_ids_status == "completed":
+        requirements = staff_member_id_snapshot_for_session(session_record)
+    else:
+        requirements = [staff_member_id_requirement_payload(member)
+                        for member in staff_members_pending_id_for_session(session_record, assignments)]
+    if not requirements:
+        return []
     confirmation_by_id = staff_member_confirmation_by_id(session_record, assignments)
-    for staff_member in staff_members_pending_id_for_session(session_record, assignments):
-        requirements.append(staff_member_id_requirement_payload(
-            staff_member,
-            is_confirmed=confirmation_by_id.get(staff_member.id, False),
-        ))
-    requirements = requirements or staff_member_id_snapshot_for_session(session_record)
     from app.models import StaffIdDocument
     from app.staff_id_documents import card_expired
     documents = {document.member_id: document for document in StaffIdDocument.query.filter(
@@ -2065,14 +2069,18 @@ def inclusion_final_items_for_session(session_record, supervisor_assignments=Non
             "schedule_copy_label": "copies",
         }
     total_candidates = 0
+    include_gift = None  # Non-concatenated sessions retain the existing bundle rule.
     component_ids = exam_session_concat_component_map().get(session_record.id, {session_record.id})
     if len(component_ids) > 1:
         component_sessions = ExamSession.query.filter(ExamSession.id.in_(component_ids)).all()
         first_session = min(
             component_sessions,
-            key=lambda item: (item.session_date or date.max, (item.exam_session_name or "").lower(), item.id),
+            key=lambda item: (item.format != "Onsite", item.session_date or date.max,
+                              (item.exam_session_name or "").lower(), item.id),
             default=None,
         )
+        include_gift = bool(first_session and first_session.id == session_record.id
+                            and session_record.format == "Onsite")
         if first_session and first_session.id == session_record.id:
             total_candidates = next(
                 (
@@ -2101,6 +2109,7 @@ def inclusion_final_items_for_session(session_record, supervisor_assignments=Non
     ]
     supervisor_count = len(assigned_supervisors)
     return {
+        "include_gift": include_gift,
         "total_candidates": total_candidates or 0,
         "supervisor_count": supervisor_count,
         "schedule_copy_label": "copy" if supervisor_count == 1 else "copies",
@@ -22976,6 +22985,12 @@ def update_staff_member_ids(session_id):
         flash("Password authorisation is required to reopen Staff ID cards.", "error")
         return package_control_redirect(session_record, status_filter, target=package_focus_target)
 
+    # Capture the listed people before completion makes this session ineligible.
+    session_assignments = (list(session_record.supervisor_assignments) + list(session_record.examiner_assignments)
+                           + list(session_record.intern_assignments))
+    pending_requirements = staff_member_id_requirements_for_session(session_record, session_assignments) if action == "mark_complete" else []
+    pending_members = staff_members_pending_id_for_session(session_record, session_assignments) if action == "mark_complete" else []
+
     error = apply_package_stage_status_update(
         session_record,
         action,
@@ -22988,17 +23003,10 @@ def update_staff_member_ids(session_id):
         flash(error, "error")
         return package_control_redirect(session_record, status_filter, target=package_focus_target)
     if action == "mark_complete":
-        session_assignments = (
-            list(session_record.supervisor_assignments)
-            + list(session_record.examiner_assignments)
-            + list(session_record.intern_assignments)
-        )
-        pending_requirements = staff_member_id_requirements_for_session(session_record, session_assignments)
-        if pending_requirements:
-            session_record.staff_member_ids_snapshot = json.dumps(pending_requirements)
+        session_record.staff_member_ids_snapshot = json.dumps(pending_requirements)
         from app.models import StaffIdDocument
         from app.staff_id_documents import card_expired
-        members = staff_members_pending_id_for_session(session_record, session_assignments)
+        members = pending_members
         documents = {document.member_id: document for document in StaffIdDocument.query.filter(
             StaffIdDocument.member_id.in_([member.id for member in members])).all()}
         missing, expired = [], []

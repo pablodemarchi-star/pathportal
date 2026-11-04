@@ -4,6 +4,7 @@ import os
 import re
 import subprocess
 import unittest
+from unittest.mock import patch
 from urllib.parse import parse_qs, unquote, urlparse
 from datetime import date, datetime, time, timedelta, timezone
 
@@ -7568,6 +7569,7 @@ for (const days of [2, 3, 4]) {
 
         self.assertIn("Add the EN identification label to any exam room package that includes candidates with EN.", third_guidance)
 
+    @patch('app.routes.pre_session_control_tower_today', new=lambda: date(2026, 1, 1))
     def test_packages_modal_staff_member_ids_lists_only_members_without_issued_id(self):
         pending_id_member = AcademicStaff(
             id=101,
@@ -7642,6 +7644,7 @@ for (const days of [2, 3, 4]) {
         self.assertNotIn("Staff ID cards", packages_section)
         self.assertNotIn("Include a lanyard, rigid ID card, and card holder for each of the following staff members:", packages_section)
 
+    @patch('app.routes.pre_session_control_tower_today', new=lambda: date(2026, 1, 1))
     def test_staff_member_ids_status_actions_are_independent(self):
         self.approve_schedule()
         self.confirm_staffing()
@@ -7706,6 +7709,7 @@ for (const days of [2, 3, 4]) {
         self.assertIn("Completed", staff_ids_section)
         self.assertIn("Mr. Pulverio Garcia", staff_ids_section)
 
+    @patch('app.routes.pre_session_control_tower_today', new=lambda: date(2026, 1, 1))
     def test_staff_member_ids_warns_when_staffing_not_confirmed(self):
         confirmed_member = AcademicStaff(
             id=211,
@@ -7829,6 +7833,52 @@ for (const days of [2, 3, 4]) {
         ]
 
         self.assertIn("Add 1 stapled copy of the full session schedule for each room for the Supervisor.", final_items_section)
+
+    def test_package_unified_total_prefers_earliest_onsite_in_mixed_concat(self):
+        from app.routes import inclusion_final_items_for_session
+        sessions = []
+        for name, day, format_name in [('Early online', 10, 'Online'),
+                ('Online centre', 11, 'Online at exam centre'), ('Later onsite', 15, 'Onsite'),
+                ('First onsite', 12, 'Onsite')]:
+            record = ExamSession(exam_session_name=name, category='Path School', status='Pending',
+                session_date=date(2026, 12, day), shifts='Morning', modules='Speaking',
+                format=format_name, unified_candidate_total=42)
+            db.session.add(record)
+            sessions.append(record)
+        db.session.flush()
+        for record in sessions:
+            record.concat_session_ids = json.dumps([item.id for item in sessions if item != record])
+        db.session.commit()
+        for record in sessions:
+            self.assertEqual(inclusion_final_items_for_session(record)['total_candidates'],
+                             42 if record.exam_session_name == 'First onsite' else 0)
+            items = inclusion_final_items_for_session(record)
+            self.assertEqual(items['include_gift'], record.exam_session_name == 'First onsite')
+            from pathlib import Path
+            source = Path('app/templates/pre_session_control_tower/_session_modals.html').read_text()
+            gift_rule = source[source.index("{% set include_gift ="):]
+            gift_rule = gift_rule[:gift_rule.index('{% endif %}') + len('{% endif %}')]
+            # Concat ownership takes precedence even when the bundle's chronological
+            # owner is an earlier Online session.
+            rendered = self.app.jinja_env.from_string(gift_rule).render(view={
+                'packages': {'inclusion_final_items': items},
+                'bundle_schedule': {'is_secondary_by_date': record.format == 'Onsite'}})
+            self.assertEqual('Add a Path Examinations bag with the gift inside.' in rendered,
+                             record.exam_session_name == 'First onsite')
+
+    def test_package_unified_total_keeps_chronological_selection_without_onsite(self):
+        from app.routes import inclusion_final_items_for_session
+        self.session_record.format = 'Online'
+        self.session_record.unified_candidate_total = 35
+        later = ExamSession(exam_session_name='Later online centre', category='Path School', status='Pending',
+            session_date=self.session_record.session_date + timedelta(days=1), shifts='Morning',
+            modules='Speaking', format='Online at exam centre', unified_candidate_total=35)
+        db.session.add(later); db.session.flush()
+        self.session_record.concat_session_ids = json.dumps([later.id])
+        later.concat_session_ids = json.dumps([self.session_record.id])
+        db.session.commit()
+        self.assertEqual(inclusion_final_items_for_session(self.session_record)['total_candidates'], 35)
+        self.assertEqual(inclusion_final_items_for_session(later)['total_candidates'], 0)
 
     def test_packages_modal_inclusion_final_items_uses_unified_total_for_first_concat_session_only(self):
         second_session = ExamSession(
