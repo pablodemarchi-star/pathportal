@@ -9,7 +9,7 @@
 <p style="color:#62727a;font-size:14px;line-height:1.6;">{{ copy.intro }}</p>
 <table role="presentation" width="100%" style="background:#e6f0f3;border-radius:10px;border-left:4px solid #0b8fb2;"><tr><td style="padding:18px;">
 <p style="margin:0 0 10px;color:#00506b;font-size:28px;font-weight:700;">{{ details.amount }}</p>
-<p style="margin:0;color:#00506b;font-size:14px;line-height:1.8;">{{ copy.reference }}: {{ details.request_number }}<br>{{ copy.concept }}: {{ details.concept }}<br>{{ copy.method }}: {{ details.method }}<br>{{ copy.date }}: {{ details.date }}</p>
+<p style="margin:0;color:#00506b;font-size:14px;line-height:1.8;">{{ copy.reference }}: {{ details.request_number }}<br>{{ copy.concept }}: {{ details.concept }}{% if details.method %}<br>{{ copy.method }}: {{ details.method }}{% endif %}{% if details.invoice_number %}<br>{{ copy.invoice_number }}: {{ details.invoice_number }}{% endif %}<br>{{ copy.date }}: {{ details.date }}</p>
 </td></tr></table>
 {% for link in receipt_links %}<p style="margin:24px 0;"><a href="{{ link }}" style="display:inline-block;background:#00506b;color:#fff;padding:12px 18px;border-radius:8px;text-decoration:none;font-weight:700;">{{ copy.receipt }}{% if receipt_links|length > 1 %} {{ loop.index }}{% endif %} ↗</a></p>{% endfor %}
 <p style="font-size:13px;line-height:1.7;color:#62727a;">{{ copy.contact }} <a href="mailto:admin@pathexaminations.com" style="color:#00506b;">admin@pathexaminations.com</a>.</p>

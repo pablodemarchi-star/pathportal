@@ -8,7 +8,7 @@ from urllib.parse import urlsplit, unquote, parse_qs
 from flask import Blueprint, abort, current_app, g, has_request_context, redirect, render_template, send_from_directory, url_for
 from app import db
 from app.google_mail import MailNotSent, MailDeliveryUnknown, send_notification_email
-from app.models import PayeePaymentNotification, GoogleDriveUpload
+from app.models import PayeePaymentNotification, ClientInvoiceNotification, GoogleDriveUpload, GoogleDriveInvoiceUpload
 
 payee_bp = Blueprint('payee_notifications', __name__)
 
@@ -31,6 +31,18 @@ PAYEE_EMAIL_COPY = {
         'contact':'Si tenés alguna consulta, escribinos a', 'footer':'Aviso automático de pago',
     },
 }
+CLIENT_EMAIL_COPY = {
+    'en': {**PAYEE_EMAIL_COPY['en'], 'subject':'Invoice issued', 'status':'Invoice issued',
+        'heading':'Your invoice has been issued.',
+        'intro':'Your invoice is now available. You can access it using the link below.',
+        'reference':'Invoice request reference', 'invoice_number':'Invoice number',
+        'date':'Issue date', 'receipt':'View invoice', 'footer':'Automated invoice notification'},
+    'sp': {**PAYEE_EMAIL_COPY['sp'], 'subject':'Factura emitida', 'status':'Factura emitida',
+        'heading':'Tu factura ha sido emitida.',
+        'intro':'Tu factura ya está disponible. Podés consultarla mediante el enlace a continuación.',
+        'reference':'Referencia de la solicitud', 'invoice_number':'Número de factura',
+        'date':'Fecha de emisión', 'receipt':'Ver factura', 'footer':'Aviso automático de factura'},
+}
 SPANISH_METHODS = {
     'Bank transfer':'Transferencia bancaria', 'Deposit':'Depósito', 'Cash':'Efectivo', 'Card':'Tarjeta',
     'Electronic Payment Slip (EPS)':'Boleta de pago electrónico (EPS)', 'Direct debit':'Débito automático',
@@ -50,9 +62,14 @@ def valid_notification_email(value):
         return False
 
 
-def receipt_manifest(payment):
+def receipt_manifest(payment, kind='payment'):
+    invoice = kind == 'invoice'
+    document_model = GoogleDriveInvoiceUpload if invoice else GoogleDriveUpload
+    owner_key = 'billing_request_id' if invoice else 'payment_request_id'
+    destination_key = 'finance_invoice_proofs' if invoice else 'finance_payment_receipts'
+    local_category = 'invoice_proofs' if invoice else 'payment_proofs'
     receipts = []
-    for address in (payment.payment_proof_url or '').splitlines():
+    for address in ((payment.invoice_link if invoice else payment.payment_proof_url) or '').splitlines():
         parsed = urlsplit(address.strip())
         path = unquote(parsed.path)
         match = re.fullmatch(r'/finance-requests/drive-documents/([A-Za-z0-9_-]+)', path)
@@ -65,8 +82,8 @@ def receipt_manifest(payment):
                 raise MailNotSent('Use an uploaded receipt file instead of a Google Drive folder link.')
         if match or drive_match:
             file_id = (match or drive_match).group(1)
-            document = GoogleDriveUpload.query.filter_by(file_id=file_id, payment_request_id=payment.id,
-                destination_key='finance_payment_receipts').first()
+            document = document_model.query.filter_by(file_id=file_id, destination_key=destination_key,
+                **{owner_key:payment.id}).first()
             if not document:
                 raise MailNotSent('The payment receipt is unavailable or does not belong to this payment.')
             receipts.append({'kind':'drive', 'file_id':file_id, 'name':document.filename})
@@ -74,7 +91,7 @@ def receipt_manifest(payment):
             from werkzeug.utils import secure_filename
             relative = path[len('/finance-requests/uploads/'):]
             parts = relative.split('/')
-            if len(parts) != 3 or parts[0] != 'payment_proofs' or parts[1] != secure_filename(payment.request_number) or parts[2] != secure_filename(parts[2]):
+            if len(parts) != 3 or parts[0] != local_category or parts[1] != secure_filename(payment.request_number) or parts[2] != secure_filename(parts[2]):
                 raise MailNotSent('The receipt does not belong to this payment.')
             from app.routes import finance_upload_root
             from werkzeug.security import safe_join
@@ -97,26 +114,29 @@ def receipt_manifest(payment):
     return receipts
 
 
-def queue_payee_notification(payment, previous, status, transition):
-    if previous == status or status != 'Payment completed' or not payment.automatic_payment_notification:
+def queue_payee_notification(payment, previous, status, transition, kind='payment'):
+    invoice = kind == 'invoice'
+    completed = 'Invoice issued' if invoice else 'Payment completed'
+    model = ClientInvoiceNotification if invoice else PayeePaymentNotification
+    if previous == status or status != completed or not payment.automatic_payment_notification:
         return None
     db.session.flush()
-    notice = PayeePaymentNotification.query.filter_by(event_id=transition.id).first()
+    notice = model.query.filter_by(event_id=transition.id).first()
     if notice:
         return notice.id
-    completed_at = payment.payment_completed_at or datetime.now(timezone.utc)
+    completed_at = (getattr(transition, 'created_at', None) if invoice else payment.payment_completed_at) or datetime.now(timezone.utc)
     if completed_at.tzinfo is None:
         completed_at = completed_at.replace(tzinfo=timezone.utc)
-    payload = {'name':payment.payee_name_snapshot or 'Payee', 'request_number':payment.request_number,
+    payload = {'name':(payment.client_name_snapshot if invoice else payment.payee_name_snapshot) or ('Client' if invoice else 'Payee'), 'request_number':payment.request_number,
                'amount':f'{payment.currency} {payment.amount:,.2f}', 'concept':payment.concept_name_snapshot,
-               'method':payment.payment_method, 'language':payment.payment_notification_language or 'en',
+               'method':None if invoice else payment.payment_method, 'invoice_number':payment.invoice_number if invoice else None, 'language':payment.payment_notification_language or 'en',
                'amount_sp':f'{payment.currency} {payment.amount:,.2f}'.replace(',', '_').replace('.', ',').replace('_', '.'),
                'date':completed_at.astimezone(timezone(timedelta(hours=-3))).strftime('%d/%m/%Y')}
-    notice = PayeePaymentNotification(payment=payment, event_id=transition.id,
+    notice = model(**{'billing' if invoice else 'payment':payment}, event_id=transition.id,
         recipient=payment.payment_notification_email or '', receipt_token=secrets.token_urlsafe(32), payload=json.dumps(payload))
     db.session.add(notice); db.session.flush()
     if has_request_context():
-        g.setdefault('_payee_pending', []).append(notice.id)
+        g.setdefault('_client_pending' if invoice else '_payee_pending', []).append(notice.id)
     return notice.id
 
 
@@ -130,15 +150,17 @@ def portal_origin():
     return origin
 
 
-def deliver_payee_notification(notice_id):
-    notice = db.session.get(PayeePaymentNotification, notice_id)
+def deliver_payee_notification(notice_id, kind='payment'):
+    invoice = kind == 'invoice'
+    model = ClientInvoiceNotification if invoice else PayeePaymentNotification
+    notice = db.session.get(model, notice_id)
     if not notice or notice.status not in {'pending', 'failed'}:
         return bool(notice and notice.status == 'sent')
-    payment = notice.payment
-    if not payment or payment.is_archived or payment.status != 'Payment completed':
+    payment = notice.billing if invoice else notice.payment
+    if not payment or payment.is_archived or payment.status != ('Invoice issued' if invoice else 'Payment completed'):
         notice.status = 'cancelled'; db.session.commit(); return False
-    claimed = PayeePaymentNotification.query.filter(PayeePaymentNotification.id == notice_id,
-        PayeePaymentNotification.status.in_(['pending','failed'])).update({'status':'sending'}, synchronize_session=False)
+    claimed = model.query.filter(model.id == notice_id,
+        model.status.in_(['pending','failed'])).update({'status':'sending'}, synchronize_session=False)
     db.session.commit()
     if not claimed:
         return False
@@ -148,29 +170,34 @@ def deliver_payee_notification(notice_id):
         details = json.loads(notice.payload)
         # Freeze only the receipts for this completed payment, never expose a portal session.
         if 'receipts' not in details:
-            details['receipts'] = receipt_manifest(payment)
+            details['receipts'] = receipt_manifest(payment, kind)
             notice.payload = json.dumps(details)
             db.session.commit()
         origin = portal_origin()
-        links = [origin + url_for('payee_notifications.receipt', token=notice.receipt_token, index=index)
+        links = [origin + url_for('payee_notifications.invoice' if invoice else 'payee_notifications.receipt', token=notice.receipt_token, index=index)
                  for index, _ in enumerate(details['receipts'])]
         language = details.get('language', 'en')
-        if language not in PAYEE_EMAIL_COPY:
+        email_copy = CLIENT_EMAIL_COPY if invoice else PAYEE_EMAIL_COPY
+        if language not in email_copy:
             raise MailNotSent('Select a valid language (EN or SP) for the Payee notification.')
-        copy = PAYEE_EMAIL_COPY[language]
+        copy = email_copy[language]
         display = dict(details)
         if language == 'sp':
             display['amount'] = details.get('amount_sp', details['amount'])
-            display['method'] = SPANISH_METHODS.get(details.get('method'), details.get('method', 'No especificado'))
+            if not invoice:
+                display['method'] = SPANISH_METHODS.get(details.get('method'), details.get('method', 'No especificado'))
         text = (f"{copy['greeting']} {display['name']},\n\n{copy['heading']}\n"
                 f"{copy['reference']}: {display['request_number']}\n{copy['amount']}: {display['amount']}\n"
-                f"{copy['concept']}: {display['concept']}\n{copy['method']}: {display.get('method', 'Not specified')}\n{copy['date']}: {display['date']}\n\n" +
+                f"{copy['concept']}: {display['concept']}\n" +
+                (f"{copy['method']}: {display.get('method', 'Not specified')}\n" if not invoice else '') +
+                (f"{copy['invoice_number']}: {display['invoice_number']}\n" if invoice and display.get('invoice_number') else '') +
+                f"{copy['date']}: {display['date']}\n\n" +
                 '\n'.join(f"{copy['receipt']}: {link}" for link in links) +
                 f"\n\n{copy['contact']} admin@pathexaminations.com.\n\nPath International Examinations")
         html = render_template('finance_requests/payee_payment_email.html', details=display, receipt_links=links,
                                copy=copy, language=language)
         notice.gmail_message_id = send_notification_email(notice.recipient, f"{copy['subject']} — {details['request_number']}",
-            text, html, f'<payee-payment-{notice.id}@pathexaminations.com>')
+            text, html, f'<{"client-invoice" if invoice else "payee-payment"}-{notice.id}@pathexaminations.com>')
         notice.status, notice.last_error = 'sent', None
         notice.sent_at = datetime.now(timezone.utc)
     except MailNotSent as exc:
@@ -184,11 +211,31 @@ def deliver_payee_notification(notice_id):
     return notice.status == 'sent'
 
 
+
+def queue_client_notification(billing, previous, status, transition):
+    return queue_payee_notification(billing, previous, status, transition, kind='invoice')
+
+
+def deliver_client_notification(notice_id):
+    return deliver_payee_notification(notice_id, kind='invoice')
+
+
 @payee_bp.get('/payment-receipts/<token>/<int:index>')
 def receipt(token, index):
-    notice = PayeePaymentNotification.query.filter_by(receipt_token=token).first_or_404()
-    payment = notice.payment
-    if not payment or payment.is_archived or payment.status != 'Payment completed':
+    return external_document_response(token, index, 'payment')
+
+
+@payee_bp.get('/invoice-documents/<token>/<int:index>')
+def invoice(token, index):
+    return external_document_response(token, index, 'invoice')
+
+
+def external_document_response(token, index, kind):
+    is_invoice = kind == 'invoice'
+    model = ClientInvoiceNotification if is_invoice else PayeePaymentNotification
+    notice = model.query.filter_by(receipt_token=token).first_or_404()
+    record = notice.billing if is_invoice else notice.payment
+    if not record or record.is_archived or record.status != ('Invoice issued' if is_invoice else 'Payment completed'):
         abort(404)
     receipts = json.loads(notice.payload).get('receipts', [])
     if index >= len(receipts):
@@ -196,8 +243,10 @@ def receipt(token, index):
     item = receipts[index]
     if item['kind'] == 'drive':
         from app.google_drive import stream_document
-        document = GoogleDriveUpload.query.filter_by(file_id=item['file_id'], payment_request_id=payment.id,
-            destination_key='finance_payment_receipts').first_or_404()
+        document_model = GoogleDriveInvoiceUpload if is_invoice else GoogleDriveUpload
+        owner = {'billing_request_id' if is_invoice else 'payment_request_id':record.id}
+        document = document_model.query.filter_by(file_id=item['file_id'],
+            destination_key='finance_invoice_proofs' if is_invoice else 'finance_payment_receipts', **owner).first_or_404()
         response = stream_document(document)
     elif item['kind'] == 'local':
         from app.routes import finance_upload_root

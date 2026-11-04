@@ -154,6 +154,7 @@
       <summary>Status track</summary>
       {{ billing_status_track_panel_content(billing) }}
     </details>
+    {% if billing.automatic_payment_notification %}<span class="badge finance-auto-notification-chip">Automatic notification activated</span>{% endif %}
     {% if can_show_billing_edit or show_copy or show_archive %}
       <div class="finance-card-actions finance-invoice-card-actions">
         {% if show_copy %}
@@ -682,8 +683,10 @@
   {% set needs_full_address = selected_vat_status in vat_status_requires_full_address %}
   {% set selected_currency = billing.currency if billing and billing.currency else 'ARS' %}
   {% set request_currency_options = finance_currency_options|default(['ARS', 'EUR', 'GBP', 'USD', 'UYU']) %}
+  <div class="finance-payee-fields">
   <div class="finance-payee-picker" data-finance-payee-picker data-finance-contact-kind="client">
-    <label>Contact / Client
+    <input type="hidden" name="client_contact_id" value="{{ billing.client_contact_id or '' if billing else '' }}">
+    <label>Client
       <input name="client_name" value="{{ billing.client_name_snapshot or '' if billing else '' }}" autocomplete="off" data-finance-payee-input required>
     </label>
     <div class="finance-payee-menu" data-finance-payee-menu hidden>
@@ -692,6 +695,9 @@
           class="finance-payee-option"
           data-finance-payee-option
           data-contact-kind="client"
+          data-payment-notification="{{ 'yes' if contact.automatic_payment_notification else 'no' }}"
+          data-payment-notification-email="{{ contact.payment_notification_email or '' }}"
+          data-payment-notification-language="{{ contact.payment_notification_language or 'en' }}"
           data-contact-id="{{ contact.id }}"
           data-contact-name="{{ contact.display_name }}"
           data-concept-id="{{ contact.default_concept_id or '' }}"
@@ -708,7 +714,11 @@
       {% endfor %}
     </div>
   </div>
-  <label>Concept
+  {% with payment=billing, notification_contact_id_field='client_contact_id' %}
+    {% include 'finance_requests/_payee_notification_fields.html' %}
+  {% endwith %}
+  </div>
+  <label class="finance-invoice-concept-field">Concept
     <select name="concept_id" required>
       <option value="">Select concept</option>
       {% for concept in billing_concepts %}<option value="{{ concept.id }}" {% if billing and billing.concept_id == concept.id %}selected{% endif %}>{{ concept.name }}</option>{% endfor %}

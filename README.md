@@ -354,3 +354,11 @@ requester notification; unknown delivery outcomes require checking Gmail first.
 Payee notification language is required when enabling automatic payment notices.
 The choice is stored per Payee and copied to each payment. Existing enabled
 payments and already queued notices retain English after the language upgrade.
+
+Invoice requests use the same opt-in controls under Client. Client defaults
+include email and required EN/SP language; each invoice keeps its own snapshot.
+Existing invoices and clients default to No, without retroactive notifications.
+On Invoice issued, the Client receives the invoice document links in the selected
+language, and the requester email reports the delivery outcome. Public links only
+expose that invoice's proof documents and stop working when it is cancelled or
+archived. Client notices can be retried independently from API integrations.

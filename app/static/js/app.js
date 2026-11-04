@@ -9250,7 +9250,7 @@ const applyFinancePayeeDefaults = (picker, option) => {
     field.dispatchEvent(new Event("input", { bubbles: true }));
     field.dispatchEvent(new Event("change", { bubbles: true }));
   };
-  setField("payee_contact_id", option.dataset.contactId);
+  setField(option.dataset.contactKind === 'client' ? 'client_contact_id' : 'payee_contact_id', option.dataset.contactId);
   setField("concept_id", option.dataset.conceptId);
   setField("currency", option.dataset.currency);
   setField("payment_method", option.dataset.paymentMethod);

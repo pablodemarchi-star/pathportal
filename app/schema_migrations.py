@@ -94,7 +94,7 @@ def migrate_staff_id_expiry():
 def migrate_payee_notification_preferences():
     if db.engine.dialect.name != 'sqlite':
         return
-    for table in ('payment_request', 'finance_contact'):
+    for table in ('payment_request', 'finance_contact', 'billing_request', 'finance_client_contact'):
         columns = {row[1] for row in db.session.execute(text(f'PRAGMA table_info({table})'))}
         if columns and 'automatic_payment_notification' not in columns:
             db.session.execute(text(f'ALTER TABLE {table} ADD COLUMN automatic_payment_notification BOOLEAN NOT NULL DEFAULT 0'))

@@ -27931,6 +27931,18 @@ def apply_billing_form(billing, form, save_client_contact=False):
             clean_optional_url(value, label)
         except ValueError as exc:
             errors.append(str(exc))
+    notification_present = 'automatic_payment_notification' in form
+    notify_client = form.get('automatic_payment_notification') == 'yes' if notification_present else bool(billing.automatic_payment_notification)
+    notification_email = (form.get('payment_notification_email') or '').strip() if notification_present else (billing.payment_notification_email or '')
+    languages = form.getlist('payment_notification_language') if notification_present else [billing.payment_notification_language or 'en']
+    language = languages[0] if len(languages) == 1 else None
+    if notification_present and form.get('automatic_payment_notification') not in {'yes', 'no'}:
+        errors.append('Select Yes or No for Automatic payment notification.')
+    from app.payee_notifications import valid_notification_email
+    if notify_client and not valid_notification_email(notification_email):
+        errors.append('Enter a valid email address for Automatic payment notification.')
+    if notify_client and language not in {'en', 'sp'}:
+        errors.append('Select exactly one language (EN or SP) for Automatic payment notification.')
     if errors:
         return errors
     if save_client_contact:
@@ -27943,6 +27955,17 @@ def apply_billing_form(billing, form, save_client_contact=False):
             vat_status_invoice_type,
             client_full_address,
         )
+    if notification_present:
+        if not contact:
+            contact = FinanceClientContact(display_name=client_name)
+            db.session.add(contact)
+        contact.automatic_payment_notification = notify_client
+        contact.payment_notification_email = notification_email if notify_client else None
+        billing.automatic_payment_notification = notify_client
+        billing.payment_notification_email = notification_email if notify_client else None
+        if notify_client:
+            contact.payment_notification_language = language
+            billing.payment_notification_language = language
     if not description:
         description = concept.name if concept else "Invoice request"
     billing.client_contact = contact

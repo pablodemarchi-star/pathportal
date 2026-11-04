@@ -15,7 +15,8 @@
   window.applyPayeeNotificationDefaults = (form, option) => {
     const group = groupFor(form);
     if (!group) return;
-    const contact = form.querySelector('[name="payee_contact_id"]');
+    const contactField = group.dataset?.contactIdField || 'payee_contact_id';
+    const contact = form.querySelector(`[name="${contactField}"]`);
     if (contact) contact.value = option?.contactId || '';
     const choice = option?.paymentNotification === 'yes' ? 'yes' : 'no';
     group.querySelectorAll('[name="automatic_payment_notification"]').forEach(radio => { radio.checked = radio.value === choice; });

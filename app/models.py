@@ -2535,6 +2535,9 @@ class FinanceClientContact(db.Model):
 
     id = db.Column(db.Integer, primary_key=True)
     display_name = db.Column(db.String(180), nullable=False, index=True)
+    automatic_payment_notification = db.Column(db.Boolean, nullable=False, default=False, server_default=db.false())
+    payment_notification_email = db.Column(db.String(254), nullable=True)
+    payment_notification_language = db.Column(db.String(2), nullable=False, default='en', server_default='en')
     default_concept_id = db.Column(db.Integer, db.ForeignKey("finance_concept.id"), nullable=True, index=True)
     default_currency = db.Column(db.String(10), nullable=True)
     client_tax_id = db.Column(db.String(80), nullable=True)
@@ -2671,6 +2674,20 @@ class PayeePaymentNotification(db.Model):
     payment = db.relationship('PaymentRequest', backref=db.backref('payee_notifications', cascade='all, delete-orphan'))
 
 
+class ClientInvoiceNotification(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    billing_request_id = db.Column(db.Integer, db.ForeignKey('billing_request.id'), nullable=False, index=True)
+    event_id = db.Column(db.Integer, nullable=False, unique=True)
+    recipient = db.Column(db.String(254), nullable=False)
+    receipt_token = db.Column(db.String(100), nullable=False, unique=True)
+    payload = db.Column(db.Text, nullable=False)
+    status = db.Column(db.String(24), nullable=False, default='pending', index=True)
+    gmail_message_id = db.Column(db.String(200), nullable=True)
+    last_error = db.Column(db.String(250), nullable=True)
+    sent_at = db.Column(db.DateTime(timezone=True), nullable=True)
+    billing = db.relationship('BillingRequest', backref=db.backref('client_notifications', cascade='all, delete-orphan'))
+
+
 class PaymentReviewNotification(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     payment_request_id = db.Column(db.Integer, db.ForeignKey("payment_request.id"), nullable=False, index=True)
@@ -2719,6 +2736,9 @@ class BillingRequest(db.Model):
     request_number = db.Column(db.String(40), nullable=False, unique=True, index=True)
     requester_user_id = db.Column(db.Integer, db.ForeignKey("app_user.id"), nullable=True, index=True)
     requester_department = db.Column(db.String(40), nullable=True, index=True)
+    automatic_payment_notification = db.Column(db.Boolean, nullable=False, default=False, server_default=db.false())
+    payment_notification_email = db.Column(db.String(254), nullable=True)
+    payment_notification_language = db.Column(db.String(2), nullable=False, default='en', server_default='en')
     client_contact_id = db.Column(db.Integer, db.ForeignKey("finance_client_contact.id"), nullable=True, index=True)
     client_name_snapshot = db.Column(db.String(180), nullable=True)
     concept_id = db.Column(db.Integer, db.ForeignKey("finance_concept.id"), nullable=False, index=True)

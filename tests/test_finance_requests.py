@@ -3854,8 +3854,9 @@ class FinanceRequestsTest(unittest.TestCase):
 
         body = self.client_for(user).get("/finance-requests?tab=billing_requests").get_data(as_text=True)
 
-        self.assertIn("Contact / Client", body)
-        self.assertLess(body.index("Contact / Client"), body.index(">Concept"))
+        self.assertIn("Client", body)
+        self.assertNotIn("Contact / Client", body)
+        self.assertLess(body.index(">Client"), body.index(">Concept"))
         self.assertIn("data-finance-contact-kind=\"client\"", body)
         self.assertIn("data-contact-kind=\"client\"", body)
         self.assertIn("Invoice Client", body)

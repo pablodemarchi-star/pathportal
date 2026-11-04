@@ -1,4 +1,4 @@
-<fieldset class="finance-payee-notification" data-payee-notification data-read-only="{{ 'true' if current_menu_can_edit is defined and not current_menu_can_edit else 'false' }}">
+<fieldset class="finance-payee-notification" data-payee-notification data-contact-id-field="{{ notification_contact_id_field|default('payee_contact_id') }}" data-read-only="{{ 'true' if current_menu_can_edit is defined and not current_menu_can_edit else 'false' }}">
   <legend>Automatic payment notification</legend>
   <div class="finance-payee-notification-options">
     <div class="finance-payee-notification-yes">

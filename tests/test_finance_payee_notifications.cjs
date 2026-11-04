@@ -45,4 +45,14 @@ handlers.change({target: {name: 'automatic_payment_notification', closest: () =>
 assert.equal(en.checked, false);
 assert.equal(sp.checked, false);
 assert.equal(en.required, true);
+const clientContact = {value: ''};
+group.dataset = {contactIdField: 'client_contact_id'};
+const clientForm = {querySelector: selector => selector.includes('client_contact_id') ? clientContact : selector.includes('payee_contact_id') ? contact : group};
+const originalPayee = contact.value;
+context.window.applyPayeeNotificationDefaults(clientForm, {paymentNotification: 'yes', paymentNotificationEmail: 'client@example.com', paymentNotificationLanguage: 'en', contactId: '73'});
+assert.equal(clientContact.value, '73');
+assert.equal(contact.value, originalPayee);
+assert.equal(email.value, 'client@example.com');
+assert.equal(en.checked, true);
+assert.equal(sp.checked, false);
 console.log('Payee notification fields: required EN/SP, saved language, email and switching Payees verified.');
