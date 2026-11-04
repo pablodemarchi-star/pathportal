@@ -18105,3 +18105,18 @@ body.staff-session-detail-open { overflow: hidden; }
 .package-staff-id-download { color: var(--path-blue-303up, #00506b); text-decoration: underline; text-underline-offset: 2px; }
 
 .package-staff-id-download-disabled { color: #9aa6a2; text-decoration: underline; text-underline-offset: 2px; cursor: not-allowed; }
+
+.control-tower-table .concat-primary-schedule-link {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+  width: 100%;
+  min-width: 0;
+  max-width: 220px;
+  box-sizing: border-box;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  overflow: hidden;
+  line-height: 1.35;
+}

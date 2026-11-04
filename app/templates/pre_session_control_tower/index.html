@@ -1968,7 +1968,7 @@
           {% call contextual_cell_trigger(session, 'schedule-actions', 'Review schedule', true, interactive=not view.bundle_schedule.is_secondary) %}
             {{ schedule_table_cell(view.bundle_schedule.status, view.schedule_gate, view.review_round, view.schedule_preparation_unlocked, view.deadline_badge, view.schedule_auto_confirmed) }}
           {% endcall %}
-          {% if view.primary_schedule_link %}<a class="concat-primary-schedule-link" href="{{ view.primary_schedule_link.url }}">Manage schedule: {{ view.primary_schedule_link.name }}</a>{% endif %}
+          {% if view.primary_schedule_link %}<a class="concat-primary-schedule-link" href="{{ view.primary_schedule_link.url }}" title="Manage schedule: {{ view.primary_schedule_link.name }}">Manage schedule: {{ view.primary_schedule_link.name }}</a>{% endif %}
         </td>
         <td>{% call contextual_cell_trigger(session, 'staffing', 'Manage staffing', staffing_only=true) %}
           {{ staffing_table_cell(view.staffing, view.schedule_gate, false, view.staffing_deadline_badge, true) }}
@@ -2072,7 +2072,7 @@
               {% call contextual_cell_trigger(session, 'schedule-actions', 'Review schedule', true, interactive=not view.bundle_schedule.is_secondary) %}
                 {{ schedule_table_cell(view.bundle_schedule.status, view.schedule_gate, view.review_round, view.schedule_preparation_unlocked, view.deadline_badge, view.schedule_auto_confirmed) }}
               {% endcall %}
-              {% if view.primary_schedule_link %}<a class="concat-primary-schedule-link" href="{{ view.primary_schedule_link.url }}">Manage schedule: {{ view.primary_schedule_link.name }}</a>{% endif %}
+              {% if view.primary_schedule_link %}<a class="concat-primary-schedule-link" href="{{ view.primary_schedule_link.url }}" title="Manage schedule: {{ view.primary_schedule_link.name }}">Manage schedule: {{ view.primary_schedule_link.name }}</a>{% endif %}
             </td>
             <td>
               {% call contextual_cell_trigger(session, 'staffing', 'Manage staffing', staffing_only=true) %}
