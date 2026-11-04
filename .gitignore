@@ -9,3 +9,4 @@ instance/google_gmail_token.json
 instance/.gmail-*
 instance/import_batches/
 .DS_Store
+instance/finance_uploads/

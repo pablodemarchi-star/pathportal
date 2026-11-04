@@ -39,7 +39,9 @@ const context = {
   },
 };
 const source = fs.readFileSync('app/static/js/app.js', 'utf8');
-vm.runInNewContext(source.slice(source.lastIndexOf('document.querySelectorAll("[data-finance-institutions-form]")')), context);
+const start = source.lastIndexOf('document.querySelectorAll("[data-finance-institutions-form]")');
+const end = source.indexOf('// Save checklist changes without navigating', start);
+vm.runInNewContext(source.slice(start, end), context);
 (async () => {
   addHandlers.click();
   assert.equal(requests[0].get('institution_name'), '');

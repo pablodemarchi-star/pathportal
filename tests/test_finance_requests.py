@@ -1255,6 +1255,37 @@ class FinanceRequestsTest(unittest.TestCase):
         self.assertNotIn(delayed.request_number, body)
         self.assertNotIn("Delayed payment", body)
 
+    def test_superadmin_finance_actions_creation_auto_approves_like_payment_requests(self):
+        from app.models import PaymentReviewNotification
+        superadmin = self.create_user('superadmin-create@example.com', is_superadmin=True)
+        for source in ('payment_requests', 'finance_payments'):
+            with self.subTest(source=source), patch('app.routes.today_local', return_value=date(2026, 11, 4)), patch('app.payment_notifications.send_notification_email') as send:
+                response = self.client_for(superadmin).post('/finance-requests/payment-requests', data={
+                    'source_tab':source, 'description':'Automatic superadmin approval', 'concept_id':str(self.concept.id),
+                    'currency':'ARS', 'amount':'2500', 'payment_method':'Cash', 'payment_date_mode':'specific',
+                    'scheduled_payment_date':'10/11/2026'})
+                self.assertEqual(response.status_code, 302)
+                item = PaymentRequest.query.order_by(PaymentRequest.id.desc()).first()
+                self.assertEqual(item.status, 'Management approved')
+                self.assertIsNotNone(item.management_approved_at)
+                self.assertTrue(any(event.event_type == 'Approved by Management' for event in item.events))
+                if source == 'finance_payments':
+                    self.assertIn('finance_filter=date:2026-11-10', response.location)
+                self.assertEqual(PaymentReviewNotification.query.count(), 0)
+                send.assert_not_called()
+
+    def test_superadmin_finance_actions_without_amount_still_requires_review(self):
+        superadmin = self.create_user('superadmin-pending@example.com', is_superadmin=True)
+        with patch('app.payment_notifications.send_notification_email', return_value='review-gmail'):
+            response = self.client_for(superadmin).post('/finance-requests/payment-requests', data={
+                'source_tab':'finance_payments', 'description':'Amount still pending', 'concept_id':str(self.concept.id),
+                'currency':'ARS', 'amount':'', 'payment_method':'Cash', 'payment_date_mode':'asap'})
+        self.assertEqual(response.status_code, 302)
+        item = PaymentRequest.query.one()
+        self.assertEqual(item.status, 'Pending approval')
+        self.assertIsNone(item.management_approved_at)
+        self.assertEqual(item.amount, Decimal('0.00'))
+
     def test_finance_actions_created_payment_goes_to_pending_approval_filter_and_management_review(self):
         finance_user = self.create_user("finance@example.com", department="Finance")
         response = self.client_for(finance_user).post(
@@ -1522,10 +1553,8 @@ class FinanceRequestsTest(unittest.TestCase):
         self.assertIn(f'action="/finance-requests/billing-requests/{billing.id}/finance"', today_body)
         self.assertIn("Invoice proof", today_body)
         self.assertIn('name="invoice_link"', today_body)
-        self.assertIn(
-            '<a class="finance-access-folder-link" href="https://example.com/invoice-proof-folder" target="_blank" rel="noopener noreferrer">Access folder</a>',
-            today_body,
-        )
+        self.assertIn('name="invoice_proof_file"', today_body)
+        self.assertIn('data-finance-upload-dropzone', today_body)
         self.assertIn('name="status" value="Invoice cancelled"', today_body)
         self.assertIn(">Cancel invoice</button>", today_body)
         self.assertIn("data-requires-empty-payment-proof", today_body)
@@ -2606,7 +2635,8 @@ class FinanceRequestsTest(unittest.TestCase):
 
         body = self.client_for(user).get("/finance-requests").get_data(as_text=True)
 
-        self.assertIn("Contact / Payee", body)
+        self.assertIn("Payee", body)
+        self.assertNotIn("Contact / Payee", body)
         self.assertIn("data-finance-payee-picker", body)
         self.assertIn("data-finance-payee-input", body)
         self.assertIn("data-finance-payee-menu", body)
@@ -2616,7 +2646,8 @@ class FinanceRequestsTest(unittest.TestCase):
         self.assertIn('data-payment-method="Bank transfer"', body)
         self.assertIn('data-account-number="000123"', body)
         self.assertNotIn("Payee name", body)
-        self.assertNotIn("payee_contact_id", body)
+        self.assertNotIn('<select name="payee_contact_id"', body)
+        self.assertIn('type="hidden" name="payee_contact_id"', body)
 
     def test_contact_can_be_forgotten_from_saved_payee_list(self):
         user = self.create_user("requester@example.com")
@@ -3483,7 +3514,7 @@ class FinanceRequestsTest(unittest.TestCase):
         page = self.client_for(user).get("/finance-requests?tab=billing_requests").get_data(as_text=True)
 
         self.assertIn("<summary>Supporting documents</summary>", page)
-        self.assertIn('<a href="https://example.com/docs" target="_blank" rel="noopener">View documents here</a>', page)
+        self.assertIn('<a href="https://example.com/docs" target="_blank" rel="noopener">View document</a>', page)
         self.assertIn("<summary>Comments (2)</summary>", page)
         comments_panel = page[page.index("<summary>Comments (2)</summary>") : page.index("<summary>Status track</summary>")]
         self.assertIn("<strong>Requester:</strong> Requester note", comments_panel)
@@ -3648,7 +3679,7 @@ class FinanceRequestsTest(unittest.TestCase):
         self.assertIn("Requested:", page)
         self.assertIn(f"Requester: {user.full_name} · {user.department}", page)
         self.assertIn("Completed:", page)
-        self.assertIn('Invoice: <a href="https://example.com/invoice" target="_blank" rel="noopener">click here</a>', page)
+        self.assertIn('Invoice: <a href="https://example.com/invoice" target="_blank" rel="noopener">View proof</a>', page)
         self.assertIn("*BILL-2026-0001*", page)
         self.assertIn("The invoice for *Client SA* was updated to *Invoice issued* on *20/10/2026 at 11:50h.*", page)
         self.assertIn("*View the invoice here:* https://example.com/invoice", page)

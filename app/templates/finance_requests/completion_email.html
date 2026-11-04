@@ -15,6 +15,7 @@
 <p style="margin:0 0 12px;color:#00506b;font-size:28px;font-weight:700;">{{ details.amount }}</p>
 <p style="margin:0;color:#00506b;font-size:14px;line-height:1.6;">{{ details.name or 'Not specified' }}<br>{{ details.concept }}</p>
 </td></tr></table></td></tr>
+{% if details.payee_notice_result %}<tr><td style="padding:0 26px 20px;color:#00506b;font-size:14px;line-height:1.6;">{{ details.payee_notice_result }}</td></tr>{% endif %}
 {% if details.reason %}<tr><td style="padding:0 26px 20px;"><h2 style="color:#00506b;font-size:12px;">{{ 'DISCREPANCY DETAILS' if details.status == 'With discrepancy' else 'REASON' }}</h2><p style="white-space:pre-wrap;overflow-wrap:anywhere;font-size:14px;line-height:1.6;">{{ details.reason }}</p></td></tr>{% endif %}
 {% for language, heading, instruction in [('en', 'English message', 'Copy the message below and paste it into WhatsApp to send it.'), ('sp', 'Mensaje en español', 'Copiá el mensaje de abajo y pegalo en WhatsApp para enviarlo.')] %}
 <tr><td style="padding:0 26px 24px;" lang="{{ 'es' if language == 'sp' else 'en' }}">

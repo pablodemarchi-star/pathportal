@@ -1,0 +1,10 @@
+<fieldset class="finance-payee-notification" data-payee-notification data-read-only="{{ 'true' if current_menu_can_edit is defined and not current_menu_can_edit else 'false' }}">
+  <legend>Automatic payment notification</legend>
+  <div class="finance-payee-notification-options">
+    <div class="finance-payee-notification-yes">
+      <label><input type="radio" name="automatic_payment_notification" value="yes" {% if payment and payment.automatic_payment_notification %}checked{% endif %}> Yes</label>
+      <input type="email" name="payment_notification_email" value="{{ payment.payment_notification_email or '' if payment else '' }}" maxlength="254" placeholder="Email address" aria-label="Payee notification email" {% if not payment or not payment.automatic_payment_notification %}hidden disabled{% else %}required{% endif %}>
+    </div>
+    <label><input type="radio" name="automatic_payment_notification" value="no" {% if not payment or not payment.automatic_payment_notification %}checked{% endif %}> No</label>
+  </div>
+</fieldset>

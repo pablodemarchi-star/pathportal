@@ -89,3 +89,15 @@ def migrate_staff_id_expiry():
     if columns and "expiry_date" not in columns:
         db.session.execute(text("ALTER TABLE staff_id_document ADD COLUMN expiry_date DATE"))
         db.session.commit()
+
+
+def migrate_payee_notification_preferences():
+    if db.engine.dialect.name != 'sqlite':
+        return
+    for table in ('payment_request', 'finance_contact'):
+        columns = {row[1] for row in db.session.execute(text(f'PRAGMA table_info({table})'))}
+        if columns and 'automatic_payment_notification' not in columns:
+            db.session.execute(text(f'ALTER TABLE {table} ADD COLUMN automatic_payment_notification BOOLEAN NOT NULL DEFAULT 0'))
+        if columns and 'payment_notification_email' not in columns:
+            db.session.execute(text(f'ALTER TABLE {table} ADD COLUMN payment_notification_email VARCHAR(254)'))
+    db.session.commit()

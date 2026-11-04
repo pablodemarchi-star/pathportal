@@ -2486,6 +2486,8 @@ class FinanceContact(db.Model):
     display_name = db.Column(db.String(180), nullable=False, index=True)
     default_concept_id = db.Column(db.Integer, db.ForeignKey("finance_concept.id"), nullable=True, index=True)
     email = db.Column(db.String(180), nullable=True)
+    automatic_payment_notification = db.Column(db.Boolean, nullable=False, default=False, server_default=db.false())
+    payment_notification_email = db.Column(db.String(254), nullable=True)
     phone = db.Column(db.String(80), nullable=True)
     tax_id = db.Column(db.String(80), nullable=True)
     bank_name = db.Column(db.String(160), nullable=True)
@@ -2569,6 +2571,8 @@ class PaymentRequest(db.Model):
     amount = db.Column(db.Numeric(14, 2), nullable=False)
     currency = db.Column(db.String(10), nullable=False, index=True)
     payment_method = db.Column(db.String(40), nullable=False)
+    automatic_payment_notification = db.Column(db.Boolean, nullable=False, default=False, server_default=db.false())
+    payment_notification_email = db.Column(db.String(254), nullable=True)
     requested_payment_date = db.Column(db.Date, nullable=True, index=True)
     fixed_payment_date_required = db.Column(db.Boolean, nullable=False, default=False)
     scheduled_payment_date = db.Column(db.Date, nullable=True, index=True)
@@ -2649,6 +2653,20 @@ class FinanceCompletionNotification(db.Model):
     created_at = db.Column(db.DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))
     sent_at = db.Column(db.DateTime(timezone=True), nullable=True)
     __table_args__ = (db.UniqueConstraint("request_kind", "event_id"),)
+
+
+class PayeePaymentNotification(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    payment_request_id = db.Column(db.Integer, db.ForeignKey('payment_request.id'), nullable=False, index=True)
+    event_id = db.Column(db.Integer, nullable=False, unique=True)
+    recipient = db.Column(db.String(254), nullable=False)
+    receipt_token = db.Column(db.String(100), nullable=False, unique=True)
+    payload = db.Column(db.Text, nullable=False)
+    status = db.Column(db.String(24), nullable=False, default='pending', index=True)
+    gmail_message_id = db.Column(db.String(200), nullable=True)
+    last_error = db.Column(db.String(250), nullable=True)
+    sent_at = db.Column(db.DateTime(timezone=True), nullable=True)
+    payment = db.relationship('PaymentRequest', backref=db.backref('payee_notifications', cascade='all, delete-orphan'))
 
 
 class PaymentReviewNotification(db.Model):

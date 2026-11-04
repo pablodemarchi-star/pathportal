@@ -158,6 +158,8 @@ def create_app():
     app.register_blueprint(staff_id_documents_bp)
     from app.finance_completion import completion_bp
     app.register_blueprint(completion_bp)
+    from app.payee_notifications import payee_bp
+    app.register_blueprint(payee_bp)
     from app.finance_agenda import agenda_bp
     app.register_blueprint(agenda_bp)
     from app.marketing_material import marketing_bp
@@ -291,6 +293,8 @@ def create_app():
 
     with app.app_context():
         db.create_all()
+        from app.schema_migrations import migrate_payee_notification_preferences
+        migrate_payee_notification_preferences()
         from app.schema_migrations import migrate_staff_id_expiry
         migrate_staff_id_expiry()
         from app.schema_migrations import migrate_finance_completion_events

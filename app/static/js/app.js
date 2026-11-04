@@ -9242,6 +9242,7 @@ const openFinancePayeeMenu = (picker) => {
 const applyFinancePayeeDefaults = (picker, option) => {
   const form = picker?.closest?.("form");
   if (!form || !option) return;
+  window.applyPayeeNotificationDefaults?.(form, option.dataset);
   const setField = (name, value) => {
     const field = form.querySelector(`[name="${name}"]`);
     if (!field) return;
@@ -9249,6 +9250,7 @@ const applyFinancePayeeDefaults = (picker, option) => {
     field.dispatchEvent(new Event("input", { bubbles: true }));
     field.dispatchEvent(new Event("change", { bubbles: true }));
   };
+  setField("payee_contact_id", option.dataset.contactId);
   setField("concept_id", option.dataset.conceptId);
   setField("currency", option.dataset.currency);
   setField("payment_method", option.dataset.paymentMethod);

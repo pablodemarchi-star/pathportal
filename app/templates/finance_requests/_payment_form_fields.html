@@ -4,8 +4,10 @@
   {% set asap_payment_date = payment.scheduled_payment_date if payment and date_mode == 'asap' and payment.scheduled_payment_date else next_payment_run_date %}
   {% set selected_currency = payment.currency if payment and payment.currency else 'ARS' %}
   {% set request_currency_options = finance_currency_options|default(['ARS', 'EUR', 'GBP', 'USD', 'UYU']) %}
+  <div class="finance-payee-fields">
   <div class="finance-payee-picker" data-finance-payee-picker>
-    <label>Contact / Payee
+    <input type="hidden" name="payee_contact_id" value="{{ payment.payee_contact_id or '' if payment else '' }}">
+    <label>Payee
       <input name="payee_name" value="{{ payment.payee_name_snapshot or '' if payment else '' }}" autocomplete="off" data-finance-payee-input>
     </label>
     <div class="finance-payee-menu" data-finance-payee-menu hidden>
@@ -14,6 +16,8 @@
           class="finance-payee-option"
           data-finance-payee-option
           data-contact-kind="payee"
+          data-payment-notification="{{ 'yes' if contact.automatic_payment_notification else 'no' }}"
+          data-payment-notification-email="{{ contact.payment_notification_email or '' }}"
           data-contact-id="{{ contact.id }}"
           data-contact-name="{{ contact.display_name }}"
           data-concept-id="{{ contact.default_concept_id or '' }}"
@@ -31,7 +35,9 @@
       {% endfor %}
     </div>
   </div>
-  <label>Concept
+  {% include 'finance_requests/_payee_notification_fields.html' %}
+  </div>
+  <label class="finance-payment-concept-field">Concept
     <select name="concept_id" required>
       <option value="">Select concept</option>
       {% for concept in payment_concepts %}

@@ -27804,6 +27804,17 @@ def apply_payment_form(payment, form, allow_status=False, save_payee_contact=Fal
         receipt_url = ""
     if card_payment_already_paid and not receipt_url:
         errors.append("Receipt is required for already paid card payments.")
+    notification_present = 'automatic_payment_notification' in form
+    notification_choice = form.get('automatic_payment_notification', 'no')
+    notify_payee = notification_choice == 'yes' if notification_present else bool(payment.automatic_payment_notification)
+    notification_email = (form.get('payment_notification_email') or '').strip() if notification_present else (payment.payment_notification_email or '')
+    if notification_present and notification_choice not in {'yes', 'no'}:
+        errors.append('Select Yes or No for Automatic payment notification.')
+    from app.payee_notifications import valid_notification_email
+    if notify_payee and not valid_notification_email(notification_email):
+        errors.append('Enter a valid email address for Automatic payment notification.')
+    if notify_payee and not payee_name:
+        errors.append('Payee is required.')
     if errors:
         return errors
     if save_payee_contact:
@@ -27820,6 +27831,15 @@ def apply_payment_form(payment, form, allow_status=False, save_payee_contact=Fal
                 "tax_id": tax_id if payment_method in {"Bank transfer", "Deposit"} else "",
             },
         )
+    if notification_present:
+        if not contact and payee_name:
+            contact = FinanceContact(display_name=payee_name)
+            db.session.add(contact)
+        if contact:
+            contact.automatic_payment_notification = notify_payee
+            contact.payment_notification_email = notification_email if notify_payee else None
+        payment.automatic_payment_notification = notify_payee
+        payment.payment_notification_email = notification_email if notify_payee else None
     payment.description = description
     payment.concept = concept
     payment.concept_name_snapshot = concept.name
@@ -28253,7 +28273,9 @@ def create_payment_request():
     source_tab = request.form.get("source_tab") if request.form.get("source_tab") in {"payment_requests", "finance_payments"} else "payment_requests"
     is_finance_action_request = source_tab == "finance_payments"
     return_url = finance_payment_request_return_url()
-    initial_status = "Pending approval" if is_finance_action_request else ("Management approved" if actor["is_superadmin"] else "Submitted")
+    # Empty-amount Finance requests still need an amount before approval.
+    auto_approve = actor["is_superadmin"] and bool((request.form.get("amount") or "").strip())
+    initial_status = "Management approved" if auto_approve else ("Pending approval" if is_finance_action_request else "Submitted")
     payment = PaymentRequest(
         id=next_identity(PaymentRequest),
         request_number=next_finance_request_number(PaymentRequest, "PAY"),
@@ -28308,7 +28330,7 @@ def create_payment_request():
     if payment.status == "Payment completed":
         add_payment_event(payment, "Payment completed", new_status=payment.status)
     else:
-        add_payment_event(payment, "Pending approval" if is_finance_action_request else "Submitted", new_status=payment.status)
+        add_payment_event(payment, "Pending approval" if initial_status == "Pending approval" else "Submitted", new_status=payment.status)
     if payment.status != "Payment completed" and initial_status == "Management approved":
         add_payment_event(payment, "Approved by Management", previous_status="Submitted", new_status="Management approved")
     from app.payment_notifications import queue_management_notification, deliver_management_notification
@@ -28319,6 +28341,13 @@ def create_payment_request():
     if return_url:
         return redirect(return_url)
     if source_tab == "finance_payments":
+        if payment.status == "Payment completed":
+            return finance_request_redirect("finance_payments", show_archived="1")
+        if payment.status == "Management approved":
+            scheduled = payment.scheduled_payment_date
+            filter_key = ("today" if not scheduled or scheduled <= today_local() else
+                          "tomorrow" if scheduled == today_local() + timedelta(days=1) else f"date:{scheduled.isoformat()}")
+            return finance_request_redirect("finance_payments", finance_filter=filter_key)
         return finance_request_redirect("finance_payments", finance_filter="pending_approval")
     return finance_request_redirect("payment_requests")
 
