@@ -7955,7 +7955,7 @@ for (const days of [2, 3, 4]) {
         self.assertLess(final_items_index, session_box_index)
         self.assertIn("Ensure all previously listed items are included in the session box, then close it.", session_box_section)
         self.assertIn('Print <span class="shipment-pack-count-chip">2</span> copies of the ', session_box_section)
-        self.assertIn('session identification label</a> and affix <span class="shipment-pack-count-chip">1</span> to the designated square on the front of the session box.', session_box_section)
+        self.assertIn('session identification label</a> and affix <span class="shipment-pack-count-chip">1</span> to the front of the session box.', session_box_section)
         self.assertIn("Wrap the session box securely in black plastic, heat-seal it, and affix the second session identification label to the top of the sealed box.", session_box_section)
         self.assertIn("session identification label", session_box_section)
         self.assertIn(
