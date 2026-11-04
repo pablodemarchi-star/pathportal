@@ -9732,8 +9732,8 @@ def package_status_label(status):
 def package_preparation_stage_statuses(session_record, staff_member_id_requirements=None):
     stages = [
         ("Candidate label verification", session_record.package_label_verification_status),
-        ("Candidate label printing and affixing", session_record.package_label_printing_status),
-        ("Room package sealing", session_record.room_package_sealing_status),
+        ("Candidate labelling and room package sealing", session_record.package_label_printing_status),
+        ("Room package labelling and documentation", session_record.room_package_sealing_status),
         ("Return packages", session_record.return_packages_status),
     ]
     if staff_member_id_requirements:
@@ -9839,8 +9839,8 @@ def packages_modal_blocker_messages(packages_contract, staffing_contract=None, i
 
 PACKAGE_STATUS_TRACK_FIELDS = (
     ("Candidate label verification", "package_label_verification_status", "package_label_verification_updated_at", "package_label_verification_updated_by"),
-    ("Candidate label printing and affixing", "package_label_printing_status", "package_label_printing_updated_at", "package_label_printing_updated_by"),
-    ("Room package sealing", "room_package_sealing_status", "room_package_sealing_updated_at", "room_package_sealing_updated_by"),
+    ("Candidate labelling and room package sealing", "package_label_printing_status", "package_label_printing_updated_at", "package_label_printing_updated_by"),
+    ("Room package labelling and documentation", "room_package_sealing_status", "room_package_sealing_updated_at", "room_package_sealing_updated_by"),
     ("Return packages", "return_packages_status", "return_packages_updated_at", "return_packages_updated_by"),
     ("Staff ID cards", "staff_member_ids_status", "staff_member_ids_updated_at", "staff_member_ids_updated_by"),
     ("Inclusion of final items", "inclusion_final_items_status", "inclusion_final_items_updated_at", "inclusion_final_items_updated_by"),
@@ -22877,10 +22877,10 @@ def update_package_label_printing(session_id):
 
     action = request.form.get("action", "").strip()
     if action == "reopen" and request.form.get("confirmation_password", request.form.get("deletion_password", "")) != "EditOK":
-        flash("Password authorisation is required to reopen Candidate label printing and affixing.", "error")
+        flash("Password authorisation is required to reopen Candidate labelling and room package sealing.", "error")
         return package_control_redirect(session_record, status_filter, target=package_focus_target)
     if action != "reopen" and (session_record.package_label_verification_status or "not_started") != "completed":
-        flash("Candidate label verification must be completed before Candidate label printing and affixing can begin.", "error")
+        flash("Candidate label verification must be completed before Candidate labelling and room package sealing can begin.", "error")
         return package_control_redirect(session_record, status_filter, target=package_focus_target)
 
     error = apply_package_stage_status_update(
@@ -22889,13 +22889,13 @@ def update_package_label_printing(session_id):
         "package_label_printing_status",
         "package_label_printing_updated_at",
         "package_label_printing_updated_by",
-        "Candidate label printing",
+        "Candidate labelling and room package sealing",
     )
     if error:
         flash(error, "error")
         return package_control_redirect(session_record, status_filter, target=package_focus_target)
     db.session.commit()
-    flash(f"Candidate label printing marked as {package_label_verification_status_label(session_record.package_label_printing_status)}.", "success")
+    flash(f"Candidate labelling and room package sealing marked as {package_label_verification_status_label(session_record.package_label_printing_status)}.", "success")
     return package_control_redirect(session_record, status_filter, target=package_focus_target)
 
 
@@ -22913,10 +22913,10 @@ def update_room_package_sealing(session_id):
 
     action = request.form.get("action", "").strip()
     if action == "reopen" and request.form.get("confirmation_password", request.form.get("deletion_password", "")) != "EditOK":
-        flash("Password authorisation is required to reopen Room package sealing.", "error")
+        flash("Password authorisation is required to reopen Room package labelling and documentation.", "error")
         return package_control_redirect(session_record, status_filter, target=package_focus_target)
     if action != "reopen" and (session_record.package_label_printing_status or "not_started") != "completed":
-        flash("Candidate label printing and affixing must be completed before Room package sealing can begin.", "error")
+        flash("Candidate labelling and room package sealing must be completed before Room package labelling and documentation can begin.", "error")
         return package_control_redirect(session_record, status_filter, target=package_focus_target)
 
     error = apply_package_stage_status_update(
@@ -22925,13 +22925,13 @@ def update_room_package_sealing(session_id):
         "room_package_sealing_status",
         "room_package_sealing_updated_at",
         "room_package_sealing_updated_by",
-        "Room package sealing",
+        "Room package labelling and documentation",
     )
     if error:
         flash(error, "error")
         return package_control_redirect(session_record, status_filter, target=package_focus_target)
     db.session.commit()
-    flash(f"Room package sealing marked as {package_label_verification_status_label(session_record.room_package_sealing_status)}.", "success")
+    flash(f"Room package labelling and documentation marked as {package_label_verification_status_label(session_record.room_package_sealing_status)}.", "success")
     return package_control_redirect(session_record, status_filter, target=package_focus_target)
 
 

@@ -7394,10 +7394,10 @@ for (const days of [2, 3, 4]) {
         packages_section_start = html.index(f'<section class="staffing-control-section packages-control-section" id="packages-{self.session_record.id}"')
         packages_section = html[packages_section_start:packages_section_start + 36000]
         printing_guidance = packages_section[
-            packages_section.index("Candidate label printing and affixing") : packages_section.index("Room package sealing")
+            packages_section.index("Candidate labelling and room package sealing") : packages_section.index("Room package labelling and documentation")
         ]
         room_guidance = packages_section[
-            packages_section.index("Room package sealing") : packages_section.index("Return packages")
+            packages_section.index("Room package labelling and documentation") : packages_section.index("Return packages")
         ]
         self.assertIn("disabled>Mark as in progress", printing_guidance)
         self.assertIn("disabled>Mark as complete", printing_guidance)
@@ -7412,7 +7412,7 @@ for (const days of [2, 3, 4]) {
             follow_redirects=True,
         )
         self.assertIn(
-            b"Candidate label verification must be completed before Candidate label printing and affixing can begin.",
+            b"Candidate label verification must be completed before Candidate labelling and room package sealing can begin.",
             response.data,
         )
         db.session.refresh(self.session_record)
@@ -7425,10 +7425,10 @@ for (const days of [2, 3, 4]) {
         packages_section_start = html.index(f'<section class="staffing-control-section packages-control-section" id="packages-{self.session_record.id}"')
         packages_section = html[packages_section_start:packages_section_start + 36000]
         printing_guidance = packages_section[
-            packages_section.index("Candidate label printing and affixing") : packages_section.index("Room package sealing")
+            packages_section.index("Candidate labelling and room package sealing") : packages_section.index("Room package labelling and documentation")
         ]
         room_guidance = packages_section[
-            packages_section.index("Room package sealing") : packages_section.index("Return packages")
+            packages_section.index("Room package labelling and documentation") : packages_section.index("Return packages")
         ]
         self.assertNotIn("disabled>Mark as in progress", printing_guidance)
         self.assertIn("disabled>Mark as complete", printing_guidance)
@@ -7443,7 +7443,7 @@ for (const days of [2, 3, 4]) {
             follow_redirects=True,
         )
         self.assertIn(
-            b"Candidate label printing and affixing must be completed before Room package sealing can begin.",
+            b"Candidate labelling and room package sealing must be completed before Room package labelling and documentation can begin.",
             response.data,
         )
         db.session.refresh(self.session_record)
@@ -7545,10 +7545,10 @@ for (const days of [2, 3, 4]) {
         packages_section_start = html.index(f'<section class="staffing-control-section packages-control-section" id="packages-{self.session_record.id}"')
         packages_section = html[packages_section_start:packages_section_start + 36000]
         third_guidance = packages_section[
-            packages_section.index("Room package sealing") : packages_section.index("Return packages")
+            packages_section.index("Room package labelling and documentation") : packages_section.index("Return packages")
         ]
 
-        self.assertNotIn("Room package sealing warning", third_guidance)
+        self.assertNotIn("Room package labelling and documentation warning", third_guidance)
         self.assertNotIn("Staffing must be ready before the exam room records can be printed and affixed to the packages.", third_guidance)
         self.assertNotIn("Do not proceed with this stage. Staff members have not been confirmed yet", third_guidance)
         self.assertNotIn("disabled>Mark as complete", third_guidance)
@@ -7564,7 +7564,7 @@ for (const days of [2, 3, 4]) {
         packages_section_start = html.index(f'<section class="staffing-control-section packages-control-section" id="packages-{self.session_record.id}"')
         packages_section = html[packages_section_start:packages_section_start + 36000]
         third_guidance = packages_section[
-            packages_section.index("Room package sealing") : packages_section.index("Return packages")
+            packages_section.index("Room package labelling and documentation") : packages_section.index("Return packages")
         ]
 
         self.assertIn("Add the EN identification label to any exam room package that includes candidates with EN.", third_guidance)
@@ -7766,9 +7766,9 @@ for (const days of [2, 3, 4]) {
         self.assertNotIn("Do not proceed with printing this ID. The staff member has not been confirmed yet", confirmed_row)
         self.assertIn("Do not proceed with printing this ID. The staff member has not been confirmed yet", pending_row)
         self.assertNotIn("Do not proceed with this stage. Staff members have not been confirmed yet", pending_row)
-        self.assertIn("Staffing must be ready before adding full schedule for each room for the Supervisor.", final_items_section)
+        self.assertNotIn("Staffing must be ready before adding full schedule for each room for the Supervisor.", final_items_section)
         self.assertIn("package-preparation-blocked-chip", final_items_section)
-        self.assertIn("Do not proceed with printing full schedule. Staff members have not been confirmed yet", final_items_section)
+        self.assertNotIn("Do not proceed with printing full schedule. Staff members have not been confirmed yet", final_items_section)
         self.assertIn("disabled>Mark as complete", final_items_section)
 
     def test_packages_modal_inclusion_final_items_uses_latest_total_and_supervisors(self):
@@ -7810,7 +7810,7 @@ for (const days of [2, 3, 4]) {
         ]
 
         self.assertIn("Add 24 Path Examinations wristbands. Do not include any extras.", final_items_section)
-        self.assertIn("Add 2 stapled copies of the full session schedule for each room for the Supervisor.", final_items_section)
+        self.assertNotIn("Add 2 stapled copies of the full session schedule for each room for the Supervisor.", final_items_section)
         self.assertIn("Add a Path Examinations bag with the gift inside.", final_items_section)
         self.assertIn("Not started yet", final_items_section)
         self.assertIn("Inclusion of final items actions", final_items_section)
@@ -7832,7 +7832,7 @@ for (const days of [2, 3, 4]) {
             packages_section.index("Inclusion of final items") : packages_section.index("Session box sealing")
         ]
 
-        self.assertIn("Add 1 stapled copy of the full session schedule for each room for the Supervisor.", final_items_section)
+        self.assertNotIn("Add 1 stapled copy of the full session schedule for each room for the Supervisor.", final_items_section)
 
     def test_package_unified_total_prefers_earliest_onsite_in_mixed_concat(self):
         from app.routes import inclusion_final_items_for_session
@@ -7973,6 +7973,29 @@ for (const days of [2, 3, 4]) {
         self.assertIn("disabled>Mark as in progress", session_box_section)
         self.assertIn("disabled>Mark as complete", session_box_section)
         self.assertIn("disabled>Mark incident", session_box_section)
+
+    def test_single_session_bundle_uses_one_identification_label_only(self):
+        from pathlib import Path
+        source = Path('app/templates/pre_session_control_tower/_session_modals.html').read_text()
+        start = source.index('{% set single_session_bundle =')
+        end = source.index('</ol>', start) + len('</ol>')
+        for count in (0, 1, 2):
+            with self.subTest(bundle_size=count), self.app.test_request_context():
+                bundle = {'included_sessions': list(range(count))} if count else None
+                rendered = self.app.jinja_env.from_string(source[start:end]).render(
+                    view={'shipments': {'bundle_view': bundle}, 'packages': {'schedule_ready': True}},
+                    session=self.session_record)
+                self.assertEqual(rendered.count('<li>'), 3)
+                self.assertIn(f'/sessions/{self.session_record.id}/session-identification-label.pdf', rendered)
+                if count == 1:
+                    self.assertIn('Print a copy of the', rendered)
+                    self.assertIn('and affix it to the front of the session box.', rendered)
+                    self.assertIn('Wrap the session box securely in black plastic and heat-seal it.', rendered)
+                    self.assertNotIn('shipment-pack-count-chip', rendered)
+                    self.assertNotIn('second session identification label', rendered)
+                else:
+                    self.assertIn('Print <span class="shipment-pack-count-chip">2</span> copies', rendered)
+                    self.assertIn('affix the second session identification label to the top', rendered)
 
     def test_session_identification_label_pdf_requires_login_and_permission(self):
         url = f"/pre-session-control-tower/sessions/{self.session_record.id}/session-identification-label.pdf"
@@ -8811,7 +8834,7 @@ for (const days of [2, 3, 4]) {
         self.assertEqual(status_contract["label"], "In progress")
         self.assertEqual(status_contract["table_summary"], "1 / 6 completed")
         self.assertEqual(status_contract["secondary_lines"][0]["text"], "1 in progress")
-        self.assertIn("Candidate label printing and affixing", status_contract["secondary_lines"][0]["tooltip"])
+        self.assertIn("Candidate labelling and room package sealing", status_contract["secondary_lines"][0]["tooltip"])
 
         self.session_record.package_label_printing_status = "completed"
         self.session_record.room_package_sealing_status = "completed"
@@ -8886,21 +8909,21 @@ for (const days of [2, 3, 4]) {
             len(packages_section),
         )
         self.assertLess(
-            packages_section.index("Candidate label printing and affixing"),
+            packages_section.index("Candidate labelling and room package sealing"),
             len(packages_section),
         )
         self.assertLess(
-            packages_section.index("Room package sealing"),
+            packages_section.index("Room package labelling and documentation"),
             len(packages_section),
         )
         first_guidance = packages_section[
-            packages_section.index("Candidate label verification") : packages_section.index("Candidate label printing and affixing")
+            packages_section.index("Candidate label verification") : packages_section.index("Candidate labelling and room package sealing")
         ]
         second_guidance = packages_section[
-            packages_section.index("Candidate label printing and affixing") : packages_section.index("Room package sealing")
+            packages_section.index("Candidate labelling and room package sealing") : packages_section.index("Room package labelling and documentation")
         ]
         third_guidance = packages_section[
-            packages_section.index("Room package sealing") : packages_section.index("Return packages")
+            packages_section.index("Room package labelling and documentation") : packages_section.index("Return packages")
         ]
         return_guidance = packages_section[
             packages_section.index("Return packages") :
@@ -8923,18 +8946,19 @@ for (const days of [2, 3, 4]) {
         self.assertIn("Prepare the exam papers required for each module and exam room, arranging them in the exact order shown on the approved schedule.", second_guidance)
         self.assertIn("Check whether any listed candidates have EN and require adapted exam papers.", second_guidance)
         self.assertIn("Affix each candidate label to the corresponding exam paper.", second_guidance)
-        self.assertIn("Seal each exam room package with transparent plastic wrap.", third_guidance)
+        self.assertIn("Seal each exam room package with transparent plastic wrap.", second_guidance)
+        self.assertNotIn("Seal each exam room package with transparent plastic wrap.", third_guidance)
         self.assertIn("Print each exam room's candidate list on an A4 adhesive label.", third_guidance)
         self.assertIn("Affix each label to the corresponding exam room package.", third_guidance)
         self.assertNotIn("Add the EN identification label to any exam room package that includes candidates with EN.", third_guidance)
-        self.assertNotIn("Room package sealing warning", third_guidance)
+        self.assertNotIn("Room package labelling and documentation warning", third_guidance)
         self.assertIn("Staffing must be ready before the exam room records can be printed and affixed to the packages.", third_guidance)
         self.assertIn("package-preparation-blocked-step", third_guidance)
         self.assertIn("Do not proceed with this stage. Staff members have not been confirmed yet", third_guidance)
         self.assertIn("disabled>Mark as complete", third_guidance)
         self.assertIn("Candidate label verification actions", packages_section)
-        self.assertIn("Candidate label printing actions", packages_section)
-        self.assertIn("Room package sealing actions", packages_section)
+        self.assertIn("Candidate labelling and room package sealing actions", packages_section)
+        self.assertIn("Room package labelling and documentation actions", packages_section)
         self.assertIn("Return packages actions", return_guidance)
         self.assertIn("1. Include the following return packages:", return_guidance)
         self.assertIn("1 submitted Reading and writing modules.", return_guidance)
@@ -9019,7 +9043,7 @@ for (const days of [2, 3, 4]) {
         self.assertIn("packages-status-incident", packages_section)
         self.assertIn("With incident", packages_section)
         self.assertIn("Completed: Candidate label verification", packages_section)
-        self.assertIn("In progress: Candidate label printing and affixing", packages_section)
+        self.assertIn("In progress: Candidate labelling and room package sealing", packages_section)
         self.assertIn("With incident: Return packages", packages_section)
 
     def test_packages_modal_blockers_use_singular_staff_and_incident_copy(self):
@@ -9118,7 +9142,7 @@ for (const days of [2, 3, 4]) {
         self.assertIn("disabled", panel)
         self.assertNotIn("hidden", panel)
         self.assertIn("The schedule must be approved before package preparation can begin.", section)
-        for title in ("Candidate label verification", "Candidate label printing and affixing", "Room package sealing",
+        for title in ("Candidate label verification", "Candidate labelling and room package sealing", "Room package labelling and documentation",
                       "Return packages", "Inclusion of final items", "Session box sealing"):
             self.assertIn(title, section)
         links = re.findall(r'<a [^>]+>', section[section.index('<fieldset'):])

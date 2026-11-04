@@ -947,16 +947,17 @@ This stage has already been marked as complete. Reopening it may affect package 
 	              {% set label_printing_status = session.package_label_printing_status or "not_started" %}
 	              {% set label_printing_unlocked = label_verification_status == "completed" %}
               <div class="package-preparation-guidance-title">
-                <strong>Candidate label printing and affixing</strong>
+                <strong>Candidate labelling and room package sealing</strong>
                 {{ package_stage_state(session, label_printing_status, 'package_label_printing_status') }}
               </div>
               <ol>
                 <li>Prepare the exam papers required for each module and exam room, arranging them in the exact order shown on the approved schedule.</li>
                 <li>Check whether any listed candidates have EN and require adapted exam papers.</li>
                 <li>Affix each candidate label to the corresponding exam paper.</li>
+                <li>Seal each exam room package with transparent plastic wrap.</li>
               </ol>
             </div>
-            <div class="package-preparation-actions" aria-label="Candidate label printing actions">
+            <div class="package-preparation-actions" aria-label="Candidate labelling and room package sealing actions">
               <form method="post" action="{{ url_for('staff.update_package_label_printing', session_id=session.id) }}" data-disable-on-submit>
                 <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
                 <input type="hidden" name="schedule_status" value="{{ selected_schedule_status }}">
@@ -979,7 +980,7 @@ This stage has already been marked as complete. Reopening it may affect package 
 	                <button class="package-preparation-chip package-preparation-chip-incident" type="submit" {% if not label_printing_unlocked or label_printing_status in ["completed", "incident"] %}disabled{% endif %}>Mark incident</button>
               </form>
               {% if label_printing_status == "completed" %}
-                <form method="post" action="{{ url_for('staff.update_package_label_printing', session_id=session.id) }}" data-confirm-password-submit="Are you sure you want to reopen editing for Candidate label printing and affixing?
+                <form method="post" action="{{ url_for('staff.update_package_label_printing', session_id=session.id) }}" data-confirm-password-submit="Are you sure you want to reopen editing for Candidate labelling and room package sealing?
 This stage has already been marked as complete. Reopening it may affect package preparation records and any previously confirmed label checks. Please continue only if changes are required." data-confirm-password-value="EditOK" data-disable-on-submit>
                   <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
                   <input type="hidden" name="schedule_status" value="{{ selected_schedule_status }}">
@@ -996,14 +997,13 @@ This stage has already been marked as complete. Reopening it may affect package 
 	              {% set room_package_sealing_status = session.room_package_sealing_status or "not_started" %}
 	              {% set room_package_sealing_unlocked = label_printing_status == "completed" %}
               <div class="package-preparation-guidance-title">
-                <strong>Room package sealing</strong>
+                <strong>Room package labelling and documentation</strong>
                 {{ package_stage_state(session, room_package_sealing_status, 'room_package_sealing_status') }}
               </div>
               {% if view.packages.schedule_ready and not view.packages.staffing_ready %}
                 <p class="staffing-schedule-notice">Staffing must be ready before the exam room records can be printed and affixed to the packages.</p>
               {% endif %}
               <ol>
-                <li>Seal each exam room package with transparent plastic wrap.</li>
                 <li class="{% if not view.packages.staffing_ready %}package-preparation-blocked-step{% endif %}">
                   <span>Print each exam room's candidate list on an A4 adhesive label.</span>
                   {% if not view.packages.staffing_ready %}
@@ -1019,9 +1019,15 @@ This stage has already been marked as complete. Reopening it may affect package 
                 {% if session.pen_enabled %}
                   <li>Add the EN identification label to any exam room package that includes candidates with EN.</li>
                 {% endif %}
+                <li class="{% if not view.packages.staffing_ready %}package-preparation-blocked-step{% endif %}">
+                  <span>Once all exam room packages have been prepared, place one stapled copy of the full session schedule in a separate loose plastic sleeve for each room, for the Supervisor.</span>
+                  {% if not view.packages.staffing_ready %}
+                    <span class="package-preparation-blocked-chip">Do not proceed with printing full schedule. Staff members have not been confirmed yet</span>
+                  {% endif %}
+                </li>
               </ol>
             </div>
-            <div class="package-preparation-actions" aria-label="Room package sealing actions">
+            <div class="package-preparation-actions" aria-label="Room package labelling and documentation actions">
               <form method="post" action="{{ url_for('staff.update_room_package_sealing', session_id=session.id) }}" data-disable-on-submit>
                 <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
                 <input type="hidden" name="schedule_status" value="{{ selected_schedule_status }}">
@@ -1044,7 +1050,7 @@ This stage has already been marked as complete. Reopening it may affect package 
 	                <button class="package-preparation-chip package-preparation-chip-incident" type="submit" {% if not room_package_sealing_unlocked or room_package_sealing_status in ["completed", "incident"] %}disabled{% endif %}>Mark incident</button>
               </form>
               {% if room_package_sealing_status == "completed" %}
-                <form method="post" action="{{ url_for('staff.update_room_package_sealing', session_id=session.id) }}" data-confirm-password-submit="Are you sure you want to reopen editing for Room package sealing?
+                <form method="post" action="{{ url_for('staff.update_room_package_sealing', session_id=session.id) }}" data-confirm-password-submit="Are you sure you want to reopen editing for Room package labelling and documentation?
 This stage has already been marked as complete. Reopening it may affect package preparation records and any previously confirmed package sealing checks. Please continue only if changes are required." data-confirm-password-value="EditOK" data-disable-on-submit>
                   <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
                   <input type="hidden" name="schedule_status" value="{{ selected_schedule_status }}">
@@ -1198,17 +1204,10 @@ This stage has already been marked as complete. Reopening it may affect package 
                 <strong>Inclusion of final items</strong>
                 {{ package_stage_state(session, inclusion_final_items_status, 'inclusion_final_items_status') }}
 	              </div>
-	              {% if not view.packages.staffing_ready %}
-	                <p class="staffing-schedule-notice">Staffing must be ready before adding full schedule for each room for the Supervisor.</p>
-	              {% endif %}
+
 	              <ol>
 	                <li>Add {{ view.packages.inclusion_final_items.total_candidates }} Path Examinations wristbands. Do not include any extras.</li>
-	                <li>
-	                  <span>Add {{ view.packages.inclusion_final_items.supervisor_count }} stapled {{ view.packages.inclusion_final_items.schedule_copy_label }} of the full session schedule for each room for the Supervisor.</span>
-	                  {% if not view.packages.staffing_ready %}
-	                    <span class="package-preparation-blocked-chip">Do not proceed with printing full schedule. Staff members have not been confirmed yet</span>
-	                  {% endif %}
-	                </li>
+
 	                {% set include_gift = view.packages.inclusion_final_items.get('include_gift') %}
                 {% if include_gift == true or (include_gift is none and not view.get('bundle_schedule', {}).get('is_secondary_by_date', false)) %}
 	                  <li>Add a Path Examinations bag with the gift inside.</li>
@@ -1258,10 +1257,15 @@ This stage has already been marked as complete. Reopening it may affect package 
                 <strong>Session box sealing</strong>
                 {{ package_stage_state(session, session_box_sealing_status, 'session_box_sealing_status') }}
               </div>
+              {% set single_session_bundle = view.shipments.bundle_view and view.shipments.bundle_view.included_sessions|length == 1 %}
               <ol>
                 <li>Ensure all previously listed items are included in the session box, then close it.</li>
-                <li>Print <span class="shipment-pack-count-chip">2</span> copies of the <a{% if not view.packages.schedule_ready %} aria-disabled="true" tabindex="-1"{% endif %} href="{{ url_for('staff.session_identification_label_pdf', session_id=session.id) }}" target="_blank" rel="noopener noreferrer" aria-label="Open session identification label PDF">session identification label</a> and affix <span class="shipment-pack-count-chip">1</span> to the front of the session box.</li>
-                <li>Wrap the session box securely in black plastic, heat-seal it, and affix the second session identification label to the top of the sealed box.</li>
+                <li>Print {% if single_session_bundle %}a copy{% else %}<span class="shipment-pack-count-chip">2</span> copies{% endif %} of the <a{% if not view.packages.schedule_ready %} aria-disabled="true" tabindex="-1"{% endif %} href="{{ url_for('staff.session_identification_label_pdf', session_id=session.id) }}" target="_blank" rel="noopener noreferrer" aria-label="Open session identification label PDF">session identification label</a> and affix {% if single_session_bundle %}it{% else %}<span class="shipment-pack-count-chip">1</span>{% endif %} to the front of the session box.</li>
+                {% if single_session_bundle %}
+                  <li>Wrap the session box securely in black plastic and heat-seal it.</li>
+                {% else %}
+                  <li>Wrap the session box securely in black plastic, heat-seal it, and affix the second session identification label to the top of the sealed box.</li>
+                {% endif %}
               </ol>
             </div>
             <div class="package-preparation-actions" aria-label="Session box sealing actions">
