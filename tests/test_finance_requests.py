@@ -89,6 +89,42 @@ class FinanceRequestsTest(unittest.TestCase):
             self.assertFalse(deliver_management_notification(notification.id))
             self.assertEqual(send.call_count, 1)
 
+    def test_management_email_date_matches_specific_and_next_run_request_cards(self):
+        requester = self.create_user("date-requester@example.com")
+        client = self.client_for(requester)
+        for mode, expected in [('specific', date(2026, 11, 10)), ('asap', date(2026, 11, 5))]:
+            with self.subTest(mode=mode), patch('app.routes.today_local', return_value=date(2026, 11, 4)), patch('app.routes.finance_next_payment_run_date', return_value=date(2026, 11, 5)), patch('app.payment_notifications.send_notification_email', return_value='gmail-test') as send:
+                response = client.post('/finance-requests/payment-requests', data={
+                    'description':'Review payment date', 'concept_id':self.concept.id,
+                    'currency':'ARS', 'amount':'2500', 'payment_method':'Cash', 'payment_date_mode':mode,
+                    'scheduled_payment_date':'10/11/2026' if mode == 'specific' else ''})
+                self.assertEqual(response.status_code, 302)
+                payment = PaymentRequest.query.order_by(PaymentRequest.id.desc()).first()
+                self.assertEqual(payment.scheduled_payment_date, expected)
+                self.assertIsNone(payment.requested_payment_date)
+                self.assertEqual(send.call_count, 1)
+                _, _, text, html, _ = send.call_args.args
+                self.assertIn('Requested payment date: ' + expected.strftime('%d/%m/%Y'), text)
+                self.assertIn(expected.strftime('%d/%m/%Y'), html)
+                self.assertNotIn('As soon as possible', text)
+                self.assertNotIn('As soon as possible', html)
+
+    def test_management_email_prefers_card_date_and_preserves_legacy_fallback(self):
+        from app.payment_notifications import deliver_management_notification
+        requester = self.create_user('legacy-date-requester@example.com')
+        for scheduled, legacy, expected in [
+                (date(2026, 11, 10), date(2026, 11, 9), '10/11/2026'),
+                (None, date(2026, 11, 9), '09/11/2026'), (None, None, 'As soon as possible')]:
+            with self.subTest(scheduled=scheduled, legacy=legacy):
+                payment = self.payment(requester, scheduled_payment_date=scheduled)
+                payment.requested_payment_date = legacy
+                notification_id, _ = self.queue_review_email(payment)
+                with self.app.test_request_context(), patch('app.payment_notifications.send_notification_email', return_value='gmail-test') as send:
+                    self.assertTrue(deliver_management_notification(notification_id))
+                _, _, text, html, _ = send.call_args.args
+                self.assertIn('Requested payment date: ' + expected, text)
+                self.assertIn(expected, html)
+
     def test_management_email_preserves_safe_multiline_text_and_labels_pending_amount(self):
         from app.payment_notifications import deliver_management_notification
         requester = self.create_user("requester@example.com")

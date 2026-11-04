@@ -76,7 +76,10 @@ def deliver_management_notification(notification_id):
                 primary_action, ("reject", "Reject", "#b42318"),
                 ("needs_correction", "Mark discrepancy", "#8a6328")]]
         amount_display = "Amount pending" if amount_pending else f"{payment.currency} {payment.amount:,.2f}"
-        requested_date = payment.requested_payment_date.strftime("%d/%m/%Y") if payment.requested_payment_date else "As soon as possible"
+        # Current forms store both specific dates and the next payment run here.
+        # Retain the legacy requested date only for older requests without it.
+        payment_date = payment.scheduled_payment_date or payment.requested_payment_date
+        requested_date = payment_date.strftime("%d/%m/%Y") if payment_date else "As soon as possible"
         requester = payment.requester.full_name if payment.requester else payment.requester_department or "Not specified"
         introduction = "A payment request needs an amount before it can be approved. Set the amount in Management review, then review your decision." if amount_pending else "A payment request is awaiting your approval in Management review."
         text = (f"Dear Pablo,\n\n{introduction}\n\n"
