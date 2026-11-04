@@ -1,17 +1,17 @@
-<!doctype html><html lang="en"><head><meta charset="utf-8"><title>Payment completed</title></head>
+<!doctype html><html lang="{{ 'es' if language == 'sp' else 'en' }}"><head><meta charset="utf-8"><title>{{ copy.subject }}</title></head>
 <body style="margin:0;background:#00506b;font-family:Arial,Helvetica,sans-serif;color:#111115;">
 <table role="presentation" width="100%" style="background:#00506b;"><tr><td align="center" style="padding:28px 12px;">
 <table role="presentation" width="100%" style="max-width:680px;background:#fff;border-radius:16px;"><tr><td style="padding:28px 26px;">
 <p style="margin:0 0 20px;color:#00506b;font-size:11px;font-weight:700;letter-spacing:1px;">PATH INTERNATIONAL EXAMINATIONS</p>
-<span style="display:inline-block;padding:6px 12px;background:#e4f2eb;color:#236447;border-radius:20px;font-size:12px;font-weight:700;">Payment completed</span>
-<h1 style="color:#00506b;font-size:27px;line-height:1.25;">Your payment has been completed.</h1>
-<p style="font-size:15px;line-height:1.6;">Dear {{ details.name }},</p>
-<p style="color:#62727a;font-size:14px;line-height:1.6;">We are pleased to confirm that your payment has been made. You can access your receipt below.</p>
+<span style="display:inline-block;padding:6px 12px;background:#e4f2eb;color:#236447;border-radius:20px;font-size:12px;font-weight:700;">{{ copy.status }}</span>
+<h1 style="color:#00506b;font-size:27px;line-height:1.25;">{{ copy.heading }}</h1>
+<p style="font-size:15px;line-height:1.6;">{{ copy.greeting }} {{ details.name }},</p>
+<p style="color:#62727a;font-size:14px;line-height:1.6;">{{ copy.intro }}</p>
 <table role="presentation" width="100%" style="background:#e6f0f3;border-radius:10px;border-left:4px solid #0b8fb2;"><tr><td style="padding:18px;">
 <p style="margin:0 0 10px;color:#00506b;font-size:28px;font-weight:700;">{{ details.amount }}</p>
-<p style="margin:0;color:#00506b;font-size:14px;line-height:1.8;">Payment reference: {{ details.request_number }}<br>Concept: {{ details.concept }}<br>Payment method: {{ details.method }}<br>Payment date: {{ details.date }}</p>
+<p style="margin:0;color:#00506b;font-size:14px;line-height:1.8;">{{ copy.reference }}: {{ details.request_number }}<br>{{ copy.concept }}: {{ details.concept }}<br>{{ copy.method }}: {{ details.method }}<br>{{ copy.date }}: {{ details.date }}</p>
 </td></tr></table>
-{% for link in receipt_links %}<p style="margin:24px 0;"><a href="{{ link }}" style="display:inline-block;background:#00506b;color:#fff;padding:12px 18px;border-radius:8px;text-decoration:none;font-weight:700;">View payment receipt{% if receipt_links|length > 1 %} {{ loop.index }}{% endif %} ↗</a></p>{% endfor %}
-<p style="font-size:13px;line-height:1.7;color:#62727a;">If you have any questions, please contact <a href="mailto:admin@pathexaminations.com" style="color:#00506b;">admin@pathexaminations.com</a>.</p>
-<p style="padding-top:20px;border-top:1px solid #d9dfdc;font-size:11px;color:#62727a;">Path International Examinations · Automated payment notification</p>
+{% for link in receipt_links %}<p style="margin:24px 0;"><a href="{{ link }}" style="display:inline-block;background:#00506b;color:#fff;padding:12px 18px;border-radius:8px;text-decoration:none;font-weight:700;">{{ copy.receipt }}{% if receipt_links|length > 1 %} {{ loop.index }}{% endif %} ↗</a></p>{% endfor %}
+<p style="font-size:13px;line-height:1.7;color:#62727a;">{{ copy.contact }} <a href="mailto:admin@pathexaminations.com" style="color:#00506b;">admin@pathexaminations.com</a>.</p>
+<p style="padding-top:20px;border-top:1px solid #d9dfdc;font-size:11px;color:#62727a;">Path International Examinations · {{ copy.footer }}</p>
 </td></tr></table></td></tr></table></body></html>

@@ -41,7 +41,7 @@ class PayeeNotificationTest(unittest.TestCase):
         client = self.client_for(user)
         data = {'payee_name':'Saved Payee', 'concept_id':str(self.concept.id), 'description':'Payment service',
                 'amount':'100', 'currency':'ARS', 'payment_method':'Cash', 'payment_date_mode':'asap',
-                'automatic_payment_notification':'yes', 'payment_notification_email':'payee@example.com'}
+                'automatic_payment_notification':'yes', 'payment_notification_email':'payee@example.com', 'payment_notification_language':'en'}
         for tab in ('payment_requests', 'finance_payments'):
             response = client.post('/finance-requests/payment-requests', data={**data, 'source_tab':tab})
             self.assertEqual(response.status_code, 302)
@@ -69,7 +69,7 @@ class PayeeNotificationTest(unittest.TestCase):
             response = self.client_for(user).post('/finance-requests/payment-requests', data={
                 'payee_name':'Payee', 'concept_id':str(self.concept.id), 'description':'Service',
                 'amount':'100', 'currency':'ARS', 'payment_method':'Cash',
-                'automatic_payment_notification':'yes', 'payment_notification_email':email})
+                'automatic_payment_notification':'yes', 'payment_notification_email':email, 'payment_notification_language':'en'})
             self.assertEqual(response.status_code, 302)
         self.assertEqual(PaymentRequest.query.count(), 0)
         self.assertEqual(FinanceContact.query.count(), 0)
@@ -221,6 +221,86 @@ class PayeeNotificationTest(unittest.TestCase):
             self.assertTrue(deliver_payee_notification(notice.id))
         self.assertEqual(PayeePaymentNotification.query.count(), 1)
         send.assert_not_called()
+
+    def test_yes_requires_exactly_one_valid_language(self):
+        creator = self.create_user('languages@example.com')
+        data = {'payee_name':'Language Payee', 'concept_id':str(self.concept.id), 'description':'Service',
+                'amount':'100', 'currency':'ARS', 'payment_method':'Cash',
+                'automatic_payment_notification':'yes', 'payment_notification_email':'payee@example.com'}
+        client = self.client_for(creator)
+        for selection in (None, 'fr', ['en', 'sp'], ['en', 'en']):
+            submitted = dict(data)
+            if selection is not None:
+                submitted['payment_notification_language'] = selection
+            client.post('/finance-requests/payment-requests', data=submitted)
+            self.assertEqual(PaymentRequest.query.count(), 0)
+        for language in ('en', 'sp'):
+            client.post('/finance-requests/payment-requests', data={**data, 'payment_notification_language':language})
+            self.assertEqual(PaymentRequest.query.order_by(PaymentRequest.id.desc()).first().payment_notification_language, language)
+            self.assertEqual(FinanceContact.query.one().payment_notification_language, language)
+        self.assertEqual(PaymentRequest.query.order_by(PaymentRequest.id).first().payment_notification_language, 'en')
+        page = client.get('/finance-requests?tab=payment_requests').get_data(as_text=True)
+        self.assertIn('data-payment-notification-language="sp"', page)
+        self.assertIn('name="payment_notification_language" value="en"', page)
+        self.assertIn('name="payment_notification_language" value="sp"', page)
+
+    def test_spanish_notification_translates_subject_body_and_receipt_button(self):
+        payment = self.enabled_payment()
+        payment.payment_notification_language = 'sp'
+        db.session.commit()
+        external, internal = self.complete(payment)
+        _, subject, text, html, _ = external.call_args.args
+        self.assertIn('Pago realizado', subject)
+        self.assertIn('Tu pago ha sido realizado.', text)
+        self.assertIn('Importe: ARS 100,00', text)
+        self.assertIn('Medio de pago: Efectivo', text)
+        self.assertIn('Ver comprobante de pago', html)
+        self.assertIn('lang="es"', html)
+        self.assertIn('Si tenés alguna consulta', html)
+        self.assertIn('admin@pathexaminations.com', html)
+        self.assertNotIn('Your payment has been completed', text + html)
+        self.assertIn('The Payee has been notified', internal.call_args.args[2])
+        self.assertEqual(json.loads(PayeePaymentNotification.query.one().payload)['language'], 'sp')
+
+    def test_english_migration_preserves_enabled_existing_payments_and_contacts(self):
+        from sqlalchemy import text
+        from app.schema_migrations import migrate_payee_notification_preferences
+        payment = self.enabled_payment()
+        contact = FinanceContact(display_name='Previously enabled', automatic_payment_notification=True,
+                                 payment_notification_email='payee@example.com')
+        db.session.add(contact); db.session.commit()
+        for table in ('payment_request', 'finance_contact'):
+            db.session.execute(text(f'ALTER TABLE {table} DROP COLUMN payment_notification_language'))
+        db.session.commit()
+        migrate_payee_notification_preferences()
+        migrate_payee_notification_preferences()
+        db.session.expire_all()
+        self.assertEqual(payment.payment_notification_language, 'en')
+        self.assertEqual(contact.payment_notification_language, 'en')
+        self.assertTrue(payment.automatic_payment_notification)
+        self.assertTrue(contact.automatic_payment_notification)
+        self.assertEqual(PayeePaymentNotification.query.count(), 0)
+
+    def test_queued_legacy_notifications_keep_english_even_if_payment_changes_language(self):
+        from types import SimpleNamespace
+        from app.payee_notifications import queue_payee_notification
+        payment = self.enabled_payment()
+        payment.status = 'Payment completed'
+        payment.payment_proof_url = 'https://example.com/receipt.pdf'
+        with self.app.test_request_context():
+            notice_id = queue_payee_notification(payment, 'Management approved', 'Payment completed', SimpleNamespace(id=999))
+            notice = db.session.get(PayeePaymentNotification, notice_id)
+            payload = json.loads(notice.payload)
+            payload.pop('language')
+            notice.payload = json.dumps(payload)
+            payment.payment_notification_language = 'sp'
+            db.session.commit()
+            with patch('app.payee_notifications.send_notification_email', return_value='legacy-en') as send:
+                self.assertTrue(deliver_payee_notification(notice.id))
+        _, subject, text, html, _ = send.call_args.args
+        self.assertIn('Payment completed', subject)
+        self.assertIn('Your payment has been completed.', text)
+        self.assertIn('lang="en"', html)
 
     def test_rollback_does_not_send_or_persist_external_notifications(self):
         payment = self.enabled_payment()

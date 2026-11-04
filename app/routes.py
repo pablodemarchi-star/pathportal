@@ -27808,6 +27808,10 @@ def apply_payment_form(payment, form, allow_status=False, save_payee_contact=Fal
     notification_choice = form.get('automatic_payment_notification', 'no')
     notify_payee = notification_choice == 'yes' if notification_present else bool(payment.automatic_payment_notification)
     notification_email = (form.get('payment_notification_email') or '').strip() if notification_present else (payment.payment_notification_email or '')
+    notification_languages = form.getlist('payment_notification_language') if notification_present else [payment.payment_notification_language or 'en']
+    notification_language = notification_languages[0] if len(notification_languages) == 1 else None
+    if notify_payee and notification_language not in {'en', 'sp'}:
+        errors.append('Select exactly one language (EN or SP) for Automatic payment notification.')
     if notification_present and notification_choice not in {'yes', 'no'}:
         errors.append('Select Yes or No for Automatic payment notification.')
     from app.payee_notifications import valid_notification_email
@@ -27838,8 +27842,12 @@ def apply_payment_form(payment, form, allow_status=False, save_payee_contact=Fal
         if contact:
             contact.automatic_payment_notification = notify_payee
             contact.payment_notification_email = notification_email if notify_payee else None
+            if notify_payee:
+                contact.payment_notification_language = notification_language
         payment.automatic_payment_notification = notify_payee
         payment.payment_notification_email = notification_email if notify_payee else None
+        if notify_payee:
+            payment.payment_notification_language = notification_language
     payment.description = description
     payment.concept = concept
     payment.concept_name_snapshot = concept.name

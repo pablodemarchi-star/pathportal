@@ -100,4 +100,6 @@ def migrate_payee_notification_preferences():
             db.session.execute(text(f'ALTER TABLE {table} ADD COLUMN automatic_payment_notification BOOLEAN NOT NULL DEFAULT 0'))
         if columns and 'payment_notification_email' not in columns:
             db.session.execute(text(f'ALTER TABLE {table} ADD COLUMN payment_notification_email VARCHAR(254)'))
+        if columns and 'payment_notification_language' not in columns:
+            db.session.execute(text(f"ALTER TABLE {table} ADD COLUMN payment_notification_language VARCHAR(2) NOT NULL DEFAULT 'en'"))
     db.session.commit()

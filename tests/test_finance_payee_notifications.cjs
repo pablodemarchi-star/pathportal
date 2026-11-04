@@ -1,28 +1,48 @@
 const assert = require('node:assert/strict'), fs = require('node:fs'), vm = require('node:vm');
 const source = fs.readFileSync('app/static/js/finance_payee_notifications.js', 'utf8');
 const yes = {value: 'yes', checked: false}, no = {value: 'no', checked: true};
+const en = {value: 'en', checked: false}, sp = {value: 'sp', checked: false};
+const languages = {hidden: true, querySelectorAll: () => [en, sp]};
 const email = {value: '', hidden: true, disabled: true, required: false};
+const contact = {value: ''};
 const group = {
- querySelector: selector => selector.includes(':checked') ? (yes.checked ? yes : no) : email,
- querySelectorAll: () => [yes, no]
+ querySelector: selector => selector.includes(':checked') ? (yes.checked ? yes : no) : selector.includes('data-payee-notification-languages') ? languages : email,
+ querySelectorAll: selector => selector.includes('payment_notification_language') ? [en, sp] : [yes, no]
 };
 const handlers = {};
-const form = {querySelector: () => group};
+const form = {querySelector: selector => selector.includes('payee_contact_id') ? contact : group};
 const context = {window: {}, document: {querySelectorAll: () => [group], addEventListener: (type, fn) => { handlers[type] = fn; }}};
 vm.runInNewContext(source, context);
 assert.equal(no.checked, true);
 assert.equal(email.hidden, true);
-context.window.applyPayeeNotificationDefaults(form, {paymentNotification: 'yes', paymentNotificationEmail: 'payee@example.com'});
+assert.equal(languages.hidden, true);
+assert.equal(en.disabled, true);
+context.window.applyPayeeNotificationDefaults(form, {paymentNotification: 'yes', paymentNotificationEmail: 'payee@example.com', paymentNotificationLanguage: 'sp', contactId: '42'});
 assert.equal(yes.checked, true);
+assert.equal(contact.value, '42');
 assert.equal(email.value, 'payee@example.com');
 assert.equal(email.hidden, false);
 assert.equal(email.disabled, false);
 assert.equal(email.required, true);
+assert.equal(languages.hidden, false);
+assert.equal(sp.checked, true);
+assert.equal(en.checked, false);
+assert.equal(en.required, true);
+assert.equal(sp.required, true);
 yes.checked = false; no.checked = true;
 handlers.change({target: {name: 'automatic_payment_notification', closest: () => group}});
 assert.equal(email.disabled, true);
 assert.equal(email.required, false);
+assert.equal(languages.hidden, true);
+assert.equal(sp.required, false);
 context.window.applyPayeeNotificationDefaults(form, undefined);
 assert.equal(no.checked, true);
 assert.equal(email.value, '');
-console.log('Payee notification fields: legacy No, saved preference, required email and switching Payees verified.');
+assert.equal(en.checked, false);
+assert.equal(sp.checked, false);
+yes.checked = true; no.checked = false;
+handlers.change({target: {name: 'automatic_payment_notification', closest: () => group}});
+assert.equal(en.checked, false);
+assert.equal(sp.checked, false);
+assert.equal(en.required, true);
+console.log('Payee notification fields: required EN/SP, saved language, email and switching Payees verified.');

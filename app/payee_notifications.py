@@ -13,6 +13,31 @@ from app.models import PayeePaymentNotification, GoogleDriveUpload
 payee_bp = Blueprint('payee_notifications', __name__)
 
 
+PAYEE_EMAIL_COPY = {
+    'en': {
+        'subject':'Payment completed', 'status':'Payment completed',
+        'heading':'Your payment has been completed.', 'greeting':'Dear',
+        'intro':'We are pleased to confirm that your payment has been made. You can access your receipt below.',
+        'reference':'Payment reference', 'amount':'Amount', 'concept':'Concept', 'method':'Payment method',
+        'date':'Payment date', 'receipt':'View payment receipt',
+        'contact':'If you have any questions, please contact', 'footer':'Automated payment notification',
+    },
+    'sp': {
+        'subject':'Pago realizado', 'status':'Pago realizado',
+        'heading':'Tu pago ha sido realizado.', 'greeting':'Hola',
+        'intro':'Te informamos que tu pago ha sido realizado. Podés consultar el comprobante a continuación.',
+        'reference':'Referencia del pago', 'amount':'Importe', 'concept':'Concepto', 'method':'Medio de pago',
+        'date':'Fecha de pago', 'receipt':'Ver comprobante de pago',
+        'contact':'Si tenés alguna consulta, escribinos a', 'footer':'Aviso automático de pago',
+    },
+}
+SPANISH_METHODS = {
+    'Bank transfer':'Transferencia bancaria', 'Deposit':'Depósito', 'Cash':'Efectivo', 'Card':'Tarjeta',
+    'Electronic Payment Slip (EPS)':'Boleta de pago electrónico (EPS)', 'Direct debit':'Débito automático',
+    'UK bank transfer':'Transferencia bancaria en el Reino Unido',
+}
+
+
 def valid_notification_email(value):
     from email.headerregistry import Address
     from app.validators import EMAIL_RE
@@ -84,7 +109,8 @@ def queue_payee_notification(payment, previous, status, transition):
         completed_at = completed_at.replace(tzinfo=timezone.utc)
     payload = {'name':payment.payee_name_snapshot or 'Payee', 'request_number':payment.request_number,
                'amount':f'{payment.currency} {payment.amount:,.2f}', 'concept':payment.concept_name_snapshot,
-               'method':payment.payment_method,
+               'method':payment.payment_method, 'language':payment.payment_notification_language or 'en',
+               'amount_sp':f'{payment.currency} {payment.amount:,.2f}'.replace(',', '_').replace('.', ',').replace('_', '.'),
                'date':completed_at.astimezone(timezone(timedelta(hours=-3))).strftime('%d/%m/%Y')}
     notice = PayeePaymentNotification(payment=payment, event_id=transition.id,
         recipient=payment.payment_notification_email or '', receipt_token=secrets.token_urlsafe(32), payload=json.dumps(payload))
@@ -128,13 +154,22 @@ def deliver_payee_notification(notice_id):
         origin = portal_origin()
         links = [origin + url_for('payee_notifications.receipt', token=notice.receipt_token, index=index)
                  for index, _ in enumerate(details['receipts'])]
-        text = (f"Dear {details['name']},\n\nYour payment has been completed.\n"
-                f"Payment reference: {details['request_number']}\nAmount: {details['amount']}\n"
-                f"Concept: {details['concept']}\nPayment method: {details.get('method', 'Not specified')}\nPayment date: {details['date']}\n\n" +
-                '\n'.join(f'Payment receipt: {link}' for link in links) +
-                '\n\nIf you have any questions, please contact admin@pathexaminations.com.\n\nPath International Examinations')
-        html = render_template('finance_requests/payee_payment_email.html', details=details, receipt_links=links)
-        notice.gmail_message_id = send_notification_email(notice.recipient, f"Payment completed — {details['request_number']}",
+        language = details.get('language', 'en')
+        if language not in PAYEE_EMAIL_COPY:
+            raise MailNotSent('Select a valid language (EN or SP) for the Payee notification.')
+        copy = PAYEE_EMAIL_COPY[language]
+        display = dict(details)
+        if language == 'sp':
+            display['amount'] = details.get('amount_sp', details['amount'])
+            display['method'] = SPANISH_METHODS.get(details.get('method'), details.get('method', 'No especificado'))
+        text = (f"{copy['greeting']} {display['name']},\n\n{copy['heading']}\n"
+                f"{copy['reference']}: {display['request_number']}\n{copy['amount']}: {display['amount']}\n"
+                f"{copy['concept']}: {display['concept']}\n{copy['method']}: {display.get('method', 'Not specified')}\n{copy['date']}: {display['date']}\n\n" +
+                '\n'.join(f"{copy['receipt']}: {link}" for link in links) +
+                f"\n\n{copy['contact']} admin@pathexaminations.com.\n\nPath International Examinations")
+        html = render_template('finance_requests/payee_payment_email.html', details=display, receipt_links=links,
+                               copy=copy, language=language)
+        notice.gmail_message_id = send_notification_email(notice.recipient, f"{copy['subject']} — {details['request_number']}",
             text, html, f'<payee-payment-{notice.id}@pathexaminations.com>')
         notice.status, notice.last_error = 'sent', None
         notice.sent_at = datetime.now(timezone.utc)

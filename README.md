@@ -345,8 +345,12 @@ changes remove Examiner assignments and their portal submissions for that format
 Automatic Payee payment notifications are opt-in per payment request. Existing
 requests and contacts default to No. Selecting a saved Payee preloads its preference
 and email for new payments; each payment stores its own copy. On completion, the
-Payee receives an English receipt email and the requester email reports whether
+Payee receives a receipt email in the selected EN/SP language, and the requester email reports whether
 Gmail confirmed that send. Receipt-only random links require no portal login and
 never grant access to another payment's uploads or supporting documentation.
 Known delivery failures can be retried from API integrations independently of the
 requester notification; unknown delivery outcomes require checking Gmail first.
+
+Payee notification language is required when enabling automatic payment notices.
+The choice is stored per Payee and copied to each payment. Existing enabled
+payments and already queued notices retain English after the language upgrade.

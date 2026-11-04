@@ -5,6 +5,12 @@
     const enabled = group.querySelector('[name="automatic_payment_notification"]:checked')?.value === 'yes';
     const email = group.querySelector('[name="payment_notification_email"]');
     email.hidden = !enabled; email.disabled = !enabled || group.dataset?.readOnly === 'true'; email.required = enabled;
+    const languages = group.querySelector('[data-payee-notification-languages]');
+    languages.hidden = !enabled;
+    languages.querySelectorAll('[name="payment_notification_language"]').forEach(radio => {
+      radio.disabled = !enabled || group.dataset?.readOnly === 'true';
+      radio.required = enabled;
+    });
   };
   window.applyPayeeNotificationDefaults = (form, option) => {
     const group = groupFor(form);
@@ -14,6 +20,9 @@
     const choice = option?.paymentNotification === 'yes' ? 'yes' : 'no';
     group.querySelectorAll('[name="automatic_payment_notification"]').forEach(radio => { radio.checked = radio.value === choice; });
     group.querySelector('[name="payment_notification_email"]').value = option?.paymentNotificationEmail || '';
+    group.querySelectorAll('[name="payment_notification_language"]').forEach(radio => {
+      radio.checked = choice === 'yes' && radio.value === option?.paymentNotificationLanguage;
+    });
     sync(group);
   };
   document.querySelectorAll('[data-payee-notification]').forEach(sync);

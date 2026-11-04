@@ -4,6 +4,14 @@
     <div class="finance-payee-notification-yes">
       <label><input type="radio" name="automatic_payment_notification" value="yes" {% if payment and payment.automatic_payment_notification %}checked{% endif %}> Yes</label>
       <input type="email" name="payment_notification_email" value="{{ payment.payment_notification_email or '' if payment else '' }}" maxlength="254" placeholder="Email address" aria-label="Payee notification email" {% if not payment or not payment.automatic_payment_notification %}hidden disabled{% else %}required{% endif %}>
+      <div class="finance-notification-languages" data-payee-notification-languages role="group" aria-label="Payment notification language" {% if not payment or not payment.automatic_payment_notification %}hidden{% endif %}>
+        {% for code in ['en', 'sp'] %}
+          <label class="finance-notification-language" title="{{ 'English' if code == 'en' else 'Español' }}">
+            <input type="radio" name="payment_notification_language" value="{{ code }}" aria-label="{{ 'English' if code == 'en' else 'Español' }}" {% if payment and payment.automatic_payment_notification and (payment.payment_notification_language or 'en') == code %}checked{% endif %} {% if not payment or not payment.automatic_payment_notification %}disabled{% else %}required{% endif %}>
+            <span>{{ code|upper }}</span>
+          </label>
+        {% endfor %}
+      </div>
     </div>
     <label><input type="radio" name="automatic_payment_notification" value="no" {% if not payment or not payment.automatic_payment_notification %}checked{% endif %}> No</label>
   </div>

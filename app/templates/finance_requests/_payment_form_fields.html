@@ -18,6 +18,7 @@
           data-contact-kind="payee"
           data-payment-notification="{{ 'yes' if contact.automatic_payment_notification else 'no' }}"
           data-payment-notification-email="{{ contact.payment_notification_email or '' }}"
+          data-payment-notification-language="{{ contact.payment_notification_language or 'en' }}"
           data-contact-id="{{ contact.id }}"
           data-contact-name="{{ contact.display_name }}"
           data-concept-id="{{ contact.default_concept_id or '' }}"
