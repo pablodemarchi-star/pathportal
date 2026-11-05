@@ -1,7 +1,7 @@
 {% extends 'marketing_material/public_base.html' if public else 'base.html' %}
 {% block title %}Marketing material | Path Examinations{% endblock %}
 {% block content %}
-{% if not public %}<link rel="stylesheet" href="{{ url_for('static', filename='css/marketing_material.css') }}">{% endif %}
+{% if not public %}<link rel="stylesheet" href="{{ url_for('static', filename='css/marketing_material.css', v='20261105-format-colors') }}">{% endif %}
 <header class="marketing-header">
   <img src="{{ url_for('static', filename='img/path-logo-white-transparent.png') }}" alt="Path International Examinations" class="marketing-logo">
   <div><p class="marketing-eyebrow">SESSION RESOURCES · {{ year }}</p><h1>Marketing material</h1><p>Photos and information for our marketing team.</p></div>
@@ -65,7 +65,7 @@
 <tr data-marketing-row="{{ row.id }}"{% if not public and can_edit %} data-logistics-concept-row{% endif %}>
   <td><span class="marketing-mobile-label" aria-hidden="true">Exam session</span>{% for name in row.names %}<strong class="marketing-line">{{ name }}</strong>{% endfor %}</td>
   <td><span class="marketing-mobile-label" aria-hidden="true">Date</span>{% for date in row.dates %}<time class="marketing-line" datetime="{{ date.isoformat() }}">{{ date.strftime('%d/%m/%Y') }}</time>{% endfor %}</td>
-  <td><span class="marketing-mobile-label" aria-hidden="true">Format</span>{% for format in row.formats %}<span class="marketing-format">{{ format }}</span>{% endfor %}</td>
+  <td><span class="marketing-mobile-label" aria-hidden="true">Format</span>{% for format in row.formats %}<span class="marketing-format" data-format="{{ format|lower }}">{{ format }}</span>{% endfor %}</td>
   <td><span class="marketing-mobile-label" aria-hidden="true">City</span>{% for city in row.cities %}<span class="marketing-line">{{ city }}</span>{% else %}<span class="muted">Not available</span>{% endfor %}</td>
   <td><span class="marketing-mobile-label" aria-hidden="true">Session pictures</span>{% if row.folder %}<a class="marketing-access" href="{{ row.folder }}" target="_blank" rel="noopener noreferrer">Access ↗</a>
     {% else %}<span class="muted">Not available</span>{% endif %}
