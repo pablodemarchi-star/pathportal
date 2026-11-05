@@ -28010,6 +28010,7 @@ def finance_requests():
         active_tab = default_tab
     show_archived = request.args.get("show_archived") == "1"
     show_archived_invoices = request.args.get("show_archived_invoices") == "1"
+    payment_search = request.args.get("payment_search", "").strip()
     finance_sort_by = request.args.get("sort", "").strip()
     finance_sort_dir = request.args.get("dir", "asc").strip()
     if finance_sort_by not in {"payment_no", "invoice_no", "final_date", "status", "payee", "client", "concept", "payment_method"}:
@@ -28226,6 +28227,7 @@ def finance_requests():
         active_tab=active_tab,
         valid_tabs=valid_tabs,
         payment_requests=payment_requests,
+        payment_search=payment_search,
         finance_payments=finance_payments,
         finance_billings=finance_billings,
         finance_archived_payments=finance_archived_payments,

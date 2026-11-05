@@ -18122,6 +18122,8 @@ body.staff-session-detail-open { overflow: hidden; }
 }
 
 .finance-payee-notification { border: 0; padding: 0; margin: 0; min-width: 0; }
+.finance-payment-search { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 0 0 20px; }
+.finance-payment-search input[type="search"] { width: 420px; max-width: 100%; min-width: 0; box-sizing: border-box; }
 .finance-payee-notification[data-contact-id-field="client_contact_id"] { position: relative; top: -2mm; }
 .finance-payee-notification legend { margin-bottom: 10px; padding: 0; font-family: inherit; font-size: inherit; font-weight: 600; line-height: inherit; color: inherit; }
 .finance-payee-notification-options, .finance-payee-notification-yes { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; }

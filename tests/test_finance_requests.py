@@ -33,6 +33,35 @@ from app.routes import (
 
 
 class FinanceRequestsTest(unittest.TestCase):
+    def test_payment_search_matches_payee_or_request_number_with_visibility(self):
+        user = self.create_user("search@example.com")
+        other = self.create_user("other-search@example.com")
+        first = self.payment(user)
+        first.payee_name_snapshot = "London Services"
+        second = self.payment(user)
+        second.payee_name_snapshot = "Other Supplier"
+        hidden = self.payment(other)
+        hidden.payee_name_snapshot = "London Private"
+        hidden.visibility_mode = "Superadmin only"
+        archived = self.payment(user, is_archived=True)
+        archived.payee_name_snapshot = "London Archived"
+        db.session.commit()
+        client = self.client_for(user)
+        page = client.get("/finance-requests", query_string={"payment_search": "LONDON"}).get_data(as_text=True)
+        self.assertIn("London Services", page)
+        self.assertIn("Other Supplier", page)
+        self.assertIn("data-payment-live-search", page)
+        self.assertNotIn("London Private", page)
+        self.assertNotIn("London Archived", page)
+        page = client.get("/finance-requests", query_string={"payment_search": second.request_number.lower()}).get_data(as_text=True)
+        self.assertIn("Other Supplier", page)
+        self.assertIn("London Services", page)
+        page = client.get("/finance-requests", query_string={"payment_search": "no-match"}).get_data(as_text=True)
+        self.assertIn("No payment requests match your search.", page)
+        page = client.get("/finance-requests", query_string={"payment_search": "London", "show_archived": "1"}).get_data(as_text=True)
+        self.assertIn("London Archived", page)
+        self.assertNotIn("London Services", page)
+
     def test_management_review_form_renders_session_token_and_can_approve(self):
         import re
         requester = self.create_user("requester@example.com")

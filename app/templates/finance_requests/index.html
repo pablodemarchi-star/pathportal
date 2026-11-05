@@ -211,7 +211,7 @@
 {% endmacro %}
 
 {% macro archived_payment_table(payments, empty_message='No archived payment requests yet.', tab_name='payment_requests', show_copy_actions=false) %}
-  <label class="finance-archive-search">
+  <label class="finance-archive-search" {% if tab_name == 'payment_requests' %}hidden{% endif %}>
     <span class="sr-only">Search archived payment requests</span>
     <input type="search" placeholder="Payment no. payee, description" aria-label="Search archived payment requests by payment number, payee, or description" data-archive-payment-search>
   </label>
@@ -247,7 +247,7 @@
         {% for payment in payments %}
           {% set whatsapp_copy = payment_whatsapp_copy_contract(payment) %}
           {% set whatsapp_copy_sp = payment_whatsapp_copy_contract(payment, 'sp') %}
-          <tr data-archive-payment-row data-archive-payment-search-text="{{ (payment.request_number ~ ' ' ~ (payment.payee_name_snapshot or '') ~ ' ' ~ (payment.description or ''))|lower|e }}">
+          <tr data-archive-payment-row data-payment-search-text="{{ payment.request_number }} {{ payment.payee_name_snapshot or '' }}" data-archive-payment-search-text="{{ (payment.request_number ~ ' ' ~ (payment.payee_name_snapshot or '') ~ ' ' ~ (payment.description or ''))|lower|e }}">
             <td><strong>{{ payment.request_number }}</strong></td>
             <td>{{ payment_finalized_at(payment)|display_date if payment_finalized_at(payment) else 'Not set' }}</td>
             <td>{{ status_chip(payment.status) }}</td>
@@ -393,7 +393,7 @@
 {% macro payment_card(payment, tab_name, readonly=false) %}
   {% set can_use_requester_payment_actions = current_user_is_superadmin or (current_user and payment.requester_user_id == current_user.id) %}
   {% set can_show_payment_edit = not readonly and current_menu_can_edit and can_use_requester_payment_actions and not payment.is_archived and can_edit_payment_request(current_user, payment) %}
-  <article class="finance-request-card {% if tab_name == 'payment_requests' %}finance-payment-requests-card{% endif %} {% if payment.is_archived %}is-archived{% endif %}" data-payment-number="{{ payment.request_number }}">
+  <article class="finance-request-card {% if tab_name == 'payment_requests' %}finance-payment-requests-card{% endif %} {% if payment.is_archived %}is-archived{% endif %}" data-payment-search-text="{{ payment.request_number }} {{ payment.payee_name_snapshot or '' }}" data-payment-number="{{ payment.request_number }}">
     <div class="finance-card-main">
       <div>
         <div class="finance-card-kicker">
@@ -879,11 +879,15 @@
 
 {% if active_tab == 'payment_requests' %}
   <section>
-    <div class="finance-panel">
+    <div class="finance-panel" data-payment-search-panel>
       <div class="finance-panel-header">
         <h2>{{ 'Archived payment requests' if show_archived else 'Payment requests' }}</h2>
-        <a class="secondary-button compact-action" href="{{ url_for('staff.finance_requests', tab='payment_requests', show_archived='0' if show_archived else '1') }}">{{ 'Hide archived payments' if show_archived else 'Show archived payments' }}</a>
+        <a class="secondary-button compact-action" href="{{ url_for('staff.finance_requests', tab='payment_requests', show_archived='0' if show_archived else '1', payment_search=payment_search) }}">{{ 'Hide archived payments' if show_archived else 'Show archived payments' }}</a>
       </div>
+      <div class="finance-payment-search">
+        <input type="search" name="payment_search" value="{{ payment_search }}" placeholder="Search by Payee or payment request number" aria-label="Search by Payee or payment request number" data-payment-live-search>
+      </div>
+      <p class="empty-state" data-payment-search-empty role="status" hidden>No payment requests match your search.</p>
       {% if show_archived %}
         {{ archived_payment_table(payment_requests, tab_name='payment_requests', show_copy_actions=true) }}
       {% else %}
