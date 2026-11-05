@@ -374,3 +374,23 @@ all assigned, sanitised instructions with titles and the aggregate In progress /
 Confirmed status. Interns can accept or decline invitations in all three formats;
 arrival is 50 minutes early for physical sessions and connection is 15 minutes
 early for Online sessions.
+
+Onsite Final checks opens Return of exam materials only after the session's
+shipment recipient confirms participation and the exam is at most 29 calendar
+days away. Sinapsis checks opens as well within
+eight Argentine business days of the exam. Return is due at the earlier of ten
+calendar days after both Return opening conditions first hold or seven calendar
+days before the exam; existing confirmed recipients start their new clock at
+upgrade if within the 29-day window, or when that window opens otherwise.
+Sinapsis is due four Argentine business days before the exam, with every required
+check marked Checked. Both deadlines expire after the end of the due date in
+GMT-3. Return's clock survives recipient changes and confirmation resets.
+Replacing the recipient preserves the configuration but requires an explicit
+Confirm return review before it counts as complete. Management and Admin actions
+are independent; Final communications has been removed from this modal.
+
+Immediate and combined return dispatch use one private Drive shipping-label file
+per option, stored in folder `1bzB2g3XWlISXh606AzCQtvKdJPpDvtJD`. Combined return
+sessions share the same file. Deleting it moves it to Drive trash before removing
+every portal reference; a Drive error retains the saved file and configuration.
+Legacy dispatch label links are cleared on upgrade; drop-off addresses remain.

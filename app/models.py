@@ -66,6 +66,14 @@ class GoogleDriveStaffInvoiceUpload(db.Model):
     created_at = db.Column(db.DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))
 
 
+class ReturnShippingLabel(db.Model):
+    file_id = db.Column(db.String(160), primary_key=True)
+    destination_key = db.Column(db.String(100), nullable=False)
+    filename = db.Column(db.String(500), nullable=False)
+    mime_type = db.Column(db.String(160), nullable=False)
+    created_at = db.Column(db.DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))
+
+
 class StaffIdDocument(db.Model):
     member_id = db.Column(db.Integer, db.ForeignKey("academic_staff.id"), primary_key=True)
     file_id = db.Column(db.String(160), nullable=False, unique=True)
@@ -1262,6 +1270,7 @@ class ExamSessionFinanceControl(db.Model):
     exam_session_id = db.Column(db.Integer, db.ForeignKey("exam_session.id"), nullable=False, index=True)
     status = db.Column(db.String(40), nullable=False, default="Not applicable", index=True)
     additional_institutions = db.Column(db.Text, nullable=False, default="[]")
+    comments = db.Column(db.Text, nullable=False, default="", server_default="")
     institutions_confirmed_with_admin = db.Column(db.Boolean, nullable=False, default=False)
     finance_due_at = db.Column(db.Date, nullable=True, index=True)
     evidence_url = db.Column(db.String(500), nullable=True)
@@ -1315,6 +1324,18 @@ class ExamSessionSinapsisControl(db.Model):
     combined_return_materials_label_url = db.Column(db.String(2000), nullable=True)
     combined_return_session_ids_json = db.Column(db.Text, nullable=False, default="[]")
     return_materials_local_override = db.Column(db.Boolean, nullable=False, default=False)
+    return_started_on = db.Column(db.Date, nullable=True)
+    return_recipient_confirmed_on = db.Column(db.Date, nullable=True)
+    return_recipient_ref = db.Column(db.String(80), nullable=True)
+    return_review_required = db.Column(db.Boolean, nullable=False, default=False, server_default=db.false())
+    return_reviewed_at = db.Column(db.DateTime(timezone=True), nullable=True)
+    return_completed_at = db.Column(db.DateTime(timezone=True), nullable=True)
+    return_instructions_title = db.Column(db.String(200), nullable=False, default='', server_default='')
+    return_instructions_html = db.Column(db.Text, nullable=False, default='', server_default='')
+    return_shipping_label_id = db.Column(db.String(160), db.ForeignKey('return_shipping_label.file_id'), nullable=True)
+    combined_return_shipping_label_id = db.Column(db.String(160), db.ForeignKey('return_shipping_label.file_id'), nullable=True)
+    return_shipping_label = db.relationship('ReturnShippingLabel', foreign_keys=[return_shipping_label_id])
+    combined_return_shipping_label = db.relationship('ReturnShippingLabel', foreign_keys=[combined_return_shipping_label_id])
     sinapsis_due_at = db.Column(db.Date, nullable=True, index=True)
     evidence_url = db.Column(db.String(500), nullable=True)
     note = db.Column(db.Text, nullable=True)

@@ -71,6 +71,15 @@ function childContext() {
   assert.equal(concurrent.fields.get('tower_revision').value, 'r3');
   assert.equal(concurrent.notice.hidden, true);
 
+  const finance = childContext();
+  finance.edit();
+  await finance.window.fetch('https://portal.test/save', {method:'POST', headers:{'X-Finance-Autosave':'1'}});
+  finance.flushTimeouts();
+  assert.equal(finance.fields.get('tower_revision').value, 'r2');
+  assert.ok(finance.messages.some(message => message.type === 'tower-session-saved'));
+  assert.equal(finance.messages.some(message => message.type === 'tower-session-refresh-request'), false,
+    'Finance autosave must update the revision without refreshing the modal');
+
   const draft = childContext();
   draft.edit(); draft.setRemote('someone-elses-change');
   await draft.timers[0]();

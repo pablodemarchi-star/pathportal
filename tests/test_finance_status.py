@@ -11,7 +11,7 @@ from app.routes import (
 
 class FinanceStatusTest(unittest.TestCase):
     def test_unselected_standing_is_not_reviewed_with_fixed_deadline(self):
-        result = finance_readiness_contract(session_date=date(2026, 11, 1))
+        result = finance_readiness_contract(session_date=date(2026, 11, 1), today=date(2026, 10, 28))
         self.assertEqual(result['label'], 'Not applicable')
         self.assertEqual(result['current_deadline'], date(2026, 10, 30))
         self.assertEqual(result['block_label'], 'Not reviewed')
@@ -127,3 +127,22 @@ class FinanceStatusTest(unittest.TestCase):
                 actions = bundle_detail_action_items(**args, finance={'readiness_label': state})
                 self.assertEqual(actions, logistics_actions)
                 self.assertFalse(any(action.get('department') == 'FINANCE' for action in actions))
+
+    def test_logistics_actions_cover_management_and_omit_inactive_states(self):
+        from app.routes import bundle_detail_action_items
+        for status, unblocked, expected in [
+            ('not_applicable', True, []), ('completed', True, []),
+            ('in_progress', False, []), ('configuration_required', False, []),
+            ('configuration_required', True, [('MANAGEMENT', 'Complete Logistics concepts')]),
+            ('needs_review', True, [('MANAGEMENT', 'Review Logistics potential issue')]),
+            ('not_started', True, [('LOGISTICS', 'Start Logistics planning')]),
+            ('in_progress', True, [('LOGISTICS', 'Continue with Logistics planning')]),
+        ]:
+            with self.subTest(status=status, unblocked=unblocked):
+                rows = bundle_detail_action_items(schedule_status='Approved',
+                    schedule_gate={'is_ready': True}, schedule_next_action='',
+                    schedule_responsible='ADMIN', logistics={'status': status},
+                    logistics_gate={'is_unblocked': unblocked},
+                    sessions_logistics_action_mode=True, include_sections=True)
+                logistics_rows = [row for row in rows if row['section'] == 'logistics']
+                self.assertEqual([(row['department'], row['description']) for row in logistics_rows], expected)

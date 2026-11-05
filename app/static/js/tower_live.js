@@ -337,9 +337,11 @@
         if (result.ok !== false && result.saved !== false && !result.confirmation_required) {
           revision = next; body.dataset.revision = next; stampAll();
           if (form) dirtyForms.delete(form);
-          needsRefresh = true;
           notifyParent('tower-session-saved');
-          setTimeout(refreshIfClean, 1200);
+          if (headers.get('X-Finance-Autosave') !== '1') {
+            needsRefresh = true;
+            setTimeout(refreshIfClean, 1200);
+          }
         }
       }
       return response;

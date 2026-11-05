@@ -94,9 +94,9 @@
   {% endif %}
 {%- endmacro %}
 
-{% macro shipment_deadline_chip(deadline_badge, extra_class='') -%}
+{% macro shipment_deadline_chip(deadline_badge, extra_class='', show_prefix=true) -%}
   {% if deadline_badge %}
-    <span class="shipment-deadline-chip shipment-deadline-{{ deadline_badge.status }} {{ extra_class }}" title="{{ deadline_badge.label }}" aria-label="{{ deadline_badge.label }}: {{ deadline_badge.date|session_date }}">Deadline {{ deadline_badge.date|session_date }}</span>
+    <span class="shipment-deadline-chip shipment-deadline-{{ deadline_badge.status }} {{ extra_class }}" title="{{ deadline_badge.label }}" aria-label="{{ deadline_badge.label }}: {{ deadline_badge.date|session_date }}">{% if show_prefix %}Deadline {% endif %}{{ deadline_badge.date|session_date }}</span>
   {% endif %}
 {%- endmacro %}
 
@@ -244,7 +244,7 @@
 
 {% macro final_checks_gate_chip(view) -%}
   {% if view.final_checks_gate.status == 'unblocked' %}
-    <span class="logistics-gate-chip logistics-gate-unblocked" aria-label="Final checks gate unblocked">
+    <span class="logistics-gate-chip logistics-gate-unblocked" aria-label="Final checks gate unblocked" title="{{ view.final_checks_gate.message }}">
       <svg viewBox="0 0 24 24" aria-hidden="true">
         <rect x="5" y="10" width="14" height="10" rx="2"></rect>
         <path d="M8 10V7a4 4 0 0 1 7.4-2.1"></path>
@@ -252,7 +252,7 @@
       UNBLOCKED
     </span>
   {% elif view.final_checks_gate.status == 'semi_unblocked' %}
-    <span class="logistics-gate-chip logistics-gate-semi-unblocked" aria-label="Final checks gate semi-unblocked">
+    <span class="logistics-gate-chip logistics-gate-semi-unblocked" aria-label="Final checks gate semi-unblocked: {{ view.final_checks_gate.message }}" title="{{ view.final_checks_gate.message }}">
       <svg viewBox="0 0 24 24" aria-hidden="true">
         <rect x="5" y="10" width="14" height="10" rx="2"></rect>
         <path d="M8 10V7a4 4 0 0 1 7.4-2.1"></path>
@@ -261,7 +261,7 @@
       SEMI-UNBLOCKED
     </span>
   {% else %}
-    <span class="logistics-gate-chip logistics-gate-blocked" aria-label="Final checks gate blocked">
+    <span class="logistics-gate-chip logistics-gate-blocked" aria-label="Final checks gate blocked: {{ view.final_checks_gate.message }}" title="{{ view.final_checks_gate.message }}">
       <svg viewBox="0 0 24 24" aria-hidden="true">
         <rect x="5" y="10" width="14" height="10" rx="2"></rect>
         <path d="M8 10V7a4 4 0 0 1 8 0v3"></path>
@@ -429,7 +429,7 @@
 
 {% macro finance_table_cell(finance, focusable=true, schedule_preparation_unlocked=false) -%}
   <span class="finance-summary-cell">
-    <span class="workflow-gate-chip workflow-gate-{{ 'unblocked' if schedule_preparation_unlocked else 'blocked' }}" aria-label="Finance gate {{ 'unblocked' if schedule_preparation_unlocked else 'blocked' }}">
+    <span class="workflow-gate-chip workflow-gate-{{ 'unblocked' if schedule_preparation_unlocked else 'blocked' }}" aria-label="Finance gate {{ 'unblocked' if schedule_preparation_unlocked else 'blocked' }}{% if not schedule_preparation_unlocked %}: {{ finance.gate_message }}{% endif %}" title="{{ finance.gate_message }}">
       <svg viewBox="0 0 24 24" aria-hidden="true">
         <rect x="5" y="10" width="14" height="10" rx="2"></rect>
         {% if schedule_preparation_unlocked %}
@@ -451,9 +451,10 @@
 {%- endmacro %}
 
 {% macro final_checks_progress_chip(sinapsis) -%}
-  {% if sinapsis.status == 'ready' %}
+  {% set progress = sinapsis.overall_progress if sinapsis.overall_progress is defined else ('completed' if sinapsis.status == 'ready' and not sinapsis.return_configuration_pending else 'in_progress' if sinapsis.status in ['in_progress', 'needs_correction', 'ready'] else 'not_started') %}
+  {% if progress == 'completed' %}
     <span class="badge final-checks-progress-completed">Completed</span>
-  {% elif sinapsis.status == 'in_progress' or sinapsis.status == 'needs_correction' %}
+  {% elif progress == 'in_progress' %}
     <span class="badge final-checks-progress-in-progress">In progress</span>
   {% else %}
     <span class="badge final-checks-progress-not-started">Not started</span>
@@ -481,16 +482,9 @@
     {{ final_checks_gate_chip(view) }}
     {{ final_checks_progress_chip(view.sinapsis) }}
     <span>{{ view.sinapsis.checklist_checked }} / {{ view.sinapsis.checklist_total }} checks complete</span>
-    {% if view.sinapsis.requires_action %}
-      {% if view.sinapsis.deadline_status in ['overdue', 'due_today', 'not_set'] %}
-        <small>{{ view.sinapsis.responsible }} · {{ view.sinapsis.deadline_label }}</small>
-      {% elif view.sinapsis.deadline %}
-        <small>{{ view.sinapsis.responsible }} · {{ view.sinapsis.deadline|session_date }}</small>
-      {% endif %}
-    {% else %}
-      <small>{{ view.sinapsis.responsible }}</small>
-    {% endif %}
-    {{ shipment_deadline_chip(view.final_checks_deadline_badge, 'final-checks-column-deadline-chip') }}
+    <small>{{ view.final_checks_gate.actions|map(attribute='department')|unique|join(' / ') or '—' }}</small>
+    {% if view.return_deadline_badge %}<span>Return: {{ shipment_deadline_chip(view.return_deadline_badge, 'final-checks-column-deadline-chip') }}</span>{% endif %}
+    {% if view.final_checks_gate.checks_enabled %}<span>Sinapsis: {{ shipment_deadline_chip(view.final_checks_gate.checks_deadline_badge, 'final-checks-column-deadline-chip') }}</span>{% endif %}
   </span>
 {%- endmacro %}
 
@@ -630,7 +624,7 @@
         </span>
       {% endfor %}
     </span>
-  {% else %}
+  {% elif selected_view != 'sessions' %}
     <span class="muted">-</span>
   {% endif %}
 {%- endmacro %}
@@ -653,7 +647,7 @@
         </span>
       {% endfor %}
     </span>
-  {% else %}
+  {% elif selected_view != 'sessions' %}
     <span class="muted">No action required</span>
   {% endif %}
 {%- endmacro %}
@@ -2190,5 +2184,6 @@
     <iframe title="Staff member card" data-staffing-card-frame hidden></iframe>
   </div>
 </div>
-<script src="{{ url_for('static', filename='js/tower_live.js', v='20261103-safe-modal-refresh-2') }}"></script>
+{% with instructions_can_edit=user_can_edit('pre_session_control_tower'), instructions_heading='Return instructions' %}{% include '_instructions_editor.html' %}{% endwith %}
+<script src="{{ url_for('static', filename='js/tower_live.js', v='20261105-finance-autosave-3') }}"></script>
 {% endblock %}

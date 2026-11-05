@@ -1983,7 +1983,7 @@ This stage has already been marked as complete. Reopening it may affect package 
               UNBLOCKED
             </span>
           {% else %}
-            <span class="workflow-gate-chip workflow-gate-blocked" aria-label="Finance gate blocked">
+            <span class="workflow-gate-chip workflow-gate-blocked" aria-label="Finance gate blocked: {{ view.finance.gate_message }}" title="{{ view.finance.gate_message }}">
               <svg viewBox="0 0 24 24" aria-hidden="true">
                 <rect x="5" y="10" width="14" height="10" rx="2"></rect>
                 <path d="M8 10V7a4 4 0 0 1 8 0v3"></path>
@@ -1992,7 +1992,9 @@ This stage has already been marked as complete. Reopening it may affect package 
             </span>
           {% endif %}
         </div>
-        {{ review_flags_block(view.review_flags.by_area.get('finance', []), session, selected_schedule_status, selected_view, csrf_token) }}
+        <div{% if not view.schedule_preparation_unlocked %} class="finance-blocked-content" inert{% endif %}>
+          {{ review_flags_block(view.review_flags.by_area.get('finance', []), session, selected_schedule_status, selected_view, csrf_token) }}
+        </div>
         <section class="staffing-control-metadata" aria-label="Finance readiness details">
           <div>
             <span>Status</span>
@@ -2027,7 +2029,8 @@ This stage has already been marked as complete. Reopening it may affect package 
             </ul>
           </div>
         {% endif %}
-        <form method="post" action="{{ url_for('staff.update_finance_control', session_id=session.id) }}" id="finance-control-form-{{ session.id }}" class="staffing-control-form finance-control-form" data-finance-control-form data-finance-institutions-form>
+        <form method="post" action="{{ url_for('staff.update_finance_control', session_id=session.id) }}" id="finance-control-form-{{ session.id }}" class="staffing-control-form finance-control-form{% if not view.schedule_preparation_unlocked %} finance-blocked-content{% endif %}" data-finance-control-form data-finance-institutions-form>
+          <fieldset class="finance-edit-fields"{% if not view.schedule_preparation_unlocked %} disabled aria-label="Finance editing unavailable while blocked"{% endif %}>
           <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
           <input type="hidden" name="schedule_status" value="{{ selected_schedule_status }}">
           {{ pre_session_return_fields(selected_view, selected_bundle) }}
@@ -2035,16 +2038,21 @@ This stage has already been marked as complete. Reopening it may affect package 
           <input type="hidden" name="evidence_url" value="{{ view.finance.evidence_url }}">
           <input type="hidden" name="note" value="{{ view.finance.note }}">
           <input type="hidden" name="finance_institutions_form" value="1">
+          <button class="secondary-button compact-action finance-add-institution" type="button" data-finance-add-institution{% if not view.schedule_preparation_unlocked or view.finance.additional_institutions|length >= 9 %} disabled{% endif %}>Add institution in this session</button>
+          <label class="finance-institutions-confirmation"><input type="checkbox" name="institutions_confirmed_with_admin"{% if view.finance.institutions_confirmed_with_admin %} checked{% endif %}{% if not view.schedule_preparation_unlocked %} disabled{% endif %}><span>It has been confirmed with Admin that there are no additional institutions listed in this exam session.</span></label>
+          <div class="finance-institution-cards">
           <div class="finance-institution-row finance-primary-institution" data-finance-primary-institution>
+          <div class="finance-institution-card-heading"><span>Main institution</span><div class="finance-main-institution-label"><span>Institution name</span><strong class="finance-main-institution-name" title="{{ session.exam_session_name }}">{{ session.exam_session_name }}</strong></div></div>
           <label>
             Current account standing
             <span class="finance-standing-select"><select name="finance_status" data-finance-status-select{% if not view.schedule_preparation_unlocked %} disabled aria-disabled="true"{% endif %}>
-              {% if not view.finance.standing_selected %}<option value="" selected disabled>Select current account standing</option>{% endif %}
+              <option value=""{% if not view.finance.standing_selected %} selected{% endif %}>Select account standing</option>
               {% for status_option in finance_status_options %}
                 <option value="{{ status_option }}" data-description="{{ view.finance.standing_messages[status_option] }}" {% if view.finance.standing_selected and view.finance.label == status_option %}selected{% endif %}>{{ status_option }}</option>
               {% endfor %}
             </select><span class="badge finance-status-{{ view.finance.status|replace('_', '-') }}" data-finance-selected-chip{% if not view.finance.standing_selected %} hidden{% endif %}>{{ view.finance.label if view.finance.standing_selected else '' }}</span></span>
           </label>
+          <label>Comments<textarea name="finance_comments" rows="3" maxlength="2000" placeholder="Optional"{% if not view.schedule_preparation_unlocked %} disabled{% endif %}>{{ view.finance.comments }}</textarea></label>
           <div data-finance-status-preview aria-live="polite">
             {% if view.finance.standing_selected %}
             <p>{% if view.finance.label == 'Not applicable' %}This institution is configured as <strong>Payer candidate</strong>, so a financial status check at institution level is not required.{% else %}{{ view.finance.message }}{% endif %}</p>
@@ -2054,34 +2062,39 @@ This stage has already been marked as complete. Reopening it may affect package 
           <div class="finance-institution-list" data-finance-institution-list>
             {% for institution in view.finance.additional_institutions %}
               <div class="finance-institution-row" data-finance-institution-row>
-                <label>Institution name<input name="institution_name" value="{{ institution.name }}" maxlength="200" required{% if not view.schedule_preparation_unlocked %} disabled{% endif %}></label>
-                <label>Current account standing<span class="finance-standing-select"><select name="institution_standing" required data-finance-status-select{% if not view.schedule_preparation_unlocked %} disabled{% endif %}>
+                <div class="finance-institution-card-heading"><span>Additional institution</span><label>Institution name<input name="institution_name" value="{{ institution.name }}" maxlength="200" required{% if not view.schedule_preparation_unlocked %} disabled{% endif %}></label></div>
+                <label>Current account standing<span class="finance-standing-select"><select name="institution_standing" data-finance-status-select{% if not view.schedule_preparation_unlocked %} disabled{% endif %}>
+                  <option value=""{% if not institution.standing %} selected{% endif %}>Select account standing</option>
                   {% for status_option in finance_status_options %}<option value="{{ status_option }}" data-description="{{ view.finance.standing_messages[status_option] }}"{% if institution.standing == status_option %} selected{% endif %}>{{ status_option }}</option>{% endfor %}
-                </select><span class="badge finance-status-{{ institution.standing|lower|replace(' ', '-') }}" data-finance-selected-chip>{{ institution.standing }}</span></span></label>
+                </select><span class="badge finance-status-{{ institution.standing|lower|replace(' ', '-') }}" data-finance-selected-chip{% if not institution.standing %} hidden{% endif %}>{{ institution.standing }}</span></span></label>
+                <label>Comments<textarea name="institution_comments" rows="3" maxlength="2000" placeholder="Optional"{% if not view.schedule_preparation_unlocked %} disabled{% endif %}>{{ institution.comments or '' }}</textarea></label>
                 <div data-finance-status-preview aria-live="polite">
-                  <p>{% if institution.standing == 'Not applicable' %}This institution is configured as <strong>Payer candidate</strong>, so a financial status check at institution level is not required.{% else %}{{ view.finance.standing_messages[institution.standing] }}{% endif %}</p>
+                  <p>{% if institution.standing == 'Not applicable' %}This institution is configured as <strong>Payer candidate</strong>, so a financial status check at institution level is not required.{% elif institution.standing %}{{ view.finance.standing_messages[institution.standing] }}{% endif %}</p>
                 </div>
                 <button class="finance-remove-institution" type="button" data-finance-remove-institution{% if not view.schedule_preparation_unlocked %} disabled{% endif %}>Remove</button>
               </div>
             {% endfor %}
           </div>
-          <button class="secondary-button compact-action finance-add-institution" type="button" data-finance-add-institution{% if not view.schedule_preparation_unlocked or view.finance.additional_institutions|length >= 9 %} disabled{% endif %}>Add institution in this session</button>
-          <label class="finance-institutions-confirmation"><input type="checkbox" name="institutions_confirmed_with_admin"{% if view.finance.institutions_confirmed_with_admin %} checked{% endif %}{% if not view.schedule_preparation_unlocked %} disabled{% endif %}><span>It has been confirmed with Admin that there are no additional institutions listed in this exam session.</span></label>
+          </div>
           <template data-finance-institution-template>
             <div class="finance-institution-row" data-finance-institution-row>
-              <label>Institution name<input name="institution_name" maxlength="200" required></label>
-              <label>Current account standing<span class="finance-standing-select"><select name="institution_standing" required data-finance-status-select>
-                {% for status_option in finance_status_options %}<option value="{{ status_option }}" data-description="{{ view.finance.standing_messages[status_option] }}"{% if status_option == 'Not applicable' %} selected{% endif %}>{{ status_option }}</option>{% endfor %}
-              </select><span class="badge finance-status-not-applicable" data-finance-selected-chip>Not applicable</span></span></label>
-              <div data-finance-status-preview aria-live="polite"><p>This institution is configured as <strong>Payer candidate</strong>, so a financial status check at institution level is not required.</p></div>
+              <div class="finance-institution-card-heading"><span>Additional institution</span><label>Institution name<input name="institution_name" maxlength="200" required></label></div>
+              <label>Current account standing<span class="finance-standing-select"><select name="institution_standing" data-finance-status-select>
+                <option value="" selected>Select account standing</option>
+                {% for status_option in finance_status_options %}<option value="{{ status_option }}" data-description="{{ view.finance.standing_messages[status_option] }}">{{ status_option }}</option>{% endfor %}
+              </select><span class="badge" data-finance-selected-chip hidden></span></span></label>
+              <label>Comments<textarea name="institution_comments" rows="3" maxlength="2000" placeholder="Optional"></textarea></label>
+              <div data-finance-status-preview aria-live="polite"></div>
               <button class="finance-remove-institution" type="button" data-finance-remove-institution>Remove</button>
             </div>
           </template>
-          <button class="primary-button compact-action finance-save-button" type="submit"{% if not view.schedule_preparation_unlocked %} disabled{% endif %}>Save</button>
+          <button class="secondary-button compact-action" type="button" data-finance-retry hidden>Retry saving</button>
           <span class="finance-auto-save-status" data-finance-auto-save-status role="status" aria-live="polite"></span>
+          </fieldset>
         </form>
-        <section class="logistics-readonly-list finance-history-list" aria-label="Finance history">
-          <h4>History</h4>
+        <section class="status-track-panel finance-history-list" aria-label="Status track">
+          <button class="status-track-toggle" type="button" aria-expanded="false" aria-controls="finance-status-track-{{ session.id }}" data-status-track-toggle>Status track</button>
+          <div id="finance-status-track-{{ session.id }}" class="status-track-content" hidden>
           {% if view.finance_events %}
             <ul>
               {% for event in view.finance_events %}
@@ -2095,8 +2108,9 @@ This stage has already been marked as complete. Reopening it may affect package 
               {% endfor %}
             </ul>
           {% else %}
-            <p class="empty-history">No finance history yet.</p>
+            <p class="status-track-empty">No finance history yet.</p>
           {% endif %}
+          </div>
         </section>
       </section>
 
@@ -2109,21 +2123,16 @@ This stage has already been marked as complete. Reopening it may affect package 
           </div>
           {{ final_checks_gate_chip(view) }}
         </div>
-        {{ review_flags_block(view.review_flags.by_area.get('sinapsis', []), session, selected_schedule_status, selected_view, csrf_token) }}
+        <div{% if not view.final_checks_gate.checks_enabled %} class="final-checks-disabled" inert{% endif %}>
+          {{ review_flags_block(view.review_flags.by_area.get('sinapsis', []), session, selected_schedule_status, selected_view, csrf_token) }}
+        </div>
         <section class="staffing-control-metadata" aria-label="Final checks details">
           {% set final_checks_metadata = namespace(next_action='-', responsible=view.sinapsis.responsible, deadline='-') %}
           {% if view.final_checks_deadline_badge %}
             {% set final_checks_metadata.deadline = view.final_checks_deadline_badge.date|session_date %}
           {% endif %}
-          {% if view.sinapsis.requires_action %}
-            {% if view.sinapsis.label == 'Not reviewed' %}
-              {% set final_checks_metadata.next_action = 'Review Final checks' %}
-            {% elif view.sinapsis.label == 'In progress' %}
-              {% set final_checks_metadata.next_action = 'Complete Final checks' %}
-            {% elif view.sinapsis.label == 'Needs correction' %}
-              {% set final_checks_metadata.next_action = 'Correct Final checks' %}
-            {% endif %}
-          {% endif %}
+          {% set final_checks_metadata.next_action = view.final_checks_gate.actions|map(attribute='description')|join(' / ') or '-' %}
+          {% set final_checks_metadata.responsible = view.final_checks_gate.actions|map(attribute='department')|unique|join(' / ') or '-' %}
           <div>
             <span>Current status</span>
             <strong>{{ final_checks_progress_chip(view.sinapsis) }}</strong>
@@ -2137,7 +2146,7 @@ This stage has already been marked as complete. Reopening it may affect package 
             <strong>{{ final_checks_metadata.responsible }}</strong>
           </div>
           <div>
-            <span>Current deadline</span>
+            <span>{{ 'Sinapsis checks deadline' if view.final_checks_gate.checks_enabled else 'Return configuration deadline' }}</span>
             <strong>{{ final_checks_metadata.deadline }}</strong>
           </div>
         </section>
@@ -2153,8 +2162,10 @@ This stage has already been marked as complete. Reopening it may affect package 
           </div>
         {% endif %}
 
-        <section class="sinapsis-checklist return-materials-section" aria-labelledby="return-materials-title-{{ session.id }}">
+        <section class="sinapsis-checklist return-materials-section{% if not view.final_checks_gate.return_enabled %} final-checks-disabled{% endif %}"{% if not view.final_checks_gate.return_enabled %} inert{% endif %} aria-labelledby="return-materials-title-{{ session.id }}">
           <h4 id="return-materials-title-{{ session.id }}">Return of exam materials</h4>
+          {% if view.return_deadline_badge %}<p>Return configuration deadline: {{ shipment_deadline_chip(view.return_deadline_badge, show_prefix=false) }}</p>{% endif %}
+          <fieldset class="final-checks-fields"{% if not view.final_checks_gate.return_enabled %} disabled{% endif %}>
           {% set return_method = view.sinapsis.control.return_materials_method if view.sinapsis.control else '' %}
           {% set combined_selection = namespace(complete=false) %}
           {% for other_session in combined_return_options_by_session.get(session.id, []) %}
@@ -2162,12 +2173,29 @@ This stage has already been marked as complete. Reopening it may affect package 
               {% set combined_selection.complete = true %}
             {% endif %}
           {% endfor %}
-          <form method="post" action="{{ url_for('staff.update_return_materials_method', session_id=session.id) }}" class="sinapsis-checklist-list" data-return-materials-form data-session-id="{{ session.id }}" data-linked-session-ids="{{ (view.sinapsis.control.combined_return_session_ids if view.sinapsis.control else [])|tojson|forceescape }}" data-saved-method="{{ return_method or '' }}">
+          <form method="post" action="{{ url_for('staff.update_return_materials_method', session_id=session.id) }}" class="sinapsis-checklist-list" data-return-materials-form data-return-review-required="{{ 'true' if view.final_checks_gate.review_required else 'false' }}" data-return-enabled="{{ 'true' if view.final_checks_gate.return_enabled else 'false' }}" data-session-id="{{ session.id }}" data-linked-session-ids="{{ (view.sinapsis.control.combined_return_session_ids if view.sinapsis.control else [])|tojson|forceescape }}" data-saved-method="{{ return_method or '' }}">
             <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
             {% for option in return_materials_options %}
-              <div class="sinapsis-checklist-item return-material-option{% if return_method == option.key %} is-selected{% if (option.key == 'combined_location_drop_off' and (not view.sinapsis.combined_return_drop_off_address_valid or not combined_selection.complete)) or (option.key == 'location_drop_off' and not view.sinapsis.return_drop_off_address_valid) or (option.key == 'immediate_dispatch' and not view.sinapsis.return_materials_label_valid) or (option.key == 'combined_dispatch' and (not view.sinapsis.combined_return_materials_label_valid or not combined_selection.complete)) or (option.key == 'staff_handover' and (not view.sinapsis.control or not view.sinapsis.control.return_handover_staff_id)) %} needs-label{% endif %}{% endif %}">
+              <div class="sinapsis-checklist-item return-material-option{% if return_method == option.key %} is-selected{% if (option.key == 'combined_location_drop_off' and (not view.sinapsis.combined_return_drop_off_address_valid or not combined_selection.complete)) or (option.key == 'location_drop_off' and not view.sinapsis.return_drop_off_address_valid) or (option.key == 'immediate_dispatch' and (not view.sinapsis.control or not view.sinapsis.control.return_shipping_label)) or (option.key == 'combined_dispatch' and (not view.sinapsis.control or not view.sinapsis.control.combined_return_shipping_label or not combined_selection.complete)) or view.final_checks_gate.review_required or (option.key == 'staff_handover' and (not view.sinapsis.control or not view.sinapsis.control.return_handover_staff_id)) %} needs-label{% endif %}{% endif %}">
                 <div>
                   <strong id="return-option-{{ session.id }}-{{ option.key }}">{{ option.label }}</strong><p>{{ option.description }}</p>
+                  {% if option.key in ['immediate_dispatch', 'combined_dispatch'] %}
+                    {% set shipping = namespace(count=1) %}
+                    {% if option.key == 'combined_dispatch' and return_method == 'combined_dispatch' %}
+                      {% for other_session in combined_return_options_by_session.get(session.id, []) %}
+                        {% if view.sinapsis.control and other_session.id in view.sinapsis.control.combined_return_session_ids and combined_return_examiner_confirmed(other_session) %}{% set shipping.count = shipping.count + 1 %}{% endif %}
+                      {% endfor %}
+                    {% endif %}
+                    <div class="return-shipping-info" data-return-shipping-info>
+                      <h5>SHIPPING INFORMATION</h5>
+                      <ul class="return-shipping-dimensions">
+                        <li><span>Length:</span> 26 cm</li>
+                        <li><span>Width:</span> 30 cm</li>
+                        <li><span>Height:</span> <span data-return-shipping-height>{{ shipping.count * 7 }} cm</span></li>
+                        <li><span>Weight:</span> <span data-return-shipping-weight>{{ 1 if shipping.count <= 3 else 2 if shipping.count <= 6 else 3 if shipping.count <= 12 else 4 }} kg</span></li>
+                      </ul>
+                    </div>
+                  {% endif %}
                   {% if option.key in ['immediate_dispatch', 'combined_dispatch', 'location_drop_off', 'combined_location_drop_off'] %}
                     {% set label_url_name = 'return_materials_label_url' if option.key == 'immediate_dispatch' else ('return_drop_off_address_url' if option.key == 'location_drop_off' else ('combined_return_drop_off_address_url' if option.key == 'combined_location_drop_off' else 'combined_return_materials_label_url')) %}
                     <ul class="return-material-label-link" data-return-label-field{% if return_method != option.key %} hidden{% endif %}>
@@ -2188,7 +2216,11 @@ This stage has already been marked as complete. Reopening it may affect package 
                           <p class="return-label-url-warning" data-return-materials-selector-feedback role="alert" hidden></p>
                         </li>
                       {% endif %}
-                      <li><label for="return-label-url-{{ session.id }}-{{ option.key }}">{{ 'Enter drop-off address for return exam packages:' if option.key in ['location_drop_off', 'combined_location_drop_off'] else 'Insert label link for sealed return exam packages:' }}</label><input id="return-label-url-{{ session.id }}-{{ option.key }}" type="url" name="{{ label_url_name }}" data-return-label-url maxlength="2000" value="{{ (view.sinapsis.control|attr(label_url_name)) or '' if view.sinapsis.control else '' }}" placeholder="https://..."></li>
+                      <li>{% if option.key in ['immediate_dispatch', 'combined_dispatch'] %}
+                        {% include 'pre_session_control_tower/_return_label_upload.html' %}
+                      {% else %}
+                        <label for="return-label-url-{{ session.id }}-{{ option.key }}">Enter drop-off address for return exam packages:</label><input id="return-label-url-{{ session.id }}-{{ option.key }}" type="url" name="{{ label_url_name }}" data-return-label-url maxlength="2000" value="{{ (view.sinapsis.control|attr(label_url_name)) or '' if view.sinapsis.control else '' }}" placeholder="https://...">
+                      {% endif %}</li>
                     </ul>
                     <p class="return-label-url-warning" data-return-url-warning role="alert" hidden>This URL is not valid</p>
                   {% endif %}
@@ -2211,10 +2243,28 @@ This stage has already been marked as complete. Reopening it may affect package 
 
             <p data-return-materials-feedback role="status" hidden></p>
           </form>
+          <form method="post" action="{{ url_for('staff.update_return_instructions', session_id=session.id) }}" class="return-instructions-panel" data-logistics-concept-row data-return-instructions-row data-session-id="{{ session.id }}">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+            <input type="hidden" name="logistics_concept_id_return_{{ session.id }}" value="{{ session.id }}">
+            <input type="hidden" value="{{ view.sinapsis.control.return_instructions_title or '' if view.sinapsis.control else '' }}" data-logistics-instructions-title-value>
+            <input type="hidden" value="{{ view.sinapsis.control.return_instructions_html or '' if view.sinapsis.control else '' }}" data-logistics-instructions-value>
+            <button type="button" class="return-instructions-chip" data-logistics-instructions-open data-return-instructions-open data-instructions-url="{{ url_for('staff.update_return_instructions', session_id=session.id) }}">Instructions (<em>{{ 'added' if view.sinapsis.control and view.sinapsis.control.return_instructions_html else 'empty' }}</em>)</button>
+          </form>
+          {% if view.final_checks_gate.review_required %}
+          <form method="post" action="{{ url_for('staff.confirm_return_review', session_id=session.id) }}" class="return-review-confirmation">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+            {{ pre_session_return_fields(selected_view, selected_bundle) }}
+            <p>Review the saved return arrangements for the new shipment recipient, complete any missing details, then confirm your review.</p>
+            <button class="primary-button compact-action" type="submit">Confirm return review</button>
+          </form>
+          {% endif %}
+          </fieldset>
         </section>
 
-        <section class="sinapsis-checklist" aria-label="Sinapsis checks">
+        <section class="sinapsis-checklist{% if not view.final_checks_gate.checks_enabled %} final-checks-disabled{% endif %}" aria-label="Sinapsis checks"{% if not view.final_checks_gate.checks_enabled %} inert{% endif %}>
+          <fieldset class="final-checks-fields"{% if not view.final_checks_gate.checks_enabled %} disabled{% endif %}>
           <h4>Sinapsis checks</h4>
+          <p>Sinapsis checks deadline: {{ shipment_deadline_chip(view.final_checks_gate.checks_deadline_badge, show_prefix=false) }}</p>
             <div class="sinapsis-checklist-list">
               {% for item in view.sinapsis_checklist_items %}
                 <form method="post" action="{{ url_for('staff.update_sinapsis_checklist_item', session_id=session.id, item_id=item.id) }}" class="sinapsis-checklist-item {% if item.is_checked %}is-checked{% endif %}" data-sinapsis-check-form data-session-id="{{ session.id }}" data-item-id="{{ item.id }}">
@@ -2237,6 +2287,15 @@ This stage has already been marked as complete. Reopening it may affect package 
                       <p>Verify in Sinapsis that the correct number of candidates is listed, including only candidates with <b>Paid</b> or <b>Paying</b> status.</p>
                     {% else %}
                       <p>{{ item.description }}</p>
+                    {% endif %}
+                    {% if item.item_key == 'modules_configured' %}
+                      <ul class="sinapsis-staff-verification-list" aria-label="Assigned session staff">
+                        {% for verification_role in ['Emergency contact', 'Supervisor', 'Remote supervisor', 'Examiner', 'Intern'] %}
+                          {% for row in view.staffing_rows if row.has_staff_member and row.verification_role == verification_role %}
+                            <li><strong>{{ verification_role }}:</strong> <span>{{ row.staff_title }}{% if row.staff_title %} {% endif %}{{ row.staff_name }}</span> – <span class="staff-card-header-tag participation-{{ row.status_class }}">{{ row.status }}</span></li>
+                          {% endfor %}
+                        {% endfor %}
+                      </ul>
                     {% endif %}
                     {% if item.checked_at %}
                       <small>Checked {{ item.checked_at|localdt }}{% if item.checked_by %} by {{ item.checked_by }}{% endif %}</small>
@@ -2269,112 +2328,7 @@ This stage has already been marked as complete. Reopening it may affect package 
                 </div>
               {% endfor %}
             </div>
-        </section>
-        <section class="sinapsis-checklist final-communications-section" aria-labelledby="final-communications-title-{{ session.id }}">
-          <h4 id="final-communications-title-{{ session.id }}">Final communications</h4>
-          <div class="sinapsis-checklist-list">
-            <div class="sinapsis-checklist-item">
-              <div class="final-staff-confirmation">
-                <strong>Final staff confirmation</strong>
-                <div class="final-staff-table-wrap">
-                  <table class="final-staff-table" aria-label="Final staff confirmation">
-                    <thead><tr><th scope="col">Staff member</th><th scope="col">Role</th><th scope="col">Status</th><th scope="col">Final confirmation</th><th scope="col">Check</th></tr></thead>
-                    <tbody>
-                  {% for row in view.staffing_rows if row.has_staff_member %}
-                    <tr>
-                        <td><span class="staffing-member-name">{{ row.staff_name }}</span></td>
-                        <td><span class="badge {% if row.assignment_type == 'emergency_contact' %}fee-role-emergency-contact{% else %}role-{{ row.assignment_type }}{% endif %}">{{ row.role }}</span></td>
-                        <td><span class="staff-card-header-tag participation-{{ row.status_class }}">{{ row.status }}</span></td>
-                      <td>
-                        <div class="final-staff-email-actions">
-                          {% if row.staff_email %}
-                            <a class="staffing-action-chip staffing-action-chip-blue" href="{{ row.final_confirmation_gmail_url }}" target="_blank" rel="noopener noreferrer">Send email</a>
-                          {% else %}
-                            <button class="staffing-action-chip staffing-action-chip-blue is-disabled" type="button" disabled title="No email added">Send email</button>
-                          {% endif %}
-                          <button class="copy-icon-button email-invitation-copy-button" type="button" data-copy-final-confirmation data-final-confirmation-payload='{{ row.official_confirmation_email_payload|tojson }}' aria-label="Copy final confirmation email" title="Copy final confirmation email">
-                            <svg class="copy-icon" viewBox="0 0 24 24" aria-hidden="true">
-                              <rect x="9" y="9" width="10" height="10" rx="2"></rect>
-                              <path d="M5 15V7a2 2 0 0 1 2-2h8"></path>
-                            </svg>
-                          </button>
-                        </div>
-                      </td>
-                      <td>
-                        <form method="post" action="{{ url_for('staff.update_staff_final_confirmation', session_id=session.id, assignment_type=row.assignment_type, assignment_id=row.assignment_id) }}">
-                          <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-                          <input type="hidden" name="schedule_status" value="{{ selected_schedule_status }}">
-                          {{ pre_session_return_fields(selected_view, selected_bundle) }}
-                          <label class="final-staff-sent-label">
-                            <input type="checkbox" name="final_confirmation_sent" value="1" data-final-confirmation-sent{% if row.final_confirmation_sent %} checked{% endif %}>
-                            <span>Mark as sent</span>
-                          </label>
-                        </form>
-                      </td>
-                    </tr>
-                  {% else %}
-                    <tr><td colspan="5" class="muted">No staff members assigned to this session.</td></tr>
-                  {% endfor %}
-                    </tbody>
-                  </table>
-                </div>
-              </div>
-            </div>
-            <div class="sinapsis-checklist-item">
-              <div class="exam-centre-reminders">
-                <strong>Exam centre pre-session reminder</strong>
-                <div class="final-staff-table-wrap">
-                  <table class="final-staff-table exam-centre-reminder-table" aria-label="Exam centre pre-session reminders">
-                    <thead><tr><th scope="col">Contact point</th><th scope="col">WhatsApp</th><th scope="col">Email</th><th scope="col">Check</th></tr></thead>
-                    <tbody>
-                      {% set reminder_sent_keys = session.contact_reminder_sent_keys() %}
-                      {% for contact in session.contact_points_list() %}
-                        {% set contact_key = session.contact_reminder_key(contact) %}
-                        {% set phone = contact.phone|whatsapp_phone %}
-                        <tr>
-                          <td><span class="exam-centre-reminder-label">{{ contact.full_name or '—' }}</span></td>
-                          <td>
-                            {% if phone %}
-                              <a class="staffing-action-chip staffing-action-chip-blue" href="https://wa.me/{{ phone }}" target="_blank" rel="noopener noreferrer">Send WhatsApp</a>
-                            {% else %}
-                              <button class="staffing-action-chip staffing-action-chip-blue" type="button" disabled title="No phone number configured">Send WhatsApp</button>
-                            {% endif %}
-                          </td>
-                          <td>
-                            <div class="final-staff-email-actions">
-                              {% if contact.email %}
-                                <a class="staffing-action-chip staffing-action-chip-blue" href="https://mail.google.com/mail/?view=cm&amp;fs=1&amp;to={{ contact.email|urlencode }}&amp;su={{ '¡Muy pronto, los visitaremos!'|urlencode }}" target="_blank" rel="noopener noreferrer">Send email</a>
-                              {% else %}
-                                <button class="staffing-action-chip staffing-action-chip-blue" type="button" disabled title="No email address configured">Send email</button>
-                              {% endif %}
-                              <button class="copy-icon-button" type="button" aria-label="Copy email reminder" title="Copy email reminder">
-                                <svg class="copy-icon" viewBox="0 0 24 24" aria-hidden="true">
-                                  <rect x="9" y="9" width="10" height="10" rx="2"></rect>
-                                  <path d="M5 15V7a2 2 0 0 1 2-2h8"></path>
-                                </svg>
-                              </button>
-                            </div>
-                          </td>
-                          <td>
-                            <form method="post" action="{{ url_for('staff.update_exam_centre_reminder_sent', session_id=session.id, channel='contact') }}">
-                              <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-                              <input type="hidden" name="contact_key" value="{{ contact_key }}">
-                              <label class="final-staff-sent-label">
-                                <input type="checkbox" name="reminder_sent" value="1" data-exam-centre-reminder-sent{% if contact_key in reminder_sent_keys %} checked{% endif %}>
-                                <span>Mark as sent</span>
-                              </label>
-                            </form>
-                          </td>
-                        </tr>
-                      {% else %}
-                        <tr><td colspan="4" class="muted">No contact points configured for this session.</td></tr>
-                      {% endfor %}
-                    </tbody>
-                  </table>
-                </div>
-              </div>
-            </div>
-          </div>
+          </fieldset>
         </section>
       </section>
 

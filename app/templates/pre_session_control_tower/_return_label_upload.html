@@ -1,0 +1,13 @@
+{% set label_document = (view.sinapsis.control.return_shipping_label if option.key == 'immediate_dispatch' else view.sinapsis.control.combined_return_shipping_label) if view.sinapsis.control else none %}
+<div class="return-label-upload" data-return-label-upload data-url="{{ url_for('return_labels.manage', session_id=session.id, method=option.key) }}" data-file-id="{{ label_document.file_id if label_document else '' }}" data-file-present="{{ 'true' if label_document else 'false' }}">
+  <span class="return-label-upload-title">Upload shipping label for sealed return exam packages</span>
+  <label class="finance-upload-dropzone" data-return-label-dropzone{% if label_document %} hidden{% endif %}>
+    <input type="file" data-return-label-file aria-label="Upload shipping label for sealed return exam packages">
+    <span>Select a file or drop it here</span>
+  </label>
+  <div class="return-label-document" data-return-label-document{% if not label_document %} hidden{% endif %}>
+    <a data-return-label-view href="{{ url_for('return_labels.preview', file_id=label_document.file_id) if label_document else '#' }}" target="_blank" rel="noopener noreferrer">{{ label_document.filename if label_document else '' }}</a>
+    <button type="button" class="secondary-button compact-action" data-return-label-delete>Delete</button>
+  </div>
+  <p class="return-label-upload-feedback" data-return-label-feedback role="status" hidden></p>
+</div>

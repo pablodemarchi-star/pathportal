@@ -13535,15 +13535,18 @@ document.querySelectorAll("[data-finance-institutions-form]").forEach((form) => 
   const template = form.querySelector("[data-finance-institution-template]");
   const locked = form.querySelector('[name="finance_status"]').disabled;
   const feedback = form.querySelector("[data-finance-auto-save-status]");
+  const retry = form.querySelector("[data-finance-retry]");
   const collectFinanceData = () => {
     const data = new FormData();
     form.querySelectorAll('input[type="hidden"]').forEach((input) => {
       if (input.name && !input.disabled) data.append(input.name, input.value);
     });
     data.set("finance_status", form.querySelector('[name="finance_status"]').value || "");
+    data.set("finance_comments", form.querySelector('[name="finance_comments"]')?.value || "");
     list.querySelectorAll("[data-finance-institution-row]").forEach((row) => {
       data.append("institution_name", row.querySelector('[name="institution_name"]').value);
       data.append("institution_standing", row.querySelector('[name="institution_standing"]').value);
+      data.append("institution_comments", row.querySelector('[name="institution_comments"]')?.value || "");
     });
     if (form.querySelector('[name="institutions_confirmed_with_admin"]').checked) data.set("institutions_confirmed_with_admin", "on");
     return data;
@@ -13559,7 +13562,8 @@ document.querySelectorAll("[data-finance-institutions-form]").forEach((form) => 
     let retryCount = 0;
     while (dirty) {
       dirty = false;
-      feedback.textContent = "";
+      feedback.textContent = "Saving...";
+      if (retry) retry.hidden = true;
       feedback.classList.remove("is-error");
       try {
         const response = await fetch(form.action, {
@@ -13568,7 +13572,7 @@ document.querySelectorAll("[data-finance-institutions-form]").forEach((form) => 
         });
         if (!response.headers.get("content-type")?.includes("application/json")) throw new Error("Your session may have expired. Reload the page to continue.");
         const result = await response.json();
-        if (!response.ok || !result.ok) throw new Error(result.message || "Finance changes could not be saved.");
+        if (!response.ok || !result.ok) throw new Error(result.message || result.error || "Finance changes could not be saved.");
         retryCount = 0;
         if (!dirty) {
           const section = form.closest(".finance-control-section");
@@ -13598,6 +13602,7 @@ document.querySelectorAll("[data-finance-institutions-form]").forEach((form) => 
       } catch (error) {
         feedback.textContent = error.message || "Finance changes could not be saved. Try changing the field again.";
         feedback.classList.add("is-error");
+        if (retry) retry.hidden = false;
         // A failed earlier request must not discard newer edits waiting to save.
         if (dirty) continue;
         if (retryCount < 2) {
@@ -13612,24 +13617,22 @@ document.querySelectorAll("[data-finance-institutions-form]").forEach((form) => 
     }
     saving = false;
   };
-  form.addEventListener("submit", async (event) => {
+  form.addEventListener("submit", (event) => {
     event.preventDefault();
-    if (locked) return;
     clearTimeout(saveTimer);
-    dirty = false;
-    const button = form.querySelector(".finance-save-button");
-    button.disabled = true;
-    button.textContent = "Saving...";
-    while (saving) await new Promise((resolve) => setTimeout(resolve, 50));
-    HTMLFormElement.prototype.submit.call(form);
+    save();
+  });
+  retry?.addEventListener("click", () => {
+    clearTimeout(saveTimer);
+    save();
   });
   form.addEventListener("focusout", (event) => {
-    if (!event.target.matches('[name="institution_name"]')) return;
+    if (!event.target.matches('[name="institution_name"], [name="finance_comments"], [name="institution_comments"]')) return;
     clearTimeout(saveTimer);
     save();
   });
   form.addEventListener("input", (event) => {
-    if (!event.target.matches('[name="institution_name"]')) return;
+    if (!event.target.matches('[name="institution_name"], [name="finance_comments"], [name="institution_comments"]')) return;
     clearTimeout(saveTimer);
     saveTimer = setTimeout(save, 400);
   });
@@ -13793,6 +13796,10 @@ const isValidReturnLabelUrl = (value) => {
     return value.trim().length <= 2000 && ["http:", "https:"].includes(url.protocol) && Boolean(url.hostname);
   } catch (_) { return false; }
 };
+const returnShippingDimensions = (sessionCount = 1) => {
+  const count = Math.max(1, Math.trunc(Number(sessionCount) || 1));
+  return {height: count * 7, weight: count <= 3 ? 1 : count <= 6 ? 2 : count <= 12 ? 3 : 4};
+};
 const syncReturnMaterialsOptions = (form) => {
   form.querySelectorAll('input[type="radio"]').forEach((radio) => {
     const box = radio.closest(".return-material-option");
@@ -13803,10 +13810,24 @@ const syncReturnMaterialsOptions = (form) => {
     const hasSavedSession = [...box.querySelectorAll("[data-return-combined-session]")].some((checkbox) => checkbox.checked && checkbox.defaultChecked && !checkbox.disabled);
     const handover = box.querySelector("[data-return-handover-staff]");
     const savedStaff = handover && [...handover.options].some((option) => option.value && option.selected && option.defaultSelected);
-    const complete = handover ? Boolean(savedStaff) : validSavedUrl && (!["combined_dispatch", "combined_location_drop_off"].includes(radio.value) || hasSavedSession);
-    box.classList.toggle("needs-label", radio.checked && Boolean(urlField || handover) && !complete);
+    const upload = box.querySelector('[data-return-label-upload]');
+    const hasLabel = upload ? upload.dataset.filePresent === 'true' : validSavedUrl;
+    const complete = handover ? Boolean(savedStaff) : hasLabel && (!["combined_dispatch", "combined_location_drop_off"].includes(radio.value) || hasSavedSession);
+    box.classList.toggle("needs-label", radio.checked && (form.dataset.returnReviewRequired === 'true' || Boolean(urlField || handover || upload) && !complete));
     const field = box.querySelector("[data-return-label-field], [data-return-handover-field]");
     if (field) field.hidden = !radio.checked;
+    const shipping = box.querySelector('[data-return-shipping-info]');
+    if (shipping) {
+      const sessions = new Set([form.dataset.sessionId]);
+      if (radio.value === 'combined_dispatch') {
+        box.querySelectorAll('[data-return-combined-session]').forEach(checkbox => {
+          if (checkbox.checked && !checkbox.disabled) sessions.add(checkbox.value);
+        });
+      }
+      const dimensions = returnShippingDimensions(sessions.size);
+      shipping.querySelector('[data-return-shipping-height]').textContent = `${dimensions.height} cm`;
+      shipping.querySelector('[data-return-shipping-weight]').textContent = `${dimensions.weight} kg`;
+    }
     if (!radio.checked) {
       const warning = box.querySelector("[data-return-url-warning]");
       if (warning) warning.hidden = true;
@@ -13827,6 +13848,7 @@ document.addEventListener("change", async (event) => {
   const field = event.target.closest('[data-return-materials-form] input, [data-return-materials-form] select');
   if (!field || !field.matches('input[type="radio"], [data-return-label-url], [data-return-combined-session], [data-return-handover-staff]')) return;
   const form = field.closest("[data-return-materials-form]");
+  if (form.dataset.returnEnabled === 'false' || field.matches(':disabled')) return;
   const linkedIds = JSON.parse(form.dataset.linkedSessionIds || "[]");
   const changingLinkedMethod = field.matches('input[type="radio"]') && field.value !== form.dataset.savedMethod && linkedIds.length > 0;
   if (changingLinkedMethod && !(await confirmReturnMaterialsChange("Are you sure you want to continue? Linked sessions will keep the original selection of return of exam packages."))) {
@@ -13890,6 +13912,8 @@ document.addEventListener("change", async (event) => {
         result = await response.json();
       }
       if (!response.ok || !result.saved) throw new Error(result.error || "The return method could not be saved.");
+      window.refreshReturnLabels?.();
+      if (result.return_instructions) window.syncReturnInstructions?.(result.return_instructions);
       form.dataset.savedMethod = result.method;
       form.dataset.linkedSessionIds = JSON.stringify(result.linked_session_ids || []);
       form.querySelectorAll('input[type="radio"]').forEach((radio) => {
@@ -13983,6 +14007,7 @@ document.addEventListener("click", async (event) => {
     const result = await response.json();
     if (returnMaterialsSaveQueues.get(form)?.length) return;
     form.dataset.savedMethod = result.method;
+    if (result.return_instructions) window.syncReturnInstructions?.(result.return_instructions);
     form.dataset.linkedSessionIds = JSON.stringify(result.session_ids);
     form.querySelectorAll('input[type="radio"]').forEach((radio) => { radio.checked = radio.defaultChecked = radio.value === result.method; });
     form.querySelectorAll("[data-return-combined-session]").forEach((checkbox) => {
@@ -14612,6 +14637,7 @@ document.addEventListener("submit", (event) => {
     const titleInput = row.querySelector('[data-logistics-instructions-title-value]');
     let titleValue = deleted ? '' : title.value.trim();
     let value = deleted || !editor.textContent.trim() ? '' : editor.innerHTML;
+    let sharedSessionIds = [];
     const conceptId = row.querySelector('input[name^="logistics_concept_id_"]').value;
     busy = true;
     save.disabled = remove.disabled = true;
@@ -14629,13 +14655,14 @@ document.addEventListener("submit", (event) => {
         if (!response.ok || !payload.ok) throw new Error(payload.error || 'Could not save instructions.');
         value = payload.instructions;
         titleValue = payload.title;
+        sharedSessionIds = payload.session_ids || [];
       }
       input.value = value;
       titleInput.value = titleValue;
       if (conceptId) { input.defaultValue = value; titleInput.defaultValue = titleValue; }
       opener.textContent = value ? 'View' : '✎';
       opener.classList.toggle('has-instructions', Boolean(value));
-      row.dispatchEvent(new CustomEvent('instructions:saved', { bubbles: true, detail: { title: titleValue, html: value } }));
+      row.dispatchEvent(new CustomEvent('instructions:saved', { bubbles: true, detail: { title: titleValue, html: value, sessionIds: sharedSessionIds } }));
       opener.setAttribute('aria-label', value ? 'View or edit instructions' : 'Add instructions');
       if (!conceptId) markStaffChangesUnsaved(row.closest('form'));
       dialog.close();

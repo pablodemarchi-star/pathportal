@@ -156,6 +156,8 @@ def create_app():
     app.register_blueprint(staff_invoices_bp)
     from app.staff_id_documents import staff_id_documents_bp
     app.register_blueprint(staff_id_documents_bp)
+    from app.return_labels import return_labels_bp
+    app.register_blueprint(return_labels_bp)
     from app.finance_completion import completion_bp
     app.register_blueprint(completion_bp)
     from app.payee_notifications import payee_bp
@@ -349,6 +351,10 @@ def create_app():
             db.session.execute(text("UPDATE exam_session_sinapsis_checklist_item SET label = :label, description = :description WHERE item_key = :item_key"),
                 {"label": checklist_item["label"], "description": checklist_item["description"], "item_key": checklist_item["key"]})
         finance_columns = {row[1] for row in db.session.execute(text("PRAGMA table_info(exam_session_finance_control)"))}
+        from app.schema_migrations import migrate_final_checks_workflow
+        migrate_final_checks_workflow()
+        if "comments" not in finance_columns:
+            db.session.execute(text("ALTER TABLE exam_session_finance_control ADD COLUMN comments TEXT NOT NULL DEFAULT ''"))
         if "additional_institutions" not in finance_columns:
             db.session.execute(text("ALTER TABLE exam_session_finance_control ADD COLUMN additional_institutions TEXT NOT NULL DEFAULT '[]'"))
         if "institutions_confirmed_with_admin" not in finance_columns:
@@ -1415,6 +1421,8 @@ def create_app():
         normalize_online_supervisor_role_fees()
         from app.staffing_rules import normalize_existing_interns
         normalize_existing_interns()
+        from app.final_checks import initialize_existing_final_checks
+        initialize_existing_final_checks()
     return app
 
 

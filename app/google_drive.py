@@ -20,6 +20,8 @@ DRIVE_SCOPE = 'https://www.googleapis.com/auth/drive.file'
 API = 'https://www.googleapis.com/drive/v3'
 FOLDER_MIME = 'application/vnd.google-apps.folder'
 DESTINATIONS = {
+    'return_shipping_labels': {'label': 'Return shipping labels', 'section': 'Final checks', 'category': 'return_shipping_labels',
+        'suggested_id': '1bzB2g3XWlISXh606AzCQtvKdJPpDvtJD'},
     'staff_id_documents': {'label': 'Staff ID documents', 'section': 'Staff members', 'category': 'staff_id_documents',
         'suggested_id': '1Ff__Dc0ZirrtefiDlBw6ovZtION2OsnV'},
     'staff_portal_invoices': {'label': 'Staff invoices', 'section': 'Staff portal', 'category': 'staff_invoices',
@@ -127,6 +129,8 @@ def save_folder(key):
         abort(404)
     if key == 'staff_id_documents' and request.form.get('folder_id', '').strip() != DESTINATIONS[key]['suggested_id']:
         return jsonify(ok=False, error='Select the designated Staff ID documents folder.'), 400
+    if key == 'return_shipping_labels' and request.form.get('folder_id', '').strip() != DESTINATIONS[key]['suggested_id']:
+        return jsonify(ok=False, error='Select the designated Return shipping labels folder.'), 400
     try:
         folder = folder_metadata(request.form.get('folder_id', '').strip())
     except DriveStorageError as exc:
@@ -229,6 +233,13 @@ def upload_document(upload, payment, destination):
             raise ValueError('Upload not confirmed')
         from app.staff_invoices import StaffInvoiceTarget
         from app.staff_id_documents import StaffIdTarget
+        from app.return_labels import ReturnLabelTarget
+        if isinstance(payment, ReturnLabelTarget):
+            from app.models import ReturnShippingLabel
+            document = ReturnShippingLabel(file_id=file_id, destination_key=destination.key, filename=filename, mime_type=mime)
+            db.session.add(document)
+            payment.document = document
+            return url_for('return_labels.preview', file_id=file_id, _external=True)
         if isinstance(payment, StaffIdTarget):
             from app.models import StaffIdDocument
             document = payment.document or StaffIdDocument(member_id=payment.member_id)

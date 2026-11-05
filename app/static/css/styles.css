@@ -8368,6 +8368,13 @@ span.session-marker-chip {
   color: #8a5a00;
 }
 
+.control-tower-table.sessions-table .logistics-summary-cell > span.logistics-gate-chip.logistics-gate-semi-unblocked {
+  white-space: nowrap;
+  overflow-wrap: normal;
+  word-break: normal;
+  flex-shrink: 0;
+}
+
 .packages-gate-unblocked {
   background: #d9f0df;
   color: #1f6a35;
@@ -16844,6 +16851,7 @@ span.session-marker-chip {
 .finance-institution-list { display: grid; gap: 12px; grid-column: 1 / -1; }
 .finance-institution-row { display: grid; gap: 10px; padding: 12px; border: 1px solid var(--color-border); border-radius: 8px; }
 .finance-control-form .finance-institutions-confirmation { display: flex; align-items: center; gap: 6px; grid-column: 1 / -1; font-weight: 400; }
+.finance-control-form .finance-institutions-confirmation + .finance-institution-cards { margin-top: 1mm; }
 .finance-institutions-confirmation input { width: auto; flex: 0 0 auto; margin: 0; }
 .finance-control-form input:disabled { background: var(--path-grey-50); color: var(--color-muted); cursor: not-allowed; }
 .finance-add-institution { justify-self: start; }
@@ -16853,6 +16861,50 @@ span.session-marker-chip {
 .finance-institution-row [data-finance-remove-institution] { justify-self: start; }
 
 .finance-control-form[data-finance-institutions-form] { padding: 0; border: 0; background: transparent; }
+.finance-edit-fields { display: contents; }
+.final-checks-fields { display: contents; }
+.final-checks-disabled { filter: grayscale(1); opacity: .6; }
+.final-checks-disabled input, .final-checks-disabled button, .final-checks-disabled select { cursor: not-allowed; }
+.return-label-upload { display: grid; gap: 8px; margin-top: 8px; min-width: 0; }
+.return-label-upload-title { font-weight: 600; font-size: 12px; }
+.return-label-document { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; }
+.return-label-document a { overflow-wrap: anywhere; color: var(--color-primary); text-decoration: underline; }
+.return-label-upload-feedback.is-error { color: var(--path-red); }
+.return-label-upload .finance-upload-dropzone.is-dragging { border-color: var(--color-primary); background: #edf5f7; }
+.return-label-upload [hidden] { display: none; }
+.return-instructions-panel { margin-top: 14px; }
+.return-instructions-chip { display: inline-flex; align-items: center; gap: 3px; width: fit-content; padding: 6px 12px; border: 1px solid #bdd5df; border-radius: 999px; background: #edf5f8; color: var(--color-primary); font-family: inherit; font-size: 12px; font-weight: 600; cursor: pointer; }
+.return-instructions-chip em { font-style: italic; font-weight: 300; }
+.return-instructions-chip:disabled { cursor: not-allowed; }
+.return-shipping-info { margin: 10px 0; padding: 10px 12px; border: 1px solid #dce7eb; border-radius: 8px; background: #f5f9fa; }
+.return-shipping-info h5 { margin: 0 0 6px; color: var(--color-muted); font-size: 10px; letter-spacing: .05em; }
+.return-shipping-dimensions { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); grid-template-rows: repeat(2, auto); grid-auto-flow: column; gap: 3px 16px; margin: 0; padding-left: 16px; font-size: 12px; line-height: 1.4; }
+.return-shipping-dimensions li { margin: 0; white-space: nowrap; }
+.return-shipping-dimensions li > span:first-child { font-weight: 600; }
+.return-review-confirmation { margin-top: 14px; padding: 14px; border: 1px solid #e6cf8a; border-radius: 10px; background: #fff8e4; }
+.finance-blocked-content { filter: grayscale(1); opacity: .65; }
+.finance-blocked-content input:disabled, .finance-blocked-content textarea:disabled,
+.finance-blocked-content select:disabled { background: var(--path-grey-50); color: var(--color-muted); cursor: not-allowed; }
+.finance-blocked-content button:disabled { cursor: not-allowed; }
+.finance-institution-cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 60mm), 60mm)); grid-auto-rows: 1fr; gap: 16px; grid-column: 1 / -1; min-width: 0; }
+.finance-institution-cards .finance-institution-list { display: contents; }
+.finance-institution-cards .finance-institution-row { width: 100%; min-width: 0; box-sizing: border-box; padding: 34px 14px 16px; border: 1px solid #d6e3e8; border-top: 3px solid var(--color-primary); border-radius: 14px; gap: 14px; grid-template-rows: minmax(80px, auto) auto auto 1fr; align-content: start; overflow-wrap: anywhere; background: linear-gradient(180deg, #eef5f8 0, #fff 160px); box-shadow: 0 3px 12px #00506b0d; }
+.finance-institution-cards .finance-institution-row:hover { border-color: #9abcc9; box-shadow: 0 5px 16px #00506b16; }
+.finance-institution-card-heading { display: grid; align-content: start; gap: 8px; padding-bottom: 10px; border-bottom: 1px solid #dce8ed; }
+.finance-institution-card-heading > span { color: var(--color-primary); font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: .06em; }
+.finance-institution-card-heading strong { color: var(--color-primary-dark); font-size: 14px; line-height: 1.4; }
+.finance-institution-card-heading label { color: var(--color-muted); }
+.finance-main-institution-label { display: grid; gap: 6px; min-width: 0; color: var(--color-muted); font-size: 12px; font-weight: 600; }
+.finance-institution-card-heading .finance-main-institution-name { display: flex; align-items: center; height: 36px; min-width: 0; color: var(--color-primary-dark); font-size: 14px; font-weight: 700; line-height: 1.4; }
+.finance-institution-cards label { min-width: 0; font-size: 12px; }
+.finance-institution-cards input, .finance-institution-cards select { width: 100%; min-width: 0; max-width: 100%; box-sizing: border-box; font-size: 12px; }
+.finance-institution-cards textarea { width: 100%; min-width: 0; box-sizing: border-box; font-size: 12px; line-height: 1.5; resize: vertical; }
+.finance-institution-cards textarea::placeholder { font-weight: 300; }
+.sinapsis-staff-verification-list { display: grid; gap: 3px; margin: 8px 0 0; padding-left: 18px; overflow-x: auto; }
+.sinapsis-staff-verification-list li { width: max-content; padding-left: 0; margin: 0; font-size: 12px; line-height: 1.35; white-space: nowrap; color: var(--color-primary-dark); }
+.sinapsis-staff-verification-list li strong { display: inline; font-size: inherit; }
+.sinapsis-staff-verification-list .staff-card-header-tag { margin-left: 2px; padding: 1px 5px; font-size: 9px; vertical-align: middle; }
+@media (max-width: 600px) { .finance-institution-cards { grid-template-columns: minmax(0, 60mm); } }
 .finance-auto-save-status { color: var(--color-muted); font-size: 12px; }
 .finance-auto-save-status.is-error { color: var(--path-red); }
 

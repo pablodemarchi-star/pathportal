@@ -411,7 +411,7 @@ SINAPSIS_CHECKLIST_ITEMS = [
 SINAPSIS_RETIRED_CHECKLIST_KEYS = {"session_visible", "candidates_loaded", "speaking_recordings_checked", "details_link_verified", "final_check_completed"}
 def combined_return_examiner_confirmed(session_record):
     examiners = list(session_record.examiner_assignments)
-    return bool(examiners) and all(
+    return session_shipment_recipient_confirmed_for_shipment(session_record) and bool(examiners) and all(
         (assignment.team_member_id or assignment.potential_entry_id) and assignment.participation_status == "Confirmed"
         for assignment in examiners
     )
@@ -426,6 +426,7 @@ def combined_return_session_options(session_record):
         return []
     return (ExamSession.query.options(joinedload(ExamSession.examiner_assignments)).join(ExamSessionSupervisorAssignment)
             .filter(ExamSession.id != session_record.id,
+                    ExamSession.format == "Onsite",
                     ExamSessionSupervisorAssignment.is_shipment_recipient.is_(True),
                     ExamSessionSupervisorAssignment.team_member_id == supervisor.team_member_id,
                     ExamSessionSupervisorAssignment.participation_status.notin_(["Declined", "Cancelled"]))
@@ -6780,7 +6781,7 @@ def logistics_deadline_badge_contract(session_record, logistics=None, concepts=N
 def final_checks_deadline(session_record):
     if not session_record or not session_record.session_date:
         return None
-    return argentina_subtract_business_days(session_record.session_date, 1)
+    return argentina_subtract_business_days(session_record.session_date, 4)
 
 
 def final_checks_completed_date(sinapsis=None):
@@ -7440,6 +7441,8 @@ def staffing_assignment_row(role, assignment=None, assignment_type="", status="P
     )
     return {
         "role": role,
+        "verification_role": "Remote supervisor" if role == "Supervisor (remote)" else role,
+        "staff_title": (getattr(staffing_assignment_person(assignment) if assignment else getattr(session_record, "emergency_contact_member", None), "title", "") or ""),
         "assignment_type": assignment_type,
         "assignment_id": assignment_id if assignment_id is not None else (assignment.id if assignment else None),
         "staff_name": resolved_name or "Assigned staff member",
@@ -7780,6 +7783,7 @@ def finance_readiness_contract(finance_control=None, today=None, session_date=No
         "label": status,
         "standing_messages": FINANCE_STATUS_MESSAGES,
         "additional_institutions": additional_institutions,
+        "comments": finance_control.comments or "" if finance_control else "",
         "institutions_confirmed_with_admin": confirmed,
         "standing_selected": standing_selected,
         "action_label": action_label,
@@ -7873,9 +7877,10 @@ def sinapsis_readiness_contract(session_record, sinapsis_control=None, checklist
     checklist_total, checklist_checked = sinapsis_checklist_counts(items)
     checklist_complete = checklist_total > 0 and checklist_checked == checklist_total
     raw_status = status
+    status = "Ready" if checklist_complete else "In progress" if checklist_checked else "Not reviewed"
     if status == "Ready" and not checklist_complete:
         status = "Needs correction"
-    deadline = sinapsis_control.sinapsis_due_at if sinapsis_control else None
+    deadline = final_checks_deadline(session_record)
     note = (sinapsis_control.note or "").strip() if sinapsis_control and sinapsis_control.note else ""
     evidence_url = (sinapsis_control.evidence_url or "").strip() if sinapsis_control and sinapsis_control.evidence_url else ""
     details_url = (session_record.details_url or "").strip() if session_record and session_record.details_url else ""
@@ -7934,20 +7939,20 @@ def sinapsis_readiness_contract(session_record, sinapsis_control=None, checklist
         "return_materials_label_valid": bool(sinapsis_control and sinapsis_control.return_materials_label_url and is_valid_url(sinapsis_control.return_materials_label_url)),
         "control": sinapsis_control,
         "reviewed_at": sinapsis_control.reviewed_at if sinapsis_control else None,
-        "ready_at": sinapsis_control.ready_at if sinapsis_control else None,
+        "ready_at": max((local_date(item.checked_at) for item in items if item.checked_at), default=None) if checklist_complete else None,
         "needs_correction_at": sinapsis_control.needs_correction_at if sinapsis_control else None,
         "updated_by": sinapsis_control.updated_by if sinapsis_control else "",
     }
 
 
 def sinapsis_action_contract(sinapsis_contract):
-    if not sinapsis_contract or not sinapsis_contract.get("requires_action"):
+    if not sinapsis_contract or not sinapsis_contract.get("requires_action") or sinapsis_contract.get('checks_enabled') is False:
         return None
     status = sinapsis_contract.get("label", "Not reviewed")
     labels = {
-        "Not reviewed": "Review Sinapsis readiness",
-        "In progress": "Complete Sinapsis verification",
-        "Needs correction": "Correct Sinapsis setup",
+        "Not reviewed": "Start pre-session Sinapsis checks",
+        "In progress": "Continue with pre-session Sinapsis checks",
+        "Needs correction": "Continue with pre-session Sinapsis checks",
     }
     return {
         "action_key": f"sinapsis_{sinapsis_contract.get('status', 'not_reviewed')}",
@@ -7955,7 +7960,7 @@ def sinapsis_action_contract(sinapsis_contract):
         "source": "sinapsis",
         "source_label": "Sinapsis",
         "status": "action_required",
-        "description": sinapsis_contract.get("message", ""),
+        "description": labels.get(status, "Continue with pre-session Sinapsis checks"),
         "responsible": "ADMIN",
         "deadline": sinapsis_contract.get("deadline"),
         "deadline_label": sinapsis_contract.get("deadline_label") or "Not set",
@@ -10246,16 +10251,17 @@ def bundle_detail_action_items(
         finance_actions = tag(finance_actions, "finance")
         logistics_status = logistics.get("status")
         logistics_unblocked = (logistics_gate or {}).get("is_unblocked")
-        if logistics_status == "not_applicable":
+        if logistics_status in {"not_applicable", "completed"} or not logistics_unblocked:
+            return finance_actions
+        logistics_management_descriptions = {
+            "configuration_required": "Complete Logistics concepts",
+            "needs_review": "Review Logistics potential issue",
+        }
+        if logistics_status in logistics_management_descriptions:
             return tag([{
-                "department": "",
-                "description": "Logistics is not needed for this session",
-            }], "logistics") + finance_actions
-        if not logistics_unblocked:
-            return tag([{
-                "department": "",
-                "description": "Staffing must be confirmed before proceeding with Logistics planning.",
-                "preserve_period": True,
+                "department": "MANAGEMENT",
+                "description": logistics_management_descriptions[logistics_status],
+                "overdue": logistics_overdue,
             }], "logistics") + finance_actions
         if logistics_status == "not_started":
             return tag([{
@@ -10269,12 +10275,6 @@ def bundle_detail_action_items(
                 "description": "Continue with Logistics planning",
                 "overdue": logistics_overdue,
             }], "logistics") + finance_actions
-        if logistics_status == "completed":
-            return tag([{
-                "department": "",
-                "description": "Logistics planning has been finalised",
-            }], "logistics") + finance_actions
-
         actions.extend(finance_actions)
 
     if packages_action and not packages_action.get("is_complete"):
@@ -13822,10 +13822,6 @@ def department_my_actions(schedule_views, bundle_views, pending_bundle, staffing
             action = finance_action_contract(view.get("finance"))
             if action:
                 add(view, {"department": action["responsible"], "description": action.get("description") or action["label"]}, "finance")
-        if (view.get("final_checks_gate") or {}).get("status") in {"unblocked", "semi_unblocked"}:
-            action = sinapsis_action_contract(view.get("sinapsis"))
-            if action:
-                add(view, {"department": action["responsible"], "description": action.get("description") or action["label"]}, "sinapsis")
 
     # Shipment actions belong to the bundle: show each pending step once.
     for bundle in bundle_views:
@@ -15129,51 +15125,9 @@ def render_journey_unavailable(status_code=404):
     ), status_code
 
 
-def final_checks_gate_contract(session_record, schedule_status, schedule_gate, staffing, packages, shipments, logistics, finance, today=None):
-    schedule_completed = schedule_status in {"Approved", "Completed"} or bool((schedule_gate or {}).get("is_ready"))
-    staffing_confirmed = bool((staffing or {}).get("ready")) or (staffing or {}).get("status") == "confirmed"
-    package_completed = ((packages or {}).get("preparation_status") or {}).get("status") == "completed"
-    operational_status = (shipments or {}).get("operational_status") or {}
-    shipment_contract = (shipments or {}).get("contract") or {}
-    shipment_delivered = (
-        operational_status.get("status") == "delivered_successfully"
-        or shipment_contract.get("status") == "Delivered successfully"
-    )
-    logistics_completed = (logistics or {}).get("status") in {"completed", "not_applicable"}
-    finance_cleared = (finance or {}).get("status") == "cleared" or (finance or {}).get("label") == "Cleared"
-    business_days_until_session = argentina_business_days_until(getattr(session_record, "session_date", None), today=today)
-    within_window = business_days_until_session is not None and business_days_until_session <= 4
-    unblocked = (
-        within_window
-        and schedule_completed
-        and staffing_confirmed
-        and package_completed
-        and shipment_delivered
-        and logistics_completed
-        and finance_cleared
-    )
-    semi_unblocked = within_window and schedule_completed and staffing_confirmed
-    if unblocked:
-        status = "unblocked"
-        label = "UNBLOCKED"
-    elif semi_unblocked:
-        status = "semi_unblocked"
-        label = "SEMI-UNBLOCKED"
-    else:
-        status = "blocked"
-        label = "BLOCKED"
-    return {
-        "status": status,
-        "label": label,
-        "within_window": within_window,
-        "business_days_until_session": business_days_until_session,
-        "schedule_completed": schedule_completed,
-        "staffing_confirmed": staffing_confirmed,
-        "package_completed": package_completed,
-        "shipment_delivered": shipment_delivered,
-        "logistics_completed": logistics_completed,
-        "finance_cleared": finance_cleared,
-    }
+def final_checks_gate_contract(session_record, schedule_status=None, schedule_gate=None, staffing=None, packages=None, shipments=None, logistics=None, finance=None, today=None):
+    from app.final_checks import final_checks_state
+    return final_checks_state(session_record, today=today)
 
 
 def schedule_workflow_view(session_record, workflow=None, today=None, staffing=None, logistics=None, logistics_gate=None, logistics_deadline_badge=None, core_readiness=None, operational_readiness=None, session_readiness=None, incidents=None, review_flags=None, priority_action=None, staffing_control=None, staffing_deadline_badge=None, logistics_control=None, finance=None, finance_events=None, sinapsis=None, sinapsis_checklist_items=None, sinapsis_events=None, communications=None, communications_checklist_items=None, communications_events=None, schedule_gate=None, packages=None, shipments=None, activity_timeline=None, journey_shares=None, staffing_rows=None, staffing_events=None, bundle_detail_actions=None, schedule_locked_by_staffing=False):
@@ -15197,6 +15151,7 @@ def schedule_workflow_view(session_record, workflow=None, today=None, staffing=N
     finance_view = finance or finance_readiness_contract(None, today=today, session_date=session_record.session_date)
     if not schedule_preparation_unlocked:
         finance_view = {**finance_view, "block_label": "Not started", "block_status": "not_started"}
+    finance_view = {**finance_view, 'gate_message': schedule_preparation_blocker if not schedule_preparation_unlocked else ''}
     sinapsis_view = sinapsis or sinapsis_readiness_contract(session_record, None, today=today)
     final_checks_deadline_badge = final_checks_deadline_badge_contract(session_record, sinapsis_view, today=today)
     communications_view = communications or communications_readiness_contract(None, today=today)
@@ -15249,8 +15204,12 @@ def schedule_workflow_view(session_record, workflow=None, today=None, staffing=N
         today=today,
     )
     auto_approval_event = schedule_workflow_auto_approval_event(workflow)
+    sinapsis_view['checks_enabled'] = final_checks_gate['checks_enabled']
+    sinapsis_view['return_configuration_pending'] = not final_checks_gate['return_complete']
+    sinapsis_view['overall_progress'] = final_checks_gate['progress']
     notification_pending = bool(auto_approval_event and not auto_approval_event.approval_notification_acknowledged)
     detail_actions = list(bundle_detail_actions or [])
+    detail_actions.extend(final_checks_gate["actions"])
     if notification_pending:
         detail_actions.insert(0, {"department": "ADMIN", "description": "Notify institution of schedule auto-approval", "section": "schedule"})
     return {
@@ -15288,7 +15247,7 @@ def schedule_workflow_view(session_record, workflow=None, today=None, staffing=N
         "finance": finance_view,
         "finance_events": finance_events or [],
         "sinapsis": sinapsis_view,
-        "final_checks_deadline_badge": final_checks_deadline_badge,
+        "final_checks_deadline_badge": final_checks_gate["checks_deadline_badge"] if final_checks_gate["checks_enabled"] else final_checks_gate["return_deadline_badge"],
         "sinapsis_checklist_items": sinapsis_checklist_items or [],
         "sinapsis_events": sinapsis_events or [],
         "communications": communications_view,
@@ -15297,6 +15256,7 @@ def schedule_workflow_view(session_record, workflow=None, today=None, staffing=N
         "packages": packages_view,
         "shipments": shipments_view,
         "final_checks_gate": final_checks_gate,
+        "return_deadline_badge": final_checks_gate["return_deadline_badge"],
         "core_readiness": core_readiness or core_readiness_contract(
             gate,
             staffing_readiness_contract([], [], []),
@@ -18679,6 +18639,10 @@ def pre_session_control_tower(_count_only=False):
         )
         for session_record in sessions
     }
+    g._final_checks_assignment_rows = shipment_recipient_assignments_by_session
+    g._final_checks_controls = sinapsis_controls_by_session
+    g._final_checks_events = {session_id: sinapsis_events_by_control.get(control.id, [])
+                             for session_id, control in sinapsis_controls_by_session.items()}
     pending_shipment_bundle = {
         "session_records": [
             session_record
@@ -19177,6 +19141,7 @@ def pre_session_control_tower(_count_only=False):
             or deadline_badge_is_red(view.get("logistics_deadline_badge"))
             or bool((view.get("finance") or {}).get("is_overdue"))
             or deadline_badge_is_red(view.get("final_checks_deadline_badge"))
+            or deadline_badge_is_red(view.get("return_deadline_badge"))
             or bool((view.get("incidents") or {}).get("overdue_count"))
         )
 
@@ -20989,14 +20954,26 @@ def update_finance_control(session_id):
     if request.form.get("finance_institutions_form") == "1":
         names = request.form.getlist("institution_name")
         standings = request.form.getlist("institution_standing")
+        comments = request.form.getlist("institution_comments")
+        if comments and len(comments) != len(names):
+            return finance_error("Each institution must have its own Comments field.")
         if len(names) != len(standings) or len(names) > 9:
             return finance_error("A session can include up to 10 institutions.")
         additional_institutions = []
-        for name, standing in zip(names, standings):
+        for index, (name, standing) in enumerate(zip(names, standings)):
             name = name.strip()
-            if (not name and not auto_save) or len(name) > 200 or standing not in FINANCE_STATUS_OPTIONS:
+            standing = standing.strip()
+            if (not name and not auto_save) or len(name) > 200 or (standing and standing not in FINANCE_STATUS_OPTIONS):
                 return finance_error("Enter an institution name and a valid current account standing for every institution.")
             additional_institutions.append({"name": name, "standing": standing})
+            if comments:
+                comment = comments[index].strip()
+                if len(comment) > 2000:
+                    return finance_error("Comments must be 2000 characters or fewer.")
+                additional_institutions[-1]["comments"] = comment
+    primary_comments = request.form.get("finance_comments", "").strip()
+    if len(primary_comments) > 2000:
+        return finance_error("Comments must be 2000 characters or fewer.")
     due_value = request.form.get("finance_due_at", "").strip()
     finance_due_at = None
     if due_value:
@@ -21038,6 +21015,8 @@ def update_finance_control(session_id):
     if additional_institutions is not None:
         control_record.additional_institutions = json.dumps(additional_institutions)
         control_record.institutions_confirmed_with_admin = request.form.get("institutions_confirmed_with_admin") == "on"
+    if "finance_comments" in request.form:
+        control_record.comments = primary_comments
 
     try:
         db.session.commit()
@@ -21058,7 +21037,9 @@ def update_return_materials_method(session_id):
     session_record = ExamSession.query.get_or_404(session_id)
     if request.method == "GET":
         control = ExamSessionSinapsisControl.query.filter_by(exam_session_id=session_id).first()
+        from app.final_checks import return_instructions_payload
         return jsonify(session_id=session_id, method=control.return_materials_method if control else "",
+            return_instructions=return_instructions_payload(session_record, control),
             label_url=control.combined_return_materials_label_url or "" if control else "",
             combined_drop_off_address_url=control.combined_return_drop_off_address_url or "" if control else "",
             drop_off_address_url=control.return_drop_off_address_url or "" if control else "",
@@ -21067,11 +21048,16 @@ def update_return_materials_method(session_id):
             session_ids=control.combined_return_session_ids if control else [])
     if not validate_csrf():
         return jsonify(error="Security token expired. Please try again."), 403
+    from app.final_checks import final_checks_state
+    if not final_checks_state(session_record)['return_enabled']:
+        return jsonify(error="Return of exam materials is blocked until the shipment recipient confirms participation."), 403
     method = request.form.get("return_materials_method", "").strip()
     option = next((option for option in RETURN_MATERIALS_OPTIONS if option["key"] == method), None)
     if option is None:
         return jsonify(error="Select a valid return method."), 400
-    label_urls = {name: request.form[name].strip() for name in ("return_materials_label_url", "combined_return_materials_label_url", "return_drop_off_address_url", "combined_return_drop_off_address_url") if name in request.form}
+    if any(name in request.form for name in ('return_materials_label_url', 'combined_return_materials_label_url')):
+        return jsonify(error="Upload a shipping label file instead of entering a link."), 400
+    label_urls = {name: request.form[name].strip() for name in ("return_drop_off_address_url", "combined_return_drop_off_address_url") if name in request.form}
     if any(value and (len(value) > 2000 or not is_valid_url(value)) for value in label_urls.values()):
         return jsonify(error="This URL is not valid"), 400
     handover_staff_id = None
@@ -21083,7 +21069,7 @@ def update_return_materials_method(session_id):
         if handover_staff_id is not None and db.session.get(AcademicStaff, handover_staff_id) is None:
             return jsonify(error="Select a valid staff member."), 400
     combined_methods = {"combined_dispatch", "combined_location_drop_off"}
-    combined_url_field = "combined_return_drop_off_address_url" if method == "combined_location_drop_off" else "combined_return_materials_label_url"
+    combined_url_field = "combined_return_drop_off_address_url" if method == "combined_location_drop_off" else "combined_return_shipping_label_id"
     combined_session_ids = None
     if request.form.get("save_combined_return_sessions") == "1":
         if method not in combined_methods:
@@ -21147,6 +21133,8 @@ def update_return_materials_method(session_id):
             ExamSessionSinapsisControl.exam_session_id.in_(previous_group - {session_id})
         ).all()
         for peer in peers:
+            if not session_shipment_recipient_confirmed_for_shipment(peer.exam_session):
+                continue
             if session_id in peer.combined_return_session_ids:
                 peer.combined_return_session_ids_json = json.dumps(sorted(set(peer.combined_return_session_ids) - {session_id}))
                 peer.updated_by = session.get("user")
@@ -21162,9 +21150,28 @@ def update_return_materials_method(session_id):
             ExamSessionSinapsisControl.exam_session_id.in_((member_ids | previous_group) - {session_id})
         ).all()
         peers_by_session = {peer.exam_session_id: peer for peer in peers}
+        if method == 'combined_dispatch':
+            labels = {peer.combined_return_shipping_label_id for peer in peers
+                      if peer.exam_session_id in member_ids and peer.combined_return_shipping_label_id
+                      and not peer.return_materials_local_override}
+            if control.combined_return_shipping_label_id:
+                labels.add(control.combined_return_shipping_label_id)
+            if len(labels) > 1:
+                db.session.rollback()
+                return jsonify(error='Selected sessions have different shipping labels. Delete the extra labels before combining their return.'), 400
+            if labels and not control.combined_return_shipping_label:
+                from app.models import ReturnShippingLabel
+                control.combined_return_shipping_label = db.session.get(ReturnShippingLabel, next(iter(labels)))
         if combined_session_ids is None:
             member_ids -= {member_id for member_id, peer in peers_by_session.items() if peer.return_materials_local_override}
             control.combined_return_session_ids_json = json.dumps(sorted(member_ids - {session_id}))
+        instruction_sets = {(peer.return_instructions_title or '', peer.return_instructions_html)
+                            for peer in [control, *peers] if peer.exam_session_id in member_ids and peer.return_instructions_html}
+        if len(instruction_sets) > 1:
+            db.session.rollback()
+            return jsonify(error='Selected sessions have different return instructions. Align or clear them before combining their return.'), 400
+        if instruction_sets:
+            control.return_instructions_title, control.return_instructions_html = next(iter(instruction_sets))
         for member_id in sorted(member_ids - {session_id}):
             peer = peers_by_session.get(member_id)
             if peer is None:
@@ -21172,16 +21179,24 @@ def update_return_materials_method(session_id):
                 db.session.add(peer)
             peer.return_materials_method = method
             peer.return_materials_local_override = False
-            setattr(peer, combined_url_field, getattr(control, combined_url_field))
+            peer.return_instructions_title = control.return_instructions_title or ''
+            peer.return_instructions_html = control.return_instructions_html or ''
+            if method == 'combined_dispatch':
+                peer.combined_return_shipping_label = control.combined_return_shipping_label
+            else:
+                setattr(peer, combined_url_field, getattr(control, combined_url_field))
             peer.combined_return_session_ids_json = json.dumps(sorted(member_ids - {member_id}))
             peer.updated_by = session.get("user")
             synced_controls.append(peer)
         # Detach removed members only when they still belong to the previous group.
         for removed_id in previous_group - member_ids:
             peer = peers_by_session.get(removed_id)
-            if peer and not peer.return_materials_local_override and {removed_id, *peer.combined_return_session_ids} == previous_group:
+            if peer and session_shipment_recipient_confirmed_for_shipment(peer.exam_session) and not peer.return_materials_local_override and {removed_id, *peer.combined_return_session_ids} == previous_group:
                 peer.combined_return_session_ids_json = "[]"
-                setattr(peer, combined_url_field, None)
+                if method == 'combined_dispatch':
+                    peer.combined_return_shipping_label = None
+                else:
+                    setattr(peer, combined_url_field, None)
                 peer.updated_by = session.get("user")
                 synced_controls.append(peer)
         synced_controls.append(control)
@@ -21192,6 +21207,8 @@ def update_return_materials_method(session_id):
         current_app.logger.exception("Return materials method save failed")
         return jsonify(error="The return method could not be saved. Please try again."), 500
     result = {"saved": True, "method": control.return_materials_method, "linked_session_ids": control.combined_return_session_ids, "handover_staff_id": control.return_handover_staff_id}
+    from app.final_checks import return_instructions_payload
+    result['return_instructions'] = return_instructions_payload(session_record, control)
     if synced_controls:
         result["synced_sessions"] = [{"session_id": record.exam_session_id,
             "method": record.return_materials_method,
@@ -21201,11 +21218,74 @@ def update_return_materials_method(session_id):
     return jsonify(result)
 
 
+@staff_bp.route("/pre-session-control-tower/sessions/<int:session_id>/return-instructions", methods=["POST"])
+@login_required
+def update_return_instructions(session_id):
+    require_menu_edit("pre_session_control_tower")
+    record = ExamSession.query.get_or_404(session_id)
+    from app.final_checks import final_checks_state, shared_return_controls
+    if not validate_csrf():
+        return jsonify(ok=False, error="Security token expired. Please reload and try again."), 403
+    if not final_checks_state(record)['return_enabled']:
+        return jsonify(ok=False, error="Return instructions are blocked until the shipment recipient confirms participation."), 403
+    value = request.form.get("instructions", "")
+    title = request.form.get("title", "").strip()
+    if len(value) > 50000 or len(title) > 200:
+        return jsonify(ok=False, error="Instructions must be shorter than 50,000 characters and the title no longer than 200 characters."), 400
+    content = sanitize_instructions(value)
+    control = ExamSessionSinapsisControl.query.filter_by(exam_session_id=session_id).first_or_404()
+    controls = shared_return_controls(record, control)
+    for peer in controls:
+        if peer.return_instructions_title == title and peer.return_instructions_html == content:
+            continue
+        peer.return_instructions_title = title
+        peer.return_instructions_html = content
+        peer.updated_by = session.get("user")
+        db.session.add(ExamSessionSinapsisEvent(sinapsis_control=peer, event_type="return_instructions_updated",
+            new_status=peer.status or "Not reviewed", note="Return instructions updated." if content else "Return instructions deleted.",
+            created_by=session.get("user")))
+    try:
+        db.session.commit()
+    except Exception:
+        db.session.rollback()
+        current_app.logger.exception("Return instructions save failed")
+        return jsonify(ok=False, error="The return instructions could not be saved. Please retry."), 500
+    return jsonify(ok=True, title=title, instructions=content, session_ids=[peer.exam_session_id for peer in controls])
+
+
+@staff_bp.route("/pre-session-control-tower/sessions/<int:session_id>/return-review", methods=["POST"])
+@login_required
+def confirm_return_review(session_id):
+    record = ExamSession.query.get_or_404(session_id)
+    from app.final_checks import final_checks_state, return_configuration_complete
+    if not validate_csrf():
+        abort(403, description="Security token expired. Please try again.")
+    if not final_checks_state(record)['return_enabled']:
+        abort(403, description="Return review is blocked until the shipment recipient confirms participation.")
+    control = ExamSessionSinapsisControl.query.filter_by(exam_session_id=session_id).first_or_404()
+    if control.return_review_required:
+        control.return_review_required = False
+        if not return_configuration_complete(record, control):
+            db.session.rollback()
+            flash("Complete the return configuration before confirming your review.", "error")
+            return sinapsis_control_redirect(record)
+        control.return_reviewed_at = datetime.now(timezone.utc)
+        control.updated_by = session.get("user")
+        db.session.add(ExamSessionSinapsisEvent(sinapsis_control=control, event_type="return_review_confirmed",
+            new_status=control.status, note="Return configuration reviewed for the current shipment recipient.", created_by=session.get("user")))
+        db.session.commit()
+    flash("Return review confirmed.", "success")
+    return sinapsis_control_redirect(record)
+
+
 @staff_bp.route("/pre-session-control-tower/sessions/<int:session_id>/sinapsis-checklist/<int:item_id>", methods=["POST"])
 @login_required
 def update_sinapsis_checklist_item(session_id, item_id):
     is_async = request.headers.get("X-Requested-With") == "XMLHttpRequest"
     session_record = ExamSession.query.get_or_404(session_id)
+    from app.final_checks import final_checks_state
+    if not final_checks_state(session_record)['checks_enabled']:
+        return jsonify(error="Sinapsis checks are blocked until the shipment recipient is confirmed and the session is within 8 business days."), 403
     status_filter = request.form.get("schedule_status", "").strip()
     if status_filter not in SCHEDULE_WORKFLOW_STATUSES:
         status_filter = ""
@@ -21279,6 +21359,9 @@ def update_sinapsis_checklist_item(session_id, item_id):
 def mark_sinapsis_checklist_issue(session_id, item_id):
     is_async = request.headers.get("X-Requested-With") == "XMLHttpRequest"
     session_record = ExamSession.query.get_or_404(session_id)
+    from app.final_checks import final_checks_state
+    if not final_checks_state(session_record)['checks_enabled']:
+        return jsonify(error="Sinapsis checks are blocked until the shipment recipient is confirmed and the session is within 8 business days."), 403
     if not validate_csrf():
         if is_async:
             return jsonify(error="Security token expired. Please try again."), 403

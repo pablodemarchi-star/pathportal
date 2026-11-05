@@ -17122,20 +17122,23 @@ assert.equal(storage.size, 0);
     def test_finance_control_view_does_not_create_record(self):
         client = self.login_client()
 
-        response = client.get("/pre-session-control-tower?session_year=2026&view=sessions")
+        response = client.get(f"/pre-session-control-tower?session_year=2026&view=sessions&session_modal={self.session_record.id}&open_schedule_modal={self.session_record.id}&finance_only=1")
 
         self.assertEqual(response.status_code, 200)
         self.assertEqual(ExamSessionFinanceControl.query.count(), 0)
         html = response.data.decode()
-        self.assertIn('<th class="finance-column">Finance</th>', html)
         self.assertIn("Current account standing", html)
         self.assertIn("Add institution in this session", html)
 
     def test_finance_blocked_disables_standing_and_rejects_update(self):
         client = self.login_client()
-        response = client.get("/pre-session-control-tower?session_year=2026&view=sessions")
+        response = client.get(f"/pre-session-control-tower?session_year=2026&view=sessions&session_modal={self.session_record.id}&open_schedule_modal={self.session_record.id}&finance_only=1")
         html = response.data.decode()
         self.assertRegex(html, r'<select[^>]*data-finance-status-select[^>]*disabled')
+        self.assertIn('class="finance-edit-fields" disabled', html)
+        self.assertIn('finance-blocked-content', html)
+        self.assertRegex(html, r'<textarea[^>]*name="finance_comments"[^>]*disabled')
+        self.assertIn('data-status-track-toggle>Status track</button>', html)
         self.assertIn('finance-status-not-started', html)
         response = client.post(
             f"/pre-session-control-tower/sessions/{self.session_record.id}/finance-control",
@@ -17147,8 +17150,9 @@ assert.equal(storage.size, 0);
         self.session_record.monthly_registrations_closed = True
         self.session_record.date_confirmation_status = "Confirmed"
         db.session.commit()
-        html = client.get("/pre-session-control-tower?session_year=2026&view=sessions").data.decode()
+        html = client.get(f"/pre-session-control-tower?session_year=2026&view=sessions&session_modal={self.session_record.id}&open_schedule_modal={self.session_record.id}&finance_only=1").data.decode()
         self.assertNotRegex(html, r'<select[^>]*data-finance-status-select[^>]*disabled')
+        self.assertNotIn('class="finance-edit-fields" disabled', html)
 
     def test_finance_institutions_limit_persistence_and_removal(self):
         self.session_record.monthly_registrations_closed = True
@@ -17164,7 +17168,7 @@ assert.equal(storage.size, 0);
         control = ExamSessionFinanceControl.query.one()
         self.assertEqual(len(json.loads(control.additional_institutions)), 9)
         self.assertTrue(control.institutions_confirmed_with_admin)
-        html = client.get("/pre-session-control-tower?session_year=2026&view=sessions").data.decode()
+        html = client.get(f"/pre-session-control-tower?session_year=2026&view=sessions&session_modal={self.session_record.id}&open_schedule_modal={self.session_record.id}&finance_only=1").data.decode()
         self.assertIn('value="School 8"', html)
         rows = re.findall(r'<div class="finance-institution-row" data-finance-institution-row>(.*?)</div>\s*<button', re.sub(r'<template.*?</template>', '', html, flags=re.S), re.S)
         self.assertEqual(len(rows), 9)
@@ -17198,21 +17202,28 @@ assert.equal(storage.size, 0);
         url = f"/pre-session-control-tower/sessions/{self.session_record.id}/finance-control"
         headers = {"X-Finance-Autosave": "1", "Accept": "application/json"}
         data = {"csrf_token": "token", "finance_institutions_form": "1", "finance_status": "",
-                "institution_name": [""], "institution_standing": ["Not applicable"]}
+                "institution_name": [""], "institution_standing": [""]}
         response = client.post(url, data=data, headers=headers)
         self.assertEqual(response.status_code, 200)
         self.assertTrue(response.json["ok"])
         control = ExamSessionFinanceControl.query.one()
         self.assertEqual(control.status, "Not reviewed")
-        self.assertEqual(json.loads(control.additional_institutions), [{"name": "", "standing": "Not applicable"}])
+        self.assertEqual(json.loads(control.additional_institutions), [{"name": "", "standing": ""}])
+        from app.routes import finance_readiness_contract
+        self.assertFalse(finance_readiness_contract(control)["can_proceed"])
+        data.update(institution_name=["Awaiting finance review"])
+        self.assertEqual(client.post(url, data=data, headers=headers).status_code, 200)
+        self.assertEqual(json.loads(control.additional_institutions), [{"name": "Awaiting finance review", "standing": ""}])
         data.update(finance_status="Effective clearance", institution_name=["New institution"], institution_standing=["Mid-risk debt"], institutions_confirmed_with_admin="on")
         response = client.post(url, data=data, headers=headers)
         self.assertEqual(response.json["block_label"], "Overdue")
         self.assertTrue(control.institutions_confirmed_with_admin)
         self.assertEqual(json.loads(control.additional_institutions)[0]["name"], "New institution")
-        html = client.get("/pre-session-control-tower?session_year=2026&view=sessions").data.decode()
+        html = client.get(f"/pre-session-control-tower?session_year=2026&view=sessions&session_modal={self.session_record.id}&open_schedule_modal={self.session_record.id}&finance_only=1").data.decode()
         self.assertNotIn('>Save Finance</button>', html)
         self.assertIn('data-finance-auto-save-status', html)
+        self.assertIn('Select account standing', html)
+        self.assertNotIn('finance-save-button', html)
         data.update(institution_name=[], institution_standing=[])
         data.pop("institutions_confirmed_with_admin")
         self.assertEqual(client.post(url, data=data, headers=headers).status_code, 200)
@@ -17241,9 +17252,9 @@ assert.equal(storage.size, 0);
         control = ExamSessionFinanceControl.query.one()
         self.assertEqual(json.loads(control.additional_institutions), [{"name": "Institution manually saved", "standing": "Conditional clearance"}])
         self.assertTrue(control.institutions_confirmed_with_admin)
-        html = client.get("/pre-session-control-tower?session_year=2026&view=sessions").data.decode()
+        html = client.get(f"/pre-session-control-tower?session_year=2026&view=sessions&session_modal={self.session_record.id}&open_schedule_modal={self.session_record.id}&finance_only=1").data.decode()
         self.assertIn('value="Institution manually saved"', html)
-        self.assertIn('finance-save-button', html)
+        self.assertNotIn('finance-save-button', html)
 
     def test_control_modal_redirects_preserve_origin_view(self):
         from app.routes import logistics_control_redirect, finance_control_redirect, sinapsis_control_redirect
@@ -17528,10 +17539,10 @@ assert.equal(storage.size, 0);
             peer = ExamSessionSinapsisControl.query.filter_by(exam_session_id=member.id).one()
             self.assertEqual(peer.return_materials_method, "combined_dispatch")
             self.assertEqual(set(peer.combined_return_session_ids), {self.session_record.id, records[0].id, records[1].id} - {member.id})
-        html = client.get("/pre-session-control-tower?session_year=2026&view=sessions").get_data(as_text=True)
+        html = client.get(f"/pre-session-control-tower?session_year=2026&view=sessions&session_modal={self.session_record.id}&open_schedule_modal={self.session_record.id}&sinapsis_only=1").get_data(as_text=True)
         self.assertIn('return-material-option is-selected needs-label', html)
         self.assertEqual(client.post(path, data={"csrf_token": "token", "return_materials_method": "combined_dispatch", "combined_return_materials_label_url": "https://example.com/combined"}).status_code, 200)
-        html = client.get("/pre-session-control-tower?session_year=2026&view=sessions").get_data(as_text=True)
+        html = client.get(f"/pre-session-control-tower?session_year=2026&view=sessions&session_modal={self.session_record.id}&open_schedule_modal={self.session_record.id}&sinapsis_only=1").get_data(as_text=True)
         self.assertNotIn('return-material-option is-selected needs-label', html)
         for member in records[:2]:
             peer = ExamSessionSinapsisControl.query.filter_by(exam_session_id=member.id).one()
@@ -17540,8 +17551,9 @@ assert.equal(storage.size, 0);
             data={"csrf_token": "token", "return_materials_method": "combined_dispatch", "combined_return_materials_label_url": "https://example.com/updated"})
         self.assertEqual(response.status_code, 200)
         self.assertEqual(control.combined_return_materials_label_url, "https://example.com/updated")
+        self.assertIsNotNone(control.return_completed_at)
         self.assertEqual(len(response.json["synced_sessions"]), 3)
-        html = client.get("/pre-session-control-tower?session_year=2026&view=sessions").get_data(as_text=True)
+        html = client.get(f"/pre-session-control-tower?session_year=2026&view=sessions&session_modal={self.session_record.id}&open_schedule_modal={self.session_record.id}&sinapsis_only=1").get_data(as_text=True)
         self.assertIn("Select exam sessions for combined return dispatch", html)
         self.assertIn(f'value="{records[0].id}" data-return-combined-session checked', html)
         self.assertEqual(client.post(path, data={**data, "combined_return_session_ids": [str(records[2].id)]}).status_code, 400)
@@ -17549,7 +17561,7 @@ assert.equal(storage.size, 0);
         examiner = ExamSessionExaminerAssignment.query.filter_by(exam_session_id=records[1].id).one()
         examiner.participation_status = "Pending"
         db.session.commit()
-        html = client.get("/pre-session-control-tower?session_year=2026&view=sessions").get_data(as_text=True)
+        html = client.get(f"/pre-session-control-tower?session_year=2026&view=sessions&session_modal={self.session_record.id}&open_schedule_modal={self.session_record.id}&sinapsis_only=1").get_data(as_text=True)
         self.assertIn(f'value="{records[1].id}" data-return-combined-session disabled', html)
         self.assertIn("Not confirmed yet", html)
         self.assertIn('badge combined-return-confirmed">Confirmed</span>', html)
@@ -17557,7 +17569,7 @@ assert.equal(storage.size, 0);
         self.assertEqual(client.post(path, data={**data, "combined_return_session_ids": [str(records[0].id)]}).status_code, 200)
         self.assertEqual(client.post(path, data={**data, "combined_return_session_ids": []}).status_code, 200)
         self.assertEqual(control.combined_return_session_ids, [])
-        html = client.get("/pre-session-control-tower?session_year=2026&view=sessions").get_data(as_text=True)
+        html = client.get(f"/pre-session-control-tower?session_year=2026&view=sessions&session_modal={self.session_record.id}&open_schedule_modal={self.session_record.id}&sinapsis_only=1").get_data(as_text=True)
         self.assertIn('return-material-option is-selected needs-label', html)
 
     def test_sinapsis_linked_return_method_change_requires_confirmation_and_stays_local(self):
@@ -17678,10 +17690,10 @@ assert.equal(storage.size, 0);
             peer = ExamSessionSinapsisControl.query.filter_by(exam_session_id=member.id).one()
             self.assertEqual(peer.return_materials_method, "combined_location_drop_off")
             self.assertEqual(set(peer.combined_return_session_ids), {self.session_record.id, records[0].id, records[1].id} - {member.id})
-        html = client.get("/pre-session-control-tower?session_year=2026&view=sessions").get_data(as_text=True)
+        html = client.get(f"/pre-session-control-tower?session_year=2026&view=sessions&session_modal={self.session_record.id}&open_schedule_modal={self.session_record.id}&sinapsis_only=1").get_data(as_text=True)
         self.assertIn('return-material-option is-selected needs-label', html)
         self.assertEqual(client.post(path, data={"csrf_token": "token", "return_materials_method": "combined_location_drop_off", "combined_return_drop_off_address_url": "https://example.com/combined"}).status_code, 200)
-        html = client.get("/pre-session-control-tower?session_year=2026&view=sessions").get_data(as_text=True)
+        html = client.get(f"/pre-session-control-tower?session_year=2026&view=sessions&session_modal={self.session_record.id}&open_schedule_modal={self.session_record.id}&sinapsis_only=1").get_data(as_text=True)
         self.assertNotIn('return-material-option is-selected needs-label', html)
         for member in records[:2]:
             peer = ExamSessionSinapsisControl.query.filter_by(exam_session_id=member.id).one()
@@ -17691,7 +17703,7 @@ assert.equal(storage.size, 0);
         self.assertEqual(response.status_code, 200)
         self.assertEqual(control.combined_return_drop_off_address_url, "https://example.com/updated")
         self.assertEqual(len(response.json["synced_sessions"]), 3)
-        html = client.get("/pre-session-control-tower?session_year=2026&view=sessions").get_data(as_text=True)
+        html = client.get(f"/pre-session-control-tower?session_year=2026&view=sessions&session_modal={self.session_record.id}&open_schedule_modal={self.session_record.id}&sinapsis_only=1").get_data(as_text=True)
         self.assertIn("Select exam sessions for combined return dispatch", html)
         self.assertIn(f'value="{records[0].id}" data-return-combined-session checked', html)
         self.assertEqual(client.post(path, data={**data, "combined_return_session_ids": [str(records[2].id)]}).status_code, 400)
@@ -17699,7 +17711,7 @@ assert.equal(storage.size, 0);
         examiner = ExamSessionExaminerAssignment.query.filter_by(exam_session_id=records[1].id).one()
         examiner.participation_status = "Pending"
         db.session.commit()
-        html = client.get("/pre-session-control-tower?session_year=2026&view=sessions").get_data(as_text=True)
+        html = client.get(f"/pre-session-control-tower?session_year=2026&view=sessions&session_modal={self.session_record.id}&open_schedule_modal={self.session_record.id}&sinapsis_only=1").get_data(as_text=True)
         self.assertIn(f'value="{records[1].id}" data-return-combined-session disabled', html)
         self.assertIn("Not confirmed yet", html)
         self.assertIn('badge combined-return-confirmed">Confirmed</span>', html)
@@ -17707,7 +17719,7 @@ assert.equal(storage.size, 0);
         self.assertEqual(client.post(path, data={**data, "combined_return_session_ids": [str(records[0].id)]}).status_code, 200)
         self.assertEqual(client.post(path, data={**data, "combined_return_session_ids": []}).status_code, 200)
         self.assertEqual(control.combined_return_session_ids, [])
-        html = client.get("/pre-session-control-tower?session_year=2026&view=sessions").get_data(as_text=True)
+        html = client.get(f"/pre-session-control-tower?session_year=2026&view=sessions&session_modal={self.session_record.id}&open_schedule_modal={self.session_record.id}&sinapsis_only=1").get_data(as_text=True)
         self.assertIn('return-material-option is-selected needs-label', html)
 
     def test_sinapsis_linked_location_method_change_requires_confirmation_and_stays_local(self):
@@ -17978,6 +17990,50 @@ assert.equal(storage.size, 0);
             data={"csrf_token": "token", "sinapsis_status": "Ready"})
         self.assertEqual(response.status_code, 404)
         self.assertEqual(ExamSessionSinapsisControl.query.count(), 1)
+
+    def test_staffing_verification_lists_assigned_people_in_role_order(self):
+        people = []
+        for name, title, roles in [('Emergency Person', 'Ms', 'Emergency contact'),
+                                   ('Onsite Person', 'Mr', 'Supervisor'),
+                                   ('Remote Person', 'Dr', 'Supervisor'),
+                                   ('Examiner Person', 'Ms', 'Examiner'),
+                                   ('Intern Person', 'Mr', 'Intern')]:
+            person = AcademicStaff(full_name=name, title=title, roles=roles, status='Active')
+            db.session.add(person)
+            people.append(person)
+        db.session.flush()
+        self.session_record.emergency_contact_required = True
+        self.session_record.emergency_contact_member_id = people[0].id
+        self.session_record.emergency_contact_participation_status = 'Confirmed'
+        db.session.add_all([
+            ExamSessionSupervisorAssignment(exam_session_id=self.session_record.id, team_member_id=people[2].id,
+                is_remote=True, participation_status='Pending'),
+            ExamSessionSupervisorAssignment(exam_session_id=self.session_record.id, team_member_id=people[1].id,
+                participation_status='Confirmed'),
+            ExamSessionExaminerAssignment(exam_session_id=self.session_record.id, team_member_id=people[3].id,
+                participation_status='Pre-confirmed'),
+            ExamSessionInternAssignment(exam_session_id=self.session_record.id, team_member_id=people[4].id,
+                participation_status='Pending'),
+            ExamSessionExaminerAssignment(exam_session_id=self.session_record.id, participation_status='Pending'),
+        ])
+        db.session.commit()
+        url = f'/pre-session-control-tower?session_year=2026&view=sessions&session_modal={self.session_record.id}&open_schedule_modal={self.session_record.id}&sinapsis_only=1'
+        html = self.login_client().get(url).get_data(as_text=True)
+        listing = re.search(r'<ul class="sinapsis-staff-verification-list".*?</ul>', html, re.S).group(0)
+        self.assertEqual(listing.count('<li>'), 5)
+        ordered_roles = ['Emergency contact', 'Supervisor', 'Remote supervisor', 'Examiner', 'Intern']
+        positions = [listing.index(f'<strong>{role}:</strong>') for role in ordered_roles]
+        self.assertEqual(positions, sorted(positions))
+        for person in people:
+            self.assertIn(f'{person.title} {person.full_name}', listing)
+        self.assertIn('participation-confirmed">Confirmed</span>', listing)
+        self.assertIn('participation-pre-confirmed', listing)
+        self.assertNotIn('role-examiner', listing)
+        self.assertNotIn('Role to cover', listing)
+        people[4].full_name = 'Updated Intern'
+        db.session.commit()
+        updated = self.login_client().get(url).get_data(as_text=True)
+        self.assertIn('Mr Updated Intern', updated)
 
     def test_sinapsis_checklist_update_and_counts(self):
         control = ExamSessionSinapsisControl(
@@ -23837,7 +23893,7 @@ for (const role of ["Examiner", "Supervisor", "Intern", "Emergency contact"]) {
         ]
         missing_link_row = sessions_table[sessions_table.index("Missing link logistics"):]
         self.assertIn('<span class="muted">-</span>', no_logistics_row)
-        self.assertIn("<span>Logistics is not needed for this session</span>", no_logistics_row)
+        self.assertNotIn("<span>Logistics is not needed for this session</span>", no_logistics_row)
         self.assertIn(">Not applicable</span>", no_logistics_row)
         self.assertIn("No logistics required", no_logistics_row)
         self.assertIn("session-readiness-final-not-ready", no_logistics_row)
@@ -23857,9 +23913,9 @@ for (const role of ["Examiner", "Supervisor", "Intern", "Emergency contact"]) {
         self.assertIn('<span class="responsible-chip users-department-chip">LOGISTICS</span>', payment_row)
         self.assertIn("<span>Continue with Logistics planning</span>", payment_row)
         self.assertIn('<span class="muted">-</span>', ready_row)
-        self.assertIn("<span>Logistics planning has been finalised</span>", ready_row)
+        self.assertNotIn("<span>Logistics planning has been finalised</span>", ready_row)
         self.assertIn('<span class="muted">-</span>', missing_link_row)
-        self.assertIn("<span>Logistics planning has been finalised</span>", missing_link_row)
+        self.assertNotIn("<span>Logistics planning has been finalised</span>", missing_link_row)
         self.assertIn("Not applicable", html)
         self.assertIn("No logistics required", html)
         self.assertNotIn("0 / 0 concepts confirmed", html)

@@ -8,8 +8,10 @@ const node = () => ({ children: [], append(...children) { this.children.push(...
 const preview = node();
 const selectedChip = node();
 const name = { value: '', focus() {} };
-const standing = { value: 'Not applicable', selectedOptions: [{ value: 'Not applicable', dataset: {} }] };
-const row = { querySelector(selector) { if (selector.includes('preview')) return preview; if (selector === 'select' || selector.includes('standing')) return standing; return name; } };
+const mainComment = { value: 'Main comment' };
+const extraComment = { value: 'Additional comment' };
+const standing = { value: '', selectedOptions: [{ value: '', dataset: {} }] };
+const row = { querySelector(selector) { if (selector.includes('institution_comments')) return extraComment; if (selector.includes('preview')) return preview; if (selector === 'select' || selector.includes('standing')) return standing; return name; } };
 standing.closest = () => row;
 standing.parentElement = { querySelector: () => selectedChip, classList: { toggle() {} } };
 const list = { children: [], append(row) { this.children.push(row); this.lastElementChild = row; }, querySelectorAll() { return this.children; }, addEventListener() {} };
@@ -18,10 +20,12 @@ const feedback = { classList: { add() {}, remove() {} } };
 const form = {
   action: '/finance-control', closest(selector) { return selector === '.modal' ? null : { querySelectorAll: () => [] }; },
   querySelector(selector) {
+    if (selector.includes('finance_comments')) return mainComment;
     if (selector.includes('institution-list')) return list;
     if (selector.includes('add-institution')) return { addEventListener(event, fn) { addHandlers[event] = fn; } };
     if (selector.includes('institution-template')) return { content: { cloneNode: () => row } };
     if (selector.includes('auto-save-status')) return feedback;
+    if (selector.includes('finance-retry')) return null;
     if (selector.includes('confirmed_with_admin')) return { checked: true };
     return primary;
   },
@@ -45,6 +49,9 @@ vm.runInNewContext(source.slice(start, end), context);
 (async () => {
   addHandlers.click();
   assert.equal(requests[0].get('institution_name'), '');
+  assert.equal(requests[0].get('institution_standing'), '');
+  assert.equal(requests[0].get('finance_comments'), 'Main comment');
+  assert.equal(requests[0].get('institution_comments'), 'Additional comment');
   name.value = 'New institution';
   standing.value = 'Mid-risk debt';
   standing.selectedOptions = [{ value: 'Mid-risk debt', dataset: { description: 'Debt description' } }];
@@ -60,5 +67,10 @@ vm.runInNewContext(source.slice(start, end), context);
   assert.equal(selectedChip.textContent, 'Mid-risk debt');
   assert.equal(preview.children.length, 1);
   assert.equal(preview.children[0].textContent, 'Debt description');
+  let prevented = false;
+  handlers.submit({preventDefault() { prevented = true; }});
+  await new Promise(resolve => setTimeout(resolve, 10));
+  assert.equal(prevented, true);
+  assert.equal(requests.length, 3);
   console.log('Dynamic institution fields save; queued edits survive an earlier failed request.');
 })().catch(error => { console.error(error); process.exitCode = 1; });

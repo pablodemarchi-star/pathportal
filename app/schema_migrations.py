@@ -6,6 +6,34 @@ from sqlalchemy.schema import CreateTable, CreateIndex
 from app import db
 
 
+def migrate_final_checks_workflow():
+    from sqlalchemy import inspect
+    columns = {column['name'] for column in inspect(db.engine).get_columns('exam_session_sinapsis_control')}
+    definitions = {'return_started_on': 'DATE', 'return_recipient_ref': 'VARCHAR(80)',
+                   'return_recipient_confirmed_on': 'DATE',
+                   'return_review_required': 'BOOLEAN NOT NULL DEFAULT FALSE',
+                   'return_reviewed_at': 'TIMESTAMP', 'return_completed_at': 'TIMESTAMP',
+                   'return_shipping_label_id': 'VARCHAR(160) REFERENCES return_shipping_label(file_id)',
+                   'combined_return_shipping_label_id': 'VARCHAR(160) REFERENCES return_shipping_label(file_id)',
+                   'return_instructions_title': "VARCHAR(200) NOT NULL DEFAULT ''",
+                   'return_instructions_html': "TEXT NOT NULL DEFAULT ''"}
+    for field, definition in definitions.items():
+        if field not in columns:
+            db.session.execute(text(f'ALTER TABLE exam_session_sinapsis_control ADD COLUMN {field} {definition}'))
+    if 'return_shipping_label_id' not in columns:
+        db.session.execute(text("UPDATE exam_session_sinapsis_control SET return_materials_label_url = NULL, combined_return_materials_label_url = NULL, return_completed_at = CASE WHEN return_materials_method IN ('immediate_dispatch', 'combined_dispatch') THEN NULL ELSE return_completed_at END WHERE return_materials_label_url IS NOT NULL OR combined_return_materials_label_url IS NOT NULL"))
+    if 'return_recipient_confirmed_on' not in columns:
+        from datetime import date, timedelta
+        db.session.execute(text('UPDATE exam_session_sinapsis_control SET return_recipient_confirmed_on = return_started_on'))
+        records = db.session.execute(text('SELECT c.id, c.return_started_on, s.session_date FROM exam_session_sinapsis_control c JOIN exam_session s ON s.id = c.exam_session_id WHERE c.return_started_on IS NOT NULL')).all()
+        for record in records:
+            started = date.fromisoformat(str(record.return_started_on)[:10])
+            exam_date = date.fromisoformat(str(record.session_date)[:10])
+            if started < exam_date - timedelta(days=29):
+                db.session.execute(text('UPDATE exam_session_sinapsis_control SET return_started_on = NULL WHERE id = :id'), {'id': record.id})
+    db.session.commit()
+
+
 def migrate_finance_completion_events():
     from app.models import FinanceCompletionNotification
     if db.engine.dialect.name != 'sqlite':
