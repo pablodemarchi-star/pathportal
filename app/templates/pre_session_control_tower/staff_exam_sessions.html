@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="robots" content="noindex, nofollow">
   <title>Your exam sessions | Path Examinations</title>
-  <link rel="stylesheet" href="{{ url_for('static', filename='css/styles.css', v='20261103-examiner-guidelines-10') }}">
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/styles.css', v='20261105-intern-portal-25') }}">
 </head>
 <body>
 <main class="staff-exam-sessions-shell">
@@ -77,7 +77,7 @@
     </section>
     {% endif %}
     {% endfor %}
-    {% if confirmed_sessions %}
+    {% if fee_rows %}
     <section class="staff-exam-sessions-panel" aria-labelledby="session-fees-title">
       <h2 id="session-fees-title">Your exam session fees</h2>
       <div class="staff-fees-invoice-layout">
@@ -141,7 +141,7 @@
     </footer>
   </section>
 </main>
-<script src="{{ url_for('static', filename='js/app.js', v='20261104-package-section-names-12') }}"></script>
+<script src="{{ url_for('static', filename='js/app.js', v='20261105-intern-portal-15') }}"></script>
 <script src="{{ url_for('static', filename='js/staff_exam_sessions.js', v='20261103-examiner-materials-12') }}"></script>
 <script src="{{ url_for('static', filename='js/staff_invoice_upload.js', v='20261103-staff-invoice-upload-1') }}"></script>
 </body>

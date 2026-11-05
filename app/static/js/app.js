@@ -5561,6 +5561,7 @@ const clearRemoteDeviceDep = (row) => {
 };
 
 const syncLiveFeeCalculations = (row, { forceEmpty = true } = {}) => {
+  if (row?.dataset.sectionKey === 'intern') return;
   clearRemoteDeviceDep(row);
   if (!row || rowFeesAreLocked(row)) {
     syncAssignmentTotalFee(row);
@@ -8200,6 +8201,7 @@ const validateStaffOfficialConfirmationEmailPayload = (payload, { portalSubmissi
   }
   // Portal invitations use their own format-specific details, not the legacy onsite email.
   if (onlinePortal) return "";
+  if (portalSubmission && cleanEmailValue(payload?.role) === 'Intern') return "";
   if (!cleanEmailValue(payload?.address)) return "Exam session address is required for onsite sessions.";
   const role = cleanEmailValue(payload?.role);
   if (["Examiner", "Supervisor"].includes(role)) {
@@ -8263,6 +8265,9 @@ const officialMaterialRows = (role, links = {}) => {
   const materialForExaminersUrl = cleanEmailValue(links.materialForExaminersUrl || links.material_for_examiners_url);
   const supervisorGuidelineUrl = cleanEmailValue(links.supervisorGuidelineUrl || links.supervisor_guideline_url);
   const backupMaterialForExaminersUrl = cleanEmailValue(links.backupMaterialForExaminersUrl || links.backup_material_for_examiners_url);
+  if (role === 'Intern') {
+    return [["🗓️ Exam session schedule", "Please access this folder before the exam session to review your assigned times and the session schedule.", scheduleFolderUrl]];
+  }
   if (role === "Examiner") {
     return [
       ["🗓️ Exam session schedule", cleanEmailValue(links.format) === "Online" ? "Please access this section in advance to check your assigned levels, the session timings and ensure your schedule information is complete." : "Please access this section in advance to check your assigned exam rooms and ensure your schedule information is complete. You may have been assigned to the Listening and speaking module, the Reading and writing module, or both. To verify this, compare the start and end times in this email with those shown in the PDFs. Please also review the session timings, rooms and layout in advance.", scheduleFolderUrl],
@@ -8817,7 +8822,7 @@ const validateStaffSessionSubmit = (form, submitter = null) => {
   const role = cleanEmailValue(payload?.role);
   const logisticsStatus = cleanEmailValue(payload?.logistics_status || payload?.logisticsStatus);
   let error = "";
-  const requiresLogistics = cleanEmailValue(payload?.format) !== "Online";
+  const requiresLogistics = role !== 'Intern' && cleanEmailValue(payload?.format) !== "Online";
   if (role === "Examiner" && cleanEmailValue(payload?.format) === "Online at exam centre") {
     error = "Examiners cannot be assigned to Online at exam centre sessions.";
   } else if (requiresLogistics && role === "Supervisor" && payload?.is_remote && logisticsStatus !== "Does not apply") {
@@ -9878,7 +9883,11 @@ const formHasLogisticsConcepts = (form) => logisticsConceptRows(form).length > 0
 
 const logisticsControls = (form) => Array.from(form?.querySelectorAll("[data-logistics-control]") || []);
 
-const logisticsControlIsActive = (control) => ["Uber ride", "Complex Uber ride", "Complex logistics", "Carpooling"].includes(control?.value);
+const logisticsControlIsActive = (control) => {
+  const row = control?.closest?.('[data-supervisor-row]');
+  if (row?.dataset.sectionKey === 'intern') return Boolean(row.querySelector('[data-team-member-select]')?.value);
+  return ["Uber ride", "Complex Uber ride", "Complex logistics", "Carpooling"].includes(control?.value);
+};
 
 const activeLogisticsControls = (form) => logisticsControls(form).filter(logisticsControlIsActive);
 
@@ -9961,6 +9970,9 @@ const syncStaffLogisticsControl = (control) => {
   if (!control) return;
   const row = control.closest("[data-supervisor-row]");
   const remote = rowIsRemoteSupervisor(row);
+  if (row?.dataset.sectionKey === 'intern') {
+    control.value = row.querySelector('[data-team-member-select]')?.value ? 'Complex logistics' : 'Does not apply';
+  }
   if (remote) control.value = "Does not apply";
   Array.from(control.options).forEach((option) => {
     option.disabled = remote && option.value !== "Does not apply";
@@ -10056,7 +10068,8 @@ const syncLogisticsFilesLink = (section) => {
   const field = section?.querySelector(".logistics-files-field");
   if (!input || !link) return true;
   const value = input.value.trim();
-  const required = activeLogisticsControls(section.closest("[data-session-members-form]")).length > 0;
+  const required = activeLogisticsControls(section.closest("[data-session-members-form]"))
+    .some(control => control.closest('[data-supervisor-row]')?.dataset.sectionKey !== 'intern');
   const missing = required && !value;
   const valid = !missing && logisticsUrlIsValid(value);
   if (error) error.textContent = missing ? "Configure the Logistics folder link before saving this session." : valid ? "" : "Please enter a valid link.";
@@ -10128,6 +10141,7 @@ const complexLogisticsCoverageError = (form) => {
   if (!form) return "";
   const requiredMembers = new Map();
   form.querySelectorAll("[data-supervisor-row]").forEach((row) => {
+    if (row.dataset.sectionKey === 'intern') return;
     const logisticsControl = row.querySelector("[data-logistics-control]");
     const teamInput = row.querySelector("[data-team-member-select]");
     const staffMemberId = teamInput?.value || "";

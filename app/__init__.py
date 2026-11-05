@@ -1413,6 +1413,8 @@ def create_app():
         remove_existing_online_centre_examiners()
         from app.staffing_rules import normalize_online_supervisor_role_fees
         normalize_online_supervisor_role_fees()
+        from app.staffing_rules import normalize_existing_interns
+        normalize_existing_interns()
     return app
 
 

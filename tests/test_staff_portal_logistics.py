@@ -45,7 +45,7 @@ class StaffPortalLogisticsTest(unittest.TestCase):
 
     def test_each_onsite_role_requires_a_logistics_selection(self):
         for role, model in [("supervisor", ExamSessionSupervisorAssignment),
-                            ("examiner", ExamSessionExaminerAssignment), ("intern", ExamSessionInternAssignment)]:
+                            ("examiner", ExamSessionExaminerAssignment)]:
             assignment = model(exam_session_id=self.record.id, team_member_id=self.person.id,
                                staffing_role_check_verified=True, participation_status="Pre-confirmed",
                                logistics_type="", logistics_enabled=True)
@@ -252,10 +252,10 @@ class StaffPortalLogisticsTest(unittest.TestCase):
             db.session.refresh(assignment)
             self.assertIsNone(assignment.km)
             self.assertFalse(assignment.fuel_enabled)
-            self.assertFalse(assignment.logistics_enabled)
-            self.assertEqual(assignment.logistics_type,'Does not apply')
+            self.assertEqual(assignment.logistics_enabled, role == 'intern')
+            self.assertEqual(assignment.logistics_type, 'Complex logistics' if role == 'intern' else 'Does not apply')
             for field in ('commuting','fuel','vehicle_dep'):
-                self.assertEqual(getattr(assignment,field),'')
+                self.assertEqual(getattr(assignment,field), None if role == 'intern' else '')
             self.assertEqual(assignment.participation_status,'Confirmed')
         for session_format in ('Online','Online at exam centre'):
             self.record.format=session_format
@@ -271,7 +271,7 @@ class StaffPortalLogisticsTest(unittest.TestCase):
                 self.assertTrue(matches,role)
                 for card in matches:
                     for selector in ('data-km-field','data-commuting-cell','data-fuel-cell','data-vehicle-cell','data-logistics-control'):
-                        self.assertEqual(selector in card,session_format != 'Online')
+                        self.assertEqual(selector in card, (role == 'intern' or session_format != 'Online') if selector == 'data-logistics-control' else role != 'intern' and session_format != 'Online')
             for role,assignment in assignments:
                 if session_format == 'Online at exam centre' and role == 'examiner':
                     continue
@@ -285,8 +285,8 @@ class StaffPortalLogisticsTest(unittest.TestCase):
                 if session_format == 'Online at exam centre' and role == 'examiner':
                     continue
                 db.session.refresh(assignment)
-                self.assertEqual(assignment.km,90 if session_format != 'Online' else None)
-                self.assertEqual(assignment.commuting,'ARS 100' if session_format != 'Online' else '')
+                self.assertEqual(assignment.km,90 if role != 'intern' and session_format != 'Online' else None)
+                self.assertEqual(assignment.commuting, None if role == 'intern' else 'ARS 100' if session_format != 'Online' else '')
 
     def test_online_supervisor_role_fee_is_65_percent_only_for_that_format_and_role(self):
         import json
@@ -310,7 +310,7 @@ class StaffPortalLogisticsTest(unittest.TestCase):
                     apply_role_fee_calculation(assignment,fee,datetime.now(timezone.utc))
                     db.session.commit()
                     expected='ARS 16.250' if session_format=='Online' and model is ExamSessionSupervisorAssignment else 'ARS 25.000'
-                    self.assertEqual(assignment.role_fee,expected)
+                    self.assertEqual(assignment.role_fee, None if model is ExamSessionInternAssignment else expected)
                     self.assertEqual(fee.fee_value,'25.000')
         self.record.format='Online'
         db.session.commit()
@@ -459,6 +459,9 @@ class StaffPortalLogisticsTest(unittest.TestCase):
             articles=re.findall(r'<article class="staff-detail-assignment".*?</article>',html,re.S)
             self.assertEqual(len(articles),3 if session_format in ("Online at exam centre", "Onsite") else 4)
             for article in articles:
+                if '"assignment_type": "intern"' in article:
+                    self.assertNotIn('staff-detail-invoice', article)
+                    continue
                 section=re.search(r'<details class="staff-detail-invoice">.*?</details>',article,re.S).group(0)
                 self.assertIn('upload <strong>one consolidated invoice</strong>',section)
                 self.assertIn('<strong><em class="staff-invoicing-instructions-reference">Invoicing instructions</em></strong>',section)

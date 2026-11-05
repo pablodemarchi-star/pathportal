@@ -37,3 +37,7 @@ const onsite={full_name:'Staff',role:'Supervisor',format:'Onsite',session_name:'
 assert.equal(context.validate({payload:onsite,querySelector:()=>({})}),false);
 assert.match(lastError,/address/);
 console.log('Online portal Add accepts both formats and roles while retaining required assignment checks and onsite validation.');
+for (const format of ['Onsite', 'Online', 'Online at exam centre']) {
+  const payload = {full_name:'Intern', role:'Intern', format, session_name:'Intern session', session_date:'5 November 2026', time_ranges:['09:00 - 12:00']};
+  assert.equal(context.validate({payload, querySelector:()=>({})}), true);
+}

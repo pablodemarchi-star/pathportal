@@ -17715,6 +17715,10 @@ body.staff-session-detail-open { overflow: hidden; }
 .staff-detail-venue { grid-column: 1 / -1; border-top: 1px solid var(--color-border); padding-top: 16px; }
 .staff-detail-address { width: fit-content; color: var(--color-primary-dark); font-size: 14px; font-weight: 600; text-decoration: underline; text-underline-offset: 3px; overflow-wrap: anywhere; }
 .staff-detail-grid { display: grid; grid-template-columns: minmax(0, 1.7fr) minmax(240px, 1fr); gap: 20px; align-items: start; }
+.staff-detail-grid-intern { grid-template-columns: minmax(0, 1fr); }
+.staff-detail-instructions-heading { display: flex; align-items: center; gap: 10px; margin-bottom: 12px; }
+.staff-detail-section .staff-detail-instructions-heading h3,
+.staff-detail-section .staff-detail-instructions-heading .staff-detail-logistics-progress { margin: 0; }
 .staff-detail-main { display: grid; gap: 20px; min-width: 0; }
 .staff-detail-section { padding: 22px; border: 1px solid var(--color-border); border-radius: 12px; background: white; min-width: 0; }
 .staff-detail-section h3, .staff-detail-response h3 { margin: 0 0 12px; color: var(--color-primary-dark); font-size: 17px; line-height: 1.3; }

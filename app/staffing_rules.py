@@ -37,8 +37,8 @@ TRAVEL_FIELDS = tuple(prefix + suffix for prefix in ('commuting', 'fuel', 'vehic
 
 
 def clear_online_travel(assignment):
-    assignment.logistics_type = "Does not apply"
-    assignment.logistics_enabled = False
+    assignment.logistics_type = "Complex logistics" if isinstance(assignment, ExamSessionInternAssignment) and assignment.team_member_id else "Does not apply"
+    assignment.logistics_enabled = bool(isinstance(assignment, ExamSessionInternAssignment) and assignment.team_member_id)
     assignment.km = None
     assignment.fuel_enabled = False
     for name in TRAVEL_FIELDS:
@@ -64,6 +64,34 @@ def normalize_existing_online_travel_fees():
         values = {name: '' for name in TRAVEL_FIELDS}
         values.update(km=None, fuel_enabled=False, logistics_type="Does not apply", logistics_enabled=False)
         model.query.filter(model.exam_session_id.in_(db.session.query(ExamSession.id).filter_by(format='Online'))).update(values, synchronize_session=False)
+    db.session.commit()
+
+
+INTERN_FEE_FIELDS = tuple(column.name for column in ExamSessionInternAssignment.__table__.columns
+                         if column.name.startswith(('role_fee', 'device_dep', 'commuting', 'fuel', 'vehicle_dep', 'seniority', 'fee_frozen'))
+                         or column.name in {'manual_fee_override', 'km'})
+
+
+def clear_intern_fees(assignment):
+    for name in INTERN_FEE_FIELDS:
+        column = ExamSessionInternAssignment.__table__.columns[name]
+        setattr(assignment, name, False if name in {'manual_fee_override', 'fuel_enabled', 'seniority_applied'}
+                else None if column.nullable else '')
+    assignment.logistics_enabled = bool(assignment.team_member_id or assignment.potential_entry_id)
+    assignment.logistics_type = 'Complex logistics' if assignment.logistics_enabled else 'Does not apply'
+
+
+@event.listens_for(Session, 'before_flush')
+def enforce_unpaid_interns(unit, *_):
+    for assignment in list(unit.new) + list(unit.dirty):
+        if isinstance(assignment, ExamSessionInternAssignment):
+            clear_intern_fees(assignment)
+
+
+def normalize_existing_interns():
+    from app import db
+    for assignment in ExamSessionInternAssignment.query.all():
+        clear_intern_fees(assignment)
     db.session.commit()
 
 

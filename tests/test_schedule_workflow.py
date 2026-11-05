@@ -13841,7 +13841,7 @@ assert.equal(storage.size, 0);
             session_date=date(2026, 7, 9),
             shifts="Morning",
             modules="Speaking",
-            format="Online",
+            format="Onsite",
             package_label_verification_status="incident",
         )
         staff_member = AcademicStaff(id=32, status="Active", full_name="Pending Incident Staff", roles="Examiner", email="pending-incident@example.com")
@@ -13873,8 +13873,16 @@ assert.equal(storage.size, 0);
         self.assertIn("With incident", row)
         self.assertIn('<span class="responsible-chip users-department-chip">MANAGEMENT</span>', action_cells)
         self.assertIn("Solve Package incident with Logistics", action_cells)
-        self.assertNotIn('<span class="responsible-chip users-department-chip">LOGISTICS</span>', action_cells)
+        self.assertIn('<span class="responsible-chip users-department-chip">LOGISTICS</span>', action_cells)
+        self.assertIn("Solve Package incident with Management", action_cells)
         self.assertNotIn("Start session package preparation", action_cells)
+
+        session_record.package_label_verification_status = "in_progress"
+        db.session.commit()
+        response = client.get(f"/pre-session-control-tower?session_year=2026&view=bundle&bundle_id={bundle.id}")
+        resolved_html = response.get_data(as_text=True)
+        self.assertNotIn("Solve Package incident with Logistics", resolved_html)
+        self.assertNotIn("Solve Package incident with Management", resolved_html)
 
     def test_bundle_detail_schedule_blocked_shows_registration_close_action(self):
         self.create_supervisor(staff_id=1, name="Laura Mendez")

@@ -415,12 +415,12 @@
             <option value="{{ option }}" {% if participation_status == option %}selected{% endif %} {% if not selected_value and option != 'Pending' %}disabled hidden{% endif %}>{{ option }}</option>
           {% endfor %}
         </select>
-        <span class="fee-state-chip {{ 'is-live' if participation_has_live_calculation else 'is-locked' }}" data-fee-state-chip>
+        <span class="fee-state-chip {{ 'is-live' if participation_has_live_calculation else 'is-locked' }}" data-fee-state-chip {% if section_key == 'intern' %}hidden{% endif %}>
           {{ 'Live calculation' if participation_has_live_calculation else 'Locked' }}
         </span>
       </div>
       </div>
-      {% if session.format != 'Online' %}
+      {% if session.format != 'Online' or section_key == 'intern' %}
       <div class="staff-card-field centered-table-cell">
       <span class="staff-card-field-label">Logistics</span>
       <select name="{{ section_key }}_logistics_type_{{ row_key }}" class="staff-logistics-select staff-logistics-{{ logistics_type_class }}" data-logistics-control>
@@ -435,15 +435,15 @@
       </div>
     </section>
 
-    <section class="staff-card-block staff-card-time-block is-collapsed" aria-label="Time and distance" data-staff-collapsible-section>
+    <section class="staff-card-block staff-card-time-block is-collapsed" aria-label="{{ 'Time' if section_key == 'intern' else 'Time and distance' }}" data-staff-collapsible-section>
       <div class="staff-card-section-header">
-        <h4>Time & distance</h4>
-        <button class="staff-card-section-toggle" type="button" data-staff-section-toggle aria-expanded="false" aria-label="Expand Time and distance">
+        <h4>{{ 'Time' if section_key == 'intern' else 'Time & distance' }}</h4>
+        <button class="staff-card-section-toggle" type="button" data-staff-section-toggle aria-expanded="false" aria-label="Expand {{ 'Time' if section_key == 'intern' else 'Time and distance' }}">
           <span aria-hidden="true">+</span>
         </button>
       </div>
       <div class="staff-card-section-content" data-staff-section-content>
-      {% if session.format != 'Online' %}
+      {% if session.format != 'Online' and section_key != 'intern' %}
       <div class="staff-card-field">
       <span class="staff-card-field-label">Km.</span>
       <div class="km-field" data-km-field>
@@ -485,6 +485,7 @@
       </div>
     </section>
 
+    {% if section_key != 'intern' %}
     <section class="staff-card-block staff-card-fees-block is-collapsed" aria-label="Fees" data-staff-collapsible-section>
       <div class="staff-card-section-header">
         <h4>Fees</h4>
@@ -577,6 +578,7 @@
       </div>
     </section>
 
+    {% endif %}
     <section class="staff-card-block staff-card-contact-block" aria-label="Contact">
       <div class="staff-card-field staff-card-field-wide staff-email-cell" data-staff-email-cell>
       <span class="staff-card-field-label">Email</span>

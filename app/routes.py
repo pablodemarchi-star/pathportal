@@ -1333,6 +1333,11 @@ def logistics_concepts_have_data(concepts):
 
 
 def logistics_enabled_for_session(session_id):
+    if ExamSessionInternAssignment.query.filter(
+        ExamSessionInternAssignment.exam_session_id == session_id,
+        db.or_(ExamSessionInternAssignment.team_member_id.isnot(None), ExamSessionInternAssignment.potential_entry_id.isnot(None)),
+    ).first():
+        return True
     for model in (ExamSessionSupervisorAssignment, ExamSessionExaminerAssignment, ExamSessionInternAssignment):
         if any(normalize_assignment_logistics_type(item.logistics_type, item.logistics_enabled)
                in EXAM_SESSION_LOGISTICS_ACTIVE_TYPES
@@ -4981,6 +4986,8 @@ def add_currency_total(totals, currency, amount):
 
 
 def add_assignment_fee_totals(totals, assignment, include_role_currency=True):
+    if isinstance(assignment, ExamSessionInternAssignment):
+        return
     fee_fields = [
         ("role_fee", "role_fee_currency" if include_role_currency else None),
         ("device_dep", "device_dep_currency"),
@@ -5080,7 +5087,6 @@ def build_staff_payment_rows(selected_year):
     assignment_sources = (
         (ExamSessionSupervisorAssignment, "Supervisor"),
         (ExamSessionExaminerAssignment, "Examiner"),
-        (ExamSessionInternAssignment, "Intern"),
     )
     for assignment_model, staff_type in assignment_sources:
         assignments = (
@@ -5829,6 +5835,10 @@ def supervisor_fee_for_session(session_record, fee):
 
 
 def apply_role_fee_calculation(assignment, fee, now, *, recalculated=False):
+    if isinstance(assignment, ExamSessionInternAssignment):
+        from app.staffing_rules import clear_intern_fees
+        clear_intern_fees(assignment)
+        return
     if isinstance(assignment, ExamSessionSupervisorAssignment):
         fee = supervisor_fee_for_session(assignment.exam_session or db.session.get(ExamSession, assignment.exam_session_id), fee)
     result = calculate_role_fee_from_ranges(assignment.time_ranges_list(), fee)
@@ -7406,8 +7416,8 @@ def staffing_official_confirmation_email_payload(session_record, role, assignmen
         "material_for_examiners_url": examiner_material_links["material_for_examiners_url"],
         "supervisor_guideline_url": supervisor_material_links["supervisor_guideline_url"],
         "backup_material_for_examiners_url": supervisor_material_links["backup_material_for_examiners_url"],
-        "fee_lines": staffing_email_fee_lines(assignment),
-        "total_fee": staffing_email_total_fee_for_payload(assignment, session_record, assignment_type),
+        "fee_lines": [] if assignment_type == 'intern' else staffing_email_fee_lines(assignment),
+        "total_fee": "" if assignment_type == 'intern' else staffing_email_total_fee_for_payload(assignment, session_record, assignment_type),
         "logistics_status": (normalize_assignment_logistics_type(getattr(assignment, "logistics_type", ""))
                              or "Does not apply") if assignment else "Does not apply",
         "logistics_url": (getattr(logistics_config, "logistics_files_url", "") or "").strip(),
@@ -10273,6 +10283,12 @@ def bundle_detail_action_items(
             "description": packages_action.get("description") or packages_action.get("label") or "Continue session package preparation.",
             "overdue": package_overdue,
         })
+        if packages_action.get("action_key") == "solve_package_incident":
+            actions.append({
+                "department": "LOGISTICS",
+                "description": "Solve Package incident with Management",
+                "overdue": package_overdue,
+            })
 
     package_completed = (package_preparation_status or {}).get("status") == "completed"
     if not actions and schedule_status == "Approved" and staffing_status == "confirmed" and package_completed:
@@ -20320,7 +20336,7 @@ def submit_staff_exam_session(session_id, assignment_type, assignment_id):
     assignment, person_ref = staff_submission_assignment(record, assignment_type, assignment_id)
     if not assignment or not person_ref:
         abort(404)
-    if assignment_type != "emergency_contact" and record.format != "Online":
+    if assignment_type not in {"emergency_contact", "intern"} and record.format != "Online":
         logistics_type = (assignment.logistics_type or "").strip()
         logistics_error = ""
         if assignment_type == "supervisor" and assignment.is_remote:
@@ -20549,6 +20565,7 @@ def staff_exam_sessions(token):
         {"session": record, "detail": detail}
         for record in ordered_sessions if record.id not in awaiting_ids
         for detail in session_details[record.id]
+        if detail['assignment_type'] != 'intern'
     ]
     session_fee_totals = empty_currency_totals()
     for row in fee_rows:
@@ -24772,7 +24789,6 @@ def save_exam_session_assignment_section(
     supervisor_fee = role_fee_for_role("Supervisor")
     remote_supervisor_fee = role_fee_for_role("Remote supervisor")
     examiner_fee = role_fee_for_role("Examiner")
-    intern_fee = role_fee_for_role("Intern")
     device_dep_fee = fee_by_exact_description("Device dep.")
     commuting_fee = fee_by_exact_description("Commuting")
     fuel_fee = fee_by_exact_description("Fuel")
@@ -24880,7 +24896,10 @@ def save_exam_session_assignment_section(
         if is_remote:
             logistics_type = "Does not apply"
             logistics_enabled = False
-        has_live_calculation = participation_status in EXAM_SESSION_LIVE_CALCULATION_PARTICIPATION_OPTIONS
+        if section_key == "intern":
+            logistics_enabled = bool(team_member_id or potential_entry_id)
+            logistics_type = "Complex logistics" if logistics_enabled else "Does not apply"
+        has_live_calculation = section_key != "intern" and participation_status in EXAM_SESSION_LIVE_CALCULATION_PARTICIPATION_OPTIONS
         manual_fee_override = (
             has_live_calculation
             and request.form.get(f"{section_key}_manual_fee_override_{row_key}", "").strip() == "1"
@@ -24939,25 +24958,6 @@ def save_exam_session_assignment_section(
         ):
             flash("Wrong time", "error")
             return None
-
-        if has_live_calculation and section_key == "intern" and not manual_fee_override:
-            if intern_fee:
-                role_fee_result = calculate_role_fee_from_ranges(time_ranges, intern_fee)
-                if role_fee_result:
-                    role_fee = role_fee_result["value"]
-                    role_fee_currency = role_fee_result["currency"]
-                    role_fee_base_value = role_fee_result["base_value"]
-                    role_fee_unit = role_fee_result["unit"]
-                else:
-                    role_fee = ""
-                    role_fee_currency = ""
-                    role_fee_base_value = ""
-                    role_fee_unit = ""
-            else:
-                role_fee = ""
-                role_fee_currency = ""
-                role_fee_base_value = ""
-                role_fee_unit = ""
 
         if has_live_calculation and not manual_fee_override:
             role_fee_source = (remote_supervisor_fee if is_remote else supervisor_fee) if section_key == "supervisor" else examiner_fee if section_key == "examiner" else None
@@ -25177,6 +25177,9 @@ def save_exam_session_assignment_section(
         assignment.seniority_currency = row_data["seniority_currency"]
         if row_data["seniority_fee"]:
             assignment.seniority_last_calculated_on = assignment.seniority_last_calculated_on or datetime.now(timezone.utc)
+        if section_key == "intern":
+            from app.staffing_rules import clear_intern_fees
+            clear_intern_fees(assignment)
         saved += 1
     return saved
 
@@ -25200,10 +25203,12 @@ def exam_session_staff_member_ids(session_id):
     return member_ids
 
 
-def complex_logistics_staff_members_for_session(session_id, logistics_types=None):
+def complex_logistics_staff_members_for_session(session_id, logistics_types=None, include_interns=True):
     logistics_types = EXAM_SESSION_LOGISTICS_ACTIVE_TYPES if logistics_types is None else logistics_types
     staff_members_by_id = {}
     for model in (ExamSessionSupervisorAssignment, ExamSessionExaminerAssignment, ExamSessionInternAssignment):
+        if model is ExamSessionInternAssignment and not include_interns:
+            continue
         assignments = (
             model.query.filter_by(exam_session_id=session_id)
             .options(joinedload(model.team_member))
@@ -25230,7 +25235,9 @@ def save_exam_session_logistics(session_record, saved_fields=None):
         db.session.add(config)
 
     logistics_files_url = request.form.get("logistics_files_url", "").strip()
-    if logistics_enabled_for_session(session_record.id) and not logistics_files_url:
+    needs_folder = any(item.logistics_enabled for model in (ExamSessionSupervisorAssignment, ExamSessionExaminerAssignment)
+                       for item in model.query.filter_by(exam_session_id=session_record.id).all())
+    if needs_folder and not logistics_files_url:
         flash("Configure the Logistics folder link before saving this session.", "error")
         return False
     if logistics_files_url and not is_valid_url(logistics_files_url):
@@ -25395,7 +25402,7 @@ def save_exam_session_logistics(session_record, saved_fields=None):
     missing_complex_staff_members = [
         member.full_name
         for member in complex_logistics_staff_members_for_session(
-            session_record.id, {"Complex Uber ride", "Complex logistics"})
+            session_record.id, {"Complex Uber ride", "Complex logistics"}, include_interns=False)
         if member.id not in selected_complex_staff_member_ids
     ]
     if missing_complex_staff_members:
