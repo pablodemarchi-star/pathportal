@@ -8,7 +8,7 @@ from app import db
 from app.models import (ExamSessionInternAssignment, ExamSessionExaminerAssignment,
                         ExamSessionLogisticsConcept, StaffExamSessionsShare)
 from app.routes import assignment_currency_totals, build_staff_payment_rows, logistics_enabled_for_session
-from app.staffing_rules import normalize_existing_interns
+from app.staffing_rules import normalize_existing_interns, normalize_existing_online_travel_fees
 
 
 class InternPortalTest(unittest.TestCase):
@@ -135,7 +135,32 @@ class InternPortalTest(unittest.TestCase):
         self.assertEqual(response.status_code, 200, response.json)
         assignment = ExamSessionInternAssignment.query.one()
         self.assertTrue(assignment.logistics_enabled)
-        self.assertEqual(assignment.logistics_type, 'Complex logistics')
+        self.assertEqual(assignment.logistics_type, '')
         self.assertIsNone(assignment.role_fee)
         self.assertIsNone(assignment.km)
         self.assertEqual(assignment.start_time, '09:00')
+
+    def test_intern_logistics_choice_is_preserved_in_all_formats(self):
+        assignment = self.intern()
+        key = f'existing-{assignment.id}'
+        for session_format in ('Onsite', 'Online', 'Online at exam centre'):
+            self.record.format = session_format
+            db.session.commit()
+            for value in ('', 'Does not apply', 'Uber ride', 'Carpooling', 'Complex logistics'):
+                with self.subTest(format=session_format, choice=value):
+                    response = self.client.post(f'/exam-session-planner/sessions/{self.record.id}/members', data={
+                        'csrf_token': 'test', 'session_year': '2026', 'modal_action': 'save',
+                        'intern_row_keys': key, f'intern_assignment_id_{key}': str(assignment.id),
+                        f'intern_team_member_id_{key}': str(self.person.id),
+                        f'intern_logistics_type_{key}': value,
+                        f'intern_logistics_enabled_{key}': '1',
+                        f'intern_start_time_{key}': '09:00', f'intern_end_time_{key}': '12:00',
+                    }, headers={'Accept': 'application/json'})
+                    self.assertEqual(response.status_code, 200, response.json)
+                    db.session.refresh(assignment)
+                    self.assertEqual(assignment.logistics_type, value)
+                    self.assertTrue(assignment.logistics_enabled)
+                    normalize_existing_interns()
+                    normalize_existing_online_travel_fees()
+                    db.session.refresh(assignment)
+                    self.assertEqual(assignment.logistics_type, value)

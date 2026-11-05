@@ -367,7 +367,9 @@ Intern assignments are unpaid: startup cleanup removes all stored Intern fee
 components, and assignment saves keep them empty. Interns are excluded from cost
 totals, Staff payments and portal invoicing; a person's paid assignments in other
 roles remain unchanged. Adding an Intern activates Logistics for instructions,
-without requiring a Logistics folder or an initial concept. Their portal shows
+without requiring a Logistics folder or an initial concept. The card preserves
+the selected Logistics type; activating the section never selects a type
+automatically. The portal Instructions section shows
 all assigned, sanitised instructions with titles and the aggregate In progress /
 Confirmed status. Interns can accept or decline invitations in all three formats;
 arrival is 50 minutes early for physical sessions and connection is 15 minutes

@@ -9970,9 +9970,6 @@ const syncStaffLogisticsControl = (control) => {
   if (!control) return;
   const row = control.closest("[data-supervisor-row]");
   const remote = rowIsRemoteSupervisor(row);
-  if (row?.dataset.sectionKey === 'intern') {
-    control.value = row.querySelector('[data-team-member-select]')?.value ? 'Complex logistics' : 'Does not apply';
-  }
   if (remote) control.value = "Does not apply";
   Array.from(control.options).forEach((option) => {
     option.disabled = remote && option.value !== "Does not apply";

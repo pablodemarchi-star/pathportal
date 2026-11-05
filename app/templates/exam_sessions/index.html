@@ -293,7 +293,7 @@
   {% set participation_has_live_calculation = participation_status in exam_session_planner_participation_options %}
   {% set participation_class = participation_status|lower|replace(' ', '-') %}
   {% set raw_logistics_type = assignment.logistics_type if assignment and assignment.logistics_type else '' %}
-  {% set logistics_type = raw_logistics_type if raw_logistics_type in logistics_type_options else ('Uber ride' if raw_logistics_type in ['Uber', 'Simple logistics'] or (assignment and assignment.logistics_enabled) else '') %}
+  {% set logistics_type = raw_logistics_type if raw_logistics_type in logistics_type_options else ('Uber ride' if raw_logistics_type in ['Uber', 'Simple logistics'] or (assignment and assignment.logistics_enabled and section_key != 'intern') else '') %}
   {% set remote_logistics = section_key == 'supervisor' and assignment and assignment.is_remote %}
   {% if remote_logistics %}{% set logistics_type = 'Does not apply' %}{% endif %}
   {% set logistics_type_class = (logistics_type or 'Does not apply')|lower|replace(' ', '-') %}

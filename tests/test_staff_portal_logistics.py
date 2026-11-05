@@ -253,7 +253,7 @@ class StaffPortalLogisticsTest(unittest.TestCase):
             self.assertIsNone(assignment.km)
             self.assertFalse(assignment.fuel_enabled)
             self.assertEqual(assignment.logistics_enabled, role == 'intern')
-            self.assertEqual(assignment.logistics_type, 'Complex logistics' if role == 'intern' else 'Does not apply')
+            self.assertEqual(assignment.logistics_type, 'Does not apply')
             for field in ('commuting','fuel','vehicle_dep'):
                 self.assertEqual(getattr(assignment,field), None if role == 'intern' else '')
             self.assertEqual(assignment.participation_status,'Confirmed')

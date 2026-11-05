@@ -24881,13 +24881,13 @@ def save_exam_session_assignment_section(
         legacy_logistics_enabled = request.form.get(f"{section_key}_logistics_enabled_{row_key}", "").strip() == "1"
         logistics_type = normalize_assignment_logistics_type(
             request.form.get(f"{section_key}_logistics_type_{row_key}", ""),
-            legacy_logistics_enabled,
+            legacy_logistics_enabled if section_key != "intern" else False,
         )
         logistics_enabled = logistics_type in EXAM_SESSION_LOGISTICS_ACTIVE_TYPES
         if team_member_id is None:
             logistics_enabled = False
             logistics_type = "Does not apply"
-        if session_record.format == "Online":
+        if session_record.format == "Online" and section_key != "intern":
             logistics_type = "Does not apply"
             logistics_enabled = False
         is_remote = (section_key == "supervisor"
@@ -24898,7 +24898,6 @@ def save_exam_session_assignment_section(
             logistics_enabled = False
         if section_key == "intern":
             logistics_enabled = bool(team_member_id or potential_entry_id)
-            logistics_type = "Complex logistics" if logistics_enabled else "Does not apply"
         has_live_calculation = section_key != "intern" and participation_status in EXAM_SESSION_LIVE_CALCULATION_PARTICIPATION_OPTIONS
         manual_fee_override = (
             has_live_calculation
@@ -25219,10 +25218,10 @@ def complex_logistics_staff_members_for_session(session_id, logistics_types=None
                 assignment.team_member_id is not None
                 and assignment.team_member
                 and not getattr(assignment, "is_remote", False)
-                and normalize_assignment_logistics_type(
+                and ((model is ExamSessionInternAssignment and include_interns) or normalize_assignment_logistics_type(
                     getattr(assignment, "logistics_type", ""),
                     getattr(assignment, "logistics_enabled", False),
-                ) in logistics_types
+                ) in logistics_types)
             ):
                 staff_members_by_id[assignment.team_member_id] = assignment.team_member
     return sorted(staff_members_by_id.values(), key=lambda member: (member.full_name or "").lower())
