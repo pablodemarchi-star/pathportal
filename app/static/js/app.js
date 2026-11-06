@@ -13818,6 +13818,7 @@ const syncReturnMaterialsOptions = (form) => {
     if (field) field.hidden = !radio.checked;
     const shipping = box.querySelector('[data-return-shipping-info]');
     if (shipping) {
+      shipping.hidden = !radio.checked;
       const sessions = new Set([form.dataset.sessionId]);
       if (radio.value === 'combined_dispatch') {
         box.querySelectorAll('[data-return-combined-session]').forEach(checkbox => {

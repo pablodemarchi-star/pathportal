@@ -2164,6 +2164,9 @@ This stage has already been marked as complete. Reopening it may affect package 
 
         <section class="sinapsis-checklist return-materials-section{% if not view.final_checks_gate.return_enabled %} final-checks-disabled{% endif %}"{% if not view.final_checks_gate.return_enabled %} inert{% endif %} aria-labelledby="return-materials-title-{{ session.id }}">
           <h4 id="return-materials-title-{{ session.id }}">Return of exam materials</h4>
+          {% for row in view.staffing_rows if row.receives_shipment and row.has_staff_member %}
+            <ul class="return-pack-recipient"><li>{{ row.staff_title }}{% if row.staff_title %} {% endif %}{{ row.staff_name }} <span class="badge combined-return-confirmed">Session pack recipient</span></li></ul>
+          {% endfor %}
           {% if view.return_deadline_badge %}<p>Return configuration deadline: {{ shipment_deadline_chip(view.return_deadline_badge, show_prefix=false) }}</p>{% endif %}
           <fieldset class="final-checks-fields"{% if not view.final_checks_gate.return_enabled %} disabled{% endif %}>
           {% set return_method = view.sinapsis.control.return_materials_method if view.sinapsis.control else '' %}
@@ -2186,7 +2189,7 @@ This stage has already been marked as complete. Reopening it may affect package 
                         {% if view.sinapsis.control and other_session.id in view.sinapsis.control.combined_return_session_ids and combined_return_examiner_confirmed(other_session) %}{% set shipping.count = shipping.count + 1 %}{% endif %}
                       {% endfor %}
                     {% endif %}
-                    <div class="return-shipping-info" data-return-shipping-info>
+                    <div class="return-shipping-info" data-return-shipping-info{% if return_method != option.key %} hidden{% endif %}>
                       <h5>SHIPPING INFORMATION</h5>
                       <ul class="return-shipping-dimensions">
                         <li><span>Length:</span> 26 cm</li>

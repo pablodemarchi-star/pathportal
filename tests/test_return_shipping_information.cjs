@@ -30,3 +30,9 @@ radio.value = 'immediate_dispatch'; context.sync(form);
 assert.equal(height.textContent, '7 cm');
 assert.equal(weight.textContent, '1 kg');
 console.log('Shipping dimensions: weight thresholds, unique selected sessions, live changes and fixed immediate dispatch passed.');
+
+assert.equal(info.hidden, false);
+radio.checked = false; context.sync(form);
+assert.equal(info.hidden, true, 'Hide shipping details for an unselected option');
+radio.checked = true; context.sync(form);
+assert.equal(info.hidden, false, 'Show shipping details when selected');
