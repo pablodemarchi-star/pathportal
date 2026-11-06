@@ -17386,6 +17386,7 @@ span.session-marker-chip {
   margin: 0 0 10px;
   color: var(--color-primary-dark);
   font-size: 17px;
+  font-weight: 600;
   white-space: normal;
   overflow-wrap: anywhere;
   line-height: 1.35;
@@ -17425,6 +17426,7 @@ span.session-marker-chip {
   margin: 0 0 10px;
   color: var(--color-primary-dark);
   font-size: 17px;
+  font-weight: 600;
   white-space: normal;
   overflow-wrap: anywhere;
   line-height: 1.35;
