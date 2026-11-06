@@ -17385,7 +17385,9 @@ span.session-marker-chip {
 .journey-feedback-card h3 {
   margin: 0 0 10px;
   color: var(--color-primary-dark);
-  font-size: clamp(12px, 6cqi, 18px);
+  font-size: 17px;
+  white-space: normal;
+  overflow-wrap: anywhere;
   line-height: 1.35;
 }
 
@@ -17422,7 +17424,9 @@ span.session-marker-chip {
 .journey-absence-card h3 {
   margin: 0 0 10px;
   color: var(--color-primary-dark);
-  font-size: clamp(12px, 6cqi, 18px);
+  font-size: 17px;
+  white-space: normal;
+  overflow-wrap: anywhere;
   line-height: 1.35;
 }
 
