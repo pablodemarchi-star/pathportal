@@ -2060,8 +2060,9 @@
             </span>
           </td>
           {% if selected_view == 'bundle' %}
-            <td>{{ bundle_detail_departments_cell(view.bundle_detail_actions) }}</td>
-            <td>{{ bundle_detail_action_descriptions_cell(view.bundle_detail_actions) }}</td>
+            {% set bundle_session_actions = view.bundle_detail_actions|rejectattr('section', 'in', ['logistics', 'finance', 'sinapsis'])|list %}
+            <td>{{ bundle_detail_departments_cell(bundle_session_actions) }}</td>
+            <td>{{ bundle_detail_action_descriptions_cell(bundle_session_actions) }}</td>
             <td>
               {% call contextual_cell_trigger(session, 'schedule-actions', 'Review schedule', true, interactive=not view.bundle_schedule.is_secondary) %}
                 {{ schedule_table_cell(view.bundle_schedule.status, view.schedule_gate, view.review_round, view.schedule_preparation_unlocked, view.deadline_badge, view.schedule_auto_confirmed) }}

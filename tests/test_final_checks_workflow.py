@@ -90,7 +90,7 @@ class FinalChecksWorkflowTest(unittest.TestCase):
         assigned = self.assign()
         control = self.control()
         self.assertIsNone(control.return_started_on)
-        self.assertEqual(control.return_recipient_confirmed_on, today)
+        self.assertEqual(control.return_recipient_confirmed_on, datetime.now(LOCAL_TZ).date())
         self.assertEqual(self.state(date(2026,11,20))['status'], 'blocked')
         opened = self.state(date(2026,11,21))
         self.assertEqual(opened['status'], 'semi_unblocked')
