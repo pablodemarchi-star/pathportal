@@ -394,3 +394,9 @@ per option, stored in folder `1bzB2g3XWlISXh606AzCQtvKdJPpDvtJD`. Combined retur
 sessions share the same file. Deleting it moves it to Drive trash before removing
 every portal reference; a Drive error retains the saved file and configuration.
 Legacy dispatch label links are cleared on upgrade; drop-off addresses remain.
+
+Session readiness requires the visible Package preparation status to be Completed,
+and Final checks to be Completed (Return configured completely, any recipient
+change reviewed, and all Sinapsis checks checked). Legacy package Quality checked
+and Communications no longer determine session readiness. Existing Schedule,
+Staffing, Logistics, Shipment, Finance and incident requirements still apply.

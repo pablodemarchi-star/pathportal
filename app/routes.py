@@ -13099,7 +13099,16 @@ def operational_readiness_contract(
     shipment_contract,
     staffing=None,
     logistics=None,
+    package_preparation=None,
 ):
+    if package_preparation is not None:
+        completed = package_preparation.get("status") == "completed"
+        packages_contract = {
+            "status": "quality_checked" if completed else "pre_packing_in_progress",
+            "label": "Completed" if completed else package_preparation.get("label", "In progress"),
+            "ready": completed,
+            "blockers": [] if completed else ["Complete all Package preparation sections."],
+        }
     labels = {
         "needs_review": "Needs review",
         "blocked": "Blocked",
@@ -13197,11 +13206,11 @@ def operational_readiness_contract(
 
     def package_requirement_message():
         if packages_ready:
-            return "Packages are quality checked."
+            return "Package preparation is Completed."
         blockers = packages_contract.get("blockers") or []
         if blockers:
             return blockers[0]
-        return "Packages must be quality checked."
+        return "Package preparation must be Completed."
 
     def shipment_requirement_message():
         if shipments_ready:
@@ -13961,10 +13970,10 @@ def session_readiness_contract(operational_readiness, finance, sinapsis, communi
         "needs_review": "Some session readiness data is inconsistent or requires review.",
         "blocked": "A critical readiness requirement is blocking this session.",
         "in_progress": "One or more readiness requirements still need attention.",
-        "session_ready": "Operational readiness, Finance, Sinapsis readiness, Communications, Incidents and Incident review flags are complete or cleared.",
+        "session_ready": "Operational readiness, Finance, Final checks, Incidents and Incident review flags are complete or cleared.",
     }
-    total_requirements = 6
-    scope_note = "This status covers Operational readiness, Finance, Sinapsis readiness, Communications, Incidents and Incident review flags."
+    total_requirements = 5
+    scope_note = "This status covers Operational readiness, Finance, Final checks, Incidents and Incident review flags."
 
     def needs_review_contract():
         return {
@@ -13978,8 +13987,7 @@ def session_readiness_contract(operational_readiness, finance, sinapsis, communi
             "requirements": [
                 {"key": "operational", "label": "Operational readiness", "ready": False, "status": "Needs review", "message": "Operational readiness data needs review."},
                 {"key": "finance", "label": "Finance", "ready": False, "status": "Needs review", "message": "Finance readiness data needs review."},
-                {"key": "sinapsis", "label": "Sinapsis readiness", "ready": False, "status": "Needs review", "message": "Sinapsis readiness data needs review."},
-                {"key": "communications", "label": "Communications", "ready": False, "status": "Needs review", "message": "Communications readiness data needs review."},
+                {"key": "sinapsis", "label": "Final checks", "ready": False, "status": "Needs review", "message": "Final checks data needs review."},
                 {"key": "incidents", "label": "Incidents", "ready": False, "status": "Needs review", "message": "Incident data needs review."},
                 {"key": "incident_review_flags", "label": "Incident review flags", "ready": False, "status": "Needs review", "message": "Incident review flag data needs review."},
             ],
@@ -13992,34 +14000,22 @@ def session_readiness_contract(operational_readiness, finance, sinapsis, communi
             "scope_note": scope_note,
         }
 
-    if not operational_readiness or not finance or not sinapsis or not communications or not incidents or not incident_review_flags:
+    if not operational_readiness or not finance or not sinapsis or not incidents or not incident_review_flags:
         return needs_review_contract()
 
     operational_status = operational_readiness.get("status")
     finance_status = finance.get("raw_status")
-    sinapsis_status = sinapsis.get("label")
-    communications_status = communications.get("label")
     incidents_status = incidents.get("status")
     review_flags_status = incident_review_flags.get("status")
     finance_control_status = getattr(finance.get("control"), "status", None)
     finance_control_status = FINANCE_LEGACY_STATUSES.get(finance_control_status, finance_control_status)
-    sinapsis_control_status = getattr(sinapsis.get("control"), "status", None)
-    communications_control_status = getattr(communications.get("control"), "status", None)
     if operational_status not in {"needs_review", "blocked", "in_progress", "operationally_ready"}:
         return needs_review_contract()
-    if finance.get("status") == "needs_review" or sinapsis.get("status") == "needs_review" or communications.get("status") == "needs_review":
+    if finance.get("status") == "needs_review":
         return needs_review_contract()
     if finance_control_status is not None and finance_control_status not in FINANCE_STATUS_OPTIONS:
         return needs_review_contract()
-    if sinapsis_control_status is not None and sinapsis_control_status not in SINAPSIS_STATUS_OPTIONS:
-        return needs_review_contract()
-    if communications_control_status is not None and communications_control_status not in COMMUNICATIONS_STATUS_OPTIONS:
-        return needs_review_contract()
     if finance_status not in FINANCE_STATUS_OPTIONS:
-        return needs_review_contract()
-    if sinapsis_status not in SINAPSIS_STATUS_OPTIONS:
-        return needs_review_contract()
-    if communications_status not in COMMUNICATIONS_STATUS_OPTIONS:
         return needs_review_contract()
     if incidents_status not in {"none", "active", "critical", "needs_review", "resolved"}:
         return needs_review_contract()
@@ -14028,8 +14024,7 @@ def session_readiness_contract(operational_readiness, finance, sinapsis, communi
 
     operational_ready = bool(operational_readiness.get("is_ready")) or operational_status == "operationally_ready"
     finance_ready = bool(finance.get("can_proceed"))
-    sinapsis_ready = bool(sinapsis.get("ready"))
-    communications_ready = bool(communications.get("ready"))
+    sinapsis_ready = sinapsis.get("overall_progress") == "completed"
     incidents_ready = incidents_status in {"none", "resolved"} and not incidents.get("active_count", 0)
     review_flags_active_count = incident_review_flags.get("active_flags_count", 0) or 0
     review_flags_ready = bool(incident_review_flags.get("ready"))
@@ -14092,17 +14087,10 @@ def session_readiness_contract(operational_readiness, finance, sinapsis, communi
         },
         {
             "key": "sinapsis",
-            "label": "Sinapsis readiness",
+            "label": "Final checks",
             "ready": sinapsis_ready,
-            "status": sinapsis.get("label", "Needs review"),
-            "message": sinapsis.get("message") or "Sinapsis readiness requires attention.",
-        },
-        {
-            "key": "communications",
-            "label": "Communications",
-            "ready": communications_ready,
-            "status": communications.get("label", "Needs review"),
-            "message": communications.get("message") or "Communications require attention.",
+            "status": "Completed" if sinapsis_ready else "In progress",
+            "message": "Final checks is Completed." if sinapsis_ready else "Complete Return of exam materials and all Sinapsis checks.",
         },
         {
             "key": "incidents",
@@ -14148,8 +14136,6 @@ def session_readiness_contract(operational_readiness, finance, sinapsis, communi
     for source, contract in (
         ("operational_readiness", operational_readiness),
         ("finance", finance),
-        ("sinapsis", sinapsis),
-        ("communications", communications),
         ("incidents", incidents),
         ("incident_review_flags", incident_review_flags),
     ):
@@ -14162,6 +14148,8 @@ def session_readiness_contract(operational_readiness, finance, sinapsis, communi
                 code = f"{source.upper()}_NOT_READY"
             if message:
                 blockers.append({"source": source, "code": code, "message": message})
+    if not sinapsis_ready:
+        blockers.append({"source": "sinapsis", "code": "FINAL_CHECKS_INCOMPLETE", "message": "Complete Return of exam materials and all Sinapsis checks."})
     deduped_blockers = []
     seen = set()
     for blocker in blockers:
@@ -14176,8 +14164,6 @@ def session_readiness_contract(operational_readiness, finance, sinapsis, communi
         or incidents_status == "needs_review"
         or review_flags_status == "needs_review"
         or incident_review_flags.get("data_needs_review")
-        or sinapsis_status not in SINAPSIS_STATUS_OPTIONS
-        or communications_status not in COMMUNICATIONS_STATUS_OPTIONS
     ):
         status = "needs_review"
     elif finance_status == "Finance hold" or operational_status == "blocked" or incidents.get("critical_count", 0):
@@ -14675,9 +14661,11 @@ def path_session_journey_sources(session_record, today=None):
     finance = finance_readiness_contract(finance_control, today=today, session_date=session_record.session_date)
     sinapsis = sinapsis_readiness_contract(session_record, sinapsis_control, checklist_items=sinapsis_items, today=today)
     communications = communications_readiness_contract(communications_control, checklist_items=communications_items, today=today)
-    operational = operational_readiness_contract(schedule_gate, staffing, logistics, packages, shipment)
+    operational = operational_readiness_contract(schedule_gate, staffing, logistics, packages, shipment,
+        package_preparation=package_preparation_status_contract(session_record, staff_member_id_requirements_for_session(session_record)))
     no_incidents = incidents_readiness_contract(session_record, incidents=[], today=today)
     no_review_flags = incident_review_flags_contract(session_record, flags=[])
+    sinapsis["overall_progress"] = final_checks_gate_contract(session_record, today=today)["progress"]
     session_ready = session_readiness_contract(
         operational,
         finance,
@@ -15163,6 +15151,7 @@ def schedule_workflow_view(session_record, workflow=None, today=None, staffing=N
         logistics_readiness_contract([], [], None),
         packages_readiness_contract(session_record, [], [], gate, staffing_readiness_contract([], [], [])),
         session_shipment_contract(session_record),
+        package_preparation=package_preparation_status_contract(session_record, staff_member_id_requirements_for_session(session_record)),
     )
     packages_view = packages or {
         "contract": packages_readiness_contract(session_record, [], [], schedule_gate=gate, staffing_contract=fallback_staffing_contract),
@@ -18941,11 +18930,13 @@ def pre_session_control_tower(_count_only=False):
             shipment_contract,
             staffing=staffing_presentation,
             logistics=logistics_presentation,
+            package_preparation=package_preparation_status,
         )
         review_flags_contract = incident_review_flags_contract(
             session_record,
             flags=incident_review_flags_by_session.get(session_record.id, []),
         )
+        sinapsis_contract["overall_progress"] = final_checks_gate_contract(session_record, today=today)["progress"]
         session_readiness = session_readiness_contract(
             operational_readiness,
             finance_contract,
