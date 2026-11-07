@@ -400,3 +400,38 @@ and Final checks to be Completed (Return configured completely, any recipient
 change reviewed, and all Sinapsis checks checked). Legacy package Quality checked
 and Communications no longer determine session readiness. Existing Schedule,
 Staffing, Logistics, Shipment, Finance and incident requirements still apply.
+
+### Quality control
+
+`/quality-control` is restricted to an authenticated Superadmin. The navigation
+entry is below the two session control towers. Select any session year and filter
+by format, session name or Needs attention (overdue work, process issues or active
+incidents). Filtering is immediate; no modals from the operational towers are
+preloaded. Each concatenated session keeps its own row; shared schedules use the
+same primary session as the towers, and Shipment identifies the shared bundle.
+
+The nine process cells cover Date, Registrations, Schedule, Staffing, Package,
+Shipment, Logistics, Finance and Final checks. Registrations uses the latest
+monthly total, never the sum of cumulative months. Onsite-only cells are marked
+Not applicable for online formats; travel Logistics applies to Online at exam
+centre but not Online. Interns activate Logistics. Colours have explicit rules:
+muted red for not started, strong red for an issue/overdue task, yellow for
+progress, sky blue for a concrete final pending step, green for complete, grey
+for blocked. Nearly complete does not claim a numerical 90%: Schedule awaits
+review, Staffing only awaits confirmations, Package has one section left,
+Shipment awaits recipient review, Logistics has one concept left, Finance only
+awaits institution verification, or Final checks has Return complete and one
+Sinapsis check left.
+
+`quality_process_timing` is created by the normal `db.create_all()` startup. Startup
+seeds missing baselines once. SQLAlchemy commit hooks record affected sessions'
+state transitions in the same transaction, including shared schedules and bundle
+shipment changes. Rollback also rolls back timing changes. They do not query
+external services or reload every session on each edit. Unrelated fee/comment
+edits are excluded. Batch queries and a batch insert keep query counts from
+growing per row. Timings survive restarts and track reopenings; known beginnings
+are retained across reopening. Existing event timestamps can supply first
+recorded actions/completions, but unknown enablement dates remain unknown and
+are excluded from elapsed-time averages. Process times are calendar time, not
+staff working time. The page displays its refresh timestamp and has no response
+cache; Refresh reads current database state.

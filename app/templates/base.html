@@ -125,6 +125,11 @@
             <span>Pre online session control tower</span>
           </a>
           {% endif %}
+          {% if g.current_user and g.current_user.is_superadmin %}
+          <a class="nav-link standalone-nav-link {% if request.endpoint == 'quality_control.index' %}active{% endif %}" href="{{ url_for('quality_control.index') }}">
+            <svg class="nav-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 4h16v16H4zM8 12l3 3 5-7"/></svg><span>Quality control</span>
+          </a>
+          {% endif %}
           {% if user_can_view('staff_payments') %}
           <a class="nav-link standalone-nav-link {% if request.endpoint in ['staff.staff_payments', 'staff.update_staff_payment', 'staff.update_staff_payment_settings'] %}active{% endif %}" href="{{ url_for('staff.staff_payments') }}">
             <svg class="nav-icon" viewBox="0 0 24 24" aria-hidden="true">

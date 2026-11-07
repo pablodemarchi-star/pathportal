@@ -148,6 +148,8 @@ def create_app():
     from app.routes import staff_bp, SINAPSIS_CHECKLIST_ITEMS
 
     app.register_blueprint(staff_bp)
+    from app.quality_control import quality_bp
+    app.register_blueprint(quality_bp)
     from app.google_mail import google_mail_bp
     app.register_blueprint(google_mail_bp)
     from app.google_drive import drive_bp
@@ -1423,6 +1425,9 @@ def create_app():
         normalize_existing_interns()
         from app.final_checks import initialize_existing_final_checks
         initialize_existing_final_checks()
+        from app.quality_control import initialize_quality_tracking
+        initialize_quality_tracking()
+    app.config["QUALITY_CONTROL_TRACKING_READY"] = True
     return app
 
 

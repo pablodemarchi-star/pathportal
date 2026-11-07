@@ -2819,3 +2819,20 @@ class BillingRequestEvent(db.Model):
         backref=db.backref("events", lazy=True, cascade="all, delete-orphan", order_by="desc(BillingRequestEvent.created_on)"),
     )
     created_by = db.relationship("User")
+
+
+class QualityProcessTiming(db.Model):
+    """Observed process transitions; never infer historical enablement dates."""
+    __table_args__ = (db.UniqueConstraint('exam_session_id', 'process_key', name='uq_quality_process_timing'),)
+    id = db.Column(db.Integer, primary_key=True)
+    exam_session_id = db.Column(db.Integer, db.ForeignKey('exam_session.id', ondelete='CASCADE'), nullable=False, index=True)
+    process_key = db.Column(db.String(30), nullable=False)
+    state = db.Column(db.String(30), nullable=False)
+    enabled = db.Column(db.Boolean, nullable=False, default=False)
+    observed_at = db.Column(db.DateTime(timezone=True), nullable=False)
+    enabled_at = db.Column(db.DateTime(timezone=True))
+    first_action_at = db.Column(db.DateTime(timezone=True))
+    completed_at = db.Column(db.DateTime(timezone=True))
+    reopenings = db.Column(db.Integer, nullable=False, default=0)
+    history_json = db.Column(db.Text, nullable=False, default='[]')
+    exam_session = db.relationship('ExamSession', backref=db.backref('quality_timings', cascade='all, delete-orphan'))

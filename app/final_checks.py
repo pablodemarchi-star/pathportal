@@ -2,7 +2,7 @@
 from datetime import datetime, timedelta, timezone
 from sqlalchemy import event
 from sqlalchemy.orm import Session
-from flask import g, has_request_context
+from flask import g, has_app_context
 from app import db
 from app.models import (ExamSession, ExamSessionSupervisorAssignment, ExamSessionExaminerAssignment,
                         ExamSessionInternAssignment, ExamSessionSinapsisControl, ExamSessionSinapsisEvent)
@@ -11,7 +11,7 @@ ASSIGNMENTS = (ExamSessionSupervisorAssignment, ExamSessionExaminerAssignment, E
 
 
 def recipient(record, unit=None):
-    cached = getattr(g, '_final_checks_assignment_rows', {}) if has_request_context() and unit is None else {}
+    cached = getattr(g, '_final_checks_assignment_rows', {}) if has_app_context() and unit is None else {}
     unit = unit or db.session()
     rows = list(cached.get(record.id, []))
     for model in ASSIGNMENTS:
@@ -30,7 +30,8 @@ def recipient_ref(assignment):
 
 def combined_sessions_selected(record, control):
     from app.routes import combined_return_session_options, combined_return_examiner_confirmed
-    eligible = {peer.id for peer in combined_return_session_options(record) if combined_return_examiner_confirmed(peer)}
+    cache = getattr(g, '_quality_combined_eligible', {}) if has_app_context() else {}
+    eligible = cache[record.id] if record.id in cache else {peer.id for peer in combined_return_session_options(record) if combined_return_examiner_confirmed(peer)}
     return bool(control and set(control.combined_return_session_ids) & eligible)
 
 
@@ -138,8 +139,9 @@ def final_checks_state(record, control=None, today=None):
     from app.routes import (LOCAL_TZ, argentina_business_days_until, argentina_subtract_business_days,
                             deadline_badge_contract, local_date, SINAPSIS_CHECKLIST_ITEMS)
     today = today or datetime.now(LOCAL_TZ).date()
-    cached = getattr(g, '_final_checks_controls', {}) if has_request_context() else {}
-    control = control or cached.get(record.id) or db.session.query(ExamSessionSinapsisControl).filter_by(exam_session_id=record.id).first()
+    cached = getattr(g, '_final_checks_controls', {}) if has_app_context() else {}
+    if control is None:
+        control = cached[record.id] if record.id in cached else db.session.query(ExamSessionSinapsisControl).filter_by(exam_session_id=record.id).first()
     assigned = recipient(record)
     opens_on = record.session_date - timedelta(days=29) if record.session_date else None
     confirmed = bool(assigned and assigned.participation_status == 'Confirmed')
@@ -168,7 +170,7 @@ def final_checks_state(record, control=None, today=None):
     required_keys = {item['key'] for item in SINAPSIS_CHECKLIST_ITEMS}
     items = [item for item in (control.checklist_items if control else []) if item.item_key in required_keys]
     all_checked = len({item.item_key for item in items if item.is_checked}) == len(required_keys)
-    events_cache = getattr(g, '_final_checks_events', {}) if has_request_context() else {}
+    events_cache = getattr(g, '_final_checks_events', {}) if has_app_context() else {}
     events = events_cache.get(record.id, []) if record.id in events_cache else (control.events if control else [])
     activity_types = {'checklist_checked', 'checklist_unchecked', 'checklist_updated', 'checklist_issue',
                       'return_materials_method', 'return_review_confirmed', 'return_instructions_updated'}

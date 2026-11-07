@@ -1,0 +1,33 @@
+{% extends 'base.html' %}
+{% block title %}Quality control · Path Examinations{% endblock %}
+{% block content %}
+<link rel="stylesheet" href="{{ url_for('static', filename='css/quality_control.css', v='20261107-3') }}">
+<div class="qc-page">
+  <header class="qc-heading"><div><p class="qc-eyebrow">SESSION OVERSIGHT</p><h1>Quality control</h1><p>Progress, deadlines and process times in one place.</p></div><div class="qc-header-actions"><button type="button" class="qc-button" id="qc-times">Process times</button><a class="qc-button" href="{{ url_for('quality_control.index', **request.args) }}">Refresh</a></div></header>
+  <form class="qc-filters" method="get" id="qc-filters">
+    <label>Year<select name="session_year" id="qc-year">{% for year in years %}<option value="{{ year }}"{% if year == selected_year %} selected{% endif %}>{{ year }}</option>{% endfor %}</select></label>
+    <label class="qc-search">Exam session<input type="search" id="qc-query" placeholder="Search by session name" value="{{ request.args.get('q', '') }}" name="q"></label>
+    <label>Format<select id="qc-format" name="format"><option value="">All formats</option>{% for format in formats %}<option value="{{ format }}"{% if request.args.get('format') == format %} selected{% endif %}>{{ format }}</option>{% endfor %}</select></label>
+    <label>Sort<select id="qc-sort" name="sort"><option value="date">Exam date</option><option value="priority"{% if request.args.get('sort') == 'priority' %} selected{% endif %}>Needs attention first</option></select></label>
+    <label class="qc-attention"><input type="checkbox" id="qc-attention" name="attention" value="1"{% if request.args.get('attention') == '1' %} checked{% endif %}> Needs attention</label>
+  </form>
+  <div class="qc-stats" aria-live="polite"><div><strong id="qc-total">{{ rows|length }}</strong><span>Sessions shown</span></div><div><strong id="qc-ready">0</strong><span>All applicable blocks complete</span></div><div><strong id="qc-overdue">0</strong><span>With overdue tasks</span></div><div><strong id="qc-issues">0</strong><span>With issues</span></div><div><strong id="qc-near">0</strong><span>Within 29 days · pending</span></div></div>
+  <div class="qc-legend"><span class="qc-state qc-pending">Not started</span><span class="qc-state qc-issue">Overdue / issue</span><span class="qc-state qc-progress">In progress</span><span class="qc-state qc-near">Nearly complete</span><span class="qc-state qc-complete">Completed</span><span class="qc-state qc-blocked">Blocked</span><span class="qc-state qc-na">Not applicable</span></div>
+  <p class="qc-caption">Updated {{ measured_at.strftime('%d/%m/%Y at %H:%M') }} (GMT-3). Business days exclude weekends and Argentine holidays. Times measure elapsed calendar days, not working hours. Click a block for its rules and recorded milestones.</p>
+  <div class="qc-table-wrap" tabindex="0" role="region" aria-label="Exam session quality matrix">
+    <table class="qc-table"><thead><tr><th scope="col">Exam session</th>{% for key, label in processes %}<th scope="col">{{ label }}</th>{% endfor %}</tr></thead><tbody>
+      {% for row in rows %}<tr data-qc-row data-name="{{ row.session.exam_session_name|lower }}" data-format="{{ row.session.format }}" data-attention="{{ '1' if row.attention else '0' }}" data-ready="{{ '1' if row.ready else '0' }}" data-days="{{ row.days }}" data-overdue="{{ '1' if row.cells|selectattr('overdue')|list else '0' }}" data-issues="{{ '1' if row.incident_count or row.cells|selectattr('issue')|selectattr('applicable')|list else '0' }}">
+        <th scope="row"><strong>{{ row.session.exam_session_name }}</strong><span>{{ row.session.session_date.strftime('%d/%m/%Y') }}</span><span class="qc-format">{{ row.session.format }}</span>{% if row.incident_count %}<span class="qc-state qc-issue">{{ row.incident_count }} active incident{{ 's' if row.incident_count != 1 else '' }}</span>{% endif %}{% if row.concatenated %}<small>Concatenated · one row per session</small>{% endif %}<small>{% if row.days >= 0 %}{{ row.days }} calendar days · {{ row.business_days }} business days remaining{% else %}{{ -row.days }} calendar days · {{ row.business_days }} business days ago{% endif %}</small>{% if row.session.format == 'Onsite' %}<span class="qc-recipient">{{ row.recipient or 'Recipient not assigned' }}</span>{% if row.recipient_status %}<small>Session pack recipient <span class="qc-recipient-status participation-{{ row.recipient_status|lower|replace(' ', '-') }}">{{ row.recipient_status }}</span></small>{% endif %}{% endif %}</th>
+        {% for c in row.cells %}<td data-label="{{ processes[loop.index0][1] }}">
+          <button type="button" class="qc-cell qc-{{ c.state }}" data-qc-detail data-key="{{ c.key }}" data-session="{{ row.session.exam_session_name }}" data-label="{{ processes[loop.index0][1] }}" data-status="{{ c.label if c.applicable else 'Not applicable' }}" data-detail="{{ c.detail if c.applicable else 'This process does not apply to this session format.' }}" data-timing="{{ c.timing|tojson|forceescape }}" data-url="{{ c.url or '' }}" data-deadline="{{ c.deadline.strftime('%d/%m/%Y') if c.deadline and c.applicable else '' }}" data-deadline-iso="{{ c.deadline.isoformat() if c.deadline and c.applicable else '' }}" data-applicable="{{ '1' if c.applicable else '0' }}">
+            <span class="qc-cell-status">{{ c.label if c.applicable else 'Not applicable' }}</span>{% if c.applicable %}{% if c.state == 'blocked' %}<small>Blocked</small>{% endif %}{% if c.deadline %}<small>{% if c.overdue %}Overdue · {% else %}Due {% endif %}{{ c.deadline.strftime('%d/%m/%Y') }}</small>{% endif %}{% if c.timing.elapsed is not none %}<small>{{ 'Completed in' if c.complete else 'Elapsed' }} {{ c.timing.elapsed }} days</small>{% else %}<small class="qc-no-history">Not enough historical data</small>{% endif %}{% endif %}
+          </button>
+        </td>{% endfor %}
+      </tr>{% endfor %}
+    </tbody></table>
+    <p id="qc-empty"{% if rows %} hidden{% endif %}>No sessions match these filters.</p>
+  </div>
+  <dialog id="qc-dialog" class="qc-dialog" aria-labelledby="qc-dialog-title"><header><div><p id="qc-dialog-subtitle" class="qc-eyebrow"></p><h2 id="qc-dialog-title"></h2></div><button class="qc-close" type="button" aria-label="Close">×</button></header><div id="qc-dialog-content"></div><a id="qc-open-block" class="qc-button" hidden>Open block ↗</a></dialog>
+</div>
+<script src="{{ url_for('static', filename='js/quality_control.js', v='20261106-1') }}" defer></script>
+{% endblock %}
