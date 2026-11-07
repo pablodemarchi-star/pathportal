@@ -39,6 +39,16 @@ def load_rows(records, today=None):
     ids = [item.id for item in records]
     if not ids:
         return []
+    requested_ids = set(ids)
+    # A shared Shipment gate needs the entire bundle, including peers outside
+    # the selected year. Load peers in batches but return only requested rows.
+    bundle_ids = db.session.query(m.ExamSessionShipmentBundleSession.bundle_id).filter(m.ExamSessionShipmentBundleSession.exam_session_id.in_(ids))
+    bundle_links = m.ExamSessionShipmentBundleSession.query.options(joinedload(m.ExamSessionShipmentBundleSession.bundle)).filter(
+        m.ExamSessionShipmentBundleSession.bundle_id.in_(bundle_ids)).populate_existing().all()
+    peer_ids = {link.exam_session_id for link in bundle_links} - requested_ids
+    if peer_ids:
+        records = list(records) + m.ExamSession.query.filter(m.ExamSession.id.in_(peer_ids)).all()
+        ids = [record.id for record in records]
     def by_session(model, options=()):
         grouped = defaultdict(list)
         for item in model.query.options(*options).filter(model.exam_session_id.in_(ids)).populate_existing().all():
@@ -63,7 +73,9 @@ def load_rows(records, today=None):
         selectinload(m.ExamSessionSinapsisControl.checklist_items),
         joinedload(m.ExamSessionSinapsisControl.return_shipping_label),
         joinedload(m.ExamSessionSinapsisControl.combined_return_shipping_label)))
-    links = by_session(m.ExamSessionShipmentBundleSession, (joinedload(m.ExamSessionShipmentBundleSession.bundle),))
+    links = defaultdict(list)
+    for link in bundle_links:
+        links[link.exam_session_id].append(link)
     candidates, latest_month, registration_activity = {}, {}, set()
     for sid, month, registrations in db.session.query(m.ExamSessionMonthlyRegistration.exam_session_id,
             db.func.max(m.ExamSessionMonthlyRegistration.month), db.func.sum(m.ExamSessionMonthlyRegistration.registration_number)).filter(
@@ -135,6 +147,7 @@ def load_rows(records, today=None):
             workflow = first(workflows, primary_id)
             schedule_status = r.schedule_workflow_status(workflow)
             preparation_enabled = bool(record.monthly_registrations_closed and (record.date_confirmation_status == 'Confirmed' or schedule_status != 'Not started'))
+            finance_enabled = r.session_preparation_unlocked(record, first(workflows, sid))
             staffing_ready = staff['status'] == 'confirmed'
             counts = staff['totals']
             candidate_total = record.unified_candidate_total if record.unified_candidate_total is not None and record.concat_session_ids not in ('', '[]') else candidates.get(sid)
@@ -193,7 +206,7 @@ def load_rows(records, today=None):
                      issue=log_state == 'needs_review', deadline=r.logistics_session_deadline(record), today=today,
                      detail='; '.join(b['message'] for b in log['blockers']) or 'All Logistics concepts confirmed'),
                 cell('finance', fin['readiness_label'], complete=fin['can_proceed'], active=fin['standing_selected'] or bool(fin['additional_institutions']),
-                     enabled=preparation_enabled, applicable=onsite, near=fin['readiness_label'] == 'Verification missing',
+                     enabled=finance_enabled, applicable=onsite, near=fin['readiness_label'] == 'Verification missing',
                      issue=fin['readiness_label'] == 'Close monitoring required', deadline=fin['deadline'], today=today, detail=fin['action_label'], action_at=None, completed_at=fin['cleared_at'] if fin['can_proceed'] else None),
                 cell('final_checks', gate['progress'].replace('_', ' ').title() if gate else 'Not applicable',
                      complete=bool(gate and gate['progress'] == 'completed'), active=bool(gate and gate['progress'] != 'not_started'),
@@ -205,6 +218,18 @@ def load_rows(records, today=None):
                      today=today, detail=f"{checked}/{total_checks} Sinapsis checks · Return {'complete' if gate and gate['return_complete'] else 'pending'}" +
                          (f" · {gate['message']}" if gate and gate['message'] else '')),
             ]
+            for process_cell in cells:
+                process_cell['operational_status'] = process_cell['label']
+                process_cell['availability'] = ('Not applicable' if not process_cell['applicable'] else
+                    'SEMI-UNBLOCKED' if process_cell['key'] == 'final_checks' and gate['return_enabled'] and not gate['checks_enabled'] else
+                    'UNBLOCKED' if process_cell['enabled'] else 'BLOCKED')
+            if onsite:
+                cells[4]['availability'] = r.package_gate_contract(schedule_status == 'Approved', staffing_ready)['status']
+            if staff['status'] == 'awaiting_schedule_notification':
+                cells[3]['operational_status'] = 'Awaiting institution notification'
+                cells[3]['operational_note'] = 'Institution notification pending'
+            if log_state == 'not_started':
+                cells[6]['operational_status'] = 'Not started'
             if gate and gate['return_enabled'] and control and control.return_recipient_confirmed_on:
                 opening = record.session_date - timedelta(days=29)
                 if control.return_recipient_confirmed_on < opening:
@@ -228,7 +253,8 @@ def load_rows(records, today=None):
                 'finance': {'begun': bool(first(finance, sid) and (fin['standing_selected'] or fin['additional_institutions']))},
                 'final_checks': {'begun': bool(gate and gate['return_enabled'])},
             }
-            rows.append(dict(session=record, cells=cells, timing_sources=timing_sources, days=days, business_days=business,
+            rows.append(dict(session=record, cells=cells, timing_sources=timing_sources, shipment_bundle_id=bundle.id if bundle else None,
+                             shipment_readiness={'recipient_confirmed': bool(recipient and recipient.participation_status == 'Confirmed'), 'package_completed':package['status']=='completed', 'schedule_completed':r.schedule_workflow_status(first(workflows,sid))=='Approved'}, days=days, business_days=business,
                              recipient=(' '.join(filter(None, [getattr(person, 'title', ''), getattr(person, 'full_name', '')])) if person else None),
                              recipient_status=recipient.participation_status if recipient else None,
                              incident_count=incidents.get(sid, 0),
@@ -242,7 +268,24 @@ def load_rows(records, today=None):
                     g.pop(name, None)
                 else:
                     setattr(g, name, previous)
-    return rows
+    by_id = {row['session'].id: row for row in rows}
+    readiness = {sid:row['shipment_readiness'] for sid,row in by_id.items()}
+    gates = {}
+    for bundle_id in {link.bundle_id for link in bundle_links}:
+        members = [by_id[link.exam_session_id]['session'] for link in bundle_links if link.bundle_id == bundle_id and link.exam_session_id in by_id]
+        gates[bundle_id] = r.shipment_bundle_gate_contract(members, readiness_by_session=readiness)
+    for row in rows:
+        shipment = row['cells'][5]
+        if shipment['applicable'] and row['shipment_bundle_id'] in gates:
+            gate = gates[row['shipment_bundle_id']]
+            shipment['availability'] = gate['status']
+            shipment['enabled'] = not gate['blocked']
+            shipment['overdue'] = bool(shipment['enabled'] and not shipment['complete'] and shipment['deadline'] and shipment['deadline'] < today)
+            shipment['state'] = ('complete' if shipment['complete'] else 'blocked' if gate['blocked'] else
+                'issue' if shipment['issue'] or shipment['overdue'] else 'near' if shipment['operational_status']=='Delivered successfully' else 'progress')
+            shipment['detail'] += f" · {gate['staffing_confirmed_count']}/{gate['sessions_count']} recipients confirmed · {gate['package_completed_count']}/{gate['sessions_count']} Package completed"
+        row['attention'] = bool(row['incident_count']) or any(c['overdue'] or c['issue'] for c in row['cells'] if c['applicable'])
+    return [row for row in rows if row['session'].id in requested_ids]
 
 
 def initialize_quality_tracking():

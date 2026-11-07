@@ -276,7 +276,8 @@
 {%- endmacro %}
 
 {% macro packages_gate_chip(schedule_ready, staffing_ready) -%}
-  {% if schedule_ready and staffing_ready %}
+  {% set gate = package_gate_contract(schedule_ready, staffing_ready) %}
+  {% if gate.unblocked %}
     <span class="packages-gate-chip packages-gate-unblocked" aria-label="Packages gate unblocked">
       <svg viewBox="0 0 24 24" aria-hidden="true">
         <rect x="5" y="10" width="14" height="10" rx="2"></rect>
@@ -284,7 +285,7 @@
       </svg>
       UNBLOCKED
     </span>
-  {% elif schedule_ready %}
+  {% elif gate.semi_unblocked %}
     <span class="packages-gate-chip packages-gate-semi-unblocked" aria-label="Packages gate semi-unblocked">
       <svg viewBox="0 0 24 24" aria-hidden="true">
         <rect x="5" y="10" width="14" height="10" rx="2"></rect>

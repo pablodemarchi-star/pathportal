@@ -28,6 +28,7 @@ function processTotals(clock, now=Date.now()) {
   function updateCells() {
     buttons.forEach(button=>{
       const clock=read(button);if(!clock)return;
+      if(button.dataset.stale==='1'){button.querySelector('[data-time-total]').textContent='Refresh required';button.title='Process assignment changed. Refresh the page.';return;}
       const totals=processTotals(clock);
       button.querySelector('[data-time-total]').textContent=clock.category==='N/A'?'N/A':clock.coverage_complete?processDuration(totals.total):'Insufficient timing data';
       button.title=`Total time: ${processDuration(totals.total)}\nPath time: ${processDuration(totals.path)}\nExternal waiting: ${processDuration(totals.external)}\nIncident time: ${processDuration(totals.incident)}\nStarted: ${stamp(clock.started_at)}\nCompleted: ${stamp(clock.completed_at)}${clock.coverage_complete?'':'\nPartial measurement only; earlier intervals are unknown.'}`;
@@ -44,7 +45,7 @@ function processTotals(clock, now=Date.now()) {
         if(button.dataset.applicable!=='1')return;
         groups.get(label).applicable++;
         const clock=read(button);
-        if(clock)groups.get(label).clocks.set(clock.id,clock);
+        if(clock&&button.dataset.stale!=='1')groups.get(label).clocks.set(clock.id,clock);
       });
     });
     const body=byProcess.querySelector('tbody');body.replaceChildren();
@@ -66,9 +67,13 @@ function processTotals(clock, now=Date.now()) {
   function publish(data) {
     buttons.forEach(button=>{
       const previous=read(button);
-      if(previous&&previous.id===data.id){const summary={...data};delete summary.history;delete summary.incidents;delete summary.sessions;delete summary.next_before;delete summary.manual_note;delete summary.manual_reason;delete summary.waiting_reasons;button.dataset.clock=JSON.stringify(summary);button.querySelector('[data-time-state]').textContent=data.category;const progress=button.querySelector('[data-time-progress]');if(progress)progress.textContent=data.category==='Completed'?'Completed':data.category==='Blocked'?'Not yet enabled':data.category==='N/A'?'No longer current':'In progress';
-        ['progress','near','issue','blocked','complete'].forEach(state=>button.classList.remove(`qc-${state}`));
-        const colour={'Completed':'complete','Blocked':'blocked','Path time':'progress','Waiting external':'near','Incident time':'issue','N/A':'na'}[data.category];
+      if(previous&&previous.id===data.id){
+        const current=data.operational?.[button.dataset.sessionId];
+        if(current){delete button.dataset.stale;button.dataset.availability=current.availability;button.dataset.operationalStatus=current.status;button.dataset.applicable=current.applicable?'1':'0';}
+        else if(data.operational){button.dataset.stale='1';button.dataset.availability='Refresh required';button.dataset.operationalStatus='Process assignment changed';}
+        const summary={...data};delete summary.operational;delete summary.history;delete summary.incidents;delete summary.sessions;delete summary.next_before;delete summary.manual_note;delete summary.manual_reason;delete summary.waiting_reasons;button.dataset.clock=JSON.stringify(summary);button.querySelector('[data-time-state]').textContent=data.category;const progress=button.querySelector('[data-time-progress]');if(progress)progress.textContent=`${button.dataset.availability} · ${button.dataset.operationalStatus}`;
+        ['progress','near','issue','blocked','complete','pending'].forEach(state=>button.classList.remove(`qc-${state}`));
+        const colour={'Completed':'complete','Blocked':'blocked','Not started':'pending','Path time':'progress','Waiting external':'near','Incident time':'issue','N/A':'na'}[data.category];
         button.classList.add(`qc-${colour}`);
       }
     });updateCells();
@@ -82,7 +87,9 @@ function processTotals(clock, now=Date.now()) {
   }
   function renderDetail(data,button) {
     content.replaceChildren();publish(data);
-    content.append(node('p',data.category));
+    content.append(node('p',`Timing category: ${data.category}`));
+    content.append(node('p',`Availability: ${button.dataset.availability} · Operational status: ${button.dataset.operationalStatus}`));
+    if(data.category==='Not started')content.append(node('p','Unblocked. Timing begins when the first process activity is registered.'));
     if(!data.coverage_complete){const warning=node('p','Insufficient timing data. Earlier periods are unknown. The figures below include only the intervals recorded since '+stamp(data.tracked_from)+'.');warning.className='qc-timing-warning';content.append(warning);}
     const definitions=node('dl');[['Started',stamp(data.started_at)],['Completed',stamp(data.completed_at)],['Reopenings',String(data.reopenings)]].forEach(([label,value])=>definitions.append(node('dt',label),node('dd',value)));
     content.append(definitions);
@@ -127,7 +134,7 @@ function processTotals(clock, now=Date.now()) {
     const current=++generation;
     root.querySelector('#qc-dialog-title').textContent=button.dataset.label;root.querySelector('#qc-dialog-subtitle').textContent=button.dataset.session;
     content.replaceChildren(node('p','Loading process detail…'));link.hidden=true;dialog.showModal();
-    if(!button.dataset.detailUrl){content.replaceChildren(node('p',button.dataset.applicable==='1'?'Timing starts when this process becomes available.':'N/A · This block does not apply to this session format.'));return;}
+    if(!button.dataset.detailUrl){content.replaceChildren(node('p',button.dataset.applicable==='1'?'Timing starts when the first process activity is registered.':'N/A · This block does not apply to this session format.'));return;}
     try{const response=await fetch(button.dataset.detailUrl,{credentials:'same-origin',headers:{Accept:'application/json'}});if(!response.ok)throw new Error();const data=await response.json();if(current===generation&&dialog.open)renderDetail(data,button);}
     catch(_){if(current===generation&&dialog.open)content.replaceChildren(node('p','The process detail could not be loaded. Close this window and try again.'));}
   }));

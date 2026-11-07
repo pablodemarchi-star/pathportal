@@ -562,6 +562,7 @@ def inject_menu_permissions():
             .all()
         )
     return {
+        "package_gate_contract": package_gate_contract,
         "menu_permissions": MENU_PERMISSIONS,
         "current_menu_key": current_menu_key,
         "current_menu_can_view": current_menu_can_view,
@@ -10137,6 +10138,12 @@ def staffing_open_position_action_items(staffing_contract, overdue=False):
     return actions
 
 
+def session_preparation_unlocked(session_record, workflow=None):
+    """Shared operational gate used by the tower and its Finance summary."""
+    return bool(session_record.monthly_registrations_closed and (
+        session_record.date_confirmation_status == "Confirmed" or schedule_workflow_status(workflow) != "Not started"))
+
+
 def schedule_preparation_blocker_message(monthly_registrations_closed, date_confirmation_confirmed):
     if not monthly_registrations_closed and not date_confirmation_confirmed:
         return "Close exam registrations and confirm exam session date"
@@ -11159,18 +11166,27 @@ def shipment_bundle_display_deadline_badge_contract(bundle, gate=None, included_
     return badge
 
 
-def shipment_bundle_gate_contract(included_sessions):
+def package_gate_contract(schedule_ready, staffing_ready):
+    status = "UNBLOCKED" if schedule_ready and staffing_ready else "SEMI-UNBLOCKED" if schedule_ready else "BLOCKED"
+    return {"status":status, "unblocked":status == "UNBLOCKED", "semi_unblocked":status == "SEMI-UNBLOCKED", "blocked":status == "BLOCKED"}
+
+
+def shipment_bundle_gate_contract(included_sessions, readiness_by_session=None):
     sessions = list(included_sessions or [])
     sessions_count = len(sessions)
-    staffing_confirmed_count = sum(1 for session_record in sessions if session_shipment_recipient_confirmed_for_shipment(session_record))
-    package_completed_count = sum(1 for session_record in sessions if session_package_preparation_completed(session_record))
+    def ready(record, key, fallback):
+        if readiness_by_session is not None and record.id in readiness_by_session:
+            return readiness_by_session[record.id][key]
+        return fallback(record)
+    staffing_confirmed_count = sum(1 for record in sessions if ready(record, "recipient_confirmed", session_shipment_recipient_confirmed_for_shipment))
+    package_completed_count = sum(1 for record in sessions if ready(record, "package_completed", session_package_preparation_completed))
     sessions_completed_count = sum(
         1
         for session_record in sessions
         if (
-            session_schedule_completed_for_shipment(session_record)
-            and session_shipment_recipient_confirmed_for_shipment(session_record)
-            and session_package_preparation_completed(session_record)
+            ready(session_record, "schedule_completed", session_schedule_completed_for_shipment)
+            and ready(session_record, "recipient_confirmed", session_shipment_recipient_confirmed_for_shipment)
+            and ready(session_record, "package_completed", session_package_preparation_completed)
         )
     )
     staffing_all_confirmed = sessions_count > 0 and staffing_confirmed_count == sessions_count
@@ -15130,7 +15146,7 @@ def schedule_workflow_view(session_record, workflow=None, today=None, staffing=N
     monthly_registrations_closed = bool(getattr(session_record, "monthly_registrations_closed", False))
     date_confirmation_confirmed = getattr(session_record, "date_confirmation_status", None) == "Confirmed"
     schedule_workflow_started = status != "Not started"
-    schedule_preparation_unlocked = monthly_registrations_closed and (date_confirmation_confirmed or schedule_workflow_started)
+    schedule_preparation_unlocked = session_preparation_unlocked(session_record, workflow)
     schedule_preparation_blocker = schedule_preparation_blocker_message(
         monthly_registrations_closed,
         date_confirmation_confirmed or (schedule_workflow_started and monthly_registrations_closed),

@@ -318,3 +318,45 @@ class ProcessTimingTest(unittest.TestCase):
         clock=db.session.get(m.ProcessClock,cid)
         self.assertEqual(clock.category,'N/A')
         self.assertEqual(m.ProcessInterval.query.filter_by(clock_id=cid,ended_at=None).count(),0)
+
+    def test_unblocked_finance_without_first_review_is_not_blocked_or_timed(self):
+        self.session_record.monthly_registrations_closed=True
+        self.session_record.date_confirmation_status='Confirmed'
+        db.session.commit()
+        clock=self.block_clock('finance')
+        self.assertEqual(clock.category,'Not started')
+        self.assertIsNone(clock.started_at)
+        self.assertEqual(totals(clock)['total'],0)
+        self.assertEqual(m.ProcessInterval.query.filter_by(clock_id=clock.id,ended_at=None).count(),0)
+        control=m.ExamSessionFinanceControl(exam_session_id=self.session_record.id,status='Effective clearance',institutions_confirmed_with_admin=False)
+        db.session.add(control);db.session.commit()
+        self.assertEqual(clock.category,'Path time')
+        self.assertIsNotNone(clock.started_at)
+        db.session.delete(control);db.session.commit()
+        self.assertEqual(clock.category,'Path time','Removing a review does not undo the fact that the process started')
+
+    def test_unstarted_finance_category_is_non_counting_and_stable(self):
+        c=cell('finance','Not reviewed',enabled=True,today=date(2026,11,7))
+        self.assertEqual(choose_category(c,{'begun':False})[0],'Not started')
+        c['enabled']=False
+        self.assertEqual(choose_category(c,{'begun':False})[0],'Blocked')
+
+    def test_detail_returns_fresh_operational_status_after_source_changes(self):
+        client=self.admin();clock=self.date_clock()
+        page=client.get('/quality-control?tab=timing').get_data(as_text=True)
+        self.assertIn('data-operational-status="Pending"',page)
+        self.session_record.date_confirmation_status='Confirmed';db.session.commit()
+        result=client.get(f'/quality-control/process-timing/{clock.id}')
+        self.assertEqual(result.status_code,200)
+        operational=result.json['operational'][str(self.session_record.id)]
+        self.assertEqual(operational['status'],'Confirmed')
+        self.assertEqual(operational['availability'],'UNBLOCKED')
+        self.assertEqual(result.json['category'],'Completed')
+
+    def test_timing_has_its_own_colour_legend(self):
+        response=self.admin().get('/quality-control?tab=timing')
+        html=response.get_data(as_text=True)
+        self.assertIn('Timing category colours',html)
+        self.assertIn('Path time · under Path control',html)
+        self.assertIn('Waiting external',html)
+        self.assertIn('Blocked · paused',html)

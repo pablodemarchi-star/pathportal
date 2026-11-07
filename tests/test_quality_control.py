@@ -149,3 +149,94 @@ class QualityControlTest(unittest.TestCase):
         detail=next(c['detail'] for c in result['cells'] if c['key']=='registrations')
         self.assertIn('20/30 candidates',detail)
         self.assertNotIn('30/30',detail)
+
+    def test_finance_gate_uses_own_schedule_like_the_tower_for_concat_sessions(self):
+        from app.routes import session_preparation_unlocked
+        self.session_record.monthly_registrations_closed=True
+        self.session_record.date_confirmation_status='Pending'
+        peer=m.ExamSession(exam_session_name='Concatenated finance',category='Path School',status='Pending',
+            session_date=self.session_record.session_date+timedelta(days=1),format='Onsite',shifts='Morning',modules='Speaking',
+            monthly_registrations_closed=True,date_confirmation_status='Pending')
+        db.session.add(peer);db.session.flush()
+        peer.concat_session_ids=json.dumps([self.session_record.id])
+        self.session_record.concat_session_ids=json.dumps([peer.id])
+        workflow=m.ExamSessionScheduleWorkflow(exam_session_id=peer.id,status='In progress')
+        db.session.add(workflow);db.session.commit()
+        row=load_rows([peer],today=date(2026,11,7))[0]
+        finance=next(c for c in row['cells'] if c['key']=='finance')
+        self.assertTrue(session_preparation_unlocked(peer,workflow))
+        self.assertTrue(finance['enabled'])
+        self.assertNotEqual(finance['state'],'blocked')
+        first_row=load_rows([self.session_record],today=date(2026,11,7))[0]
+        first_finance=next(c for c in first_row['cells'] if c['key']=='finance')
+        self.assertFalse(first_finance['enabled'])
+
+    def test_operational_status_is_independent_from_timing_enablement(self):
+        self.session_record.session_date=date(2026,12,20)
+        self.session_record.monthly_registrations_closed=True
+        self.session_record.date_confirmation_status='Confirmed'
+        person=m.AcademicStaff(full_name='Available Supervisor',status='Active',roles='Supervisor')
+        db.session.add(person);db.session.flush()
+        db.session.add_all([
+            m.ExamSessionSupervisorAssignment(exam_session_id=self.session_record.id,team_member_id=person.id,participation_status='Confirmed',is_shipment_recipient=True),
+            m.ExamSessionStaffingControl(exam_session_id=self.session_record.id,schedule_notification_confirmed=True),
+            m.ExamSessionScheduleWorkflow(exam_session_id=self.session_record.id,status='Approved',approved_at=datetime.now(timezone.utc))])
+        db.session.commit()
+        row=load_rows([self.session_record],today=date(2026,11,21))[0]
+        cells={c['key']:c for c in row['cells']}
+        self.assertEqual(cells['package']['availability'],'UNBLOCKED')
+        self.assertEqual(cells['package']['operational_status'],'Not started yet')
+        self.assertEqual(cells['final_checks']['availability'],'SEMI-UNBLOCKED')
+        self.assertEqual(cells['final_checks']['operational_status'],'Not Started')
+        self.assertTrue(row['timing_sources']['package']['begun'])
+        self.assertTrue(row['timing_sources']['final_checks']['begun'])
+
+    def test_package_partial_gate_matches_tower(self):
+        from app.routes import package_gate_contract
+        self.session_record.monthly_registrations_closed=True
+        self.session_record.date_confirmation_status='Confirmed'
+        db.session.add(m.ExamSessionScheduleWorkflow(exam_session_id=self.session_record.id,status='Approved',approved_at=datetime.now(timezone.utc)))
+        db.session.commit()
+        row=load_rows([self.session_record],today=date(2026,11,7))[0]
+        package=next(c for c in row['cells'] if c['key']=='package')
+        self.assertTrue(package['enabled'])
+        self.assertEqual(package['availability'],package_gate_contract(True,False)['status'])
+        self.assertEqual(package['availability'],'SEMI-UNBLOCKED')
+
+    def test_shipment_uses_all_bundle_recipients_and_packages_even_across_years(self):
+        person=m.AcademicStaff(full_name='Bundle recipient',status='Active',roles='Supervisor')
+        db.session.add(person);db.session.flush()
+        peer=m.ExamSession(exam_session_name='Next-year peer',category='Path School',status='Pending',session_date=date(2027,1,20),format='Onsite',shifts='Morning',modules='Speaking')
+        db.session.add(peer);db.session.flush()
+        assignments=[m.ExamSessionSupervisorAssignment(exam_session_id=record.id,team_member_id=person.id,participation_status=status,is_shipment_recipient=True)
+            for record,status in [(self.session_record,'Confirmed'),(peer,'Pending')]]
+        bundle=m.ExamSessionShipmentBundle(supervisor_staff_id=person.id,delivery_address='Test',status='Preparing bundle')
+        db.session.add_all(assignments+[bundle]);db.session.flush()
+        db.session.add_all([m.ExamSessionShipmentBundleSession(exam_session_id=record.id,bundle_id=bundle.id) for record in [self.session_record,peer]])
+        db.session.commit()
+        def shipment():
+            rows=load_rows([self.session_record],today=date(2026,11,7))
+            self.assertEqual(len(rows),1)
+            return next(c for c in rows[0]['cells'] if c['key']=='shipment')
+        self.assertEqual(shipment()['availability'],'BLOCKED')
+        assignments[1].participation_status='Confirmed';db.session.commit()
+        self.assertEqual(shipment()['availability'],'SEMI-UNBLOCKED')
+        self.assertTrue(shipment()['enabled'])
+        for record in [self.session_record,peer]:
+            for field in ['package_label_verification_status','package_label_printing_status','room_package_sealing_status','return_packages_status','staff_member_ids_status','inclusion_final_items_status','session_box_sealing_status']:
+                setattr(record,field,'completed')
+        db.session.commit()
+        self.assertEqual(shipment()['availability'],'UNBLOCKED')
+
+    def test_confirmed_staff_with_pending_institution_notification_is_explicit(self):
+        person=m.AcademicStaff(full_name='Confirmed member',status='Active',roles='Supervisor')
+        db.session.add(person);db.session.flush()
+        self.session_record.monthly_registrations_closed=True;self.session_record.date_confirmation_status='Confirmed'
+        db.session.add(m.ExamSessionSupervisorAssignment(exam_session_id=self.session_record.id,team_member_id=person.id,participation_status='Confirmed'))
+        db.session.commit()
+        row=load_rows([self.session_record],today=date(2026,11,7))[0]
+        staff=next(c for c in row['cells'] if c['key']=='staffing')
+        self.assertEqual(staff['label'],'1/1 confirmed')
+        self.assertEqual(staff['operational_status'],'Awaiting institution notification')
+        self.assertEqual(staff['operational_note'],'Institution notification pending')
+        self.assertFalse(staff['complete'])

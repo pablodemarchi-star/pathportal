@@ -33,8 +33,10 @@ def choose_category(c, source, manual_reason=None, incident_ids=()):
         return 'N/A', '', 'operational'
     if c['complete']:
         return 'Completed', '', 'operational'
-    if not c['enabled'] or not source.get('begun'):
+    if not c['enabled']:
         return 'Blocked', '', 'operational'
+    if not source.get('begun'):
+        return 'Not started', '', 'operational'
     if incident_ids:
         return 'Incident time', 'Linked incident', 'incident'
     if source.get('waiting'):
@@ -86,7 +88,7 @@ def lock_clocks(keys, now, unit):
 def transition(clock, category, now, *, reason='', note='', incident_ids=(), source='operational', created_by='System', interval=None, unit=None):
     unit = unit or db.session()
     incident_json = json.dumps(sorted(incident_ids)) if category not in {'Completed','N/A'} else '[]'
-    if not interval and clock.category == 'N/A' and category == 'N/A' and clock.revision:
+    if not interval and clock.category == category and category in {'N/A','Not started'} and clock.revision:
         return False
     if interval and (interval.category,interval.reason,interval.note,interval.incident_ids_json,interval.source) == (category,reason,note,incident_json,source):
         return False
@@ -112,7 +114,7 @@ def transition(clock, category, now, *, reason='', note='', incident_ids=(), sou
         clock.reopenings += 1
     if category in ACTIVE and clock.started_at is None and clock.coverage_complete:
         clock.started_at = at
-    if category != 'N/A':
+    if category not in {'N/A','Not started'}:
         unit.add(m.ProcessInterval(clock_id=clock.id, category=category, started_at=at,
             reason=reason, note=note, incident_ids_json=incident_json, source=source, created_by=created_by))
     return True
@@ -174,6 +176,7 @@ def reconcile_rows(rows, unit=None, fresh_ids=(), fresh_owners=(), now=None, cre
         row,c = selected
         aggregate = dict(c)
         source_info = dict(row['timing_sources'][block])
+        source_info['begun'] = bool(source_info.get('begun') or clock.has_begun)
         if block == 'shipment':
             aggregate['enabled'] = all(item['enabled'] for _,item in entries)
         related = [incident for incident in incidents if incident.exam_session_id in member_ids and incident.affected_block == block]
@@ -320,6 +323,7 @@ def cohort_medians(clock_dicts):
 @login_required
 def timing_detail(clock_id):
     require_superadmin()
+    reconcile_due()
     pair = db.session.query(m.ProcessClock,m.ProcessInterval).outerjoin(m.ProcessInterval,and_(m.ProcessInterval.clock_id==m.ProcessClock.id,m.ProcessInterval.ended_at.is_(None))).filter(m.ProcessClock.id==clock_id).first()
     if not pair:
         abort(404)
@@ -336,6 +340,10 @@ def timing_detail(clock_id):
         m.ProcessClockSession.clock_id==clock.id,m.ProcessClockSession.is_current.is_(True)).all()
     data = clock_data(clock,opened)
     data['sessions'] = [{'id':sid,'name':name} for sid,name in links]
+    records = db.session.query(m.ExamSession).filter(m.ExamSession.id.in_([sid for sid,name in links])).populate_existing().all()
+    current_rows = load_rows(records)
+    data['operational'] = {str(row['session'].id): {'status':c['operational_status'], 'availability':c['availability'], 'applicable':c['applicable'], 'note':c.get('operational_note','')}
+        for row in current_rows for c in row['cells'] if c['key']==clock.block}
     data['incidents'] = [{'id':item.id,'title':item.title,'status':item.status,'affected_block':item.affected_block} for item in incident_rows]
     data['waiting_reasons'] = [reason for reason, in db.session.query(m.ProcessInterval.reason).filter_by(clock_id=clock.id,category='Waiting external').distinct()]
     data['history'] = [dict(id=item.id,category=item.category,started_at=utc(item.started_at).isoformat(),
@@ -373,7 +381,7 @@ def timing_waiting(clock_id):
         return jsonify(error='This process was updated. Reopen its detail and try again.'),409
     if clock.category not in ACTIVE:
         db.session.rollback()
-        return jsonify(error='This process is blocked, completed or not applicable.'),409
+        return jsonify(error='This process has not started, is blocked, completed or not applicable.'),409
     if request.form['action']=='resume':
         clock.manual_reason=None;clock.manual_note=None;clock.manual_by=None
     else:

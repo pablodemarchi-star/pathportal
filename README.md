@@ -486,3 +486,22 @@ summaries and open intervals in batches; detailed history is requested per cell,
 100 intervals at a time. No Drive/files, operational modals or external services
 are loaded. Days/hours are calendar time, not working hours; exact seconds are
 retained internally.
+
+An enabled process that has never started is represented by non-counting metadata
+`Not started`, not `Blocked`; it has no open timing interval. This is especially
+important for Finance before its first review. The UI identifies it as Unblocked
+and awaiting first activity. Actual dependency blocks remain Blocked. Once a
+process has begun, deleting its current review/positions does not undo that fact.
+Finance availability uses the same `session_preparation_unlocked()` helper and
+session-owned workflow as the tower, independently of the shared Schedule shown
+for a concatenated group.
+
+Availability labels now share the tower's Package gate and the bundle-wide
+Shipment gate. Shipment loads recipients and Package readiness for all members,
+including sessions outside the selected year, in batches. SEMI-UNBLOCKED remains
+editable for its allowed planning work and is not presented as fully unblocked.
+Staffing explicitly names the institution-notification task when participation
+counts are already fully confirmed. Process timing has a separate colour legend
+for responsibility categories. Opening a timing detail fetches current operational
+status/availability for every session sharing that clock; reassigned clocks ask
+for Refresh instead of attributing an old process to a session that moved.
