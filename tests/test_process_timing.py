@@ -360,3 +360,17 @@ class ProcessTimingTest(unittest.TestCase):
         self.assertIn('Path time · under Path control',html)
         self.assertIn('Waiting external',html)
         self.assertIn('Blocked · paused',html)
+
+    def test_inline_breakdown_and_partial_badge_are_only_in_timing_view(self):
+        client=self.admin()
+        clock=self.date_clock();clock.coverage_complete=False;db.session.commit()
+        timing=client.get('/quality-control?tab=timing').get_data(as_text=True)
+        self.assertIn('data-time-breakdown',timing)
+        self.assertIn('data-time-path',timing)
+        self.assertIn('data-time-external',timing)
+        self.assertIn('data-time-incident',timing)
+        self.assertIn('>Partial data</span>',timing)
+        self.assertIn('Recorded time',timing)
+        live=client.get('/quality-control?tab=readiness').get_data(as_text=True)
+        self.assertNotIn('data-time-breakdown',live)
+        self.assertNotIn('data-time-total',live)

@@ -28,9 +28,16 @@ function processTotals(clock, now=Date.now()) {
   function updateCells() {
     buttons.forEach(button=>{
       const clock=read(button);if(!clock)return;
-      if(button.dataset.stale==='1'){button.querySelector('[data-time-total]').textContent='Refresh required';button.title='Process assignment changed. Refresh the page.';return;}
+      if(button.dataset.stale==='1'){button.querySelector('[data-time-total]').textContent='Refresh required';button.title='Process assignment changed. Refresh the page.';['[data-time-breakdown]','[data-time-partial]','[data-time-total-label]'].forEach(selector=>{const element=button.querySelector(selector);if(element)element.hidden=true;});return;}
       const totals=processTotals(clock);
-      button.querySelector('[data-time-total]').textContent=clock.category==='N/A'?'N/A':clock.coverage_complete?processDuration(totals.total):'Insufficient timing data';
+      const applicable=button.dataset.applicable==='1'&&clock.category!=='N/A';
+      button.querySelector('[data-time-total]').textContent=applicable?processDuration(totals.total):'N/A';
+      const label=button.querySelector('[data-time-total-label]');
+      if(label){label.hidden=!applicable;label.textContent=clock.coverage_complete?'Total time':'Recorded time';}
+      const partial=button.querySelector('[data-time-partial]');
+      if(partial){partial.hidden=!applicable||clock.coverage_complete;partial.title=`Partial measurement recorded since ${stamp(clock.tracked_from)}. Earlier periods are unknown.`;}
+      const breakdown=button.querySelector('[data-time-breakdown]');
+      if(breakdown){breakdown.hidden=!applicable;['path','external','incident'].forEach(key=>{button.querySelector(`[data-time-${key}]`).textContent=processDuration(totals[key]);});}
       button.title=`Total time: ${processDuration(totals.total)}\nPath time: ${processDuration(totals.path)}\nExternal waiting: ${processDuration(totals.external)}\nIncident time: ${processDuration(totals.incident)}\nStarted: ${stamp(clock.started_at)}\nCompleted: ${stamp(clock.completed_at)}${clock.coverage_complete?'':'\nPartial measurement only; earlier intervals are unknown.'}`;
     });
     renderSummary();
@@ -90,7 +97,7 @@ function processTotals(clock, now=Date.now()) {
     content.append(node('p',`Timing category: ${data.category}`));
     content.append(node('p',`Availability: ${button.dataset.availability} · Operational status: ${button.dataset.operationalStatus}`));
     if(data.category==='Not started')content.append(node('p','Unblocked. Timing begins when the first process activity is registered.'));
-    if(!data.coverage_complete){const warning=node('p','Insufficient timing data. Earlier periods are unknown. The figures below include only the intervals recorded since '+stamp(data.tracked_from)+'.');warning.className='qc-timing-warning';content.append(warning);}
+    if(!data.coverage_complete){const warning=node('p','Partial data. Earlier periods are unknown. The figures below include only the intervals recorded since '+stamp(data.tracked_from)+'.');warning.className='qc-timing-warning';content.append(warning);}
     const definitions=node('dl');[['Started',stamp(data.started_at)],['Completed',stamp(data.completed_at)],['Reopenings',String(data.reopenings)]].forEach(([label,value])=>definitions.append(node('dt',label),node('dd',value)));
     content.append(definitions);
     const split=node('div');split.className='qc-timing-split';const values=processTotals(data);

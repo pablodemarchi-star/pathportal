@@ -1,7 +1,7 @@
 {% extends 'base.html' %}
 {% block title %}Quality control · Path Examinations{% endblock %}
 {% block content %}
-<link rel="stylesheet" href="{{ url_for('static', filename='css/quality_control.css', v='20261107-gate-consistency-6') }}">
+<link rel="stylesheet" href="{{ url_for('static', filename='css/quality_control.css', v='20261107-inline-times-7') }}">
 <div class="qc-page" data-tab="{{ tab }}" data-csrf="{{ csrf_token }}">
   <header class="qc-heading"><div><p class="qc-eyebrow">SESSION OVERSIGHT</p><h1>Quality control</h1><p>Progress, deadlines and process times in one place.</p></div><div class="qc-header-actions"><a class="qc-button" href="{{ url_for('quality_control.index', **request.args) }}">Refresh</a></div></header>
   <nav class="qc-tabs" aria-label="Quality control views"><a href="{{ readiness_url }}"{% if tab == 'readiness' %} aria-current="page"{% endif %}>Live readiness</a><a href="{{ timing_url }}"{% if tab == 'timing' %} aria-current="page"{% endif %}>Process timing</a></nav>
@@ -26,7 +26,7 @@
   <div class="qc-table-wrap" tabindex="0" role="region" aria-label="Exam session quality matrix" id="qc-by-session">
     <table class="qc-table"><thead><tr><th scope="col">Exam session</th>{% for key, label in processes %}<th scope="col">{{ label }}</th>{% endfor %}</tr></thead><tbody>
       {% for row in rows %}<tr data-qc-row data-name="{{ row.session.exam_session_name|lower }}" data-format="{{ row.session.format }}" data-attention="{{ '1' if row.attention else '0' }}" data-ready="{{ '1' if row.ready else '0' }}" data-days="{{ row.days }}" data-overdue="{{ '1' if row.cells|selectattr('overdue')|list else '0' }}" data-issues="{{ '1' if row.incident_count or row.cells|selectattr('issue')|selectattr('applicable')|list else '0' }}">
-        <th scope="row"><strong>{{ row.session.exam_session_name }}</strong><span>{{ row.session.session_date.strftime('%d/%m/%Y') }}</span><span class="qc-format">{{ row.session.format }}</span>{% if row.incident_count %}<span class="qc-state qc-issue">{{ row.incident_count }} active incident{{ 's' if row.incident_count != 1 else '' }}</span>{% endif %}{% if row.concatenated %}<small>Concatenated · one row per session</small>{% endif %}<small>{% if row.days >= 0 %}{{ row.days }} calendar days · {{ row.business_days }} business days remaining{% else %}{{ -row.days }} calendar days · {{ row.business_days }} business days ago{% endif %}</small>{% if row.session.format == 'Onsite' %}<span class="qc-recipient">{{ row.recipient or 'Recipient not assigned' }}</span>{% if row.recipient_status %}<small>Session pack recipient <span class="qc-recipient-status participation-{{ row.recipient_status|lower|replace(' ', '-') }}">{{ row.recipient_status }}</span></small>{% endif %}{% endif %}</th>
+        <th scope="row" class="qc-session-cell"><strong class="qc-session-name">{{ row.session.exam_session_name }}</strong><span>{{ row.session.session_date.strftime('%d/%m/%Y') }}</span><span class="qc-format">{{ row.session.format }}</span>{% if row.incident_count %}<span class="qc-state qc-issue">{{ row.incident_count }} active incident{{ 's' if row.incident_count != 1 else '' }}</span>{% endif %}{% if row.concatenated %}<small>Concatenated · one row per session</small>{% endif %}<small>{% if row.days >= 0 %}{{ row.days }} calendar days · {{ row.business_days }} business days remaining{% else %}{{ -row.days }} calendar days · {{ row.business_days }} business days ago{% endif %}</small>{% if row.session.format == 'Onsite' %}<span class="qc-recipient">{{ row.recipient or 'Recipient not assigned' }}</span>{% if row.recipient_status %}<small>Session pack recipient <span class="qc-recipient-status participation-{{ row.recipient_status|lower|replace(' ', '-') }}">{{ row.recipient_status }}</span></small>{% endif %}{% endif %}</th>
         {% for c in row.cells %}<td data-label="{{ processes[loop.index0][1] }}">
           {% if tab == 'readiness' %}
           <button type="button" class="qc-cell qc-{{ c.state }}" data-qc-detail data-key="{{ c.key }}" data-session="{{ row.session.exam_session_name }}" data-label="{{ processes[loop.index0][1] }}" data-status="{{ c.label if c.applicable else 'Not applicable' }}" data-detail="{{ c.detail if c.applicable else 'This process does not apply to this session format.' }}" data-url="{{ c.url or '' }}" data-deadline="{{ c.deadline.strftime('%d/%m/%Y') if c.deadline and c.applicable else '' }}" data-applicable="{{ '1' if c.applicable else '0' }}">
@@ -36,7 +36,16 @@
             {% set clock = c.clock %}
             {% set colour = 'na' if not c.applicable else 'blocked' if (not clock and not c.enabled) or (clock and clock.category == 'Blocked') else 'pending' if not clock or clock.category == 'Not started' else 'complete' if clock.category == 'Completed' else 'issue' if clock.category == 'Incident time' else 'near' if clock.category == 'Waiting external' else 'progress' %}
             <button type="button" class="qc-cell qc-{{ colour }}" data-qc-timing data-session-id="{{ row.session.id }}" data-operational-status="{{ c.operational_status }}" data-availability="{{ c.availability }}" data-session="{{ row.session.exam_session_name }}" data-label="{{ processes[loop.index0][1] }}" data-key="{{ c.key }}" data-detail-url="{{ url_for('quality_control.timing_detail', clock_id=clock.id) if clock else '' }}" data-applicable="{{ '1' if c.applicable else '0' }}" data-clock="{{ clock|tojson|forceescape }}" data-url="{{ c.url or '' }}">
-              <span class="qc-cell-status" data-time-total>{% if not c.applicable %}N/A{% elif clock and clock.coverage_complete %}0h{% elif clock %}Insufficient timing data{% else %}Not started{% endif %}</span>
+              {% if c.applicable and clock %}<small data-time-total-label>{{ 'Total time' if clock.coverage_complete else 'Recorded time' }}</small>{% endif %}
+              <span class="qc-cell-status qc-inline-total" data-time-total>{% if not c.applicable %}N/A{% elif clock %}0h{% else %}Not started{% endif %}</span>
+              {% if c.applicable and clock %}
+                <span class="qc-partial-data" data-time-partial{% if clock.coverage_complete %} hidden{% endif %}>Partial data</span>
+                <span class="qc-cell-time-breakdown" data-time-breakdown>
+                  <span><span>Path</span><strong data-time-path>0h</strong></span>
+                  <span><span>External</span><strong data-time-external>0h</strong></span>
+                  <span><span>Incident</span><strong data-time-incident>0h</strong></span>
+                </span>
+              {% endif %}
               {% if c.applicable %}<small data-time-state>{{ clock.category if clock else 'Not started' if c.enabled else 'Blocked' }}</small>{% if clock %}<small data-time-progress>{{ c.availability }} · {{ c.operational_status }}</small>{% if clock.reopenings %}<small>Reopened {{ clock.reopenings }} time{{ 's' if clock.reopenings != 1 else '' }}</small>{% endif %}{% endif %}{% endif %}
             </button>
           {% endif %}
@@ -47,6 +56,6 @@
   </div>
   <dialog id="qc-dialog" class="qc-dialog" aria-labelledby="qc-dialog-title"><header><div><p id="qc-dialog-subtitle" class="qc-eyebrow"></p><h2 id="qc-dialog-title"></h2></div><button class="qc-close" type="button" aria-label="Close">×</button></header><div id="qc-dialog-content"></div><a id="qc-open-block" class="qc-button" hidden>Open block ↗</a></dialog>
 </div>
-<script src="{{ url_for('static', filename='js/quality_control.js', v='20261107-gate-consistency-6') }}" defer></script>
-{% if tab == 'timing' %}<script src="{{ url_for('static', filename='js/process_timing.js', v='20261107-gate-consistency-4') }}" defer></script>{% endif %}
+<script src="{{ url_for('static', filename='js/quality_control.js', v='20261107-inline-times-7') }}" defer></script>
+{% if tab == 'timing' %}<script src="{{ url_for('static', filename='js/process_timing.js', v='20261107-inline-times-5') }}" defer></script>{% endif %}
 {% endblock %}
