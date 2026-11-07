@@ -82,8 +82,8 @@ class QualityControlTest(unittest.TestCase):
 
     def test_committed_source_changes_record_completion_without_dashboard_visit(self):
         self.session_record.date_confirmation_status = 'Confirmed'; db.session.commit()
-        metric = m.QualityProcessTiming.query.filter_by(exam_session_id=self.session_record.id,process_key='date').one()
-        self.assertEqual(metric.state, 'complete')
+        metric = m.ProcessClock.query.join(m.ProcessClockSession).filter(m.ProcessClockSession.exam_session_id==self.session_record.id,m.ProcessClock.block=='date').one()
+        self.assertEqual(metric.category, 'Completed')
         self.assertIsNotNone(metric.completed_at)
         self.session_record.date_confirmation_status = 'Pending'; db.session.commit()
         self.assertEqual(metric.reopenings,1)
@@ -137,8 +137,8 @@ class QualityControlTest(unittest.TestCase):
 
     def test_source_write_rollback_does_not_record_false_completion(self):
         self.session_record.date_confirmation_status='Confirmed';db.session.flush();db.session.rollback()
-        metric=m.QualityProcessTiming.query.filter_by(exam_session_id=self.session_record.id,process_key='date').one()
-        self.assertEqual(metric.state,'pending')
+        metric=m.ProcessClock.query.join(m.ProcessClockSession).filter(m.ProcessClockSession.exam_session_id==self.session_record.id,m.ProcessClock.block=='date').one()
+        self.assertEqual(metric.category,'Path time')
         self.assertIsNone(metric.completed_at)
 
     def test_registrations_use_latest_month_not_sum_of_months(self):

@@ -131,3 +131,17 @@ def migrate_payee_notification_preferences():
         if columns and 'payment_notification_language' not in columns:
             db.session.execute(text(f"ALTER TABLE {table} ADD COLUMN payment_notification_language VARCHAR(2) NOT NULL DEFAULT 'en'"))
     db.session.commit()
+
+
+def migrate_process_timing():
+    """Additive only. Existing clocks/timing history remain available for rollback."""
+    from sqlalchemy import inspect
+    columns = {column['name'] for column in inspect(db.engine).get_columns('exam_session_incident')}
+    if 'affected_block' not in columns:
+        db.session.execute(text("ALTER TABLE exam_session_incident ADD COLUMN affected_block VARCHAR(30) NOT NULL DEFAULT 'general'"))
+    db.session.execute(text("CREATE INDEX IF NOT EXISTS ix_exam_session_incident_affected_block ON exam_session_incident (affected_block)"))
+    clock_columns = {column['name'] for column in inspect(db.engine).get_columns('process_clock')}
+    if 'has_begun' not in clock_columns:
+        db.session.execute(text('ALTER TABLE process_clock ADD COLUMN has_begun BOOLEAN NOT NULL DEFAULT FALSE'))
+        db.session.execute(text("UPDATE process_clock SET has_begun = TRUE, coverage_complete = FALSE WHERE category NOT IN ('Blocked','N/A') OR started_at IS NOT NULL"))
+    db.session.commit()

@@ -41,14 +41,14 @@ def load_rows(records, today=None):
         return []
     def by_session(model, options=()):
         grouped = defaultdict(list)
-        for item in model.query.options(*options).filter(model.exam_session_id.in_(ids)).all():
+        for item in model.query.options(*options).filter(model.exam_session_id.in_(ids)).populate_existing().all():
             grouped[item.exam_session_id].append(item)
         return grouped
     groups = []
     for model in ASSIGNMENTS:
         groups.append(by_session(model, (joinedload(model.team_member).load_only(m.AcademicStaff.id, m.AcademicStaff.title, m.AcademicStaff.full_name, m.AcademicStaff.status, m.AcademicStaff.roles),
                                          joinedload(model.potential_entry))))
-    workflows = by_session(m.ExamSessionScheduleWorkflow, (selectinload(m.ExamSessionScheduleWorkflow.events).load_only(m.ExamSessionScheduleEvent.new_status, m.ExamSessionScheduleEvent.created_at),))
+    workflows = by_session(m.ExamSessionScheduleWorkflow)
     schedule_groups = r.bundle_schedule_presentations(records)
     missing_primary_ids = {item['primary_session_id'] for item in schedule_groups.values()} - set(ids)
     if missing_primary_ids:
@@ -78,18 +78,9 @@ def load_rows(records, today=None):
     for sid, month, total in totals:
         if month == latest_month[sid]:
             candidates[sid] = total
-    evidence = defaultdict(dict)
-    for sid, timestamp in db.session.query(m.ExamSessionStaffingEvent.exam_session_id, db.func.min(m.ExamSessionStaffingEvent.created_at)).filter(
-            m.ExamSessionStaffingEvent.exam_session_id.in_(ids),
-            m.ExamSessionStaffingEvent.previous_status != m.ExamSessionStaffingEvent.new_status).group_by(m.ExamSessionStaffingEvent.exam_session_id):
-        evidence[sid]['staffing'] = timestamp
-    for sid, timestamp in db.session.query(m.ExamSessionScheduleWorkflow.exam_session_id, db.func.min(m.ExamSessionScheduleEvent.created_at)).join(
-            m.ExamSessionScheduleEvent).filter(m.ExamSessionScheduleWorkflow.exam_session_id.in_(ids),
-            m.ExamSessionScheduleEvent.previous_status != m.ExamSessionScheduleEvent.new_status).group_by(m.ExamSessionScheduleWorkflow.exam_session_id):
-        evidence[sid]['schedule'] = timestamp
-    for sid, timestamp in db.session.query(m.ExamSessionFinanceControl.exam_session_id, db.func.min(m.ExamSessionFinanceEvent.created_at)).join(
-            m.ExamSessionFinanceEvent).filter(m.ExamSessionFinanceControl.exam_session_id.in_(ids)).group_by(m.ExamSessionFinanceControl.exam_session_id):
-        evidence[sid]['finance'] = timestamp
+    latest_approvals = dict(db.session.query(m.ExamSessionScheduleWorkflow.exam_session_id, db.func.max(m.ExamSessionScheduleEvent.created_at)).join(
+        m.ExamSessionScheduleEvent).filter(m.ExamSessionScheduleWorkflow.exam_session_id.in_(set(ids) | missing_primary_ids),
+        m.ExamSessionScheduleEvent.new_status == 'Approved').group_by(m.ExamSessionScheduleWorkflow.exam_session_id).all())
     incidents = dict(db.session.query(m.ExamSessionIncident.exam_session_id, db.func.count(m.ExamSessionIncident.id)).filter(
         m.ExamSessionIncident.exam_session_id.in_(ids), m.ExamSessionIncident.status.in_(r.INCIDENT_ACTIVE_STATUSES)).group_by(m.ExamSessionIncident.exam_session_id).all())
     # ID-card ownership is one shared batch; no card files or download URLs are loaded.
@@ -172,7 +163,8 @@ def load_rows(records, today=None):
             recipient = next((a for a in assignments if a.is_shipment_recipient and (a.team_member_id or a.potential_entry_id)), None)
             person = (recipient.team_member or recipient.potential_entry) if recipient else None
             staffing_completed = r.staffing_completed_date(assignments=assignments, session_record=record) if staffing_ready else None
-            package_deadline = r.package_gate_deadline(schedule_workflow=workflow, staffing_completed_at=staffing_completed)
+            deadline_workflow = SimpleNamespace(status=workflow.status, approved_at=workflow.approved_at or latest_approvals.get(primary_id), updated_at=workflow.updated_at, events=[]) if workflow else None
+            package_deadline = r.package_gate_deadline(schedule_workflow=deadline_workflow, staffing_completed_at=staffing_completed)
             cells = [
                 cell('date', record.date_confirmation_status, complete=record.date_confirmation_status == 'Confirmed', today=today,
                      active=record.date_confirmation_status not in {'Pending', 'Confirmed'}, detail='Exam date confirmation'),
@@ -180,12 +172,12 @@ def load_rows(records, today=None):
                      active=bool(candidate_total) or sid in registration_activity, near=bool(candidate_total is not None and candidate_total >= (record.minimum_candidates_required or 0)), today=today, detail=candidate_detail, completed_at=record.monthly_registrations_closed_at),
                 cell('schedule', schedule_status, complete=schedule_status == 'Approved', active=schedule_status != 'Not started', enabled=preparation_enabled,
                      near=schedule_status == 'Sent for review', issue=schedule_status == 'Changes requested', deadline=workflow.next_action_due_at if workflow else None,
-                     today=today, detail=(f'Shared schedule · managed from session #{primary_id}' if primary_id != sid else 'Schedule approval'), action_at=evidence[primary_id].get('schedule'), completed_at=workflow.approved_at if workflow else None),
+                     today=today, detail=(f'Shared schedule · managed from session #{primary_id}' if primary_id != sid else 'Schedule approval'), action_at=None, completed_at=workflow.approved_at if workflow else None),
                 cell('staffing', 'Confirmed' if staffing_ready else f"{counts['confirmed']}/{counts['required']} confirmed", complete=staffing_ready,
                      active=bool(counts['assigned']), enabled=preparation_enabled, near=bool(counts['required'] and counts['confirmed'] + counts['sent'] == counts['required']),
                      issue=staff['status'] == 'invalid' or any(b['code'] in {'STAFF_DECLINED', 'STAFF_CANCELLED'} for b in staff['blockers']),
                      deadline=(r.staffing_deadline_badge_contract(first(staffing_controls,sid), staff, assignments, [], record, today=today) or {}).get('date'),
-                     today=today, detail='; '.join(b['message'] for b in staff['blockers']), action_at=evidence[sid].get('staffing')),
+                     today=today, detail='; '.join(b['message'] for b in staff['blockers']), action_at=None),
                 cell('package', package['label'], complete=package['status'] == 'completed', active=package['status'] != 'not_started',
                      enabled=schedule_status == 'Approved', applicable=onsite, near=done_stages == len(package_stages)-1,
                      issue=package['status'] == 'incident', deadline=package_deadline, today=today, detail=package['table_summary']),
@@ -202,7 +194,7 @@ def load_rows(records, today=None):
                      detail='; '.join(b['message'] for b in log['blockers']) or 'All Logistics concepts confirmed'),
                 cell('finance', fin['readiness_label'], complete=fin['can_proceed'], active=fin['standing_selected'] or bool(fin['additional_institutions']),
                      enabled=preparation_enabled, applicable=onsite, near=fin['readiness_label'] == 'Verification missing',
-                     issue=fin['readiness_label'] == 'Close monitoring required', deadline=fin['deadline'], today=today, detail=fin['action_label'], action_at=evidence[sid].get('finance'), completed_at=fin['cleared_at'] if fin['can_proceed'] else None),
+                     issue=fin['readiness_label'] == 'Close monitoring required', deadline=fin['deadline'], today=today, detail=fin['action_label'], action_at=None, completed_at=fin['cleared_at'] if fin['can_proceed'] else None),
                 cell('final_checks', gate['progress'].replace('_', ' ').title() if gate else 'Not applicable',
                      complete=bool(gate and gate['progress'] == 'completed'), active=bool(gate and gate['progress'] != 'not_started'),
                      enabled=bool(gate and gate['return_enabled']), applicable=onsite,
@@ -222,7 +214,21 @@ def load_rows(records, today=None):
                 cells[4]['completed_at'] = max((utc(stamp) for stamp in stamps if stamp), default=None)
             days = (record.session_date - today).days
             business = r.argentina_business_days_until(record.session_date, today=today) if days >= 0 else r.argentina_business_days_until(today, today=record.session_date)
-            rows.append(dict(session=record, cells=cells, days=days, business_days=business,
+            timing_sources = {
+                'date': {'begun': True},
+                'registrations': {'begun': sid in latest_month or record.monthly_registrations_closed},
+                'schedule': {'begun': preparation_enabled or schedule_status != 'Not started', 'primary_id': primary_id,
+                             'waiting': schedule_status == 'Sent for review', 'reason': 'Institution'},
+                'staffing': {'begun': bool(counts['required']), 'waiting': bool(counts['sent'] and not counts['open_positions'] and not counts['pending_assigned'] and staff['schedule_notification_confirmed'] and staff['status'] != 'invalid'), 'reason': 'Staff member'},
+                'package': {'begun': schedule_status == 'Approved'},
+                'shipment': {'begun': bool(bundle), 'bundle_id': bundle.id if bundle else None,
+                             'waiting': bundle_status in {'Dispatched','Recipient notified','In transit to post office','In transit to recipient','Delayed','Delivered successfully'},
+                             'reason': 'Recipient' if bundle_status == 'Delivered successfully' else 'Courier'},
+                'logistics': {'begun': bool(log['applies'])},
+                'finance': {'begun': bool(first(finance, sid) and (fin['standing_selected'] or fin['additional_institutions']))},
+                'final_checks': {'begun': bool(gate and gate['return_enabled'])},
+            }
+            rows.append(dict(session=record, cells=cells, timing_sources=timing_sources, days=days, business_days=business,
                              recipient=(' '.join(filter(None, [getattr(person, 'title', ''), getattr(person, 'full_name', '')])) if person else None),
                              recipient_status=recipient.participation_status if recipient else None,
                              incident_count=incidents.get(sid, 0),
@@ -339,13 +345,17 @@ def index():
     if years and year not in years:
         abort(400)
     rows = dashboard_rows(year)
-    metrics = observe(rows)
-    db.session.commit()
+    tab = request.args.get('tab', 'readiness')
+    if tab not in {'readiness','timing'}:
+        abort(400)
+    if tab == 'timing':
+        from app.process_timing import attach_clocks, reconcile_due
+        reconcile_due()
+        attach_clocks(rows)
     from app.routes import LOCAL_TZ
     for row in rows:
         record = row['session']
         for c in row['cells']:
-            c['timing'] = timing_view(metrics[record.id, c['key']])
             if c['key'] == 'date':
                 c['url'] = url_for('staff.exam_session_planner', session_year=year, open_session_modal=record.id)
             elif c['key'] == 'registrations':
@@ -359,7 +369,9 @@ def index():
                 c['url'] = url_for('staff.pre_session_control_tower', session_year=year, view='sessions' if c['key'] in {'logistics','finance','final_checks'} else 'bundles',
                                    open_schedule_modal=record.id, open_modal_target=target)
     response = current_app.make_response(render_template('quality_control.html', rows=rows, processes=PROCESSES,
-        formats=FORMATS, years=years, selected_year=year, measured_at=datetime.now(LOCAL_TZ)))
+        formats=FORMATS, years=years, selected_year=year, tab=tab,
+        readiness_url=url_for('quality_control.index', **{**request.args.to_dict(), 'tab':'readiness'}),
+        timing_url=url_for('quality_control.index', **{**request.args.to_dict(), 'tab':'timing'}), measured_at=datetime.now(LOCAL_TZ)))
     response.headers['Cache-Control'] = 'no-store'
     return response
 
@@ -378,6 +390,10 @@ def collect_quality_changes(unit, *_):
         return
     ids = unit.info.setdefault('quality_session_ids', set())
     for obj in list(unit.new) + list(unit.dirty) + list(unit.deleted):
+        if isinstance(obj, m.ExamSession) and obj in unit.deleted:
+            affected = {cid for cid, in unit.query(m.ProcessClockSession.clock_id).filter_by(exam_session_id=obj.id,is_current=True)}
+            unit.info.setdefault('process_timing_retire_ids', set()).update(affected)
+            ids.update(sid for sid, in unit.query(m.ProcessClockSession.exam_session_id).filter(m.ProcessClockSession.clock_id.in_(affected),m.ProcessClockSession.is_current.is_(True)))
         if isinstance(obj, (m.ExamSessionScheduleEvent, m.ExamSessionStaffingEvent, m.ExamSessionFinanceEvent)) and obj.previous_status == obj.new_status:
             continue
         if obj in unit.dirty:
@@ -418,6 +434,8 @@ def collect_quality_changes(unit, *_):
                 ids.add(control.exam_session_id)
         elif isinstance(obj, m.ExamSessionShipmentBundle):
             unit.info.setdefault('quality_bundle_ids', set()).add(obj.id)
+            if obj in unit.new:
+                unit.info.setdefault('process_timing_fresh_bundles', []).append(obj)
         elif isinstance(obj, (m.AcademicStaff, m.StaffIdDocument)):
             # Role/ID changes can affect several staffing/package summaries. These
             # sessions are collected in one query per assignment model below.
@@ -432,6 +450,9 @@ def save_quality_changes(unit):
         return
     unit.flush()
     ids = unit.info.pop('quality_session_ids', set())
+    deleted_sessions = unit.info.pop('process_timing_deleted_sessions', set())
+    if deleted_sessions:
+        unit.query(m.ProcessClockSession).filter(m.ProcessClockSession.exam_session_id.in_(deleted_sessions)).update({'is_current':False}, synchronize_session='fetch')
     fresh = {obj.id for obj in unit.info.pop('quality_new_records', []) if obj not in unit.deleted and obj.id}
     bundle_ids = unit.info.pop('quality_bundle_ids', set())
     if bundle_ids:
@@ -450,10 +471,16 @@ def save_quality_changes(unit):
     unit.info['quality_observing'] = True
     try:
         # Only previously tracked sessions need a baseline update on ordinary edits.
-        tracked = {sid for sid, in unit.query(m.QualityProcessTiming.exam_session_id).filter(m.QualityProcessTiming.exam_session_id.in_(ids)).distinct()}
-        records = unit.query(m.ExamSession).filter(m.ExamSession.id.in_(tracked | fresh)).all()
+        from app.process_timing import expanded_records
+        records = expanded_records(ids | fresh, unit=unit)
         if records:
-            observe(load_rows(records), unit=unit, fresh_ids=fresh)
+            from app.process_timing import reconcile_rows
+            fresh_owners = {f'bundle:{obj.id}' for obj in unit.info.pop('process_timing_fresh_bundles', []) if obj.id}
+            from flask import has_request_context
+            who = (getattr(getattr(g, 'current_user', None), 'email', None) or request.environ.get('REMOTE_USER') or 'Portal user') if has_request_context() else 'System'
+            reconcile_rows(load_rows(records), unit=unit, fresh_ids=fresh, fresh_owners=fresh_owners, created_by=who)
+        from app.process_timing import retire_orphan_clocks
+        retire_orphan_clocks(unit.info.pop('process_timing_retire_ids', set()), unit=unit)
         unit.flush()
     finally:
         unit.info.pop('quality_observing', None)
@@ -462,5 +489,33 @@ def save_quality_changes(unit):
 @event.listens_for(Session, 'after_rollback')
 @event.listens_for(Session, 'after_commit')
 def clear_quality_changes(unit):
-    for key in ['quality_session_ids', 'quality_new_records', 'quality_bundle_ids', 'quality_member_ids']:
+    for key in ['quality_session_ids', 'quality_new_records', 'quality_bundle_ids', 'quality_member_ids', 'process_timing_fresh_bundles', 'process_timing_retire_ids', 'process_timing_deleted_sessions']:
         unit.info.pop(key, None)
+
+
+@event.listens_for(Session, 'do_orm_execute')
+def collect_quality_bulk_changes(execution):
+    """Query.update/delete also occur in operational bulk actions."""
+    if (not (execution.is_update or execution.is_delete) or not has_app_context()
+            or not current_app.config.get('QUALITY_CONTROL_TRACKING_READY')
+            or execution.session.info.get('quality_observing')):
+        return
+    mapper = execution.bind_mapper
+    if mapper is None:
+        return
+    model = mapper.class_
+    unit = execution.session
+    clauses = execution.statement._where_criteria
+    if model in TRACKED_MODELS:
+        field = model.id if model is m.ExamSession else model.exam_session_id
+        affected_ids = {sid for sid, in unit.query(field).filter(*clauses)}
+        unit.info.setdefault('quality_session_ids', set()).update(affected_ids)
+        if model is m.ExamSession and execution.is_delete:
+            unit.info.setdefault('process_timing_deleted_sessions', set()).update(affected_ids)
+            clock_ids = {cid for cid, in unit.query(m.ProcessClockSession.clock_id).filter(m.ProcessClockSession.exam_session_id.in_(affected_ids),m.ProcessClockSession.is_current.is_(True))}
+            unit.info.setdefault('process_timing_retire_ids',set()).update(clock_ids)
+            unit.info.setdefault('quality_session_ids',set()).update(sid for sid, in unit.query(m.ProcessClockSession.exam_session_id).filter(m.ProcessClockSession.clock_id.in_(clock_ids),m.ProcessClockSession.is_current.is_(True)))
+    elif model is m.AcademicStaff:
+        unit.info.setdefault('quality_member_ids', set()).update(mid for mid, in unit.query(model.id).filter(*clauses))
+    elif model is m.ExamSessionShipmentBundle:
+        unit.info.setdefault('quality_bundle_ids', set()).update(bid for bid, in unit.query(model.id).filter(*clauses))

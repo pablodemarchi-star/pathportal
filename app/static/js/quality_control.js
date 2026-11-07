@@ -5,7 +5,7 @@
   const query = root.querySelector('#qc-query'), format = root.querySelector('#qc-format'), attention = root.querySelector('#qc-attention'), sort = root.querySelector('#qc-sort');
   const dialog = root.querySelector('#qc-dialog'), content = root.querySelector('#qc-dialog-content'), link = root.querySelector('#qc-open-block');
   const visibleRows = () => rows.filter(row => !row.hidden);
-  const set = (id, value) => { root.querySelector(id).textContent = value; };
+  const set = (id, value) => { const element=root.querySelector(id); if(element) element.textContent = value; };
   function filter() {
     const term = query.value.trim().toLocaleLowerCase();
     rows.forEach(row => { row.hidden = !((!term || row.dataset.name.includes(term)) && (!format.value || row.dataset.format === format.value) && (!attention.checked || row.dataset.attention === '1')); });
@@ -20,6 +20,8 @@
     [['q',query.value],['format',format.value],['attention',attention.checked ? '1' : ''],['sort',sort.value === 'date' ? '' : sort.value]].forEach(([key,value]) => value ? url.searchParams.set(key,value) : url.searchParams.delete(key));
     history.replaceState(null,'',url);
     root.querySelector('.qc-header-actions a').href = url.toString();
+    root.querySelectorAll('.qc-tabs a').forEach(anchor => {const next=new URL(anchor.href);url.searchParams.forEach((value,key)=>{if(key!=='tab')next.searchParams.set(key,value);});['q','format','attention','sort'].forEach(key=>{if(!url.searchParams.has(key))next.searchParams.delete(key);});anchor.href=next.toString();});
+    root.dispatchEvent(new CustomEvent('quality:filtered'));
   }
   [query,format,attention,sort].forEach(input => input.addEventListener('input',filter));
   root.querySelector('#qc-year').addEventListener('change', () => root.querySelector('#qc-filters').submit());
@@ -32,38 +34,12 @@
     set('#qc-dialog-title',title);set('#qc-dialog-subtitle',subtitle); content.replaceChildren(); link.hidden=true; dialog.showModal();
   }
   root.querySelectorAll('[data-qc-detail]').forEach(button => button.addEventListener('click', () => {
-    const d=button.dataset, timing=JSON.parse(d.timing);
+    const d=button.dataset;
     open(d.label,d.session);
     content.append(node('p', d.status), node('p', d.detail));
     if(d.deadline) content.append(node('p',`Deadline: ${d.deadline}`));
-    const definitions=node('dl');
-    const entries=[['Enabled',stamp(timing.enabled_at)],['First recorded action',stamp(timing.first_action_at)],['Completed',stamp(timing.completed_at)],['Wait before first action',days(timing.wait)],['Total elapsed since enablement',days(timing.elapsed)],['First recorded action to completion',days(timing.duration)],['Reopenings since tracking started',String(timing.reopenings)]];
-    entries.forEach(([label,value]) => definitions.append(node('dt',label),node('dd',value)));
-    content.append(definitions,node('p','Recorded times are calendar time, not working hours. Historical gaps are shown explicitly. Reopened processes retain their original known start; elapsed time includes the reopening period.'));
-    if (timing.history.length) {content.append(node('h3','Recorded milestones'));const list=node('ul');timing.history.forEach(event=>list.append(node('li',`${stamp(event.at)} · ${event.event}`))); content.append(list);}
     if(d.url && d.applicable==='1'){link.href=d.url;link.hidden=false;}
   }));
-  root.querySelector('#qc-times').addEventListener('click', () => {
-    open('Process times','CURRENT FILTERED SESSIONS');
-    content.append(node('p','Only complete processes with a known enablement date are included in averages. Unknown historical periods are excluded. Shared processes are counted once per session.'));
-    const groups=new Map();
-    visibleRows().forEach(row=>row.querySelectorAll('[data-qc-detail]').forEach(button=>{
-      if(button.dataset.applicable!=='1')return;
-      const timing=JSON.parse(button.dataset.timing), key=button.dataset.label;
-      if(!groups.has(key))groups.set(key,[]);
-      timing.deadline = button.dataset.deadlineIso;
-      groups.get(key).push(timing);
-    }));
-    const table=node('table'), head=node('tr');['Process','Measured completions','Average days','Longest days','On time (known)','Reopenings'].forEach(label=>head.append(node('th',label)));table.append(head);
-    groups.forEach((timings,key)=>{
-      const measured=timings.filter(t=>t.completed_at && t.elapsed!==null), values=measured.map(t=>t.elapsed), tr=node('tr');
-      const knownDeadlines = timings.filter(t => t.completed_at && t.deadline);
-      const localDate = value => {const parts = new Intl.DateTimeFormat('en-GB',{timeZone:'America/Argentina/Buenos_Aires',year:'numeric',month:'2-digit',day:'2-digit'}).formatToParts(new Date(value));const part = type => parts.find(p => p.type === type).value;return `${part('year')}-${part('month')}-${part('day')}`;};
-      const onTime = knownDeadlines.filter(t => localDate(t.completed_at) <= t.deadline).length;
-      const cells=[key,`${measured.length} / ${timings.length}`,values.length?(values.reduce((a,b)=>a+b,0)/values.length).toFixed(1):'No data',values.length?Math.max(...values).toFixed(1):'No data',knownDeadlines.length ? `${Math.round(onTime/knownDeadlines.length*100)}% (${onTime}/${knownDeadlines.length})` : 'No data',timings.reduce((sum,t)=>sum+t.reopenings,0)];
-      cells.forEach(value=>tr.append(node('td',String(value))));table.append(tr);
-    });content.append(table);
-  });
   dialog.querySelector('.qc-close').addEventListener('click',()=>dialog.close());
   dialog.addEventListener('click',event=>{if(event.target===dialog){const rect=dialog.getBoundingClientRect();if(event.clientX<rect.left||event.clientX>rect.right||event.clientY<rect.top||event.clientY>rect.bottom)dialog.close();}});
 })();

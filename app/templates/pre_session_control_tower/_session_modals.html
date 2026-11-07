@@ -2686,6 +2686,7 @@ This stage has already been marked as complete. Reopening it may affect package 
                 {% endfor %}
               </select>
             </label>
+            {% set timing_incident = none %}{% include 'pre_session_control_tower/_incident_affected_block.html' %}
             <label>
               Title
               <input name="title" maxlength="200" required placeholder="Short incident title">
@@ -2748,6 +2749,7 @@ This stage has already been marked as complete. Reopening it may affect package 
                   <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
                   <input type="hidden" name="schedule_status" value="{{ selected_schedule_status }}">
                   <input type="hidden" name="view" value="{{ selected_view }}">
+                  {% set timing_incident = incident.record %}{% include 'pre_session_control_tower/_incident_affected_block.html' %}
                   <label>
                     Incident status
                     <select name="incident_status" required>

@@ -22,9 +22,9 @@ const makeRow=(name,format,attention,ready,days)=>{
  buttons.push(button);row.querySelectorAll=()=>[button];return row;
 };
 const rows=[makeRow('north school','Onsite','1','0',10),makeRow('universidad del sur','Online','0','1',20)];
-const root={querySelector:s=>selectors[s],querySelectorAll:s=>s==='[data-qc-row]'?rows:buttons};
+const root={querySelector:s=>selectors[s],querySelectorAll:s=>s==='[data-qc-row]'?rows:s==='.qc-tabs a'?[]:buttons,dispatchEvent(){}};
 let lastUrl;
-const context=vm.createContext({document:{querySelector:()=>root,createElement:()=>new Element()},URL,location:{href:'http://localhost/quality-control?session_year=2026'},history:{replaceState:(_,__,url)=>{lastUrl=String(url);}},Intl});
+const context=vm.createContext({document:{querySelector:()=>root,createElement:()=>new Element()},URL,location:{href:'http://localhost/quality-control?session_year=2026'},CustomEvent:class{constructor(name){this.type=name;}},history:{replaceState:(_,__,url)=>{lastUrl=String(url);}},Intl});
 vm.runInContext(fs.readFileSync('app/static/js/quality_control.js','utf8'),context);
 assert.equal(selectors['#qc-total'].textContent,2);
 assert.equal(selectors['#qc-ready'].textContent,1);
@@ -37,8 +37,5 @@ selectors['#qc-attention'].checked=true;selectors['#qc-attention'].listeners.inp
 assert.equal(selectors['#qc-total'].textContent,1);
 buttons[0].listeners.click();assert.equal(dialog.open,true);assert.equal(selectors['#qc-dialog-title'].textContent,'Staffing');assert.equal(selectors['#qc-open-block'].hidden,false);
 close.listeners.click();assert.equal(dialog.open,false);
-selectors['#qc-times'].listeners.click();assert.equal(selectors['#qc-open-block'].hidden,true);
-assert.equal(selectors['#qc-dialog-title'].textContent,'Process times');
-assert.ok(selectors['#qc-dialog-content'].children.some(n=>n.children.length>1));
 selectors['#qc-query'].value='no match';selectors['#qc-query'].listeners.input();assert.equal(selectors['#qc-empty'].hidden,false);
-console.log('Quality control: live search, format and attention filters, counters, URL persistence, detail and process time dialogs passed.');
+console.log('Quality control: live search, format and attention filters, counters, URL persistence, readiness detail and tab-safe filters passed.');

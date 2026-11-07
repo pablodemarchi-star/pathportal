@@ -1,0 +1,9 @@
+<label>
+  Affected block
+  <select name="affected_block">
+    {% for key, label in [('general', 'General session'), ('date', 'Date'), ('registrations', 'Registrations'), ('schedule', 'Schedule'), ('staffing', 'Staffing'), ('package', 'Package'), ('shipment', 'Shipment'), ('logistics', 'Logistics'), ('finance', 'Finance'), ('final_checks', 'Final checks')] %}
+      <option value="{{ key }}"{% if (timing_incident.affected_block if timing_incident else 'general') == key %} selected{% endif %}>{{ label }}</option>
+    {% endfor %}
+  </select>
+  <small>Optional. General session does not assign incident time to a process.</small>
+</label>

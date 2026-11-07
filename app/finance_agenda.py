@@ -225,6 +225,12 @@ def daily_job():
     supplied = request.headers.get('Authorization', '')
     if len(expected) < 32 or not hmac.compare_digest(supplied, 'Bearer ' + expected):
         abort(403)
+    try:
+        from app.process_timing import reconcile_due
+        reconcile_due()
+    except Exception:
+        db.session.rollback()
+        current_app.logger.exception('Process timing calendar reconciliation failed')
     notice_id = queue_daily()
     if notice_id is None:
         return jsonify(status='before_cutoff')

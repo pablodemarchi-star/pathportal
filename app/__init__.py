@@ -149,6 +149,7 @@ def create_app():
 
     app.register_blueprint(staff_bp)
     from app.quality_control import quality_bp
+    from app import process_timing
     app.register_blueprint(quality_bp)
     from app.google_mail import google_mail_bp
     app.register_blueprint(google_mail_bp)
@@ -297,6 +298,8 @@ def create_app():
 
     with app.app_context():
         db.create_all()
+        from app.schema_migrations import migrate_process_timing
+        migrate_process_timing()
         from app.schema_migrations import migrate_payee_notification_preferences
         migrate_payee_notification_preferences()
         from app.schema_migrations import migrate_staff_id_expiry
@@ -1425,8 +1428,8 @@ def create_app():
         normalize_existing_interns()
         from app.final_checks import initialize_existing_final_checks
         initialize_existing_final_checks()
-        from app.quality_control import initialize_quality_tracking
-        initialize_quality_tracking()
+        from app.process_timing import initialize_process_timing
+        initialize_process_timing()
     app.config["QUALITY_CONTROL_TRACKING_READY"] = True
     return app
 

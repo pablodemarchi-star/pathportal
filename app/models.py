@@ -2,7 +2,7 @@ import json
 from datetime import date, datetime, timezone
 
 from app import db
-from sqlalchemy import event
+from sqlalchemy import event, text
 from werkzeug.security import check_password_hash, generate_password_hash
 
 
@@ -1477,6 +1477,7 @@ class ExamSessionCommunicationsEvent(db.Model):
 class ExamSessionIncident(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     exam_session_id = db.Column(db.Integer, db.ForeignKey("exam_session.id"), nullable=False, index=True)
+    affected_block = db.Column(db.String(30), nullable=False, default='general', server_default='general', index=True)
     incident_type = db.Column(db.String(80), nullable=False, index=True)
     title = db.Column(db.String(200), nullable=False)
     description = db.Column(db.Text, nullable=True)
@@ -2836,3 +2837,66 @@ class QualityProcessTiming(db.Model):
     reopenings = db.Column(db.Integer, nullable=False, default=0)
     history_json = db.Column(db.Text, nullable=False, default='[]')
     exam_session = db.relationship('ExamSession', backref=db.backref('quality_timings', cascade='all, delete-orphan'))
+
+
+class ProcessClock(db.Model):
+    """One clock per session process, shared schedule or shipment bundle."""
+    id = db.Column(db.Integer, primary_key=True)
+    owner_key = db.Column(db.String(100), nullable=False, unique=True, index=True)
+    block = db.Column(db.String(30), nullable=False, index=True)
+    category = db.Column(db.String(30), nullable=False, default='Blocked', index=True)
+    has_begun = db.Column(db.Boolean, nullable=False, default=False, server_default=db.false())
+    started_at = db.Column(db.DateTime(timezone=True), index=True)
+    completed_at = db.Column(db.DateTime(timezone=True), index=True)
+    tracked_from = db.Column(db.DateTime(timezone=True), nullable=False)
+    coverage_complete = db.Column(db.Boolean, nullable=False, default=False)
+    path_seconds = db.Column(db.Float, nullable=False, default=0)
+    external_seconds = db.Column(db.Float, nullable=False, default=0)
+    incident_seconds = db.Column(db.Float, nullable=False, default=0)
+    manual_reason = db.Column(db.String(40))
+    manual_note = db.Column(db.Text)
+    manual_by = db.Column(db.String(160))
+    revision = db.Column(db.Integer, nullable=False, default=0)
+    reopenings = db.Column(db.Integer, nullable=False, default=0)
+    next_check_at = db.Column(db.DateTime(timezone=True), index=True)
+    created_at = db.Column(db.DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))
+
+
+class ProcessClockSession(db.Model):
+    __table_args__ = (
+        db.UniqueConstraint('clock_id', 'exam_session_id', name='uq_process_clock_session'),
+        db.Index('ix_process_clock_session_current', 'exam_session_id', 'block', 'is_current'),
+    )
+    id = db.Column(db.Integer, primary_key=True)
+    clock_id = db.Column(db.Integer, db.ForeignKey('process_clock.id'), nullable=False, index=True)
+    exam_session_id = db.Column(db.Integer, db.ForeignKey('exam_session.id', ondelete='CASCADE'), nullable=False, index=True)
+    block = db.Column(db.String(30), nullable=False)
+    is_current = db.Column(db.Boolean, nullable=False, default=True)
+    clock = db.relationship('ProcessClock', backref=db.backref('session_links', lazy=True))
+    exam_session = db.relationship('ExamSession', backref=db.backref('process_clock_links', cascade='all, delete-orphan'))
+
+
+class ProcessInterval(db.Model):
+    __table_args__ = (db.Index('uq_process_interval_open', 'clock_id', unique=True, sqlite_where=text('ended_at IS NULL'), postgresql_where=text('ended_at IS NULL')),
+                      db.Index('ix_process_interval_history', 'clock_id', 'started_at', 'id'),
+                      db.Index('ix_process_interval_category_dates', 'category', 'started_at', 'ended_at'),)
+    id = db.Column(db.Integer, primary_key=True)
+    clock_id = db.Column(db.Integer, db.ForeignKey('process_clock.id'), nullable=False, index=True)
+    category = db.Column(db.String(30), nullable=False, index=True)
+    started_at = db.Column(db.DateTime(timezone=True), nullable=False)
+    ended_at = db.Column(db.DateTime(timezone=True), index=True)
+    reason = db.Column(db.String(60), nullable=False, default='')
+    note = db.Column(db.Text, nullable=False, default='')
+    incident_ids_json = db.Column(db.Text, nullable=False, default='[]')
+    source = db.Column(db.String(40), nullable=False, default='operational')
+    created_by = db.Column(db.String(160), nullable=False, default='System')
+    clock = db.relationship('ProcessClock', backref=db.backref('intervals', lazy=True))
+
+
+class ProcessClockIncident(db.Model):
+    __table_args__ = (db.UniqueConstraint('clock_id', 'incident_id', name='uq_process_clock_incident'),)
+    id = db.Column(db.Integer, primary_key=True)
+    clock_id = db.Column(db.Integer, db.ForeignKey('process_clock.id'), nullable=False, index=True)
+    incident_id = db.Column(db.Integer, db.ForeignKey('exam_session_incident.id', ondelete='CASCADE'), nullable=False, index=True)
+    clock = db.relationship('ProcessClock')
+    incident = db.relationship('ExamSessionIncident')

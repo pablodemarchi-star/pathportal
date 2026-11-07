@@ -423,15 +423,66 @@ Shipment awaits recipient review, Logistics has one concept left, Finance only
 awaits institution verification, or Final checks has Return complete and one
 Sinapsis check left.
 
-`quality_process_timing` is created by the normal `db.create_all()` startup. Startup
-seeds missing baselines once. SQLAlchemy commit hooks record affected sessions'
-state transitions in the same transaction, including shared schedules and bundle
-shipment changes. Rollback also rolls back timing changes. They do not query
-external services or reload every session on each edit. Unrelated fee/comment
-edits are excluded. Batch queries and a batch insert keep query counts from
-growing per row. Timings survive restarts and track reopenings; known beginnings
-are retained across reopening. Existing event timestamps can supply first
-recorded actions/completions, but unknown enablement dates remain unknown and
-are excluded from elapsed-time averages. Process times are calendar time, not
-staff working time. The page displays its refresh timestamp and has no response
-cache; Refresh reads current database state.
+The earlier `quality_process_timing` data is retained as a frozen legacy record for
+rollback. Live readiness no longer displays the old elapsed-time calculations.
+
+### Process timing
+
+Quality control keeps its menu name and now has Live readiness / Process timing
+tabs. Process timing offers By session / By process, using the same filters and
+source readiness cells. No operational completion, applicability, colour or
+filter rule is changed. The former Process times button is replaced by the new tab.
+
+Data-preserving migration `migrate_process_timing()` adds only the optional
+`exam_session_incident.affected_block` column/index (default `general`). Normal
+`db.create_all()` creates `process_clock`, `process_clock_session`,
+`process_interval` and `process_clock_incident`. Existing tables/history are not
+dropped. General session incidents affect no clock. Specific incidents affect
+the matching process; shared schedules and bundles share incident context.
+
+Persistent clocks cache closed interval totals. Their sole open interval adds
+elapsed UTC seconds at read time. A partial unique index prevents two open
+intervals per clock. Row locks (PostgreSQL) or an initial write (SQLite) serialize
+updates; interval closing, totals and source changes share a transaction.
+Rollback restores all of them. Category priority is N/A / Completed / Blocked
+first, then Incident time, Waiting external, Path time. Blocked and completed
+periods never contribute. Multiple simultaneous incidents count once. A completed
+clock that reopens resumes accumulation without counting the completed gap.
+Retired ownership keeps its intervals and stops accumulating. Metadata for N/A
+may exist but no N/A interval is created or counted.
+
+Automatic waits: Schedule Sent for review (Institution), Staffing official
+invitations when no internal vacancy/pending action or institution notification
+remains, and Shipment after dispatch / before delivery (Courier), then recipient
+review (Recipient). A decline restores Path time if internal replacement work is
+needed. Manual waits require Superadmin, CSRF, a reason and a note for Other.
+Resume clears only a manual wait: an automatic wait or active incident still wins.
+Completion/N/A clears obsolete manual waiting instructions. The manual endpoint
+uses a revision check to reject stale tabs, and never changes source block status.
+
+Operational save and bulk update/delete hooks record transitions without an open
+page. Startup reconciles current source state without replaying old history.
+`/internal/jobs/process-timing` additionally reconciles calendar gates. It accepts
+`QUALITY_TIMING_JOB_TOKEN` (fallback: existing `FINANCE_AGENDA_JOB_TOKEN`). The
+existing daily Finance agenda job invokes it internally, so no additional cron
+is required where that job already runs. The optional command is
+`python scripts/reconcile_process_timing.py`. Known Final checks openings are
+recorded at 00:00 GMT-3 even if the scheduled call runs later; an incident created
+later that morning is classified only from its actual change time.
+
+Historical category splits are never inferred from old elapsed-time snapshots.
+Existing active/completed processes show Insufficient timing data; their new
+intervals are preserved as a partial measurement. A known creation date may be
+shown for Date without claiming a complete historical duration. New processes or
+processes first enabled after an observed blocked baseline can be measured fully.
+Only fully covered, completed clocks enter medians. Every component uses the same
+cohort; component medians need not sum to the median total. Schedule group IDs
+and bundle IDs deduplicate filtered summaries. Group membership changes retain
+old clocks separately; new shared groups with prior activity are conservative
+about coverage rather than merging unknown histories.
+
+Live readiness never fetches timing intervals. Process timing loads only clock
+summaries and open intervals in batches; detailed history is requested per cell,
+100 intervals at a time. No Drive/files, operational modals or external services
+are loaded. Days/hours are calendar time, not working hours; exact seconds are
+retained internally.

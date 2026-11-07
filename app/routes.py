@@ -8857,7 +8857,10 @@ def validate_incident_change(previous_status, new_status, previous_severity, new
     return None
 
 
-def create_incident_record(session_record, incident_type, title, description, severity, responsible_department, due_at=None, evidence_url="", note="", created_by=None):
+def create_incident_record(session_record, incident_type, title, description, severity, responsible_department, due_at=None, evidence_url="", note="", created_by=None, affected_block="general"):
+    from app.process_timing import BLOCKS
+    if affected_block not in {"general", *BLOCKS}:
+        return None, "Please select a valid affected block."
     if incident_type not in INCIDENT_TYPES:
         return None, "Please select a valid incident type."
     if not (title or "").strip():
@@ -8874,6 +8877,7 @@ def create_incident_record(session_record, incident_type, title, description, se
     incident = ExamSessionIncident(
         exam_session_id=session_record.id,
         incident_type=incident_type,
+        affected_block=affected_block,
         title=title.strip(),
         description=(description or "").strip() or None,
         severity=severity,
@@ -21556,6 +21560,7 @@ def create_incident(session_id):
         evidence_url=evidence_url,
         note=note,
         created_by=session.get("user"),
+        affected_block=request.form.get("affected_block", "general").strip() or "general",
     )
     if error:
         db.session.rollback()
@@ -21604,6 +21609,12 @@ def update_incident(session_id, incident_id):
     if len(note) > 2000:
         flash("Incident note must be 2000 characters or fewer.", "error")
         return incidents_control_redirect(session_record, status_filter, incident_id=incident_id, view=view)
+    from app.process_timing import BLOCKS
+    affected_block = request.form.get("affected_block", incident.affected_block or "general").strip() or "general"
+    if affected_block not in {"general", *BLOCKS}:
+        flash("Please select a valid affected block.", "error")
+        return incidents_control_redirect(session_record, status_filter, incident_id=incident_id, view=view)
+    previous_block = incident.affected_block or "general"
     previous_status = incident.status
     previous_severity = incident.severity
     error = apply_incident_update(
@@ -21620,6 +21631,12 @@ def update_incident(session_id, incident_id):
         db.session.rollback()
         flash(error, "error")
         return incidents_control_redirect(session_record, status_filter, incident_id=incident_id, view=view)
+    incident.affected_block = affected_block
+    if previous_block != affected_block:
+        db.session.add(ExamSessionIncidentEvent(incident=incident, event_type="affected_block_changed",
+            previous_status=previous_status, new_status=incident.status,
+            previous_severity=previous_severity, new_severity=incident.severity,
+            note=f"Affected block changed from {previous_block} to {affected_block}.", created_by=session.get("user")))
     should_ensure_review_flags = (
         new_severity in {"High", "Critical"}
         and (
