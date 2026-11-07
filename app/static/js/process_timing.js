@@ -41,6 +41,7 @@ function processTotals(clock, now=Date.now()) {
       button.title=`Total time: ${processDuration(totals.total)}\nPath time: ${processDuration(totals.path)}\nExternal waiting: ${processDuration(totals.external)}\nIncident time: ${processDuration(totals.incident)}\nStarted: ${stamp(clock.started_at)}\nCompleted: ${stamp(clock.completed_at)}${clock.coverage_complete?'':'\nPartial measurement only; earlier intervals are unknown.'}`;
     });
     renderSummary();
+    root.dispatchEvent(new CustomEvent('quality:timing-updated'));
   }
   function renderSummary() {
     const groups=new Map();

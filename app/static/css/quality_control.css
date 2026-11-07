@@ -13,3 +13,7 @@
 .qc-cell-time-breakdown>span{display:flex;justify-content:space-between;align-items:baseline;gap:8px}
 .qc-cell-time-breakdown strong{font-weight:600;white-space:nowrap;font-variant-numeric:tabular-nums}
 .qc-partial-data{align-self:flex-start;max-width:100%;box-sizing:border-box;padding:3px 6px;border-radius:6px;background:#fff1ce;color:#785b0c;font-size:10px;line-height:1.3;font-weight:600}
+
+.qc-column-sort{display:flex;align-items:center;justify-content:space-between;gap:7px;width:100%;border:0;padding:0;background:transparent;color:inherit;font:inherit;text-transform:inherit;letter-spacing:inherit;text-align:left;cursor:pointer;white-space:normal}
+.qc-column-sort [data-sort-indicator]{flex-shrink:0;font-size:12px;opacity:.75}
+.qc-column-sort:focus-visible{outline:2px solid #0096ce;outline-offset:4px;border-radius:3px}

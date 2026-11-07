@@ -256,6 +256,7 @@ def load_rows(records, today=None):
             rows.append(dict(session=record, cells=cells, timing_sources=timing_sources, shipment_bundle_id=bundle.id if bundle else None,
                              shipment_readiness={'recipient_confirmed': bool(recipient and recipient.participation_status == 'Confirmed'), 'package_completed':package['status']=='completed', 'schedule_completed':r.schedule_workflow_status(first(workflows,sid))=='Approved'}, days=days, business_days=business,
                              recipient=(' '.join(filter(None, [getattr(person, 'title', ''), getattr(person, 'full_name', '')])) if person else None),
+                             recipient_sort_name=(getattr(person, 'full_name', '') or '') if onsite else '',
                              recipient_status=recipient.participation_status if recipient else None,
                              incident_count=incidents.get(sid, 0),
                              attention=bool(incidents.get(sid)) or any(c['overdue'] or c['issue'] for c in cells if c['applicable']),

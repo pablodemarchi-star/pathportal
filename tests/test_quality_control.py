@@ -240,3 +240,18 @@ class QualityControlTest(unittest.TestCase):
         self.assertEqual(staff['operational_status'],'Awaiting institution notification')
         self.assertEqual(staff['operational_note'],'Institution notification pending')
         self.assertFalse(staff['complete'])
+
+    def test_all_columns_offer_header_and_dropdown_sorting_in_both_tabs(self):
+        from app.quality_control import PROCESSES
+        client=self.login_client_for_user(self.admin())
+        for tab in ['readiness','timing']:
+            response=client.get('/quality-control?tab='+tab+'&sort=block_final_checks_desc')
+            self.assertEqual(response.status_code,200)
+            html=response.get_data(as_text=True)
+            self.assertIn('data-qc-sort="name"',html)
+            for key,label in PROCESSES:
+                self.assertIn(f'data-qc-sort="block_{key}"',html)
+                self.assertIn(f'value="block_{key}_desc"',html)
+                self.assertIn(f'data-qc-sort-cell="{key}"',html)
+            if tab=='timing':
+                self.assertLess(html.index('js/process_timing.js'),html.index('js/quality_control.js'))

@@ -24,6 +24,7 @@ const fields={};
 for(const key of ['total','total-label','partial','breakdown','path','external','incident'])fields[`[data-time-${key}]`]={hidden:false,textContent:''};
 const snapshot={category:'Completed',coverage_complete:false,tracked_from:'2026-11-07T12:00:00Z',as_of:'2026-11-07T13:00:00Z',totals:{total:30*3600,path:24*3600,external:5*3600,incident:3600}};
 const button={dataset:{applicable:'1'},querySelector:selector=>fields[selector]};
+context.root={dispatchEvent(){}};context.CustomEvent=class{constructor(name){this.type=name;}};
 context.buttons=[button];context.read=()=>snapshot;context.stamp=value=>value;context.renderSummary=()=>{};
 vm.runInContext(source.slice(start,end)+'\nthis.updateCellsForTest=updateCells;',context);
 context.updateCellsForTest();
