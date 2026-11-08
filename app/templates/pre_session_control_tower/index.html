@@ -1804,7 +1804,7 @@
           <td>
             {% set bundle_modal_session = bundle.included_sessions[0] if bundle.included_sessions else none %}
             {% if bundle_modal_session %}
-              <button class="contextual-cell-trigger" type="button" data-open-modal="schedule-workflow-{{ bundle_modal_session.id }}" data-modal-scroll-target="shipments-{{ bundle_modal_session.id }}" data-modal-target-label="Track shipment" data-modal-shipments-only="true" aria-label="Track shipment for Bundle {{ bundle.number }}">
+              <button class="contextual-cell-trigger" type="button" data-open-modal="schedule-workflow-{{ bundle_modal_session.id }}" data-modal-scroll-target="shipments-{{ bundle_modal_session.id }}" data-modal-target-label="Track shipment" data-modal-shipments-only="true" data-modal-bundle-number="{{ bundle.number }}" aria-label="Track shipment for Bundle {{ bundle.number }}">
                 {{ shipment_bundle_table_cell(bundle) }}
               </button>
             {% else %}
@@ -2145,9 +2145,9 @@
   {% include 'pre_session_control_tower/_session_modals.html' %}
 {% else %}
   {% for view in modal_views %}
-  <div class="modal tower-lazy-modal" id="schedule-workflow-{{ view.session.id }}" aria-hidden="true" role="dialog" aria-modal="true" aria-labelledby="tower-lazy-title-{{ view.session.id }}" data-tower-session="{{ view.session.id }}">
+  <div class="modal tower-lazy-modal" id="schedule-workflow-{{ view.session.id }}" aria-hidden="true" role="dialog" aria-modal="true" aria-labelledby="tower-lazy-title-{{ view.session.id }}" data-tower-session="{{ view.session.id }}" data-tower-session-name="{{ view.session.exam_session_name }}" data-tower-bundle-number="{{ view.shipments.contract.bundle_number }}">
     <div class="modal-panel large tower-lazy-panel">
-      <header data-tower-loading-header><h2 id="tower-lazy-title-{{ view.session.id }}">{{ view.session.exam_session_name }}</h2><button type="button" class="icon-button" data-close-modal aria-label="Close modal">&times;</button></header>
+      <header data-tower-loading-header><h2 data-tower-loading-title id="tower-lazy-title-{{ view.session.id }}">{{ view.session.exam_session_name }}</h2><button type="button" class="icon-button" data-close-modal aria-label="Close modal">&times;</button></header>
       <p data-tower-loading role="status">Loading session details…</p>
       <button type="button" class="secondary-button" data-tower-retry hidden>Try again</button>
       <iframe title="{{ view.session.exam_session_name }} — session details" data-tower-frame hidden></iframe>
@@ -2187,5 +2187,5 @@
   </div>
 </div>
 {% with instructions_can_edit=user_can_edit('pre_session_control_tower'), instructions_heading='Return instructions' %}{% include '_instructions_editor.html' %}{% endwith %}
-<script src="{{ url_for('static', filename='js/tower_live.js', v='20261105-finance-autosave-3') }}"></script>
+<script src="{{ url_for('static', filename='js/tower_live.js', v='20261107-bundle-loading-4') }}"></script>
 {% endblock %}

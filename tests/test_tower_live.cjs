@@ -109,10 +109,12 @@ function childContext() {
   const loading = {};
   const header = {};
   const retry = {};
+  const title = {textContent:'Test session'};
   const nodes = {'[data-tower-frame]':frame, '[data-tower-loading]':loading,
-    '[data-tower-loading-header]':header, '[data-tower-retry]':retry};
-  const modal = {dataset:{towerSession:'7'}, querySelector:key=>nodes[key],
-    classList:{contains:key=>key==='is-staffing-only'}};
+    '[data-tower-loading-header]':header, '[data-tower-retry]':retry, '[data-tower-loading-title]':title};
+  let mode = 'staffing';
+  const modal = {dataset:{towerSession:'7',towerSessionName:'Test session',towerBundleNumber:'27-26'}, querySelector:key=>nodes[key],
+    classList:{contains:key=>key===`is-${mode}-only`}};
   const window = {
     location:{href:'https://portal.test/pre-session-control-tower?session_year=2026&view=bundle&bundle_id=3&bundle_q=Patagonian&schedule_only=1&open_schedule_action=mark_ready',origin:'https://portal.test'},
     fetch:async()=>new Response(''), addEventListener() {}
@@ -131,5 +133,20 @@ function childContext() {
   frame.onload();
   assert.equal(retry.hidden,false,'A failed modal load must offer a retry');
   assert.match(loading.textContent,/could not be loaded/);
-  console.log('Tower lazy load: session, block, filter context, and load failure retry passed.');
+  mode='shipments';
+  window.loadTowerModal(modal,{dataset:{modalScrollTarget:'shipments-7',modalBundleNumber:'28-26'}});
+  assert.equal(title.textContent,'Bundle 28-26','Use the current bundle opener instead of a session name');
+  assert.equal(loading.textContent,'Loading bundle details…');
+  assert.equal(frame.title,'Bundle 28-26 — bundle details');
+  frame.onload();
+  assert.match(loading.textContent,/Bundle details could not be loaded/);
+  retry.onclick();
+  assert.equal(title.textContent,'Bundle 28-26');
+  assert.equal(loading.textContent,'Loading bundle details…');
+  mode='staffing';
+  window.loadTowerModal(modal,{dataset:{modalScrollTarget:'staffing-7'}});
+  assert.equal(title.textContent,'Test session');
+  assert.equal(loading.textContent,'Loading session details…');
+  assert.equal(frame.title,'Test session — session details');
+  console.log('Tower lazy load: bundle/session loading titles, retries, mode changes and filter context passed.');
 }

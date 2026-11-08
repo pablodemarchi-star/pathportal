@@ -18212,3 +18212,4 @@ body.staff-session-detail-open { overflow: hidden; }
 .modal .modal-shipment-name { display: none; }
 .modal.is-shipments-only .modal-session-name { display: none; }
 .modal.is-shipments-only .modal-shipment-name { display: inline; }
+.modal.is-shipments-only .modal-session-only-context { display: none; }

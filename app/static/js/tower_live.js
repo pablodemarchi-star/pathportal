@@ -48,7 +48,7 @@
             try { loginPage = Boolean(frame.contentDocument?.querySelector('form[action="/login"], input[name="password"]')); } catch (_) {}
             loading.textContent = loginPage
               ? 'Your sign-in session has expired. Reload the page and sign in again.'
-              : 'Session details could not be loaded. Please try again. If the problem persists, reload the page.';
+              : `${modal.dataset.towerLoadingKind === 'bundle' ? 'Bundle' : 'Session'} details could not be loaded. Please try again. If the problem persists, reload the page.`;
             retry.hidden = false;
           }
     };
@@ -73,7 +73,17 @@
           url.searchParams.set('open_modal_target', target ? target.replace(/-\d+$/, '') : 'overview');
         }
         frame.hidden = true; header.hidden = false; loading.hidden = false; retry.hidden = true;
-        loading.textContent = 'Loading session details…';
+        const bundleNumber = opener?.dataset.modalBundleNumber || modal.dataset.towerBundleNumber;
+        const bundleShipment = modal.classList.contains('is-shipments-only') && Boolean(bundleNumber);
+        modal.dataset.towerLoadingKind = bundleShipment ? 'bundle' : 'session';
+        const titleNode = modal.querySelector('[data-tower-loading-title]');
+        if (titleNode) {
+          modal.dataset.towerSessionName ||= titleNode.textContent;
+          titleNode.textContent = bundleShipment ? `Bundle ${bundleNumber}` : modal.dataset.towerSessionName;
+        }
+        loading.textContent = bundleShipment ? 'Loading bundle details…' : 'Loading session details…';
+        if (bundleShipment) frame.title = `Bundle ${bundleNumber} — bundle details`;
+        else if (modal.dataset.towerSessionName) frame.title = `${modal.dataset.towerSessionName} — session details`;
         frame.onload = () => displayLoadedFrame(modal, frame);
         frame.src = url.href;
       };
