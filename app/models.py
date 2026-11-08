@@ -1218,6 +1218,53 @@ class ExamSessionStaffingNoteMention(db.Model):
     exam_session = db.relationship("ExamSession", backref=db.backref("staffing_note_mentions", lazy=True, cascade="all, delete-orphan"))
 
 
+class ExamSessionShipmentNote(db.Model):
+    __tablename__ = "exam_session_shipment_note"
+
+    id = db.Column(db.Integer, primary_key=True)
+    bundle_id = db.Column(db.Integer, db.ForeignKey("exam_session_shipment_bundle.id"), nullable=False, index=True)
+    note_id = db.Column(db.String(64), nullable=False, unique=True, index=True)
+    note_context = db.Column(db.String(40), nullable=False, default="shipments", server_default="shipments")
+    note_text = db.Column(db.Text, nullable=False)
+    from_user_id = db.Column(db.Integer, db.ForeignKey("app_user.id"), nullable=True, index=True)
+    from_full_name = db.Column(db.String(160), nullable=True)
+    from_department = db.Column(db.String(40), nullable=True)
+    created_at = db.Column(db.DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc), index=True)
+
+    bundle = db.relationship("ExamSessionShipmentBundle", backref=db.backref("notes", lazy=True, cascade="all, delete-orphan"))
+
+
+class ExamSessionShipmentNoteMention(db.Model):
+    __tablename__ = "exam_session_shipment_note_mention"
+    __table_args__ = (
+        db.UniqueConstraint("note_id", "to_user_id", name="uq_shipment_note_recipient"),
+    )
+
+    id = db.Column(db.Integer, primary_key=True)
+    note_id = db.Column(db.String(64), nullable=False, index=True)
+    bundle_id = db.Column(db.Integer, db.ForeignKey("exam_session_shipment_bundle.id"), nullable=False, index=True)
+    note_context = db.Column(db.String(40), nullable=False, default="shipments", server_default="shipments")
+    from_user_id = db.Column(db.Integer, db.ForeignKey("app_user.id"), nullable=True, index=True)
+    from_full_name = db.Column(db.String(160), nullable=True)
+    from_department = db.Column(db.String(40), nullable=True)
+    to_user_id = db.Column(db.Integer, db.ForeignKey("app_user.id"), nullable=True, index=True)
+    to_full_name = db.Column(db.String(160), nullable=True)
+    to_department = db.Column(db.String(40), nullable=True)
+    comment_text = db.Column(db.Text, nullable=False)
+    is_read = db.Column(db.Boolean, nullable=False, default=False, index=True)
+    read_by_user_id = db.Column(db.Integer, db.ForeignKey("app_user.id"), nullable=True, index=True)
+    read_on = db.Column(db.DateTime(timezone=True), nullable=True)
+    created_on = db.Column(db.DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))
+    updated_on = db.Column(
+        db.DateTime(timezone=True),
+        nullable=False,
+        default=lambda: datetime.now(timezone.utc),
+        onupdate=lambda: datetime.now(timezone.utc),
+    )
+
+    bundle = db.relationship("ExamSessionShipmentBundle", backref=db.backref("note_mentions", lazy=True, cascade="all, delete-orphan"))
+
+
 class ExamSessionStaffingControl(db.Model):
     __table_args__ = (
         db.UniqueConstraint("exam_session_id", name="uq_exam_session_staffing_control"),

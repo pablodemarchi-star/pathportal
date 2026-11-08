@@ -1359,7 +1359,7 @@
       </div>
       <strong class="responsible-chip">{{ notes|length }} notes</strong>
     </div>
-    <form method="post" action="{{ url_for('staff.add_staffing_note', session_id=session.id) }}" class="staffing-control-form schedule-action-form staffing-note-form" data-disable-on-submit>
+    <form method="post" action="{{ url_for('staff.add_shipment_note', bundle_id=selected_bundle) }}" class="staffing-control-form schedule-action-form staffing-note-form" data-disable-on-submit>
       <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
       <input type="hidden" name="schedule_status" value="{{ selected_schedule_status }}">
       <input type="hidden" name="note_modal_context" value="shipments">
@@ -1406,7 +1406,7 @@
               {% if note_status.has_recipient %}
                 <span class="note-read-chip {% if note_status.is_read %}is-read{% else %}is-unread{% endif %}" {% if note_status.tooltip %}title="{{ note_status.tooltip }}" aria-label="{{ note_status.tooltip }}"{% endif %}>{{ note_status.label }}</span>
                 {% if note_status.can_mark_read %}
-                  <form method="post" action="{{ url_for('staff.mark_staffing_note_read', mention_id=note_status.mention_id) }}" class="note-read-form" data-note-read-form>
+                  <form method="post" action="{{ url_for('staff.mark_shipment_note_read', mention_id=note_status.mention_id) }}" class="note-read-form" data-note-read-form>
                     <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
                     <input type="hidden" name="return_session_id" value="{{ session.id }}">
                     <input type="hidden" name="highlight_note" value="{{ note.note_id }}">

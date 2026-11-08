@@ -50,6 +50,8 @@ from app.models import (
     ExamSessionScheduleWorkflow,
     ExamSessionShipmentBundle,
     ExamSessionShipmentBundleSession,
+    ExamSessionShipmentNote,
+    ExamSessionShipmentNoteMention,
     ExamSessionShipmentChecklistItem,
     ExamSessionShipmentEvent,
     ExamSessionSinapsisChecklistItem,
@@ -6334,52 +6336,83 @@ class ScheduleWorkflowTest(unittest.TestCase):
         note = ExamSessionStaffingNote.query.one()
         self.assertEqual(note.note_text, "Package labels need one final check.")
 
-    def test_shipment_modal_notes_panel_reuses_staffing_notes_flow(self):
+    def test_shipment_notes_belong_to_bundle_and_not_session(self):
         actor = User(full_name="Admin User", email="admin-shipment-note@example.com", department="Admin", is_active=True)
         actor.set_password("secret123")
         db.session.add(actor)
+        recipient = User(full_name="Shipment Reviewer", email="shipment-reviewer@example.com", department="Management", is_active=True)
+        recipient.set_password("secret123")
+        db.session.add(recipient)
+        supervisor = self.create_supervisor()
+        second = ExamSession(exam_session_name="Second bundle session", category="Path School", status="Pending",
+                             session_date=date(2026, 6, 26), shifts="Morning", modules="Speaking", format="Onsite")
+        bundle = ExamSessionShipmentBundle(bundle_number="7-26", bundle_sequence=7, bundle_year=2026,
+            supervisor_staff_id=supervisor.id, delivery_address="Meeting point 789")
+        other = ExamSessionShipmentBundle(bundle_number="8-26", bundle_sequence=8, bundle_year=2026,
+            supervisor_staff_id=supervisor.id, delivery_address="Another address")
+        db.session.add_all([second, bundle, other])
+        db.session.flush()
+        for record in (self.session_record, second):
+            db.session.add(ExamSessionShipmentBundleSession(bundle_id=bundle.id, exam_session_id=record.id))
+        db.session.add(ExamSessionStaffingNote(exam_session_id=self.session_record.id, note_id="session-only",
+            note_context="staffing", note_text="Private session staffing note"))
+        db.session.commit()
+        db.session.add(UserMenuPermission(user_id=recipient.id, menu_key="pre_session_control_tower", can_view=True, can_edit=False))
         db.session.commit()
         client = self.login_client_for_user(actor)
-
-        response = client.get("/pre-session-control-tower?session_year=2026&view=sessions")
-        html = response.get_data(as_text=True)
-        overview_index = html.index(f'id="overview-{self.session_record.id}"')
-        shipment_notes_index = html.index(f'id="shipments-notes-{self.session_record.id}"')
-        shipments_index = html.index(f'id="shipments-{self.session_record.id}"')
-        shipment_notes_panel = html[shipment_notes_index:shipments_index]
-
-        self.assertLess(overview_index, shipment_notes_index)
-        self.assertLess(shipment_notes_index, shipments_index)
-        self.assertIn("Notes", shipment_notes_panel)
-        self.assertIn("Shipment notes and read tracking.", shipment_notes_panel)
-        self.assertIn('action="/pre-session-control-tower/sessions/1/staffing-notes"', shipment_notes_panel)
-        self.assertIn('name="note_modal_context" value="shipments"', shipment_notes_panel)
-        self.assertIn("From", shipment_notes_panel)
-        self.assertIn("Admin User, Admin", shipment_notes_panel)
-        self.assertIn("No shipment notes yet.", shipment_notes_panel)
-
-        with open("app/static/css/styles.css", encoding="utf-8") as css_file:
-            css = css_file.read()
-        self.assertIn(".shipment-notes-section {\n  display: none;", css)
-        self.assertIn(".modal.is-shipments-only .shipment-notes-section {\n  display: grid;", css)
-
-        response = client.post(
-            f"/pre-session-control-tower/sessions/{self.session_record.id}/staffing-notes",
-            data={
-                "csrf_token": "token",
-                "note": "Shipment recipient needs a confirmation call.",
-                "note_modal_context": "shipments",
-            },
-            follow_redirects=False,
-        )
-
+        endpoint = f"/pre-session-control-tower/bundles/{bundle.id}/notes"
+        response = client.post(endpoint, data={"csrf_token": "bad", "note": "Invalid"})
         self.assertEqual(response.status_code, 302)
-        self.assertIn("open_modal_target=shipments-notes", response.headers["Location"])
-        self.assertIn("shipments_only=1", response.headers["Location"])
-        self.assertNotIn("staffing_only=1", response.headers["Location"])
-        self.assertNotIn("packages_only=1", response.headers["Location"])
-        note = ExamSessionStaffingNote.query.one()
-        self.assertEqual(note.note_text, "Shipment recipient needs a confirmation call.")
+        self.assertEqual(ExamSessionShipmentNote.query.count(), 0)
+        client.post(endpoint, data={"csrf_token": "token", "note": " "})
+        self.assertEqual(ExamSessionShipmentNote.query.count(), 0)
+        response = client.post(endpoint, data={"csrf_token": "token", "note": "Bundle-only shipment note",
+            "note_to_user_id": str(recipient.id)})
+        self.assertEqual(response.status_code, 302)
+        self.assertIn(f"bundle_id={bundle.id}", response.headers["Location"])
+        note = ExamSessionShipmentNote.query.one()
+        self.assertEqual(note.bundle_id, bundle.id)
+        self.assertEqual(ExamSessionStaffingNote.query.count(), 1)
+        mention = ExamSessionShipmentNoteMention.query.one()
+        from app.routes import pre_session_note_mentions_count_for_current_user, pre_session_note_mentions_for_current_user
+        from flask import g
+        with self.app.test_request_context():
+            g.current_user = recipient
+            self.assertEqual(pre_session_note_mentions_count_for_current_user(), 1)
+            self.assertEqual(pre_session_note_mentions_for_current_user()[0]["label"], "Bundle 7-26")
+        reviewer_client = self.login_client_for_user(recipient)
+        self.assertEqual(reviewer_client.post(endpoint, data={"csrf_token": "token", "note": "Forbidden"}).status_code, 403)
+        for record in (self.session_record, second):
+            with patch("app.routes.reconcile_auto_shipment_bundles"):
+                response = reviewer_client.get(f"/pre-session-control-tower?session_year=2026&view=sessions&session_modal={record.id}")
+            self.assertEqual(response.status_code, 200)
+            html = response.get_data(as_text=True)
+            panel = html.split(f'id="shipments-notes-{record.id}"', 1)[1].split('</section>', 1)[0]
+            self.assertIn("Bundle-only shipment note", panel)
+            self.assertNotIn("Private session staffing note", panel)
+            self.assertIn(endpoint, panel)
+            self.assertIn(f"/shipment-note-mentions/{mention.id}/read", panel)
+        other_client = self.login_client()
+        self.assertEqual(other_client.post(f"/shipment-note-mentions/{mention.id}/read",
+            data={"csrf_token": "token", "read": "1"}).status_code, 403)
+        response = reviewer_client.post(f"/shipment-note-mentions/{mention.id}/read",
+            data={"csrf_token": "token", "read": "1", "return_session_id": second.id})
+        self.assertEqual(response.status_code, 302)
+        self.assertIn(f"open_schedule_modal={second.id}", response.headers["Location"])
+        self.assertTrue(db.session.get(ExamSessionShipmentNoteMention, mention.id).is_read)
+        # Moving a session does not move or duplicate the bundle's notes.
+        link = ExamSessionShipmentBundleSession.query.filter_by(exam_session_id=second.id).one()
+        link.bundle_id = other.id
+        db.session.commit()
+        with patch("app.routes.reconcile_auto_shipment_bundles"):
+            response = client.get(f"/pre-session-control-tower?session_year=2026&view=sessions&session_modal={second.id}")
+        html = response.get_data(as_text=True)
+        panel = html.split(f'id="shipments-notes-{second.id}"', 1)[1].split('</section>', 1)[0]
+        self.assertNotIn("Bundle-only shipment note", panel)
+        self.assertIn("No shipment notes yet.", panel)
+        db.session.delete(ExamSessionShipmentBundleSession.query.filter_by(exam_session_id=self.session_record.id).one())
+        db.session.commit()
+        self.assertEqual(ExamSessionShipmentNote.query.one().bundle_id, bundle.id)
 
     def test_continue_editing_form_does_not_show_manual_editing_deadline(self):
         db.session.add(ExamSessionScheduleWorkflow(

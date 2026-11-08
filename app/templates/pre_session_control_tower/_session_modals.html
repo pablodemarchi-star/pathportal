@@ -77,6 +77,9 @@
       {{ schedule_notes_panel(session, schedule_notes, csrf_token, selected_schedule_status, selected_view, selected_bundle) }}
       {% set staffing_notes = staffing_note_views(staffing_notes_by_session.get(session.id, []), staffing_note_mentions_by_note_id) %}
       {{ package_notes_panel(session, staffing_notes, csrf_token, selected_schedule_status, selected_view, selected_bundle) }}
+      {% if view.shipments.contract.bundle %}
+        {{ shipment_notes_panel(session, shipment_note_views_by_bundle.get(view.shipments.contract.bundle.id, []), csrf_token, selected_schedule_status, selected_view, view.shipments.contract.bundle.id) }}
+      {% endif %}
       {{ staffing_notes_panel(session, staffing_notes, csrf_token, selected_schedule_status, selected_view, selected_bundle) }}
 
       <nav class="modal-section-nav" aria-label="Manage modal sections">

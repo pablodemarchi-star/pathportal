@@ -72,6 +72,8 @@ from app.models import (
     ExamSessionScheduleWorkflow,
     ExamSessionShipmentBundle,
     ExamSessionShipmentBundleSession,
+    ExamSessionShipmentNote,
+    ExamSessionShipmentNoteMention,
     ExamSessionShipmentChecklistItem,
     ExamSessionShipmentEvent,
     ExamSessionSinapsisChecklistItem,
@@ -525,7 +527,7 @@ def require_menu_permission_for_request():
     if request.endpoint == "staff.mark_schedule_note_read":
         require_menu_view("pre_session_control_tower")
         return None
-    if request.endpoint == "staff.mark_staffing_note_read":
+    if request.endpoint in {"staff.mark_staffing_note_read", "staff.mark_shipment_note_read"}:
         require_menu_view("pre_session_control_tower")
         return None
     menu_key = menu_key_for_path(request.path)
@@ -18595,6 +18597,25 @@ def pre_session_control_tower(_count_only=False):
     for link in shipment_link_records:
         if link.bundle:
             shipment_bundles_by_id[link.bundle.id] = link.bundle
+    shipment_notes_by_bundle = {}
+    note_bundle_ids = [shipment_links_by_session[modal_session_id].bundle_id] if modal_session_id in shipment_links_by_session else []
+    shipment_notes = (
+        ExamSessionShipmentNote.query.filter(ExamSessionShipmentNote.bundle_id.in_(note_bundle_ids))
+        .order_by(ExamSessionShipmentNote.created_at.desc(), ExamSessionShipmentNote.id.desc()).all()
+        if note_bundle_ids else []
+    )
+    for note in shipment_notes:
+        shipment_notes_by_bundle.setdefault(note.bundle_id, []).append(note)
+    shipment_note_ids = [note.note_id for note in shipment_notes]
+    shipment_mentions_by_note = {}
+    for mention in (ExamSessionShipmentNoteMention.query.filter(
+        ExamSessionShipmentNoteMention.note_id.in_(shipment_note_ids)
+    ).order_by(ExamSessionShipmentNoteMention.id.asc()).all() if shipment_note_ids else []):
+        shipment_mentions_by_note.setdefault(mention.note_id, []).append(mention)
+    shipment_note_views_by_bundle = {
+        bundle_id: staffing_note_views(notes, shipment_mentions_by_note)
+        for bundle_id, notes in shipment_notes_by_bundle.items()
+    }
     all_bundle_views = [shipment_bundle_view(bundle) for bundle in shipment_bundles_by_id.values()]
     all_bundle_views = [bundle_view for bundle_view in all_bundle_views if bundle_view]
     for bundle_view in all_bundle_views:
@@ -19461,6 +19482,7 @@ def pre_session_control_tower(_count_only=False):
         events_by_workflow=events_by_workflow,
         schedule_notes_by_workflow=notes_by_workflow,
         schedule_note_mentions_by_note_id=note_mentions_by_note_id,
+        shipment_note_views_by_bundle=shipment_note_views_by_bundle,
         staffing_notes_by_session=staffing_notes_by_session,
         staffing_note_mentions_by_note_id=staffing_note_mentions_by_note_id,
         csrf_token=session.get("csrf_token"),
@@ -19884,6 +19906,70 @@ def mark_schedule_note_read(mention_id):
     ))
 
 
+def shipment_notes_redirect(bundle):
+    links = sorted(bundle.session_links, key=lambda link: link.exam_session_id)
+    if not links:
+        return redirect(url_for("staff.pre_session_control_tower", view="bundles", session_year=bundle.bundle_year))
+    requested_id = request.form.get("return_session_id", type=int)
+    link = next((link for link in links if link.exam_session_id == requested_id), links[0])
+    return redirect(url_for(
+        "staff.pre_session_control_tower",
+        session_year=link.exam_session.session_date.year if link.exam_session.session_date else bundle.bundle_year,
+        view="bundle", bundle_id=bundle.id, close_view="bundles",
+        open_schedule_modal=link.exam_session_id, open_modal_target="shipments-notes",
+        shipments_only="1", highlight_note=request.form.get("highlight_note", ""),
+    ))
+
+
+@staff_bp.route("/pre-session-control-tower/bundles/<int:bundle_id>/notes", methods=["POST"])
+@login_required
+def add_shipment_note(bundle_id):
+    bundle = ExamSessionShipmentBundle.query.get_or_404(bundle_id)
+    if not validate_csrf():
+        flash("Security token expired. Please try again.", "error")
+        return shipment_notes_redirect(bundle)
+    note_text = request.form.get("note", "").strip()
+    if not note_text:
+        flash("Shipment note cannot be empty.", "error")
+        return shipment_notes_redirect(bundle)
+    actor = current_note_actor()
+    note_id = uuid.uuid4().hex
+    db.session.add(ExamSessionShipmentNote(
+        bundle_id=bundle.id, note_id=note_id, note_text=note_text,
+        from_user_id=actor.get("user_id"), from_full_name=actor.get("full_name"),
+        from_department=actor.get("department"),
+    ))
+    for recipient in selected_note_recipients(request.form):
+        if recipient.get("user_id"):
+            db.session.add(ExamSessionShipmentNoteMention(
+                bundle_id=bundle.id, note_id=note_id, comment_text=note_text,
+                from_user_id=actor.get("user_id"), from_full_name=actor.get("full_name"),
+                from_department=actor.get("department"), to_user_id=recipient["user_id"],
+                to_full_name=recipient.get("full_name"), to_department=recipient.get("department"),
+            ))
+    db.session.commit()
+    flash("Shipment note added successfully.", "success")
+    return shipment_notes_redirect(bundle)
+
+
+@staff_bp.route("/shipment-note-mentions/<int:mention_id>/read", methods=["POST"])
+@login_required
+def mark_shipment_note_read(mention_id):
+    mention = ExamSessionShipmentNoteMention.query.get_or_404(mention_id)
+    if not getattr(g, "current_user", None) or mention.to_user_id != g.current_user.id:
+        abort(403)
+    if not validate_csrf():
+        flash("Security token expired. Please try again.", "error")
+        return shipment_notes_redirect(mention.bundle)
+    if request.form.get("read") == "1" and not mention.is_read:
+        mention.is_read = True
+        mention.read_by_user_id = g.current_user.id
+        mention.read_on = datetime.now(timezone.utc)
+        db.session.commit()
+        flash("Note marked as read.", "success")
+    return shipment_notes_redirect(mention.bundle)
+
+
 @staff_bp.route("/pre-session-control-tower/sessions/<int:session_id>/staffing-notes", methods=["POST"])
 @login_required
 def add_staffing_note(session_id):
@@ -19893,23 +19979,22 @@ def add_staffing_note(session_id):
         status_filter = ""
     note_modal_context = normalized_staffing_note_context(request.form.get("note_modal_context"))
     shipment_notes_context = note_modal_context == "shipments"
+    if shipment_notes_context:
+        link = ExamSessionShipmentBundleSession.query.filter_by(exam_session_id=session_id).first()
+        if not link:
+            abort(400, description="Shipment notes require a bundle.")
+        return add_shipment_note(link.bundle_id)
     package_notes_context = note_modal_context == "packages"
     if not validate_csrf():
         flash("Security token expired. Please try again.", "error")
         return staffing_control_redirect(session_record, status_filter)
     note = request.form.get("note", "").strip()
     if not note:
-        if shipment_notes_context:
-            flash("Shipment note cannot be empty.", "error")
-        else:
-            flash("Package note cannot be empty." if package_notes_context else "Staffing note cannot be empty.", "error")
+        flash("Package note cannot be empty." if package_notes_context else "Staffing note cannot be empty.", "error")
         return staffing_control_redirect(session_record, status_filter)
     create_staffing_note(session_record, note, request.form)
     db.session.commit()
-    if shipment_notes_context:
-        flash("Shipment note added successfully.", "success")
-    else:
-        flash("Package note added successfully." if package_notes_context else "Staffing note added successfully.", "success")
+    flash("Package note added successfully." if package_notes_context else "Staffing note added successfully.", "success")
     return redirect(url_for(
         "staff.pre_session_control_tower",
         **pre_session_control_tower_return_args(session_record),
@@ -26904,6 +26989,26 @@ def pre_session_note_mentions_for_current_user(limit=None):
             "label": mention_label,
             "url": url_for("staff.pre_session_control_tower", **view_args),
         })
+    bundle_mentions = ExamSessionShipmentNoteMention.query.options(
+        joinedload(ExamSessionShipmentNoteMention.bundle)
+        .selectinload(ExamSessionShipmentBundle.session_links)
+        .joinedload(ExamSessionShipmentBundleSession.exam_session)
+    ).filter_by(to_user_id=current_user.id, is_read=False).all()
+    for mention in bundle_mentions:
+        bundle = mention.bundle
+        links = sorted(bundle.session_links, key=lambda link: link.exam_session_id) if bundle else []
+        if not links:
+            continue
+        origin = links[0].exam_session
+        mention_views.append({
+            "created_on": mention.created_on, "id": mention.id,
+            "label": f"Bundle {shipment_bundle_display_number(bundle)}",
+            "url": url_for("staff.pre_session_control_tower",
+                session_year=origin.session_date.year if origin.session_date else selected_year,
+                view="bundle", bundle_id=bundle.id, close_view="bundles",
+                open_schedule_modal=origin.id, open_modal_target="shipments-notes",
+                shipments_only="1", highlight_note=mention.note_id),
+        })
     mention_views.sort(key=lambda item: (item["created_on"] or datetime.min.replace(tzinfo=timezone.utc), item["id"]), reverse=True)
     if limit:
         return mention_views[:limit]
@@ -26923,6 +27028,7 @@ def pre_session_note_mentions_count_for_current_user():
             ExamSessionStaffingNoteMention.to_user_id == current_user.id,
             ExamSessionStaffingNoteMention.is_read.is_(False),
         ).count()
+        + ExamSessionShipmentNoteMention.query.filter_by(to_user_id=current_user.id, is_read=False).count()
     )
 
 
