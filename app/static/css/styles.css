@@ -18207,3 +18207,8 @@ body.staff-session-detail-open { overflow: hidden; }
 .finance-notification-language input:checked + span { background: var(--color-primary); border-color: var(--color-primary); color: #fff; }
 .finance-notification-language:focus-within span { outline: 2px solid #0b8fb2; outline-offset: 2px; }
 .finance-notification-language input:disabled + span { cursor: default; }
+
+/* Shipment belongs to a bundle; other modal sections keep their session title. */
+.modal .modal-shipment-name { display: none; }
+.modal.is-shipments-only .modal-session-name { display: none; }
+.modal.is-shipments-only .modal-shipment-name { display: inline; }

@@ -1308,7 +1308,7 @@ const setFocusedMode = (modal, targetId, label = "") => {
     return;
   }
   const title = label || targetLabels[key] || "Focused view";
-  const sessionTitle = modal.querySelector(".modal-header h2")?.textContent?.trim() || "";
+  const sessionTitle = (modal.querySelector(".modal-session-name") || modal.querySelector(".modal-header h2"))?.textContent?.trim() || "";
   modal.classList.add("is-focused-mode");
   modal.dataset.focusedTarget = key;
   const context = modal.querySelector("[data-focused-context]");

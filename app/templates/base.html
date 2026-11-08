@@ -4,7 +4,7 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>{% block title %}Path Examinations Internal App{% endblock %}</title>
-    <link rel="stylesheet" href="{{ url_for('static', filename='css/styles.css', v='20261106-journey-resource-titles-43') }}">
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/styles.css', v='20261107-shipment-modal-title-44') }}">
   </head>
   <body>
     <div class="app-shell {% if request.args.get('session_fullscreen') == '1' %}session-fullscreen-shell{% endif %}">
@@ -239,7 +239,7 @@
         {% block content %}{% endblock %}
       </main>
     </div>
-    <script src="{{ url_for('static', filename='js/app.js', v='20261105-return-recipient-24') }}"></script>
+    <script src="{{ url_for('static', filename='js/app.js', v='20261107-shipment-modal-title-25') }}"></script>
     {% if request.endpoint in ['staff.pre_session_control_tower', 'staff.my_actions'] %}<script src="{{ url_for('static', filename='js/return_shipping_labels.js', v='20261105-1') }}"></script>{% endif %}
     {% if request.endpoint in ['staff.pre_session_control_tower', 'staff.my_actions'] %}<script src="{{ url_for('static', filename='js/return_instructions.js', v='20261105-1') }}"></script>{% endif %}
     {% if request.endpoint == 'staff.finance_requests' %}<script src="{{ url_for('static', filename='js/finance_payee_notifications.js', v='20261104-client-notification-3') }}"></script>{% endif %}

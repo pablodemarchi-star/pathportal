@@ -27,7 +27,7 @@
             <span class="modal-title-communications">COMMUNICATIONS</span>
           </p>
           <div class="staffing-session-title-row">
-            <h2 id="schedule-workflow-title-{{ session.id }}" tabindex="-1">{{ session.exam_session_name }}</h2>
+            <h2 id="schedule-workflow-title-{{ session.id }}" tabindex="-1">{% if view.shipments.contract.bundle_number %}<span class="modal-session-name">{{ session.exam_session_name }}</span><span class="modal-shipment-name">Bundle {{ view.shipments.contract.bundle_number }}</span>{% else %}{{ session.exam_session_name }}{% endif %}</h2>
             <span class="staffing-session-considerations">
               {% with session_considerations=session.considerations_thread(), considerations_control_tower=true %}
                 {% include 'exam_sessions/_considerations.html' %}
