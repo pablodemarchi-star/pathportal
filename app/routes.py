@@ -407,7 +407,7 @@ SINAPSIS_CHECKLIST_ITEMS = [
     {
         "key": "marks_upload_enabled",
         "label": "Candidate list verification",
-        "description": "Verify in Sinapsis that the correct number of candidates is listed, including only candidates with Paid or Paying status.",
+        "description": "Verify in Sinapsis that the candidate counts in the Listening and speaking attendance, Reading and writing attendance, and Exam module supervision menus within the examiners’ and supervisors’ access area match the total number of candidates with Paid or Paying status in the exam session.",
     },
 ]
 SINAPSIS_RETIRED_CHECKLIST_KEYS = {"session_visible", "candidates_loaded", "speaking_recordings_checked", "details_link_verified", "final_check_completed"}
