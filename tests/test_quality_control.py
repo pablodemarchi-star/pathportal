@@ -227,6 +227,16 @@ class QualityControlTest(unittest.TestCase):
                 setattr(record,field,'completed')
         db.session.commit()
         self.assertEqual(shipment()['availability'],'UNBLOCKED')
+        bundle.status='Delivered successfully'
+        db.session.commit()
+        delivered=shipment()
+        self.assertTrue(delivered['complete'])
+        self.assertEqual(delivered['state'],'complete')
+        row=load_rows([self.session_record],today=date(2026,11,7))[0]
+        self.assertFalse(row['timing_sources']['shipment']['waiting'])
+        bundle.status='Recipient review successful'
+        db.session.commit()
+        self.assertTrue(shipment()['complete'])
 
     def test_confirmed_staff_with_pending_institution_notification_is_explicit(self):
         person=m.AcademicStaff(full_name='Confirmed member',status='Active',roles='Supervisor')

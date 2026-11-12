@@ -194,11 +194,11 @@ def load_rows(records, today=None):
                 cell('package', package['label'], complete=package['status'] == 'completed', active=package['status'] != 'not_started',
                      enabled=schedule_status == 'Approved', applicable=onsite, near=done_stages == len(package_stages)-1,
                      issue=package['status'] == 'incident', deadline=package_deadline, today=today, detail=package['table_summary']),
-                cell('shipment', bundle_status, complete=bundle_status == 'Recipient review successful', active=bool(bundle), applicable=onsite,
-                     enabled=staffing_ready, near=bundle_status == 'Delivered successfully', issue=bundle_status in {'Delayed', 'Recipient review with discrepancy'},
+                cell('shipment', bundle_status, complete=bundle_status in {'Delivered successfully', 'Recipient review successful'}, active=bool(bundle), applicable=onsite,
+                     enabled=staffing_ready, issue=bundle_status in {'Delayed', 'Recipient review with discrepancy'},
                      deadline=bundle.dispatch_due_at if bundle and bundle_status in {'Preparing bundle', 'Ready to dispatch'} else None,
                      today=today, detail=f'Shared bundle {bundle.bundle_number or bundle.id}' if bundle else 'No shipment bundle assigned',
-                     action_at=bundle.dispatched_at if bundle else None, completed_at=bundle.recipient_reviewed_at if bundle else None),
+                     action_at=bundle.dispatched_at if bundle else None, completed_at=(bundle.delivered_at or bundle.recipient_reviewed_at) if bundle else None),
                 cell('logistics', 'Configuration required' if log_state == 'configuration_required' else
                      'Not applicable' if not log['applies'] else f"{log['confirmed_concepts']}/{log['total_concepts']} confirmed",
                      complete=log_state == 'completed', active=bool(active_concepts), enabled=staffing_ready,
@@ -247,8 +247,8 @@ def load_rows(records, today=None):
                 'staffing': {'begun': bool(counts['required']), 'waiting': bool(counts['sent'] and not counts['open_positions'] and not counts['pending_assigned'] and staff['schedule_notification_confirmed'] and staff['status'] != 'invalid'), 'reason': 'Staff member'},
                 'package': {'begun': schedule_status == 'Approved'},
                 'shipment': {'begun': bool(bundle), 'bundle_id': bundle.id if bundle else None,
-                             'waiting': bundle_status in {'Dispatched','Recipient notified','In transit to post office','In transit to recipient','Delayed','Delivered successfully'},
-                             'reason': 'Recipient' if bundle_status == 'Delivered successfully' else 'Courier'},
+                             'waiting': bundle_status in {'Dispatched','Recipient notified','In transit to post office','In transit to recipient','Delayed'},
+                             'reason': 'Courier'},
                 'logistics': {'begun': bool(log['applies'])},
                 'finance': {'begun': bool(first(finance, sid) and (fin['standing_selected'] or fin['additional_institutions']))},
                 'final_checks': {'begun': bool(gate and gate['return_enabled'])},
@@ -283,7 +283,7 @@ def load_rows(records, today=None):
             shipment['enabled'] = not gate['blocked']
             shipment['overdue'] = bool(shipment['enabled'] and not shipment['complete'] and shipment['deadline'] and shipment['deadline'] < today)
             shipment['state'] = ('complete' if shipment['complete'] else 'blocked' if gate['blocked'] else
-                'issue' if shipment['issue'] or shipment['overdue'] else 'near' if shipment['operational_status']=='Delivered successfully' else 'progress')
+                'issue' if shipment['issue'] or shipment['overdue'] else 'progress')
             shipment['detail'] += f" · {gate['staffing_confirmed_count']}/{gate['sessions_count']} recipients confirmed · {gate['package_completed_count']}/{gate['sessions_count']} Package completed"
         row['attention'] = bool(row['incident_count']) or any(c['overdue'] or c['issue'] for c in row['cells'] if c['applicable'])
     return [row for row in rows if row['session'].id in requested_ids]

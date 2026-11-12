@@ -201,8 +201,9 @@ class ProcessTimingTest(unittest.TestCase):
         another.status='Cancelled';db.session.commit()
         self.assertEqual(clock.category,'Waiting external')
         bundle.status='Delivered successfully';db.session.commit()
+        self.assertEqual(clock.category,'Completed')
         opened=m.ProcessInterval.query.filter_by(clock_id=clock.id,ended_at=None).one()
-        self.assertEqual(opened.reason,'Recipient')
+        self.assertNotEqual(opened.reason,'Recipient')
         bundle.status='Recipient review successful';db.session.commit()
         self.assertEqual(clock.category,'Completed')
 
