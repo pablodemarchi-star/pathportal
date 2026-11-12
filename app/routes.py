@@ -13224,7 +13224,7 @@ def operational_readiness_contract(
     staffing_ready = bool(staffing_contract.get("ready"))
     logistics_ready = bool(logistics_contract.get("final_email_ready"))
     packages_ready = bool(packages_contract.get("ready"))
-    shipments_ready = shipment_status == "Recipient review successful"
+    shipments_ready = shipment_status in {"Delivered successfully", "Recipient review successful"}
 
     def package_requirement_message():
         if packages_ready:
@@ -13236,15 +13236,13 @@ def operational_readiness_contract(
 
     def shipment_requirement_message():
         if shipments_ready:
-            return "Shipment delivery and recipient review are complete."
+            return "Shipment has been delivered successfully."
         if shipment_status == "not_bundled":
             return "Session is not included in a shipment bundle."
-        if shipment_status == "Delivered successfully":
-            return "Shipment was delivered successfully, but recipient review is still pending."
         if shipment_status == "Recipient review with discrepancy":
             return "Recipient review reported a discrepancy that needs to be resolved."
         if shipment_status in {"Ready to dispatch", "Dispatched", "Recipient notified", "In transit to post office", "In transit to recipient", "Delayed"}:
-            return "Shipment is not fully delivered and recipient-reviewed yet."
+            return "Shipment has not been delivered successfully yet."
         if shipment_status == "Preparing bundle":
             return "Shipment bundle preparation is still in progress."
         return "Shipment readiness data needs review."
