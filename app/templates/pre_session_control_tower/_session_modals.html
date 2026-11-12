@@ -2289,13 +2289,12 @@ This stage has already been marked as complete. Reopening it may affect package 
                       {% endif %}
                     </div>
                     {% if item.item_key == 'marks_upload_enabled' %}
-                      <p>Verify in the <b>examiners’ and supervisors’ Sinapsis access area</b> that the candidate counts in the following menus:</p>
-                      <ul>
+                      <p>Verify in the <b>examiners’ and supervisors’ Sinapsis access area</b> that the candidate counts in the following menus match the total number of candidates with <b>Paid or Paying status</b> in the exam session:</p>
+                      <ul class="candidate-verification-menus">
                         <li><b>Listening and speaking attendance</b></li>
                         <li><b>Reading and writing attendance</b></li>
                         <li><b>Exam module supervision</b></li>
                       </ul>
-                      <p>match the total number of candidates with <b>Paid or Paying status</b> in the exam session.</p>
                     {% else %}
                       <p>{{ item.description }}</p>
                     {% endif %}

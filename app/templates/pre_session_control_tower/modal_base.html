@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><base target="_top"><title>Session details | Path Examinations</title><link rel="stylesheet" href="{{ url_for('static', filename='css/styles.css', v='20261107-shipment-bundle-header-45') }}"></head>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><base target="_top"><title>Session details | Path Examinations</title><link rel="stylesheet" href="{{ url_for('static', filename='css/styles.css', v='20261112-candidate-verification-list-46') }}"></head>
 <body class="tower-modal-document" data-tower-modal-document data-session-id="{{ modal_session_id }}" data-revision="{{ tower_revision }}" data-revision-url="{{ url_for('tower_live.revision', session_id=modal_session_id) }}">
   <aside class="tower-update-notice" data-tower-update-notice hidden role="status" aria-live="polite"><span data-tower-update-message></span><button type="button" class="secondary-button" data-tower-reload>Reload session</button></aside>
   <main data-current-menu-can-edit="{{ 'true' if user_can_edit('pre_session_control_tower') else 'false' }}">{% block content %}{% endblock %}</main>
