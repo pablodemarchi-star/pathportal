@@ -298,6 +298,8 @@ def create_app():
 
     with app.app_context():
         db.create_all()
+        from app.schema_migrations import migrate_staff_session_report_attendance
+        migrate_staff_session_report_attendance()
         from app.schema_migrations import migrate_process_timing
         migrate_process_timing()
         from app.schema_migrations import migrate_payee_notification_preferences

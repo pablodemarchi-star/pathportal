@@ -313,3 +313,42 @@
   window.setInterval(refresh, 30000);
   window.addEventListener("focus", refresh);
 })();
+
+(() => {
+  document.querySelectorAll('[data-staff-exam-day-report]').forEach((section) => {
+    const link = section.querySelector('[data-exam-day-report-link]');
+    const opensAt = Date.parse(section.dataset.opensAt);
+    const closesAt = opensAt + 24 * 60 * 60 * 1000;
+    const refresh = () => {
+      const now = Date.now();
+      const examDate = Number.isFinite(opensAt) && now >= opensAt && now < closesAt;
+      const available = examDate && Boolean(link.dataset.folderUrl);
+      section.classList.toggle('is-unavailable', !examDate);
+      const badge = section.querySelector('[data-report-availability]');
+      if (badge) {
+        badge.textContent = examDate ? 'Available' : 'Available on exam date';
+        badge.classList.toggle('is-available', examDate);
+      }
+      const dialog = section.querySelector('[data-session-report-dialog]');
+      if (!examDate && dialog?.open) dialog.close();
+      link.href = available ? link.dataset.folderUrl : '#';
+      link.classList.toggle('is-disabled', !available);
+      link.disabled = !available;
+      link.setAttribute('aria-disabled', String(!available));
+      if (available) link.removeAttribute('tabindex');
+      else link.setAttribute('tabindex', '-1');
+    };
+    const scheduleBoundary = () => {
+      refresh();
+      const next = [opensAt, closesAt].find((at) => at > Date.now());
+      if (next) window.setTimeout(scheduleBoundary, Math.min(next - Date.now() + 1, 2147483647));
+    };
+    link.addEventListener('click', (event) => {
+      refresh();
+      if (link.getAttribute('aria-disabled') === 'true') event.preventDefault();
+    });
+    window.addEventListener('focus', refresh);
+    document.addEventListener('visibilitychange', refresh);
+    scheduleBoundary();
+  });
+})();

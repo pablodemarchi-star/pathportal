@@ -54,6 +54,7 @@ from app.models import (
     StaffExamSessionsShare,
     StaffExamSessionSubmission,
     StaffExamSessionEndChecks,
+    StaffExamSessionReport,
     ExamSessionAttendanceRequest,
     ExamSessionLogistics,
     ExamSessionLogisticsControl,
@@ -20475,7 +20476,117 @@ def staff_end_checks_available(record, now=None):
     return bool(record.session_date and now.astimezone(LOCAL_TZ).date() >= record.session_date)
 
 
+def staff_report_available(record, now=None):
+    now = now or datetime.now(timezone.utc)
+    return bool(record.session_date and now.astimezone(LOCAL_TZ).date() == record.session_date)
+
+
+def staff_report_feedback_submitted(record):
+    """Fail closed until the institutional journey's session feedback is implemented."""
+    return False
+
+
+@staff_bp.route("/my-exam-sessions/<token>/submissions/<int:submission_id>/report", methods=["POST"])
+def submit_staff_session_report(token, submission_id):
+    from sqlalchemy.exc import IntegrityError
+    share = StaffExamSessionsShare.query.filter_by(token=token).first_or_404()
+    if not validate_csrf():
+        return jsonify(ok=False, error="Security token expired. Please reload and try again."), 400
+    from app.staff_report_media import lock_submission, session_pictures_folder, media_for_submission
+    submission = lock_submission(submission_id)
+    if not submission or submission.share_id != share.id:
+        abort(404)
+    record = submission.exam_session
+    assignment, person_ref = staff_submission_assignment(record, submission.assignment_type, submission.assignment_id)
+    if not assignment or person_ref != share.person_ref:
+        abort(404)
+    if (submission.assignment_type != "supervisor" or assignment.is_remote or record.format != "Onsite"
+            or assignment.participation_status != "Confirmed" or not staff_report_available(record)):
+        return jsonify(ok=False, error="This report is only available to confirmed onsite Supervisors on the exam day."), 403
+    if submission.session_report:
+        return jsonify(ok=False, error="This report has already been submitted and cannot be edited."), 409
+    outcome = request.form.get("schedule_outcome", "").strip()
+    reasons = request.form.get("reasons", "").strip()
+    if outcome not in {"The session finished ahead of schedule", "There were no delays", "There were minor delays", "There were significant delays"}:
+        return jsonify(ok=False, error="Please select a valid schedule outcome."), 400
+    if outcome != "There were no delays" and not reasons:
+        return jsonify(ok=False, error="Please provide the reasons for the selected schedule outcome."), 400
+    if len(reasons) > 10000:
+        return jsonify(ok=False, error="Reasons must not exceed 10,000 characters."), 400
+    attendance_fields = ("absent_candidates_checked", "submitted_candidates_checked", "session_completed_checked")
+    attendance = {key: request.form.get(key) == "1" for key in attendance_fields}
+    if not attendance["absent_candidates_checked"] or not attendance["submitted_candidates_checked"]:
+        return jsonify(ok=False, error="Please confirm the first two Candidate Attendance statements."), 400
+    facilities_outcome = request.form.get("facilities_outcome", "").strip()
+    facilities_comments = request.form.get("facilities_comments", "").strip()
+    if facilities_outcome not in {"Satisfactory", "Satisfactory, with comments", "Unsatisfactory"}:
+        return jsonify(ok=False, error="Please select an exam centre facilities and organisation outcome."), 400
+    if facilities_outcome != "Satisfactory" and not facilities_comments:
+        return jsonify(ok=False, error="Please provide comments on the exam centre facilities and organisation."), 400
+    if len(facilities_comments) > 10000:
+        return jsonify(ok=False, error="Comments must not exceed 10,000 characters."), 400
+    emergency_pack_outcome = request.form.get("emergency_pack_outcome", "").strip()
+    emergency_pack_reasons = request.form.get("emergency_pack_reasons", "").strip()
+    if emergency_pack_outcome not in {"No, it was not needed", "Yes, it was opened and used", "It was opened but not used"}:
+        return jsonify(ok=False, error="Please select whether the Emergency exam pack was used."), 400
+    if emergency_pack_outcome != "No, it was not needed" and not emergency_pack_reasons:
+        return jsonify(ok=False, error="Please provide reasons for opening the Emergency exam pack."), 400
+    if len(emergency_pack_reasons) > 10000:
+        return jsonify(ok=False, error="Reasons must not exceed 10,000 characters."), 400
+    return_steps = request.form.getlist("return_verification")
+    required_return_steps = ["submitted_papers", "submitted_packages", "absent_packages", "sealing", "labelling", "institutional_verification"]
+    if return_steps != required_return_steps:
+        return jsonify(ok=False, error="Please complete all six Exam return package verification steps in order."), 400
+    from app.staff_report_review import validate_assessments
+    try:
+        assessments = validate_assessments(record, request.form)
+    except ValueError as error:
+        return jsonify(ok=False, error=str(error)), 400
+    if not session_pictures_folder(record):
+        return jsonify(ok=False, error="Session pictures folder is not configured. Please contact Path Examinations."), 400
+    media = media_for_submission(record, submission)
+    if not media or request.form.get("marketing_confirmed") != "1":
+        return jsonify(ok=False, error="Upload at least one file and confirm Marketing material before submitting."), 400
+    if not staff_report_feedback_submitted(record):
+        return jsonify(ok=False, error="The exam centre must submit its Exam session feedback form before this report can be submitted."), 400
+    if request.form.get("centre_feedback_confirmed") != "1":
+        return jsonify(ok=False, error="Please confirm that the exam centre has completed its feedback form."), 400
+    recordings_required = staff_session_has_recording_candidates(record)
+    recordings_confirmed = request.form.get("recordings_reminder_confirmed") == "1"
+    if recordings_required and not recordings_confirmed:
+        return jsonify(ok=False, error="Please confirm that all examiners have been reminded to upload their recordings."), 400
+    optional_comments = request.form.get("optional_comments", "").strip()
+    if len(optional_comments) > 10000:
+        return jsonify(ok=False, error="Optional comments must not exceed 10,000 characters."), 400
+    db.session.add(StaffExamSessionReport(submission_id=submission.id, schedule_outcome=outcome,
+                                        optional_comments=optional_comments,
+                                        centre_feedback_confirmed=True,
+                                        recordings_reminder_confirmed=recordings_required and recordings_confirmed,
+                                        marketing_confirmed=True, marketing_media=json.dumps([item.file_id for item in media]),
+                                        staff_assessments=json.dumps(assessments),
+                                        return_verification=json.dumps(return_steps),
+                                        emergency_pack_outcome=emergency_pack_outcome,
+                                        emergency_pack_reasons=emergency_pack_reasons if emergency_pack_outcome != "No, it was not needed" else "",
+                                        facilities_outcome=facilities_outcome,
+                                        facilities_comments=facilities_comments if facilities_outcome != "Satisfactory" else "",
+                                        reasons=reasons if outcome != "There were no delays" else "", **attendance))
+    try:
+        db.session.commit()
+    except IntegrityError:
+        db.session.rollback()
+        return jsonify(ok=False, error="This report has already been submitted and cannot be edited."), 409
+    return jsonify(ok=True)
+
+
+@staff_bp.route("/my-exam-sessions/<token>/submissions/<int:submission_id>/report/media", methods=["POST"])
+def upload_staff_report_media(token, submission_id):
+    from app.staff_report_media import upload_media
+    return upload_media(token, submission_id)
+
+
 def staff_end_checks_view(record, role, status, submission, share):
+    from app.staff_report_review import assessment_roster, CRITERIA
+    from app.staff_report_media import media_view
     if status != "Confirmed":
         return {}
     saved = submission.end_checks
@@ -20491,6 +20602,14 @@ def staff_end_checks_view(record, role, status, submission, share):
         "digitalised_url": (record.digitalised_exams_url or "").strip(),
         "digitalised_available": datetime.now(LOCAL_TZ).date() == record.session_date,
         "report_url": "" if role == "examiner" else current_app.config.get("STAFF_END_OF_SESSION_REPORT_URL", ""),
+        "session_report_submitted": bool(submission.session_report),
+        "session_report_url": url_for("staff.submit_staff_session_report", token=share.token, submission_id=submission.id),
+        "session_report_media_url": url_for("staff.upload_staff_report_media", token=share.token, submission_id=submission.id),
+        "session_report_media": media_view(record, submission),
+        "institutional_feedback_submitted": staff_report_feedback_submitted(record),
+        "report_recordings_required": staff_session_has_recording_candidates(record),
+        "assessment_roster": assessment_roster(record) if role == "supervisor" and record.format == "Onsite" and assignment and not assignment.is_remote else [],
+        "assessment_criteria": CRITERIA,
         "url": url_for("staff.update_staff_end_checks", token=share.token, submission_id=submission.id),
     }}
 

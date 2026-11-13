@@ -1075,6 +1075,40 @@ class StaffExamSessionSubmission(db.Model):
     exam_session = db.relationship("ExamSession", backref=db.backref("staff_submissions", cascade="all, delete-orphan"))
 
 
+class StaffExamSessionReport(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    submission_id = db.Column(db.Integer, db.ForeignKey("staff_exam_session_submission.id"), nullable=False, unique=True)
+    schedule_outcome = db.Column(db.String(40), nullable=False)
+    facilities_outcome = db.Column(db.String(40), nullable=False, default="")
+    facilities_comments = db.Column(db.Text, nullable=False, default="")
+    emergency_pack_outcome = db.Column(db.String(40), nullable=False, default="")
+    emergency_pack_reasons = db.Column(db.Text, nullable=False, default="")
+    return_verification = db.Column(db.Text, nullable=False, default="[]", server_default="[]")
+    staff_assessments = db.Column(db.Text, nullable=False, default="[]", server_default="[]")
+    marketing_confirmed = db.Column(db.Boolean, nullable=False, default=False, server_default=db.false())
+    marketing_media = db.Column(db.Text, nullable=False, default="[]", server_default="[]")
+    centre_feedback_confirmed = db.Column(db.Boolean, nullable=False, default=False, server_default=db.false())
+    recordings_reminder_confirmed = db.Column(db.Boolean, nullable=False, default=False, server_default=db.false())
+    optional_comments = db.Column(db.Text, nullable=False, default="", server_default="")
+    absent_candidates_checked = db.Column(db.Boolean, nullable=False, default=False, server_default=db.false())
+    submitted_candidates_checked = db.Column(db.Boolean, nullable=False, default=False, server_default=db.false())
+    session_completed_checked = db.Column(db.Boolean, nullable=False, default=False, server_default=db.false())
+    reasons = db.Column(db.Text, nullable=False, default="")
+    submitted_at = db.Column(db.DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))
+    submission = db.relationship("StaffExamSessionSubmission", backref=db.backref("session_report", uselist=False, cascade="all, delete-orphan"))
+
+
+class StaffSessionReportMedia(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    submission_id = db.Column(db.Integer, db.ForeignKey("staff_exam_session_submission.id"), nullable=False, index=True)
+    file_id = db.Column(db.String(160), nullable=False, unique=True)
+    folder_id = db.Column(db.String(160), nullable=False)
+    filename = db.Column(db.String(500), nullable=False)
+    mime_type = db.Column(db.String(160), nullable=False)
+    created_at = db.Column(db.DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))
+    submission = db.relationship("StaffExamSessionSubmission", backref=db.backref("report_media", cascade="all, delete-orphan"))
+
+
 class StaffExamSessionEndChecks(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     submission_id = db.Column(db.Integer, db.ForeignKey("staff_exam_session_submission.id"), nullable=False, unique=True, index=True)

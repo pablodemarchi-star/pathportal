@@ -145,3 +145,15 @@ def migrate_process_timing():
         db.session.execute(text('ALTER TABLE process_clock ADD COLUMN has_begun BOOLEAN NOT NULL DEFAULT FALSE'))
         db.session.execute(text("UPDATE process_clock SET has_begun = TRUE, coverage_complete = FALSE WHERE category NOT IN ('Blocked','N/A') OR started_at IS NOT NULL"))
     db.session.commit()
+
+
+def migrate_staff_session_report_attendance():
+    from sqlalchemy import inspect
+    columns = {column['name'] for column in inspect(db.engine).get_columns('staff_exam_session_report')}
+    for field in ('absent_candidates_checked', 'submitted_candidates_checked', 'session_completed_checked', 'centre_feedback_confirmed', 'recordings_reminder_confirmed'):
+        if field not in columns:
+            db.session.execute(text(f'ALTER TABLE staff_exam_session_report ADD COLUMN {field} BOOLEAN NOT NULL DEFAULT FALSE'))
+    for field, definition in {'facilities_outcome': "VARCHAR(40) NOT NULL DEFAULT ''", 'facilities_comments': "TEXT NOT NULL DEFAULT ''", 'emergency_pack_outcome': "VARCHAR(40) NOT NULL DEFAULT ''", 'emergency_pack_reasons': "TEXT NOT NULL DEFAULT ''", 'return_verification': "TEXT NOT NULL DEFAULT '[]'", 'staff_assessments': "TEXT NOT NULL DEFAULT '[]'", 'marketing_confirmed': 'BOOLEAN NOT NULL DEFAULT FALSE', 'marketing_media': "TEXT NOT NULL DEFAULT '[]'", 'optional_comments': "TEXT NOT NULL DEFAULT ''"}.items():
+        if field not in columns:
+            db.session.execute(text(f'ALTER TABLE staff_exam_session_report ADD COLUMN {field} {definition}'))
+    db.session.commit()

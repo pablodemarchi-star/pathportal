@@ -107,7 +107,161 @@
         {% endif %}
       </section>
       {% endif %}
-      {% include 'pre_session_control_tower/_staff_session_end_checks.html' %}
+      {% if detail.format != 'Onsite' or detail.is_remote %}
+        {% include 'pre_session_control_tower/_staff_session_end_checks.html' %}
+      {% endif %}
+      {% if detail.format == 'Onsite' and not detail.is_remote %}
+      <section class="staff-detail-section staff-end-session-report{% if not detail.end_checks.digitalised_available %} is-unavailable{% endif %}" aria-label="End-of-session report" data-staff-exam-day-report data-opens-at="{{ detail.end_checks.opens_at }}">
+        <div class="staff-end-checks-heading">
+          <h3>End-of-session report</h3>
+          <span class="staff-end-checks-status{% if detail.end_checks.digitalised_available %} is-available{% endif %}" data-report-availability>{{ 'Available' if detail.end_checks.digitalised_available else 'Available on exam date' }}</span>
+        </div>
+        <p>This section will be available <strong>on the exam day only</strong>. The report must be completed <strong>before leaving the exam venue</strong>.</p>
+        <p>To formally close your exam session, please complete the following report:</p>
+        {% set report_submitted = detail.end_checks.session_report_submitted %}
+        {% set report_available = detail.end_checks.digitalised_available and not report_submitted %}
+        <button type="button" class="staff-detail-link staff-end-checks-folder{% if not report_available %} is-disabled{% endif %}" data-exam-day-report-link data-folder-url="{{ '' if report_submitted else detail.end_checks.session_report_url }}"{% if not report_available %} aria-disabled="true" tabindex="-1"{% endif %}>{{ 'Report submitted' if report_submitted else 'End-of-session report ↗' }}</button>
+        <dialog class="staff-session-report-modal" data-session-report-dialog aria-labelledby="session-report-title-{{ detail.end_checks.session_report_url|replace('/', '-') }}">
+          <form action="{{ detail.end_checks.session_report_url }}" method="post" data-session-report-form>
+            <input type="hidden" name="csrf_token" value="{{ detail.confirmation_csrf }}">
+            <div class="staff-session-report-heading">
+              <h2 id="session-report-title-{{ detail.end_checks.session_report_url|replace('/', '-') }}">End-of-session report</h2>
+              <button type="button" class="staff-detail-close" data-session-report-close aria-label="Close report">&times;</button>
+            </div>
+            <p class="staff-session-report-subtitle">Complete this report to formally close your exam session</p>
+            <p class="staff-session-report-warning"><strong>Important: once submitted, this report cannot be reopened or edited. Please ensure that you complete it in full before submitting.</strong></p>
+            <ol class="staff-session-report-questions">
+              <li>
+                <label><b>Did the exam session run according to the approved schedule?</b>
+                  <select name="schedule_outcome" required data-report-outcome>
+                    <option value="">Select an option</option>
+                    <option>The session finished ahead of schedule</option>
+                    <option>There were no delays</option>
+                    <option>There were minor delays</option>
+                    <option>There were significant delays</option>
+                  </select>
+                </label>
+                <label data-report-reasons-field hidden><b>Reasons</b>
+                  <textarea name="reasons" rows="4" maxlength="10000" disabled data-report-reasons></textarea>
+                </label>
+              </li>
+              <li>
+                <b>Candidate attendance</b>
+                <label class="staff-session-report-checkbox"><input type="checkbox" name="absent_candidates_checked" value="1" required><span>All absent candidates have been marked as <b>Absent</b> in Sinapsis and on the printed candidate list.</span></label>
+                <label class="staff-session-report-checkbox"><input type="checkbox" name="submitted_candidates_checked" value="1" required><span>All candidates who took the exam have been marked as <b>Submitted</b> in Sinapsis and on the printed candidate list.</span></label>
+                <label class="staff-session-report-checkbox"><input type="checkbox" name="session_completed_checked" value="1"><span>The exam session is marked as <b>Completed</b> in Sinapsis, with no candidates remaining in <b>Pending</b> status.</span></label>
+              </li>
+              <li>
+                <b>Exam return package verification</b>
+                <div class="staff-report-return-timeline" data-report-return-timeline role="group" aria-label="Exam return package verification">
+                  <label class="staff-session-report-checkbox"><input type="checkbox" name="return_verification" value="submitted_papers" required data-return-step><span><b>Submitted exam papers:</b> all and only submitted papers are placed inside their respective <b>Exam room packs</b>, in the exact order shown on the candidate list attached to the front.</span></label>
+                  <label class="staff-session-report-checkbox"><input type="checkbox" name="return_verification" value="submitted_packages" required disabled data-return-step><span><b>Submitted return packages:</b> all Exam room packs are placed inside the corresponding <b>SUBMITTED return package</b> for each module.</span></label>
+                  <label class="staff-session-report-checkbox"><input type="checkbox" name="return_verification" value="absent_packages" required disabled data-return-step><span><b>Absent return packages:</b> all and only absent candidates’ exam papers are placed <b>loose, without exam room packs</b>, directly inside the corresponding <b>ABSENT return package</b> for each module.</span></label>
+                  <label class="staff-session-report-checkbox"><input type="checkbox" name="return_verification" value="sealing" required disabled data-return-step><span><b>Package sealing:</b> all Exam return packages have been securely sealed.</span></label>
+                  <label class="staff-session-report-checkbox"><input type="checkbox" name="return_verification" value="labelling" required disabled data-return-step><span><b>Package labelling:</b> the correct identification label has been affixed <b>over the sealed section</b> of each Exam return package.</span></label>
+                  <label class="staff-session-report-checkbox"><input type="checkbox" name="return_verification" value="institutional_verification" required disabled data-return-step><span><b>Institutional verification:</b> the Head of the Exam centre has <b>signed and printed their full name</b> on the identification label of every Exam return package.</span></label>
+                </div>
+                <small data-return-progress role="status">0 of 6 steps completed</small>
+              </li>
+              <li>
+                <label><b>Exam centre's facilities and organisation</b>
+                  <select name="facilities_outcome" required data-report-facilities>
+                    <option value="">Select an option</option>
+                    <option>Satisfactory</option>
+                    <option>Satisfactory, with comments</option>
+                    <option>Unsatisfactory</option>
+                  </select>
+                </label>
+                <label data-report-comments-field hidden><b>Comments</b>
+                  <textarea name="facilities_comments" rows="4" maxlength="10000" disabled data-report-comments></textarea>
+                </label>
+              </li>
+              <li>
+                <label><b>Was the Emergency exam pack used?</b>
+                  <select name="emergency_pack_outcome" required data-report-emergency-pack>
+                    <option value="">Select an option</option>
+                    <option>No, it was not needed</option>
+                    <option>Yes, it was opened and used</option>
+                    <option>It was opened but not used</option>
+                  </select>
+                </label>
+                <label data-report-emergency-reasons-field hidden><b>Reasons</b>
+                  <textarea name="emergency_pack_reasons" rows="4" maxlength="10000" disabled data-report-emergency-reasons></textarea>
+                </label>
+              </li>
+              <li>
+                <b>Staff member performance review</b>
+                {% set assessment_roster = detail.end_checks.assessment_roster %}
+                <p class="staff-report-review-count" data-review-count role="status">0/{{ assessment_roster|length }} completed</p>
+                {% if assessment_roster %}
+                <div class="staff-report-review-scroll" tabindex="0" role="region" aria-label="Staff assessment matrix">
+                  <table class="staff-report-review-table">
+                    <thead><tr><th scope="col">Staff Member</th>{% for criterion in detail.end_checks.assessment_criteria %}<th scope="col">{{ criterion.label }}</th>{% endfor %}<th scope="col">Notes</th></tr></thead>
+                    <tbody>
+                      {% for member in assessment_roster %}
+                      <tr data-review-row>
+                        <th scope="row"><span class="staff-report-review-name">{{ member.name }}</span><small>{{ member.role }}</small><span class="staff-report-review-status" data-review-row-status>Incomplete</span></th>
+                        {% for criterion in detail.end_checks.assessment_criteria %}
+                        <td><select name="review.{{ member.key }}.{{ criterion.key }}" required data-review-select aria-label="{{ member.name }} ({{ member.role }}) — {{ criterion.label }}">
+                          <option value="">Select</option>
+                          {% for option in criterion.options %}<option>{{ option }}</option>{% endfor %}
+                        </select></td>
+                        {% endfor %}
+                        <td>
+                          <details class="staff-report-review-notes" data-review-notes>
+                            <summary aria-label="Notes for {{ member.name }} ({{ member.role }})" title="Add or edit notes"><span aria-hidden="true">✎</span><span class="staff-report-note-indicator" data-review-note-indicator hidden aria-hidden="true">●</span></summary>
+                            <textarea name="review.{{ member.key }}.notes" rows="3" maxlength="10000" data-review-note aria-label="Notes for {{ member.name }} ({{ member.role }})" placeholder="Optional notes"></textarea>
+                          </details>
+                        </td>
+                      </tr>
+                      {% endfor %}
+                    </tbody>
+                  </table>
+                </div>
+                {% else %}
+                <p class="staff-detail-muted">No staff members to assess</p>
+                {% endif %}
+              </li>
+              <li>
+                <b>Marketing material</b>
+                {% set marketing = detail.end_checks.session_report_media %}
+                <div data-report-media data-upload-url="{{ detail.end_checks.session_report_media_url }}" data-folder-configured="{{ 'true' if marketing.folder_configured else 'false' }}">
+                  {% if not marketing.folder_configured %}<p class="staff-session-report-warning">Session pictures folder is not configured. Please contact Path Examinations. The report cannot be submitted until this is resolved.</p>{% endif %}
+                  <label class="staff-report-media-dropzone{% if not marketing.folder_configured %} is-disabled{% endif %}" data-report-media-dropzone>
+                    <span>Drop your files here or click to select</span>
+                    <small>Upload photographs, videos and other audiovisual material. Multiple files allowed.</small>
+                    <input type="file" multiple data-report-media-input aria-label="Upload marketing material"{% if not marketing.folder_configured %} disabled{% endif %}>
+                  </label>
+                  <ul class="staff-report-media-files" data-report-media-files>{% for file in marketing.files %}<li>{{ file.filename }}</li>{% endfor %}</ul>
+                  <p role="status" data-report-media-status></p>
+                  <label class="staff-session-report-checkbox"><input type="checkbox" name="marketing_confirmed" value="1" required data-report-marketing-confirmed{% if not marketing.files or not marketing.folder_configured %} disabled{% endif %}><span>I confirm that I have uploaded all session photos and videos.</span></label>
+                </div>
+              </li>
+              <li>
+                <b>Final checks</b>
+                {% set feedback_submitted = detail.end_checks.institutional_feedback_submitted %}
+                <label class="staff-session-report-checkbox"><input type="checkbox" name="centre_feedback_confirmed" value="1" required data-report-feedback-checkbox data-submitted="{{ 'true' if feedback_submitted else 'false' }}"{% if not feedback_submitted %} disabled{% endif %}><span>I confirm that the exam centre has submitted its feedback form. <span class="staff-end-checks-status{% if feedback_submitted %} is-available{% endif %}">{{ 'Feedback form submitted' if feedback_submitted else 'Feedback form not submitted' }}</span></span></label>
+                {% if detail.end_checks.report_recordings_required %}
+                <label class="staff-session-report-checkbox"><input type="checkbox" name="recordings_reminder_confirmed" value="1" required><span><b>I confirm that all examiners have been reminded to upload their recordings to Sinapsis within two business days after the exam session.</b></span></label>
+                {% endif %}
+                {% if not feedback_submitted %}<p class="staff-detail-muted">The report cannot be submitted until the exam centre has submitted its feedback form.</p>{% endif %}
+              </li>
+              <li>
+                <label><b>Optional comments</b>
+                  <span>Please share any feedback or suggestions that could help us improve the Path experience.</span>
+                  <textarea name="optional_comments" rows="4" maxlength="10000" placeholder="Optional"></textarea>
+                </label>
+              </li>
+            </ol>
+            <p role="status" data-report-feedback></p>
+            <div class="staff-session-report-actions">
+              <button type="button" class="secondary-button" data-session-report-close>Cancel</button>
+              <button type="submit" class="primary-button"{% if not detail.end_checks.institutional_feedback_submitted %} disabled{% endif %}>Submit report</button>
+            </div>
+          </form>
+        </dialog>
+      </section>
+      {% endif %}
       {% endif %}
       {% if detail.role == 'Examiner' and detail.examiner_receives_shipment and detail.participation_confirmed %}
       {% include 'pre_session_control_tower/_staff_session_end_checks.html' %}

@@ -234,6 +234,14 @@ def upload_document(upload, payment, destination):
         from app.staff_invoices import StaffInvoiceTarget
         from app.staff_id_documents import StaffIdTarget
         from app.return_labels import ReturnLabelTarget
+        from app.staff_report_media import ReportMediaTarget
+        if isinstance(payment, ReportMediaTarget):
+            from app.models import StaffSessionReportMedia
+            document = StaffSessionReportMedia(submission_id=payment.submission_id, file_id=file_id,
+                folder_id=destination.folder_id, filename=filename, mime_type=mime)
+            db.session.add(document)
+            payment.document = document
+            return f'https://drive.google.com/file/d/{file_id}/view'
         if isinstance(payment, ReturnLabelTarget):
             from app.models import ReturnShippingLabel
             document = ReturnShippingLabel(file_id=file_id, destination_key=destination.key, filename=filename, mime_type=mime)
