@@ -29,7 +29,7 @@ const form = {querySelector: (key) => fields[key], querySelectorAll: () => revie
 const dialog = {querySelector: () => form, querySelectorAll: () => [], addEventListener() {}};
 const opener = {addEventListener() {}};
 const section = {dataset: {}, querySelector: (key) => key === '[data-exam-day-report-link]' ? opener : dialog};
-vm.runInNewContext(fs.readFileSync('app/static/js/staff_session_report.js','utf8'), {document: {querySelectorAll: () => [section]}, window: {addEventListener() {}, setInterval() {}}});
+vm.runInNewContext(fs.readFileSync('app/static/js/staff_session_report.js','utf8'), {document: {querySelectorAll: () => [section], addEventListener() {}}, window: {addEventListener() {}, setInterval() {}}});
 assert.equal(steps[0].disabled, false);
 assert.ok(steps.slice(1).every(step => step.disabled));
 for (let index = 0; index < 6; index++) {

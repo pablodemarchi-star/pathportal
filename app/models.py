@@ -1101,6 +1101,9 @@ class StaffExamSessionSubmission(db.Model):
 
 class StaffExamSessionReport(db.Model):
     id = db.Column(db.Integer, primary_key=True)
+    exam_session_id = db.Column(db.Integer, db.ForeignKey("exam_session.id"), nullable=False, unique=True)
+    author_name = db.Column(db.String(300), nullable=False, default="", server_default="")
+    author_person_ref = db.Column(db.String(80), nullable=False, default="", server_default="")
     submission_id = db.Column(db.Integer, db.ForeignKey("staff_exam_session_submission.id"), nullable=False, unique=True)
     schedule_outcome = db.Column(db.String(40), nullable=False)
     facilities_outcome = db.Column(db.String(40), nullable=False, default="")

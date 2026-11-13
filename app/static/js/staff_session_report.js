@@ -15,15 +15,56 @@
     let institutionSubmitted = institutionalFeedback?.dataset.submitted === 'true';
     let saving = false;
     let mediaPending = false;
+    const draftFields = Array.from(form.querySelectorAll('input[name]:not([type="file"]):not([type="hidden"]), select[name], textarea[name]'));
+    const clearDraft = () => { try { sessionStorage.removeItem(section.dataset.reportDraftKey); } catch {} };
+    const saveDraft = () => {
+      if (!section.dataset.reportDraftKey || !opener.dataset.folderUrl) return;
+      const values = {};
+      draftFields.forEach(input => {
+        if (input.type === 'checkbox') {
+          values[input.name] ||= [];
+          if (input.checked) values[input.name].push(input.value);
+        } else values[input.name] = input.value;
+      });
+      const status = form.querySelector('[data-report-draft-status]');
+      try {
+        sessionStorage.setItem(section.dataset.reportDraftKey, JSON.stringify(values));
+        if (status) status.textContent = 'Draft saved in this browser tab.';
+      } catch { if (status) status.textContent = 'Your browser could not save the draft. Keep this page open to retain your answers.'; }
+    };
+    form.addEventListener('input', saveDraft);
+    form.addEventListener('change', saveDraft);
+    const lockReport = (author) => {
+      opener.dataset.folderUrl = '';
+      opener.textContent = 'Report submitted';
+      opener.disabled = true;
+      opener.classList.add('is-disabled');
+      opener.setAttribute('aria-disabled', 'true');
+      opener.setAttribute('tabindex', '-1');
+      draftFields.forEach(input => { input.disabled = true; });
+      submit.disabled = true;
+      feedback.textContent = author ? `This session report has already been submitted by ${author}.` : 'This session report has already been submitted.';
+      clearDraft();
+    };
     let checkingFeedback = false;
     const refreshFeedbackStatus = async () => {
-      if (!section.dataset.feedbackStatusUrl || !opener.dataset.folderUrl || checkingFeedback || saving || mediaPending) return;
+      if (!section.dataset.feedbackStatusUrl || !opener.dataset.folderUrl || checkingFeedback || saving) return;
+      if (!dialog.open && !section.closest('dialog')?.open) return;
       checkingFeedback = true;
       try {
         const response = await fetch(section.dataset.feedbackStatusUrl, {headers: {Accept: 'application/json'}, cache: 'no-store'});
         if (!response.ok) return;
         const result = await response.json();
         if (!result.ok) return;
+        if (result.report_submitted) { lockReport(result.author_name); return; }
+        if (Array.isArray(result.files) && mediaBox && !mediaPending) {
+          const list = mediaBox.querySelector('[data-report-media-files]');
+          list.replaceChildren();
+          result.files.forEach(file => { const item = document.createElement('li'); item.textContent = file.filename; list.appendChild(item); });
+          uploadedCount = result.files.length;
+          marketingCheckbox.disabled = !uploadedCount || mediaBox.dataset.folderConfigured !== 'true';
+          if (!uploadedCount) marketingCheckbox.checked = false;
+        }
         institutionSubmitted = Boolean(result.submitted);
         institutionalFeedback.dataset.submitted = String(institutionSubmitted);
         institutionalFeedback.disabled = !institutionSubmitted;
@@ -32,14 +73,15 @@
         badge.textContent = institutionSubmitted ? 'Feedback form submitted' : 'Feedback form not submitted';
         badge.classList.toggle('is-available', institutionSubmitted);
         form.querySelector('[data-report-feedback-help]').hidden = institutionSubmitted;
-        submit.disabled = !institutionSubmitted;
+        submit.disabled = !institutionSubmitted || mediaPending;
       } catch {} finally { checkingFeedback = false; }
     };
     opener.addEventListener('click', refreshFeedbackStatus);
     window.addEventListener('focus', refreshFeedbackStatus);
+    document.addEventListener('visibilitychange', () => { if (!document.hidden) refreshFeedbackStatus(); });
     window.setInterval(() => {
       if (!document.hidden && (dialog.open || section.closest('dialog')?.open)) refreshFeedbackStatus();
-    }, 30000);
+    }, 5000);
 
     const updateReasons = () => {
       const needed = ['The session finished ahead of schedule', 'There were minor delays', 'There were significant delays'].includes(outcome.value);
@@ -158,6 +200,7 @@
           submit.disabled = !institutionSubmitted;
           marketingCheckbox.disabled = uploadedCount === 0;
           input.value = '';
+          saveDraft();
         }
       };
       input.addEventListener('change', () => uploadFiles(Array.from(input.files)));
@@ -192,6 +235,7 @@
       try {
         const response = await fetch(form.action, { method: 'POST', body: new FormData(form), headers: { Accept: 'application/json' } });
         const result = await response.json();
+        if (response.status === 409) { lockReport(); return; }
         if (!response.ok || !result.ok) throw new Error(result.error || 'The report could not be submitted. Please try again.');
         opener.dataset.folderUrl = '';
         opener.textContent = 'Report submitted';
@@ -200,15 +244,27 @@
         opener.setAttribute('aria-disabled', 'true');
         opener.setAttribute('tabindex', '-1');
         form.reset();
+        clearDraft();
         feedback.textContent = '';
         dialog.close();
       } catch (error) {
         feedback.textContent = error.message || 'The report could not be submitted. Please try again.';
       } finally {
         saving = false;
-        submit.disabled = !institutionSubmitted;
+        submit.disabled = !institutionSubmitted || !opener.dataset.folderUrl;
       }
     });
+    if (opener.dataset?.folderUrl && section.dataset.reportDraftKey) {
+      try {
+        const values = JSON.parse(sessionStorage.getItem(section.dataset.reportDraftKey) || '{}');
+        draftFields.forEach(input => {
+          if (input.type === 'checkbox' && Array.isArray(values[input.name])) input.checked = values[input.name].includes(input.value);
+          else if (input.type !== 'checkbox' && typeof values[input.name] === 'string') input.value = values[input.name];
+        });
+        if (institutionalFeedback && !institutionSubmitted) institutionalFeedback.checked = false;
+        if (marketingCheckbox && !uploadedCount) marketingCheckbox.checked = false;
+      } catch {}
+    }
     updateReasons();
     updateComments();
     updateEmergencyReasons();

@@ -4,7 +4,7 @@
 <link rel="stylesheet" href="{{ url_for('static', filename='css/quality_control.css', v='20261107-all-column-sorting-8') }}">
 <div class="qc-page" data-tab="{{ tab }}" data-csrf="{{ csrf_token }}">
   <header class="qc-heading"><div><p class="qc-eyebrow">SESSION OVERSIGHT</p><h1>Quality control</h1><p>Progress, deadlines and process times in one place.</p></div><div class="qc-header-actions"><a class="qc-button" href="{{ url_for('quality_control.index', **request.args) }}">Refresh</a></div></header>
-  <nav class="qc-tabs" aria-label="Quality control views"><a href="{{ readiness_url }}"{% if tab == 'readiness' %} aria-current="page"{% endif %}>Live readiness</a><a href="{{ timing_url }}"{% if tab == 'timing' %} aria-current="page"{% endif %}>Process timing</a></nav>
+  <nav class="qc-tabs" aria-label="Quality control views"><a href="{{ readiness_url }}"{% if tab == 'readiness' %} aria-current="page"{% endif %}>Live readiness</a><a href="{{ timing_url }}"{% if tab == 'timing' %} aria-current="page"{% endif %}>Process timing</a><a href="{{ url_for('quality_control.index', session_year=selected_year, tab='reports') }}">Session reports</a></nav>
   <form class="qc-filters" method="get" id="qc-filters">
     <input type="hidden" name="tab" value="{{ tab }}">
     <label>Year<select name="session_year" id="qc-year">{% for year in years %}<option value="{{ year }}"{% if year == selected_year %} selected{% endif %}>{{ year }}</option>{% endfor %}</select></label>

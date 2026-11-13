@@ -1,0 +1,23 @@
+<p class="qr-detail-date">{{ session_record.session_date.strftime('%d/%m/%Y') if session_record.session_date else 'Date pending' }} · {{ session_record.format }}</p>
+<section class="qr-detail-section"><h3>Supervisor report</h3>
+{% for report in reports %}{% set saved=report.record %}
+{% if report.historical %}<details><summary>Historical duplicate report retained · {{ report.author }}</summary>{% endif %}
+<p><span class="qr-chip qr-green">Submitted</span> <b>{{ report.author }}</b> · {{ saved.submitted_at|localdt }}</p>
+<div class="qr-detail-grid">
+<section><h4>1. Approved schedule</h4><p>{{ saved.schedule_outcome }}</p>{% if saved.reasons %}<p class="qr-answer">{{ saved.reasons }}</p>{% endif %}</section>
+<section><h4>2. Candidate attendance</h4><ul><li>{{ '✓' if saved.absent_candidates_checked else '—' }} Absent candidates recorded</li><li>{{ '✓' if saved.submitted_candidates_checked else '—' }} Submitted candidates recorded</li><li>{{ '✓' if saved.session_completed_checked else '—' }} Session marked Completed in Sinapsis (optional)</li></ul></section>
+<section><h4>3. Exam return package verification</h4><ol>{% for key,label in [('submitted_papers','Submitted exam papers'),('submitted_packages','Submitted return packages'),('absent_packages','Absent return packages'),('sealing','Package sealing'),('labelling','Package labelling'),('institutional_verification','Institutional verification')] %}<li>{{ '✓' if key in report.return_steps else '—' }} {{ label }}</li>{% endfor %}</ol></section>
+<section><h4>4. Exam centre's facilities and organisation</h4><p>{{ saved.facilities_outcome }}</p>{% if saved.facilities_comments %}<p class="qr-answer">{{ saved.facilities_comments }}</p>{% endif %}</section>
+<section><h4>5. Emergency exam pack</h4><p>{{ saved.emergency_pack_outcome }}</p>{% if saved.emergency_pack_reasons %}<p class="qr-answer">{{ saved.emergency_pack_reasons }}</p>{% endif %}</section>
+</div>
+<section><h4>6. Staff member performance review</h4>{% if report.reviews %}<div class="qr-detail-scroll"><table class="qr-review-table"><thead><tr><th>Staff member</th>{% for criterion in criteria %}<th>{{ criterion.label }}</th>{% endfor %}<th>Notes</th></tr></thead><tbody>{% for review in report.reviews %}<tr><th>{{ review.name }}<small>{{ review.role }}</small></th>{% for criterion in criteria %}<td>{{ review.criteria.get(criterion.key,'—') }}</td>{% endfor %}<td class="qr-answer">{{ review.notes or '—' }}</td></tr>{% endfor %}</tbody></table></div>{% else %}<p>No staff members to assess</p>{% endif %}</section>
+<section><h4>7. Marketing material</h4><p>{{ '✓' if saved.marketing_confirmed else '—' }} Upload confirmation</p><ul>{% for file in report.files %}<li><a href="https://drive.google.com/file/d/{{ file.file_id|urlencode }}/view" target="_blank" rel="noopener noreferrer">{{ file.filename }} ↗</a></li>{% else %}<li>No files recorded</li>{% endfor %}</ul>{% if session_record.session_pictures_folder_url %}<a href="{{ session_record.session_pictures_folder_url }}" target="_blank" rel="noopener noreferrer">Session pictures folder ↗</a>{% endif %}</section>
+<section><h4>8. Final checks</h4><ul><li>{{ '✓' if saved.centre_feedback_confirmed else '—' }} Institution feedback confirmed</li><li>{{ '✓' if saved.recordings_reminder_confirmed else '—' }} Recordings reminder confirmed (when applicable)</li></ul></section>
+<section><h4>9. Optional comments</h4><p class="qr-answer">{{ saved.optional_comments or 'No comments provided' }}</p></section>
+{% if report.historical %}</details>{% endif %}
+{% else %}<p>No Supervisor report submitted for this session.</p>{% endfor %}
+</section>
+<section class="qr-detail-section"><h3>Institution feedback</h3>{% if feedback %}<p><span class="qr-chip qr-green">Submitted</span> {{ feedback.submitted_at|localdt }} · {{ feedback.language|upper }}</p>
+<div class="qr-detail-grid">{% for key,title,es_title,question,es_question in questions %}{% set score=feedback|attr(key ~ '_score') %}<section><h4>{{ loop.index }}. {{ title }} <span class="qr-chip {{ 'qr-red' if score<=7 else 'qr-green' }}">{{ score }}/10</span></h4><p>{{ es_question if feedback.language=='es' else question }}</p><p class="qr-answer">{{ feedback|attr(key ~ '_comment') or 'No additional comment' }}</p></section>{% endfor %}</div>
+{% for key,title,es_title,description,es_description,placeholder,es_placeholder in open_questions %}<section><h4>{{ loop.index+4 }}. {{ title }}</h4><p class="qr-answer">{{ feedback|attr(key) or 'No response provided' }}</p></section>{% endfor %}
+{% else %}<p>No institution feedback submitted for this session.</p>{% endif %}</section>

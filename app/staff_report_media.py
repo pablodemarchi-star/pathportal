@@ -5,7 +5,7 @@ from types import SimpleNamespace
 from urllib.parse import urlsplit
 from flask import abort, jsonify, request
 from app import db, validate_csrf
-from app.models import StaffExamSessionsShare, StaffExamSessionSubmission, StaffSessionReportMedia
+from app.models import ExamSession, StaffExamSessionsShare, StaffExamSessionSubmission, StaffSessionReportMedia, StaffExamSessionReport
 from app.google_drive import folder_metadata, upload_document, DriveStorageError
 
 
@@ -32,12 +32,21 @@ def lock_submission(submission_id):
         connection = db.session.connection()
         if not connection.connection.driver_connection.in_transaction:
             connection.exec_driver_sql('BEGIN IMMEDIATE')
-    return StaffExamSessionSubmission.query.filter_by(id=submission_id).with_for_update().populate_existing().first()
+    submission = StaffExamSessionSubmission.query.filter_by(id=submission_id).populate_existing().first()
+    if submission:
+        db.session.query(ExamSession.id).filter_by(id=submission.exam_session_id).with_for_update().first()
+    return submission
+
+
+def report_for_session(record):
+    return StaffExamSessionReport.query.filter_by(exam_session_id=record.id).first()
 
 
 def media_for_submission(record, submission):
     folder_id = session_pictures_folder(record)
-    return StaffSessionReportMedia.query.filter_by(submission_id=submission.id, folder_id=folder_id).order_by(StaffSessionReportMedia.id).all() if folder_id else []
+    return (StaffSessionReportMedia.query.join(StaffExamSessionSubmission)
+            .filter(StaffExamSessionSubmission.exam_session_id == record.id, StaffSessionReportMedia.folder_id == folder_id)
+            .order_by(StaffSessionReportMedia.id).all()) if folder_id else []
 
 
 def media_view(record, submission):
@@ -60,7 +69,7 @@ def upload_media(token, submission_id):
     if (submission.assignment_type != 'supervisor' or assignment.is_remote or record.format != 'Onsite'
             or assignment.participation_status != 'Confirmed' or not staff_report_available(record)):
         return jsonify(ok=False, error='Uploads are only available to confirmed onsite Supervisors on the exam day.'), 403
-    if submission.session_report:
+    if report_for_session(record):
         return jsonify(ok=False, error='This report has already been submitted. Uploads are locked.'), 409
     folder_id = session_pictures_folder(record)
     if not folder_id:

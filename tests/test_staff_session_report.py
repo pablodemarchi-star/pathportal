@@ -328,6 +328,50 @@ class StaffSessionReportTest(unittest.TestCase):
         self.assertEqual(self.post(optional_comments='').status_code, 200)
         self.assertEqual(m.StaffExamSessionReport.query.one().optional_comments, '')
 
+    def second_supervisor(self):
+        person=m.AcademicStaff(full_name='Second Supervisor',status='Active',roles='Supervisor')
+        db.session.add(person);db.session.flush()
+        assignment=m.ExamSessionSupervisorAssignment(exam_session_id=self.record.id,team_member_id=person.id,participation_status='Confirmed')
+        share=m.StaffExamSessionsShare(person_ref=str(person.id),token='second-supervisor')
+        db.session.add_all([assignment,share]);db.session.flush()
+        submission=m.StaffExamSessionSubmission(exam_session_id=self.record.id,share_id=share.id,assignment_type='supervisor',assignment_id=assignment.id)
+        db.session.add(submission);db.session.commit()
+        return person,share,submission
+
+    def test_report_and_uploaded_material_are_shared_by_session(self):
+        from app.staff_report_media import media_for_submission
+        person,share,submission=self.second_supervisor()
+        self.assertEqual(len(media_for_submission(self.record,submission)),1)
+        first_url=self.url
+        self.url=f'/my-exam-sessions/{share.token}/submissions/{submission.id}/report'
+        self.assertEqual(self.post().status_code,200)
+        saved=m.StaffExamSessionReport.query.one()
+        self.assertEqual(saved.exam_session_id,self.record.id)
+        self.assertEqual(saved.author_name,person.full_name)
+        self.assertEqual(saved.author_person_ref,str(person.id))
+        self.url=first_url
+        self.assertEqual(self.post().status_code,409)
+        for staff_share in (self.share,share):
+            html=self.client.get(f'/my-exam-sessions/{staff_share.token}?session_year=2026').get_data(as_text=True)
+            self.assertIn('Report submitted',html)
+        response=self.client.get(first_url+'/feedback-status')
+        self.assertTrue(response.json['report_submitted'])
+        self.assertEqual(response.json['author_name'],person.full_name)
+        from io import BytesIO
+        with patch('app.routes.staff_report_available',return_value=True), patch('app.staff_report_media.upload_document') as upload:
+            response=self.client.post(first_url+'/media',data={'csrf_token':'test','file':(BytesIO(b'x'),'blocked.jpg')})
+            self.assertEqual(response.status_code,409)
+            upload.assert_not_called()
+
+    def test_database_prevents_second_report_for_same_session(self):
+        from sqlalchemy.exc import IntegrityError
+        person,share,submission=self.second_supervisor()
+        self.assertEqual(self.post().status_code,200)
+        db.session.add(m.StaffExamSessionReport(exam_session_id=self.record.id,submission_id=submission.id,schedule_outcome='There were no delays'))
+        with self.assertRaises(IntegrityError): db.session.commit()
+        db.session.rollback()
+        self.assertEqual(m.StaffExamSessionReport.query.count(),1)
+
     def test_no_delays_does_not_save_hidden_reasons(self):
         self.assertEqual(self.post(reasons='Old hidden answer').status_code, 200)
         self.assertEqual(m.StaffExamSessionReport.query.one().reasons, '')

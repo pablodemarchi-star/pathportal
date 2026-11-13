@@ -111,7 +111,7 @@
         {% include 'pre_session_control_tower/_staff_session_end_checks.html' %}
       {% endif %}
       {% if detail.format == 'Onsite' and not detail.is_remote %}
-      <section class="staff-detail-section staff-end-session-report{% if not detail.end_checks.digitalised_available %} is-unavailable{% endif %}" aria-label="End-of-session report" data-staff-exam-day-report data-opens-at="{{ detail.end_checks.opens_at }}" data-feedback-status-url="{{ detail.end_checks.feedback_status_url }}">
+      <section class="staff-detail-section staff-end-session-report{% if not detail.end_checks.digitalised_available %} is-unavailable{% endif %}" aria-label="End-of-session report" data-staff-exam-day-report data-opens-at="{{ detail.end_checks.opens_at }}" data-feedback-status-url="{{ detail.end_checks.feedback_status_url }}" data-report-draft-key="{{ detail.end_checks.session_report_draft_key }}">
         <div class="staff-end-checks-heading">
           <h3>End-of-session report</h3>
           <span class="staff-end-checks-status{% if detail.end_checks.digitalised_available %} is-available{% endif %}" data-report-availability>{{ 'Available' if detail.end_checks.digitalised_available else 'Available on exam date' }}</span>
@@ -254,6 +254,7 @@
               </li>
             </ol>
             <p role="status" data-report-feedback></p>
+            <small data-report-draft-status role="status"></small>
             <div class="staff-session-report-actions">
               <button type="button" class="secondary-button" data-session-report-close>Cancel</button>
               <button type="submit" class="primary-button"{% if not detail.end_checks.institutional_feedback_submitted %} disabled{% endif %}>Submit report</button>

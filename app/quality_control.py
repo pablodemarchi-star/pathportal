@@ -388,10 +388,13 @@ def index():
     year = request.args.get('session_year', type=int) or (years[0] if years else datetime.now().year)
     if years and year not in years:
         abort(400)
-    rows = dashboard_rows(year)
     tab = request.args.get('tab', 'readiness')
-    if tab not in {'readiness','timing'}:
+    if tab not in {'readiness','timing','reports'}:
         abort(400)
+    if tab == 'reports':
+        from app.session_reports import render_index
+        return render_index(year,years)
+    rows = dashboard_rows(year)
     if tab == 'timing':
         from app.process_timing import attach_clocks, reconcile_due
         reconcile_due()
@@ -418,6 +421,13 @@ def index():
         timing_url=url_for('quality_control.index', **{**request.args.to_dict(), 'tab':'timing'}), measured_at=datetime.now(LOCAL_TZ)))
     response.headers['Cache-Control'] = 'no-store'
     return response
+
+
+@quality_bp.get('/quality-control/session-reports/<int:session_id>')
+@login_required
+def session_reports_detail(session_id):
+    from app.session_reports import render_detail
+    return render_detail(session_id)
 
 
 # Collect affected sessions during flush (including explicit flushes before commit).

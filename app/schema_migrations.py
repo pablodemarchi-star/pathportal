@@ -157,3 +157,20 @@ def migrate_staff_session_report_attendance():
         if field not in columns:
             db.session.execute(text(f'ALTER TABLE staff_exam_session_report ADD COLUMN {field} {definition}'))
     db.session.commit()
+
+
+def migrate_session_scoped_staff_reports():
+    """Keep historical duplicates; only the earliest report owns the unique session key."""
+    from sqlalchemy import inspect
+    columns = {column['name'] for column in inspect(db.engine).get_columns('staff_exam_session_report')}
+    for field, definition in {'author_name': "VARCHAR(300) NOT NULL DEFAULT ''", 'author_person_ref': "VARCHAR(80) NOT NULL DEFAULT ''"}.items():
+        if field not in columns:
+            db.session.execute(text(f'ALTER TABLE staff_exam_session_report ADD COLUMN {field} {definition}'))
+    if 'exam_session_id' not in columns:
+        db.session.execute(text('ALTER TABLE staff_exam_session_report ADD COLUMN exam_session_id INTEGER REFERENCES exam_session(id)'))
+        db.session.execute(text('''UPDATE staff_exam_session_report SET exam_session_id = (
+            SELECT exam_session_id FROM staff_exam_session_submission WHERE id = staff_exam_session_report.submission_id
+        ) WHERE id IN (SELECT MIN(r.id) FROM staff_exam_session_report r
+            JOIN staff_exam_session_submission s ON s.id = r.submission_id GROUP BY s.exam_session_id)'''))
+    db.session.execute(text('CREATE UNIQUE INDEX IF NOT EXISTS uq_staff_report_session ON staff_exam_session_report (exam_session_id) WHERE exam_session_id IS NOT NULL'))
+    db.session.commit()
