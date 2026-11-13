@@ -1,0 +1,34 @@
+.centre-feedback-dialog { width: min(660px, calc(100vw - 28px)); max-height: calc(100dvh - 32px); overflow-y: auto; box-sizing: border-box; border: 1px solid var(--color-border); border-radius: 16px; padding: 24px; color: var(--color-primary-dark); }
+.centre-feedback-dialog::backdrop { background: rgba(15,35,30,.55); }
+.centre-feedback-dialog .centre-feedback-header { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; }
+.centre-feedback-header h2 { font-size: 25px; line-height: 1.2; font-weight: 700; margin: 0; }
+.centre-feedback-header p { margin-top: 6px; color: var(--color-muted); font-size: 12px; }
+.centre-feedback-header button { border: 0; background: transparent; font-size: 25px; cursor: pointer; }
+.centre-feedback-dialog p, .centre-feedback-dialog label { font-size: 13px; line-height: 1.5; }
+.centre-feedback-muted { color: var(--color-muted); font-size: 12px; }
+.centre-feedback-dialog .centre-feedback-scale { color: var(--path-blue-303up); font-weight: 700; }
+.centre-feedback-dialog .centre-feedback-intro { margin: 16px 0; padding: 14px 16px; border-left: 3px solid var(--path-blue-303up); border-radius: 8px; background: #eef5f8; color: var(--color-primary-dark); font-size: 14px; font-weight: 500; line-height: 1.6; }
+.centre-feedback-question { border: 0; border-top: 1px solid var(--color-border); padding: 16px 0 0; margin: 18px 0; min-width: 0; }
+.centre-feedback-question legend { font-size: 14px; font-weight: 600; padding: 0 4px 0 0; }
+.centre-feedback-question small { font-size: 10px; font-weight: 400; color: var(--color-muted); margin-left: 5px; }
+.centre-feedback-question > label { display: block; font-weight: 600; }
+.centre-feedback-description { display: block; margin: 4px 0; color: var(--color-muted); font-weight: 400; }
+.centre-feedback-dialog .centre-feedback-ratings { display: grid; grid-template-columns: repeat(10,minmax(0,1fr)); gap: 5px; }
+.centre-feedback-ratings label { position: relative; min-width: 0; cursor: pointer; }
+.centre-feedback-ratings input { position: absolute; width: 1px; height: 1px; opacity: 0; }
+.centre-feedback-ratings span { display: grid; place-items: center; border: 1px solid var(--color-border); border-radius: 7px; min-height: 35px; font-size: 13px; font-weight: 500; background: white; }
+.centre-feedback-ratings input:checked + span { background: var(--path-blue-303up); color: white; border-color: var(--path-blue-303up); }
+.centre-feedback-ratings input:focus-visible + span { outline: 2px solid var(--color-primary-dark); outline-offset: 2px; }
+.centre-feedback-dialog textarea { display: block; width: 100%; box-sizing: border-box; margin-top: 8px; font: inherit; font-weight: 400; }
+.centre-feedback-question .centre-feedback-comment { display: block; margin-top: 12px; }
+.centre-feedback-question .centre-feedback-comment[hidden], .centre-feedback-field-error[hidden] { display: none; }
+.centre-feedback-field-error { margin: 6px 0; color: #b42318; font-size: 12px; }
+.centre-feedback-question [aria-invalid="true"] { border-color: #b42318; }
+.centre-feedback-question:has(.centre-feedback-field-error:not([hidden])) .centre-feedback-ratings span { border-color: #b42318; }
+.centre-feedback-dialog .centre-feedback-actions { display: flex; flex-direction: row; flex-wrap: nowrap; justify-content: flex-end; align-items: center; gap: 10px; }
+.centre-feedback-dialog .centre-feedback-actions > button { width: auto; min-width: 0; flex: 0 1 auto; white-space: nowrap; }
+.centre-feedback-chip { display: inline-block; padding: 5px 9px; border-radius: 999px; background: var(--badge-red-bg); color: var(--badge-red-text); font-size: 11px; font-weight: 900; }
+.centre-feedback-chip.is-available { background: var(--badge-green-bg); color: var(--badge-green-text); }
+.journey-action-chip[data-centre-feedback-open] { font-weight: 500; }
+[data-centre-feedback-open]:disabled { background: #eef0ef; border-color: #dce1de; color: #89938e; cursor: default; }
+@media(max-width:420px) { .centre-feedback-dialog { padding: 16px; } .centre-feedback-dialog .centre-feedback-ratings { grid-template-columns: repeat(5,minmax(0,1fr)); } }

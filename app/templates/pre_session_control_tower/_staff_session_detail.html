@@ -111,7 +111,7 @@
         {% include 'pre_session_control_tower/_staff_session_end_checks.html' %}
       {% endif %}
       {% if detail.format == 'Onsite' and not detail.is_remote %}
-      <section class="staff-detail-section staff-end-session-report{% if not detail.end_checks.digitalised_available %} is-unavailable{% endif %}" aria-label="End-of-session report" data-staff-exam-day-report data-opens-at="{{ detail.end_checks.opens_at }}">
+      <section class="staff-detail-section staff-end-session-report{% if not detail.end_checks.digitalised_available %} is-unavailable{% endif %}" aria-label="End-of-session report" data-staff-exam-day-report data-opens-at="{{ detail.end_checks.opens_at }}" data-feedback-status-url="{{ detail.end_checks.feedback_status_url }}">
         <div class="staff-end-checks-heading">
           <h3>End-of-session report</h3>
           <span class="staff-end-checks-status{% if detail.end_checks.digitalised_available %} is-available{% endif %}" data-report-availability>{{ 'Available' if detail.end_checks.digitalised_available else 'Available on exam date' }}</span>
@@ -240,11 +240,11 @@
               <li>
                 <b>Final checks</b>
                 {% set feedback_submitted = detail.end_checks.institutional_feedback_submitted %}
-                <label class="staff-session-report-checkbox"><input type="checkbox" name="centre_feedback_confirmed" value="1" required data-report-feedback-checkbox data-submitted="{{ 'true' if feedback_submitted else 'false' }}"{% if not feedback_submitted %} disabled{% endif %}><span>I confirm that the exam centre has submitted its feedback form. <span class="staff-end-checks-status{% if feedback_submitted %} is-available{% endif %}">{{ 'Feedback form submitted' if feedback_submitted else 'Feedback form not submitted' }}</span></span></label>
+                <label class="staff-session-report-checkbox"><input type="checkbox" name="centre_feedback_confirmed" value="1" required data-report-feedback-checkbox data-submitted="{{ 'true' if feedback_submitted else 'false' }}"{% if not feedback_submitted %} disabled{% endif %}><span>I confirm that the exam centre has submitted its feedback form. <span class="staff-end-checks-status{% if feedback_submitted %} is-available{% endif %}" data-report-feedback-status>{{ 'Feedback form submitted' if feedback_submitted else 'Feedback form not submitted' }}</span></span></label>
                 {% if detail.end_checks.report_recordings_required %}
                 <label class="staff-session-report-checkbox"><input type="checkbox" name="recordings_reminder_confirmed" value="1" required><span><b>I confirm that all examiners have been reminded to upload their recordings to Sinapsis within two business days after the exam session.</b></span></label>
                 {% endif %}
-                {% if not feedback_submitted %}<p class="staff-detail-muted">The report cannot be submitted until the exam centre has submitted its feedback form.</p>{% endif %}
+                <p class="staff-detail-muted" data-report-feedback-help{% if feedback_submitted %} hidden{% endif %}>The report cannot be submitted until the exam centre has submitted its feedback form.</p>
               </li>
               <li>
                 <label><b>Optional comments</b>

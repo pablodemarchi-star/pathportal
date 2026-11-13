@@ -14760,6 +14760,8 @@ def journey_online_format_group(session_record):
 
 
 def path_session_journey_contract(session_record, audience, today=None, sources=None, now=None):
+    from app.exam_centre_feedback import feedback_states
+    from app.exam_centre_feedback_text import feedback_copy
     audience = journey_clean_text(audience)
     is_external_public = audience == "external_public"
     if is_external_public:
@@ -14924,7 +14926,11 @@ def path_session_journey_contract(session_record, audience, today=None, sources=
         "public_entry_slips_access": public_entry_slips_access,
         "staff_cards": staff_cards,
         "absence_cards": absence_cards,
-        "feedback_cards": [
+        "feedback_copy": feedback_copy(request.args.get("lang") if has_request_context() else "en"),
+        "feedback_cards": feedback_states([
+            {"session_id": card["session_id"], "session_name": card["session_name"], "session_date": card["session_date"]}
+            for card in absence_cards
+        ], now=now) if audience == "institution" and not is_external else [
             {"session_id": card["session_id"], "session_name": card["session_name"], "session_date": card["session_date"]}
             for card in absence_cards
         ],
@@ -19521,7 +19527,7 @@ def shared_path_session_journey(token, audience):
         return render_journey_unavailable(410)
     auto_approve_expired_schedule_review(share.exam_session, commit=True)
     journey = path_session_journey_contract(share.exam_session, audience)
-    return render_template("pre_session_control_tower/session_journey.html", journey=journey, share=share, is_preview=False, csrf_token="")
+    return render_template("pre_session_control_tower/session_journey.html", journey=journey, share=share, is_preview=False, csrf_token=session.setdefault("csrf_token", secrets.token_hex(32)))
 
 
 def save_journey_public_access(session_record):
@@ -20482,8 +20488,8 @@ def staff_report_available(record, now=None):
 
 
 def staff_report_feedback_submitted(record):
-    """Fail closed until the institutional journey's session feedback is implemented."""
-    return False
+    from app.models import ExamCentreFeedback
+    return ExamCentreFeedback.query.filter_by(exam_session_id=record.id).first() is not None
 
 
 @staff_bp.route("/my-exam-sessions/<token>/submissions/<int:submission_id>/report", methods=["POST"])
@@ -20584,6 +20590,21 @@ def upload_staff_report_media(token, submission_id):
     return upload_media(token, submission_id)
 
 
+@staff_bp.get("/my-exam-sessions/<token>/submissions/<int:submission_id>/report/feedback-status")
+def staff_report_feedback_status(token, submission_id):
+    share = StaffExamSessionsShare.query.filter_by(token=token).first_or_404()
+    submission = StaffExamSessionSubmission.query.filter_by(id=submission_id, share_id=share.id).first_or_404()
+    assignment, person_ref = staff_submission_assignment(submission.exam_session, submission.assignment_type, submission.assignment_id)
+    if not assignment or person_ref != share.person_ref:
+        abort(404)
+    if (submission.assignment_type != "supervisor" or assignment.is_remote or submission.exam_session.format != "Onsite"
+            or assignment.participation_status != "Confirmed"):
+        abort(403)
+    response = jsonify(ok=True, submitted=staff_report_feedback_submitted(submission.exam_session))
+    response.headers["Cache-Control"] = "private, no-store"
+    return response
+
+
 def staff_end_checks_view(record, role, status, submission, share):
     from app.staff_report_review import assessment_roster, CRITERIA
     from app.staff_report_media import media_view
@@ -20607,6 +20628,7 @@ def staff_end_checks_view(record, role, status, submission, share):
         "session_report_media_url": url_for("staff.upload_staff_report_media", token=share.token, submission_id=submission.id),
         "session_report_media": media_view(record, submission),
         "institutional_feedback_submitted": staff_report_feedback_submitted(record),
+        "feedback_status_url": url_for("staff.staff_report_feedback_status", token=share.token, submission_id=submission.id),
         "report_recordings_required": staff_session_has_recording_candidates(record),
         "assessment_roster": assessment_roster(record) if role == "supervisor" and record.format == "Onsite" and assignment and not assignment.is_remote else [],
         "assessment_criteria": CRITERIA,

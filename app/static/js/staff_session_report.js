@@ -12,9 +12,35 @@
     const feedback = form.querySelector('[data-report-feedback]');
     const submit = form.querySelector('[type="submit"]');
     const institutionalFeedback = form.querySelector('[data-report-feedback-checkbox]');
-    const institutionSubmitted = institutionalFeedback?.dataset.submitted === 'true';
+    let institutionSubmitted = institutionalFeedback?.dataset.submitted === 'true';
     let saving = false;
     let mediaPending = false;
+    let checkingFeedback = false;
+    const refreshFeedbackStatus = async () => {
+      if (!section.dataset.feedbackStatusUrl || !opener.dataset.folderUrl || checkingFeedback || saving || mediaPending) return;
+      checkingFeedback = true;
+      try {
+        const response = await fetch(section.dataset.feedbackStatusUrl, {headers: {Accept: 'application/json'}, cache: 'no-store'});
+        if (!response.ok) return;
+        const result = await response.json();
+        if (!result.ok) return;
+        institutionSubmitted = Boolean(result.submitted);
+        institutionalFeedback.dataset.submitted = String(institutionSubmitted);
+        institutionalFeedback.disabled = !institutionSubmitted;
+        if (!institutionSubmitted) institutionalFeedback.checked = false;
+        const badge = form.querySelector('[data-report-feedback-status]');
+        badge.textContent = institutionSubmitted ? 'Feedback form submitted' : 'Feedback form not submitted';
+        badge.classList.toggle('is-available', institutionSubmitted);
+        form.querySelector('[data-report-feedback-help]').hidden = institutionSubmitted;
+        submit.disabled = !institutionSubmitted;
+      } catch {} finally { checkingFeedback = false; }
+    };
+    opener.addEventListener('click', refreshFeedbackStatus);
+    window.addEventListener('focus', refreshFeedbackStatus);
+    window.setInterval(() => {
+      if (!document.hidden && (dialog.open || section.closest('dialog')?.open)) refreshFeedbackStatus();
+    }, 30000);
+
     const updateReasons = () => {
       const needed = ['The session finished ahead of schedule', 'There were minor delays', 'There were significant delays'].includes(outcome.value);
       form.querySelector('[data-report-reasons-field]').hidden = !needed;

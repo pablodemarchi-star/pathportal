@@ -940,8 +940,8 @@ class ScheduleWorkflowTest(unittest.TestCase):
                     label = "Encuesta sobre la sesión de examen de" if language == "es" else "Exam session feedback for"
                     self.assertIn(f"{label} {record.exam_session_name}", block)
                     self.assertIn(record.session_date.strftime('%d/%m/%Y'), block)
-                    self.assertIn('data-fit-single-line-text', block)
-                    self.assertIn('journey-disabled-link', block)
+                    self.assertNotIn('data-fit-single-line-text', block)
+                    self.assertIn('data-centre-feedback-open disabled', block)
                     for peer in [self.session_record, other, chained]:
                         if peer.id != record.id:
                             self.assertNotIn(peer.exam_session_name, block)

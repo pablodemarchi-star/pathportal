@@ -1,0 +1,38 @@
+{% set fc = journey.feedback_copy %}
+<dialog class="centre-feedback-dialog" data-centre-feedback-dialog aria-labelledby="centre-feedback-title-{{ card.session_id }}">
+  <form method="post" action="{{ url_for('exam_centre_feedback.submit', token=share.token, session_id=card.session_id) }}" data-centre-feedback-form novalidate>
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <input type="hidden" name="language" value="{{ journey.language }}">
+    <header class="centre-feedback-header"><div><h2 id="centre-feedback-title-{{ card.session_id }}">{{ fc.title }}</h2><p>{{ card.session_name }} · {{ card.session_date.strftime('%d/%m/%Y') }}</p></div><button type="button" data-centre-feedback-close aria-label="{{ fc.close }}">&times;</button></header>
+    <p class="centre-feedback-intro">{{ fc.intro }}</p>
+    <p class="centre-feedback-muted">{{ fc.time }} · <span class="centre-feedback-scale">{{ fc.scale }}</span></p>
+    {% for question in fc.questions %}
+    <fieldset class="centre-feedback-question" data-feedback-question="{{ question.key }}">
+      <legend>{{ loop.index }}. {{ question.title }} <small>{{ fc.required }}</small></legend>
+      <p>{{ question.question }}</p>
+      <div class="centre-feedback-ratings">
+        {% for number in range(1, 11) %}
+        <label><input type="radio" name="{{ question.key }}_score" value="{{ number }}" required aria-label="{{ question.title }}: {{ number }}"><span>{{ number }}</span></label>
+        {% endfor %}
+      </div>
+      <p class="centre-feedback-field-error" data-error-for="{{ question.key }}_score" hidden></p>
+      <label class="centre-feedback-comment" data-feedback-conditional hidden>{{ fc.conditional }} <small>{{ fc.required }}</small>
+        <textarea name="{{ question.key }}_comment" rows="2" maxlength="10000" disabled></textarea>
+      </label>
+      <p class="centre-feedback-field-error" data-error-for="{{ question.key }}_comment" hidden></p>
+    </fieldset>
+    {% endfor %}
+    {% for question in fc.open_questions %}
+    <div class="centre-feedback-question">
+      <label>{{ loop.index + 4 }}. {{ question.title }} <small>{{ fc.optional }}</small>
+        {% if question.description %}<span class="centre-feedback-description">{{ question.description }}</span>{% endif %}
+        <textarea name="{{ question.key }}" rows="2" maxlength="10000" placeholder="{{ question.placeholder }}"></textarea>
+      </label>
+      <p class="centre-feedback-field-error" data-error-for="{{ question.key }}" hidden></p>
+    </div>
+    {% endfor %}
+    <p class="centre-feedback-muted">{{ 'Una vez enviada, la evaluación no podrá editarse.' if spanish else 'Once submitted, this feedback cannot be edited.' }}</p>
+    <p role="status" aria-live="polite" data-feedback-message></p>
+    <div class="centre-feedback-actions"><button type="button" class="secondary-button" data-centre-feedback-close>{{ fc.cancel }}</button><button type="submit" class="primary-button">{{ fc.submit }}</button></div>
+  </form>
+</dialog>

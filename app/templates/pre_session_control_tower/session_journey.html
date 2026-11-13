@@ -448,4 +448,8 @@
     {% endif %}
   {% endif %}
 </section>
+{% if journey and journey.audience == 'institution' and not journey.is_external %}
+<link rel="stylesheet" href="{{ url_for('static', filename='css/exam_centre_feedback.css', v='20261113-7') }}">
+<script src="{{ url_for('static', filename='js/exam_centre_feedback.js', v='20261113-1') }}" defer></script>
+{% endif %}
 {% endblock %}

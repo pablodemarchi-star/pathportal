@@ -3,8 +3,18 @@
                 <section class="journey-feedback-card" data-feedback-session-id="{{ card.session_id }}">
                   <h3>{{ ts('Exam session feedback for') }} {{ card.session_name }}</h3>
   <time class="journey-session-resource-date" datetime="{{ card.session_date.isoformat() }}">{{ ts('Date') }}: {{ card.session_date.strftime('%d/%m/%Y') }}</time>
+                  {% if journey.audience == 'institution' and not journey.is_external %}
+                  {% set fc = journey.feedback_copy %}
+                  <div data-centre-feedback data-opens-at="{{ card.feedback_opens_at }}" data-submitted="{{ 'true' if card.feedback_submitted else 'false' }}" data-preview="{{ 'false' if share and not is_preview else 'true' }}" data-draft-key="centre-feedback-{{ share.token if share else 'preview' }}-{{ card.session_id }}" data-copy='{{ fc|tojson }}'>
+                    <span class="centre-feedback-chip{% if card.feedback_submitted or card.feedback_available %} is-available{% endif %}" data-feedback-status>{{ fc.submitted if card.feedback_submitted else fc.available if card.feedback_available else fc.unavailable }}</span>
+                    <p><button type="button" class="journey-action-chip" data-centre-feedback-open{% if card.feedback_submitted or not card.feedback_available or not share or is_preview %} disabled{% endif %}>{{ fc.submitted if card.feedback_submitted else fc.open }}</button></p>
+                    <p data-feedback-thanks role="status" hidden>{{ fc.thanks }}</p>
+                    {% if share and not is_preview and not card.feedback_submitted %}{% include 'pre_session_control_tower/_exam_centre_feedback_modal.html' %}{% endif %}
+                  </div>
+                  {% else %}
                   <span class="journey-status-chip is-pending">{{ ts('Available for 10 days after the exam date') if journey.audience == 'public' else ts('Available on exam date') }}</span>
                   <p>{% if journey.audience == 'public' and journey.exam_session_feedback_url %}<a class="journey-inline-link" href="{{ journey.exam_session_feedback_url }}" target="_blank" rel="noopener noreferrer">{{ ts('Click here') }}</a>{% else %}<span class="journey-disabled-link">{{ ts('Click here') }}</span>{% endif %}{{ ts(' to complete the exam session feedback') }}</p>
+                  {% endif %}
                 </section>
               {% endfor %}
             </div>

@@ -1055,6 +1055,30 @@ class ExamSessionJourneyShare(db.Model):
     exam_session = db.relationship("ExamSession", backref=db.backref("journey_shares", lazy=True, cascade="all, delete-orphan"))
 
 
+class ExamCentreFeedback(db.Model):
+    __table_args__ = tuple(db.CheckConstraint(f"{field}_score BETWEEN 1 AND 10", name=f"ck_centre_feedback_{field}")
+                          for field in ("organisation", "candidate_experience", "communication", "overall"))
+    id = db.Column(db.Integer, primary_key=True)
+    exam_session_id = db.Column(db.Integer, db.ForeignKey("exam_session.id"), nullable=False, unique=True, index=True)
+    share_id = db.Column(db.Integer, db.ForeignKey("exam_session_journey_share.id"), nullable=False)
+    session_year = db.Column(db.Integer, nullable=False, index=True)
+    session_name = db.Column(db.String(500), nullable=False)
+    language = db.Column(db.String(2), nullable=False)
+    organisation_score = db.Column(db.Integer, nullable=False)
+    organisation_comment = db.Column(db.Text, nullable=False, default="")
+    candidate_experience_score = db.Column(db.Integer, nullable=False)
+    candidate_experience_comment = db.Column(db.Text, nullable=False, default="")
+    communication_score = db.Column(db.Integer, nullable=False)
+    communication_comment = db.Column(db.Text, nullable=False, default="")
+    overall_score = db.Column(db.Integer, nullable=False)
+    overall_comment = db.Column(db.Text, nullable=False, default="")
+    worked_well = db.Column(db.Text, nullable=False, default="")
+    improvements_noticed = db.Column(db.Text, nullable=False, default="")
+    improvements_needed = db.Column(db.Text, nullable=False, default="")
+    submitted_at = db.Column(db.DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc), index=True)
+    exam_session = db.relationship("ExamSession", backref=db.backref("centre_feedback", uselist=False, cascade="all, delete-orphan"))
+
+
 class StaffExamSessionsShare(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     person_ref = db.Column(db.String(80), nullable=False, unique=True, index=True)

@@ -148,6 +148,8 @@ def create_app():
     from app.routes import staff_bp, SINAPSIS_CHECKLIST_ITEMS
 
     app.register_blueprint(staff_bp)
+    from app.exam_centre_feedback import feedback_bp
+    app.register_blueprint(feedback_bp)
     from app.quality_control import quality_bp
     from app import process_timing
     app.register_blueprint(quality_bp)
