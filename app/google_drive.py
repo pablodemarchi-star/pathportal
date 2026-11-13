@@ -120,6 +120,25 @@ def picker_token():
         return jsonify(ok=False, error=str(exc)), 503
 
 
+@drive_bp.post('/integrations/google/drive/session-pictures/authorize')
+@administrator
+def authorize_session_pictures():
+    from types import SimpleNamespace
+    from app.staff_report_media import session_pictures_folder
+    if not validate_csrf():
+        abort(400)
+    expected_id = session_pictures_folder(SimpleNamespace(session_pictures_folder_url=request.form.get('folder_url', '')))
+    if not expected_id:
+        return jsonify(ok=False, error='Enter a valid Google Drive folder link.'), 400
+    if request.form.get('folder_id', '').strip() != expected_id:
+        return jsonify(ok=False, error='Choose the same folder as the Session pictures folder link.'), 400
+    try:
+        folder = folder_metadata(expected_id)
+    except DriveStorageError as exc:
+        return jsonify(ok=False, error=str(exc)), 400
+    return jsonify(ok=True, name=folder['name'], url='https://drive.google.com/drive/folders/' + expected_id)
+
+
 @drive_bp.post('/integrations/google/drive/folders/<key>')
 @administrator
 def save_folder(key):

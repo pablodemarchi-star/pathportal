@@ -733,11 +733,16 @@
             <input type="url" name="exam_entry_slips_url" value="{{ session.exam_entry_slips_url if session else '' }}" placeholder="https://...">
           </label>
         </li>
-        <li>
+        <li data-drive-settings data-token-url="{{ url_for('google_drive.picker_token') }}" data-csrf="{{ csrf_token }}" data-drive-destination="session_pictures" data-drive-authorize-only="true" data-drive-button-label="Authorize Drive access" data-save-url="{{ url_for('google_drive.authorize_session_pictures') }}">
           <label>
             <span>Session pictures folder:</span>
-            <input type="url" name="session_pictures_folder_url" value="{{ (session.session_pictures_folder_url or '') if session else '' }}" placeholder="https://...">
+            <input type="url" name="session_pictures_folder_url" value="{{ (session.session_pictures_folder_url or '') if session else '' }}" placeholder="https://..." data-drive-folder-link>
           </label>
+          {% if (g.current_user and g.current_user.is_superadmin) or (not g.user_id and g.user_department == 'Admin') %}
+          <button type="button" class="secondary-button compact-action" data-drive-choose>Authorize Drive access</button>
+          <small data-drive-message role="status" aria-live="polite"></small>
+          <span data-drive-current hidden></span>
+          {% endif %}
         </li>
         <li>
           <label>
@@ -1798,4 +1803,5 @@
   </div>
 {% endfor %}
 {% include '_instructions_editor.html' %}
+<script src="{{ url_for('static', filename='js/google_drive.js', v='20261113-session-pictures-2') }}" defer></script>
 {% endblock %}

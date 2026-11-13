@@ -117,6 +117,48 @@ class GoogleDriveTest(unittest.TestCase):
         page=self.client.get('/integrations/google').get_data(as_text=True)
         for secret in ('access-test','refresh-test','secret-test'):self.assertNotIn(secret,page)
 
+    def test_authorize_session_pictures_does_not_change_document_destinations(self):
+        self.folder()
+        url='/integrations/google/drive/session-pictures/authorize'
+        folder_id='18096T-jqNPLqKQrCSg-FrbYiVo5QOFWU'
+        link='https://drive.google.com/drive/folders/'+folder_id+'?usp=drive_link'
+        response=self.client.post(url,data={'csrf_token':'test','folder_url':link,'folder_id':folder_id})
+        self.assertEqual(response.status_code,200)
+        self.assertEqual(response.json['name'],'Chosen folder')
+        self.assertEqual(GoogleDriveDestination.query.count(),1)
+        self.assertEqual(GoogleDriveDestination.query.one().folder_id,'chosen-folder-12345')
+        self.assertEqual(response.headers['Cache-Control'],'private, no-store')
+        response=self.client.post(url,data={'csrf_token':'test','folder_url':link,'folder_id':'different-folder-12345'})
+        self.assertEqual(response.status_code,400)
+        self.assertEqual(self.client.post(url,data={'csrf_token':'test','folder_url':'https://example.com/folders/abc','folder_id':folder_id}).status_code,400)
+
+    def test_session_pictures_authorization_is_next_to_planner_field(self):
+        from datetime import date
+        from app.models import ExamSession
+        folder='https://drive.google.com/drive/folders/18096T-jqNPLqKQrCSg-FrbYiVo5QOFWU'
+        record=ExamSession(exam_session_name='Pictures authorization',category='Path School',status='Pending',
+            session_date=date(2026,11,20),format='Onsite',shifts='Morning',modules='Speaking',session_pictures_folder_url=folder)
+        db.session.add(record);db.session.commit()
+        response=self.client.get('/exam-session-planner?session_year=2026')
+        self.assertEqual(response.status_code,200)
+        page=response.get_data(as_text=True)
+        self.assertIn('Authorize Drive access',page)
+        self.assertIn('data-drive-folder-link',page)
+        self.assertIn('value="'+folder+'"',page)
+        self.assertNotIn('data-drive-destination="session_pictures"',self.client.get('/integrations/google').get_data(as_text=True))
+
+    def test_session_pictures_authorization_requires_admin_csrf_and_editor_access(self):
+        url='/integrations/google/drive/session-pictures/authorize'
+        fields={'csrf_token':'test','folder_id':'pictures-folder-12345','folder_url':'https://drive.google.com/drive/folders/pictures-folder-12345'}
+        self.assertEqual(self.client.post(url).status_code,400)
+        with self.client.session_transaction() as state:state['user_department']='Finance'
+        self.assertEqual(self.client.post(url,data=fields).status_code,403)
+        with self.client.session_transaction() as state:state['user_department']='Admin'
+        with patch('app.google_drive.folder_metadata',side_effect=DriveStorageError('Editor access required')):
+            response=self.client.post(url,data=fields)
+        self.assertEqual(response.status_code,400)
+        self.assertIn('Editor access required',response.json['error'])
+
     def test_folders_are_separate_persistent_and_verified_with_google(self):
         for key,ident in [('finance_supporting_documents','support-folder-12345'),('finance_payment_receipts','receipt-folder-12345')]:
             response=self.client.post('/integrations/google/drive/folders/'+key,data={'csrf_token':'test','folder_id':ident})
