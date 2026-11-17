@@ -12,6 +12,17 @@ CRITERIA = [
     {'key': 'overall', 'label': 'Overall', 'options': ['Remarkable', 'Satisfactory', 'Unsatisfactory']},
 ]
 
+COMMENT_RULES = {
+    'arrival': ('Comment on Arrival', ['Too risky']),
+    'attitude': ('Comment on Attitude', ['Too doubtful', 'Not helpful']),
+    'responsibilities': ('Comment on Responsibilities', ['Needed guidance', 'Made mistakes']),
+    'dress_code': ('Comment on Dress code', ['Could improve', 'Inappropriate']),
+    'overall': ('Comment on Overall performance', ['Unsatisfactory']),
+}
+for criterion in CRITERIA:
+    if criterion['key'] in COMMENT_RULES:
+        criterion['comment_title'], criterion['comment_when'] = COMMENT_RULES[criterion['key']]
+
 
 def assessment_roster(record):
     from app.routes import staffing_assignment_person_ref
@@ -41,5 +52,15 @@ def validate_assessments(record, form):
         notes = form.get(f"review.{row['key']}.notes", '').strip()
         if len(notes) > 10000:
             raise ValueError(f"Notes for {row['name']} must not exceed 10,000 characters.")
-        assessments.append(dict(exam_session_id=record.id, **row, criteria=values, notes=notes))
+        comments = {}
+        for key, (title, required_values) in COMMENT_RULES.items():
+            if values[key] not in required_values:
+                continue
+            comment = form.get(f"review.{row['key']}.comments.{key}", '').strip()
+            if not comment:
+                raise ValueError(f"{title} is required for {row['name']} ({row['role']}).")
+            if len(comment) > 10000:
+                raise ValueError(f"{title} for {row['name']} must not exceed 10,000 characters.")
+            comments[key] = comment
+        assessments.append(dict(exam_session_id=record.id, **row, criteria=values, notes=notes, comments=comments))
     return assessments

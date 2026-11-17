@@ -372,6 +372,39 @@ class StaffSessionReportTest(unittest.TestCase):
         db.session.rollback()
         self.assertEqual(m.StaffExamSessionReport.query.count(),1)
 
+    def test_criterion_specific_comments_required_for_each_negative_selection(self):
+        from app.staff_report_review import COMMENT_RULES
+        examiner, intern=self.review_people()
+        answers=self.review_answers()
+        prefix=f'review.examiner:{examiner.id}.'
+        for key,(title,options) in COMMENT_RULES.items():
+            for option in options:
+                response=self.post(**{**answers,prefix+key:option})
+                self.assertEqual(response.status_code,400)
+                self.assertIn(title,response.json['error'])
+                self.assertEqual(self.post(**{**answers,prefix+key:option,prefix+'comments.'+key:'  '}).status_code,400)
+        self.assertEqual(m.StaffExamSessionReport.query.count(),0)
+        for key,(title,options) in COMMENT_RULES.items():
+            answers[prefix+key]=options[0]
+            answers[prefix+'comments.'+key]='Explanation for '+key
+        response=self.post(**answers)
+        self.assertEqual(response.status_code,200)
+        import json
+        assessments=json.loads(m.StaffExamSessionReport.query.one().staff_assessments)
+        reviewed=next(row for row in assessments if row['key']==f'examiner:{examiner.id}')
+        self.assertEqual(reviewed['comments'],{key:'Explanation for '+key for key in COMMENT_RULES})
+        self.assertEqual(reviewed['notes'],'')
+        for row in assessments:
+            if row['key']!=reviewed['key']:self.assertEqual(row['comments'],{})
+
+    def test_untriggered_comments_remain_optional_and_are_not_submitted(self):
+        examiner,intern=self.review_people()
+        answers=self.review_answers()
+        answers[f'review.examiner:{examiner.id}.comments.arrival']='Earlier note no longer applicable'
+        self.assertEqual(self.post(**answers).status_code,200)
+        import json
+        self.assertTrue(all(not row['comments'] for row in json.loads(m.StaffExamSessionReport.query.one().staff_assessments)))
+
     def test_no_delays_does_not_save_hidden_reasons(self):
         self.assertEqual(self.post(reasons='Old hidden answer').status_code, 200)
         self.assertEqual(m.StaffExamSessionReport.query.one().reasons, '')

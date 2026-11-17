@@ -18265,3 +18265,8 @@ body.staff-session-detail-open { overflow: hidden; }
 .staff-report-media-files { padding-left: 18px; overflow-wrap: anywhere; }
 .staff-end-session-report.is-unavailable { background: #f3f4f4; border-color: #dce1de; }
 .staff-end-session-report.is-unavailable h3, .staff-end-session-report.is-unavailable > p { color: #89938e; }
+
+.staff-report-review-notes.has-required-missing summary { background: var(--badge-red-bg); color: var(--badge-red-text); border-color: var(--badge-red-text); }
+.staff-report-review-notes [data-review-comment-field] { min-width: 230px; font-size: 12px; }
+.staff-report-review-notes [data-review-comment-field] small { font-weight: 400; }
+.staff-report-review-table .has-required-comments .staff-report-review-status { background: var(--badge-red-bg); color: var(--badge-red-text); }

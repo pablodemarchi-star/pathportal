@@ -85,6 +85,18 @@ class SessionReportsTest(unittest.TestCase):
         db.session.commit()
         self.assertEqual(load_report_rows(2026)[0]['report_author'],'Report Supervisor')
 
+    def test_criterion_comments_are_visible_with_titles_in_read_only_report(self):
+        examiner,intern=fixtures.StaffSessionReportTest.review_people(self)
+        answers=fixtures.StaffSessionReportTest.review_answers(self)
+        prefix=f'review.examiner:{examiner.id}.'
+        answers[prefix+'arrival']='Too risky'
+        answers[prefix+'comments.arrival']='Arrived too close to the start'
+        self.assertEqual(self.post(**answers).status_code,200)
+        client,_=self.admin_client()
+        html=client.get(f'/quality-control/session-reports/{self.record.id}').get_data(as_text=True)
+        self.assertIn('Comment on Arrival',html)
+        self.assertIn('Arrived too close to the start',html)
+
     def test_missing_reports_after_exam_date_are_highlighted(self):
         self.record.session_date=date(2025,1,1);db.session.commit()
         row=load_report_rows(2025)[0]

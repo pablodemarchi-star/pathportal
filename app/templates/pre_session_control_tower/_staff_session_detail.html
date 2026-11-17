@@ -122,7 +122,7 @@
         {% set report_available = detail.end_checks.digitalised_available and not report_submitted %}
         <button type="button" class="staff-detail-link staff-end-checks-folder{% if not report_available %} is-disabled{% endif %}" data-exam-day-report-link data-folder-url="{{ '' if report_submitted else detail.end_checks.session_report_url }}"{% if not report_available %} aria-disabled="true" tabindex="-1"{% endif %}>{{ 'Report submitted' if report_submitted else 'End-of-session report ↗' }}</button>
         <dialog class="staff-session-report-modal" data-session-report-dialog aria-labelledby="session-report-title-{{ detail.end_checks.session_report_url|replace('/', '-') }}">
-          <form action="{{ detail.end_checks.session_report_url }}" method="post" data-session-report-form>
+          <form action="{{ detail.end_checks.session_report_url }}" method="post" data-session-report-form novalidate>
             <input type="hidden" name="csrf_token" value="{{ detail.confirmation_csrf }}">
             <div class="staff-session-report-heading">
               <h2 id="session-report-title-{{ detail.end_checks.session_report_url|replace('/', '-') }}">End-of-session report</h2>
@@ -202,14 +202,19 @@
                       <tr data-review-row>
                         <th scope="row"><span class="staff-report-review-name">{{ member.name }}</span><small>{{ member.role }}</small><span class="staff-report-review-status" data-review-row-status>Incomplete</span></th>
                         {% for criterion in detail.end_checks.assessment_criteria %}
-                        <td><select name="review.{{ member.key }}.{{ criterion.key }}" required data-review-select aria-label="{{ member.name }} ({{ member.role }}) — {{ criterion.label }}">
+                        <td><select name="review.{{ member.key }}.{{ criterion.key }}" required data-review-select data-criterion="{{ criterion.key }}" aria-label="{{ member.name }} ({{ member.role }}) — {{ criterion.label }}">
                           <option value="">Select</option>
                           {% for option in criterion.options %}<option>{{ option }}</option>{% endfor %}
                         </select></td>
                         {% endfor %}
                         <td>
                           <details class="staff-report-review-notes" data-review-notes>
-                            <summary aria-label="Notes for {{ member.name }} ({{ member.role }})" title="Add or edit notes"><span aria-hidden="true">✎</span><span class="staff-report-note-indicator" data-review-note-indicator hidden aria-hidden="true">●</span></summary>
+                            <summary aria-label="Notes for {{ member.name }} ({{ member.role }})" title="Add or edit notes"><span aria-hidden="true">✎</span><span class="staff-report-note-indicator" data-review-note-indicator hidden aria-hidden="true">●</span><span data-review-note-required hidden aria-hidden="true">!</span></summary>
+                            {% for criterion in detail.end_checks.assessment_criteria if criterion.get('comment_when') %}
+                            <label data-review-comment-field data-comment-key="{{ criterion.key }}" data-comment-title="{{ criterion.comment_title }}" data-required-values='{{ criterion.comment_when|tojson }}' hidden><b>{{ criterion.comment_title }} <small>Required</small></b>
+                              <textarea name="review.{{ member.key }}.comments.{{ criterion.key }}" rows="3" maxlength="10000" data-review-comment disabled aria-label="{{ criterion.comment_title }} — {{ member.name }} ({{ member.role }})"></textarea>
+                            </label>
+                            {% endfor %}
                             <textarea name="review.{{ member.key }}.notes" rows="3" maxlength="10000" data-review-note aria-label="Notes for {{ member.name }} ({{ member.role }})" placeholder="Optional notes"></textarea>
                           </details>
                         </td>

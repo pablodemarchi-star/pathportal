@@ -16,16 +16,26 @@ fields['[data-report-return-timeline]'] = timeline;
 fields['[data-return-progress]'] = {};
 fields['[type="submit"]'] = {};
 fields['[data-review-count]'] = {classList: classes()};
+const criterionKeys=['arrival','attitude','responsibilities','staff_id','dress_code','language','overall'];
+const commentRules={arrival:['Too risky'],attitude:['Too doubtful','Not helpful'],responsibilities:['Needed guidance','Made mistakes'],dress_code:['Could improve','Inappropriate'],overall:['Unsatisfactory']};
 const reviewRows = Array.from({length: 2}, () => {
-  const selects = Array.from({length: 7}, () => ({value: '', addEventListener(name, callback) {this[name] = callback;}}));
+  const selects = criterionKeys.map(key => ({key,value: '', addEventListener(name, callback) {this[name] = callback;}}));
   const note = {value: '', addEventListener(name, callback) {this[name] = callback;}};
-  const indicator = {};
-  const notes = {classList: classes(), querySelector: () => indicator};
+  const indicator = {}, requiredIndicator = {};
+  const summary = {dataset:{},getAttribute:()=> 'Notes for Staff',setAttribute(name,value){this[name]=value;}};
+  const comments = Object.entries(commentRules).map(([key,values])=>{
+    const input={value:'',required:false,disabled:true,addEventListener(name,fn){this[name]=fn;},setCustomValidity(value){this.validation=value;}};
+    return {dataset:{commentKey:key,commentTitle:'Comment on '+key,requiredValues:JSON.stringify(values)},input,querySelector:()=>input};
+  });
+  const notes = {classList: classes(), querySelector: key => key==='summary'?summary:key==='[data-review-note-required]'?requiredIndicator:indicator};
   const status = {};
-  return {classList: classes(), selects, note, indicator, notes, status, querySelectorAll: () => selects,
-    querySelector: key => ({'[data-review-note]':note, '[data-review-notes]':notes, '[data-review-row-status]':status}[key])};
+  return {classList: classes(), selects, note, indicator, requiredIndicator, notes, status, comments,
+    querySelectorAll: key => key==='[data-review-select]'?selects:key==='[data-review-comment-field]'?comments:key==='[data-review-comment]'?comments.map(field=>field.input):[],
+    querySelector: key => key.startsWith('[data-review-select][data-criterion=')?selects.find(select=>select.key===key.match(/data-criterion="([^"]+)"/)[1]):({'[data-review-note]':note, '[data-review-notes]':notes, '[data-review-row-status]':status}[key])};
 });
-const form = {querySelector: (key) => fields[key], querySelectorAll: () => reviewRows, addEventListener() {}};
+fields['[data-report-feedback-checkbox]']={dataset:{submitted:'true'}};
+const form = {handlers:{},querySelector: (key) => fields[key], querySelectorAll: key=>key==='[data-review-row]'?reviewRows:[],
+ addEventListener(name,fn){this.handlers[name]=fn;},reportValidity(){return false;}};
 const dialog = {querySelector: () => form, querySelectorAll: () => [], addEventListener() {}};
 const opener = {addEventListener() {}};
 const section = {dataset: {}, querySelector: (key) => key === '[data-exam-day-report-link]' ? opener : dialog};
@@ -73,3 +83,29 @@ reviewRows[0].selects[3].change();
 assert.equal(fields['[data-review-count]'].textContent, '0/2 completed');
 assert.equal(reviewRows[0].status.textContent, 'Incomplete');
 console.log('Staff review: seven-criterion completion, independent optional notes and cleared selections passed.');
+
+const first=reviewRows[0];
+first.selects[0].value='Too risky';first.selects[6].value='Unsatisfactory';first.selects[0].change();
+assert.equal(first.requiredIndicator.hidden,false);
+assert.equal(first.comments[0].hidden,false);
+assert.equal(first.comments[0].input.required,true);
+assert.equal(first.comments[4].input.required,true);
+assert.equal(reviewRows[1].requiredIndicator.hidden,true);
+assert.ok(first.notes.classList.values.has('has-required-missing'));
+(async()=>{
+ await form.handlers.submit({preventDefault(){}});
+ assert.equal(first.notes.open,true);
+ first.comments[0].input.value='Late arrival';first.comments[0].input.input();
+ assert.equal(first.requiredIndicator.hidden,false);
+ first.comments[4].input.value='Overall concern';first.comments[4].input.input();
+ assert.equal(first.requiredIndicator.hidden,true);
+ first.selects[0].value='Early enough';first.selects[0].change();
+ assert.equal(first.comments[0].hidden,true);
+ assert.equal(first.comments[0].input.required,false);
+ assert.equal(first.comments[0].input.disabled,true);
+ assert.equal(first.comments[0].input.value,'Late arrival');
+ first.selects[0].value='Too risky';first.selects[0].change();
+ assert.equal(first.comments[0].input.value,'Late arrival');
+ assert.equal(first.comments[0].input.required,true);
+ console.log('Required review comments: multiple criteria, per-person pending indicator, preserved text and opening Notes before validation passed.');
+})().catch(error=>{console.error(error);process.exitCode=1;});

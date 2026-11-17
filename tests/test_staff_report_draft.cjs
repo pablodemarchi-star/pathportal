@@ -10,9 +10,9 @@ function page(){
  const facilities=make('facilities_outcome','select');const comments=make('facilities_comments','textarea');
  const emergency=make('emergency_pack_outcome','select');const emergencyReasons=make('emergency_pack_reasons','textarea');
  const feedbackCheckbox=make('centre_feedback_confirmed','checkbox','1');feedbackCheckbox.dataset.submitted='false';feedbackCheckbox.disabled=true;
- const notes=make('review.examiner:3.notes','textarea');const assessment=make('review.examiner:3.overall','select');
+ const notes=make('review.examiner:3.notes','textarea');const comment=make('review.examiner:3.comments.arrival','textarea');const assessment=make('review.examiner:3.overall','select');
  const steps=Array.from({length:6},(_,i)=>{const step=make('return_verification','checkbox',String(i));const label={classList:classes()};step.closest=()=>label;return step;});
- const fields=[outcome,reasons,facilities,comments,emergency,emergencyReasons,feedbackCheckbox,notes,assessment,...steps];
+ const fields=[outcome,reasons,facilities,comments,emergency,emergencyReasons,feedbackCheckbox,notes,comment,assessment,...steps];
  const badge={classList:classes()};const feedback={};const submit={};const help={hidden:false};
  const nodes={'[data-report-outcome]':outcome,'[data-report-reasons]':reasons,'[data-report-facilities]':facilities,'[data-report-comments]':comments,
  '[data-report-emergency-pack]':emergency,'[data-report-emergency-reasons]':emergencyReasons,'[data-report-feedback]':feedback,'[type="submit"]':submit,
@@ -27,17 +27,17 @@ function page(){
  const window={addEventListener(name,fn){events[name]=fn;},setInterval(fn,ms){assert.equal(ms,5000);poll=fn;}};
  const document={hidden:false,querySelectorAll:()=>[section],addEventListener(name,fn){documentEvents[name]=fn;}};
  vm.runInNewContext(source,{window,document,sessionStorage:{getItem:key=>storage.get(key),setItem:(key,value)=>storage.set(key,value),removeItem:key=>storage.delete(key)},fetch:async()=>({ok:true,json:async()=>result})});
- return {outcome,reasons,notes,assessment,steps,fields,form,feedbackCheckbox,badge,help,submit,feedback,opener,events,documentEvents,setResult(value){result=value;}};
+ return {outcome,reasons,notes,comment,assessment,steps,fields,form,feedbackCheckbox,badge,help,submit,feedback,opener,events,documentEvents,setResult(value){result=value;}};
 }
 (async()=>{
  const first=page();
- first.outcome.value='There were minor delays';first.reasons.value='Bus delay';first.notes.value='Very helpful';first.assessment.value='Remarkable';
+ first.outcome.value='There were minor delays';first.reasons.value='Bus delay';first.notes.value='Very helpful';first.comment.value='Reason for risky arrival';first.assessment.value='Remarkable';
  first.steps.slice(0,3).forEach(step=>step.checked=true);
  first.form.handlers.input.forEach(fn=>fn());
  assert.ok(storage.has('shared-session-draft'));
  const restored=page();
  assert.equal(restored.outcome.value,'There were minor delays');assert.equal(restored.reasons.value,'Bus delay');
- assert.equal(restored.notes.value,'Very helpful');assert.equal(restored.assessment.value,'Remarkable');
+ assert.equal(restored.comment.value,'Reason for risky arrival');assert.equal(restored.notes.value,'Very helpful');assert.equal(restored.assessment.value,'Remarkable');
  assert.ok(restored.steps.slice(0,3).every(step=>step.checked));assert.equal(restored.steps[3].disabled,false);assert.equal(restored.steps[4].disabled,true);
  restored.setResult({ok:true,submitted:true,report_submitted:false});
  await restored.events.focus();

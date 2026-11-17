@@ -141,10 +141,31 @@
         row.classList.toggle('is-complete', complete);
         row.querySelector('[data-review-row-status]').textContent = complete ? 'Completed' : 'Incomplete';
         if (complete) completed += 1;
-        const hasNote = Boolean(row.querySelector('[data-review-note]').value.trim());
+        let hasNote = Boolean(row.querySelector('[data-review-note]').value.trim());
+        let missingComments = false;
+        row.querySelectorAll('[data-review-comment-field]').forEach(field => {
+          const select = row.querySelector(`[data-review-select][data-criterion="${field.dataset.commentKey}"]`);
+          const input = field.querySelector('textarea');
+          const required = JSON.parse(field.dataset.requiredValues).includes(select.value);
+          field.hidden = !required;
+          input.disabled = !required;
+          input.required = required;
+          const missing = required && !input.value.trim();
+          input.setCustomValidity(missing ? `${field.dataset.commentTitle} is required.` : '');
+          missingComments ||= missing;
+          hasNote ||= required && Boolean(input.value.trim());
+        });
         const notes = row.querySelector('[data-review-notes]');
         notes.classList.toggle('has-note', hasNote);
+        notes.classList.toggle('has-required-missing', missingComments);
+        row.classList.toggle('has-required-comments', missingComments);
         notes.querySelector('[data-review-note-indicator]').hidden = !hasNote;
+        notes.querySelector('[data-review-note-required]').hidden = !missingComments;
+        const summary = notes.querySelector('summary');
+        summary.dataset.baseLabel ||= summary.getAttribute('aria-label');
+        summary.title = missingComments ? 'Required comments missing' : 'Add or edit notes';
+        summary.setAttribute('aria-label', summary.dataset.baseLabel + (missingComments ? ' — Required comments missing' : ''));
+        if (complete && missingComments) row.querySelector('[data-review-row-status]').textContent = 'Comments required';
       });
       const counter = form.querySelector('[data-review-count]');
       counter.textContent = `${completed}/${reviewRows.length} completed`;
@@ -153,6 +174,7 @@
     reviewRows.forEach((row) => {
       row.querySelectorAll('[data-review-select]').forEach((select) => select.addEventListener('change', updateReview));
       row.querySelector('[data-review-note]').addEventListener('input', updateReview);
+      row.querySelectorAll('[data-review-comment]').forEach(input => input.addEventListener('input', updateReview));
     });
     const mediaBox = form.querySelector('[data-report-media]');
     let uploadedCount = 0;
@@ -218,7 +240,12 @@
         feedback.textContent = 'The exam centre must submit its Exam session feedback form before this report can be submitted.';
         return;
       }
-      if (saving || mediaPending || !form.reportValidity()) return;
+      if (saving || mediaPending) return;
+      updateReview();
+      reviewRows.forEach(row => {
+        if (Array.from(row.querySelectorAll('[data-review-comment]')).some(input => input.required && !input.value.trim())) row.querySelector('[data-review-notes]').open = true;
+      });
+      if (!form.reportValidity()) return;
       if (!mediaBox || mediaBox.dataset.folderConfigured !== 'true' || !uploadedCount || !marketingCheckbox.checked) {
         feedback.textContent = 'Upload at least one file and confirm Marketing material before submitting.';
         return;
