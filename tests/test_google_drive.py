@@ -143,6 +143,8 @@ class GoogleDriveTest(unittest.TestCase):
         self.assertEqual(response.status_code,200)
         page=response.get_data(as_text=True)
         self.assertIn('Authorize Drive access',page)
+        self.assertIn('Authorize Session pictures folders',page)
+        self.assertIn('data-drive-bulk-session',page)
         self.assertIn('data-drive-folder-link',page)
         self.assertIn('value="'+folder+'"',page)
         self.assertNotIn('data-drive-destination="session_pictures"',self.client.get('/integrations/google').get_data(as_text=True))
@@ -224,6 +226,82 @@ class GoogleDriveTest(unittest.TestCase):
         self.assertEqual(response.status_code,503)
         self.assertEqual(GoogleDriveUpload.query.count(),0)
         self.assertEqual(len(self.trashed),2)
+
+    def test_report_media_preserves_original_names_and_bytes(self):
+        from datetime import date
+        from types import SimpleNamespace
+        from werkzeug.datastructures import FileStorage
+        from app import models as m
+        from app.staff_report_media import ReportMediaTarget
+        record=m.ExamSession(exam_session_name='Media upload',category='Path School',status='Pending',session_date=date(2026,11,17),format='Onsite')
+        share=m.StaffExamSessionsShare(person_ref='media-test',token='media-test')
+        db.session.add_all([record,share]);db.session.flush()
+        submission=m.StaffExamSessionSubmission(exam_session_id=record.id,share_id=share.id,assignment_type='supervisor',assignment_id=1)
+        db.session.add(submission);db.session.commit()
+        with self.app.test_request_context():
+            target=ReportMediaTarget(submission.id,'Session marketing material')
+            file=FileStorage(stream=io.BytesIO(b'original media bytes'),filename='Fotografía 1.jpg',content_type='image/jpeg')
+            upload_document(file,target,SimpleNamespace(folder_id='pictures-folder-12345'))
+            db.session.commit()
+        self.assertEqual(self.metadata[-1]['name'],'Fotografía 1.jpg')
+        self.assertEqual(self.metadata[-1]['parents'],['pictures-folder-12345'])
+        self.assertEqual(b''.join(self.parts),b'original media bytes')
+        document=m.StaffSessionReportMedia.query.one()
+        self.assertEqual(document.filename,'Fotografía 1.jpg')
+        self.assertEqual(document.mime_type,'image/jpeg')
+
+    def bulk_sessions(self):
+        from datetime import date
+        from app.models import ExamSession
+        rows=[]
+        for index,folder in enumerate(['https://drive.google.com/drive/folders/shared-folder-12345',
+                                     'https://drive.google.com/drive/folders/shared-folder-12345',
+                                     'https://drive.google.com/drive/folders/other-folder-12345',None,'https://example.com/not-drive']):
+            record=ExamSession(exam_session_name=f'Bulk session {index}',category='Path School',status='Pending',session_date=date(2026,11,20),format='Onsite',session_pictures_folder_url=folder)
+            db.session.add(record);rows.append(record)
+        db.session.commit()
+        return rows
+
+    def test_bulk_drive_plan_groups_shared_folders_without_changing_links(self):
+        records=self.bulk_sessions()
+        original=[row.session_pictures_folder_url for row in records]
+        self.network.reset_mock()
+        response=self.client.post('/integrations/google/drive/session-pictures/bulk/prepare',data={'csrf_token':'test','session_ids':[str(row.id) for row in records]})
+        self.assertEqual(response.status_code,200)
+        self.assertEqual(len(response.json['folders']),2)
+        self.assertEqual(len(response.json['issues']),2)
+        shared=next(folder for folder in response.json['folders'] if folder['folder_id']=='shared-folder-12345')
+        self.assertEqual(shared['session_ids'],[records[0].id,records[1].id])
+        self.network.assert_not_called()
+        self.assertEqual([row.session_pictures_folder_url for row in records],original)
+
+    def test_bulk_verification_is_per_folder_and_rechecks_current_configuration(self):
+        records=self.bulk_sessions()
+        url='/integrations/google/drive/session-pictures/bulk/verify'
+        fields={'csrf_token':'test','session_ids':[str(row.id) for row in records],'folder_ids':['shared-folder-12345','other-folder-12345']}
+        def metadata(folder_id):
+            if folder_id=='other-folder-12345':raise DriveStorageError('Editor access required')
+            return {'id':folder_id,'name':'Session photos'}
+        with patch('app.google_drive.folder_metadata',side_effect=metadata) as check:
+            response=self.client.post(url,data=fields)
+        self.assertEqual(response.status_code,200)
+        self.assertEqual([row['status'] for row in response.json['results']],['authorized','failed'])
+        self.assertEqual(check.call_count,2)
+        self.assertEqual(GoogleDriveDestination.query.count(),0)
+        for record in records[:2]:record.session_pictures_folder_url='https://drive.google.com/drive/folders/changed-folder-12345'
+        db.session.commit()
+        with patch('app.google_drive.folder_metadata') as check:
+            response=self.client.post(url,data={**fields,'folder_ids':['shared-folder-12345','unrelated-folder-12345']})
+        check.assert_not_called()
+        self.assertTrue(all(row['status']=='not_configured' for row in response.json['results']))
+
+    def test_bulk_authorization_requires_admin_csrf_and_valid_selection(self):
+        url='/integrations/google/drive/session-pictures/bulk/prepare'
+        self.assertEqual(self.client.post(url).status_code,400)
+        self.assertEqual(self.client.post(url,data={'csrf_token':'test'}).status_code,400)
+        self.assertEqual(self.client.post(url,data={'csrf_token':'test','session_ids':['999999']}).status_code,400)
+        with self.client.session_transaction() as state:state['user_department']='Finance'
+        self.assertEqual(self.client.post(url,data={'csrf_token':'test','session_ids':['1']}).status_code,403)
 
     def test_unconfigured_destination_keeps_existing_local_uploads_working(self):
         root=Path(self.temp.name)/'uploads'

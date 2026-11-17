@@ -234,7 +234,7 @@
                   {% if not marketing.folder_configured %}<p class="staff-session-report-warning">Session pictures folder is not configured. Please contact Path Examinations. The report cannot be submitted until this is resolved.</p>{% endif %}
                   <label class="staff-report-media-dropzone{% if not marketing.folder_configured %} is-disabled{% endif %}" data-report-media-dropzone>
                     <span>Drop your files here or click to select</span>
-                    <small>Upload photographs, videos and other audiovisual material. Multiple files allowed.</small>
+                    <small>Upload photographs, videos and other audiovisual material. Multiple files allowed. ZIP files are unpacked into individual files in the session folder.</small>
                     <input type="file" multiple data-report-media-input aria-label="Upload marketing material"{% if not marketing.folder_configured %} disabled{% endif %}>
                   </label>
                   <ul class="staff-report-media-files" data-report-media-files>{% for file in marketing.files %}<li>{{ file.filename }}</li>{% endfor %}</ul>

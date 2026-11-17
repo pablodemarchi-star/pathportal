@@ -139,6 +139,17 @@ def authorize_session_pictures():
     return jsonify(ok=True, name=folder['name'], url='https://drive.google.com/drive/folders/' + expected_id)
 
 
+@drive_bp.post('/integrations/google/drive/session-pictures/bulk/<action>')
+@administrator
+def bulk_session_pictures(action):
+    if not validate_csrf():
+        abort(400)
+    if action not in {'prepare', 'verify'}:
+        abort(404)
+    from app.drive_bulk_authorization import bulk_session_pictures as execute
+    return execute(action)
+
+
 @drive_bp.post('/integrations/google/drive/folders/<key>')
 @administrator
 def save_folder(key):
@@ -207,7 +218,9 @@ def cleanup_failed_uploads(response):
 def upload_document(upload, payment, destination):
     """Resumable chunks bound memory use and preserve the supplied Drive permissions."""
     token = access_token()
-    filename = secure_filename(upload.filename) or 'document'
+    from app.staff_report_media import ReportMediaTarget
+    report_media = isinstance(payment, ReportMediaTarget)
+    filename = (os.path.basename((upload.filename or '').replace('\\', '/')).replace('\x00', '').strip()[:500] or 'document') if report_media else (secure_filename(upload.filename) or 'document')
     mime = upload.mimetype or 'application/octet-stream'
     stream = upload.stream
     try:
@@ -220,7 +233,7 @@ def upload_document(upload, payment, destination):
         if not re.fullmatch(r'[A-Za-z0-9_-]{10,160}', file_id):
             raise ValueError('Invalid file ID')
         remember_uncommitted(file_id)
-        metadata = {'id': file_id, 'name': f'{payment.request_number} - {filename}', 'parents': [destination.folder_id]}
+        metadata = {'id': file_id, 'name': filename if report_media else f'{payment.request_number} - {filename}', 'parents': [destination.folder_id]}
         uri = 'https://www.googleapis.com/upload/drive/v3/files?' + urlencode({
             'uploadType': 'resumable', 'supportsAllDrives': 'true', 'fields': 'id'
         })

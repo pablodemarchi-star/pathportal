@@ -1,0 +1,12 @@
+.drive-bulk-actions { display:flex; align-items:center; gap:12px; flex-wrap:wrap; margin:12px 0; font-size:12px; }
+.exam-session-table .drive-bulk-checkbox { width:15px; height:15px; min-width:15px; padding:0; margin:0 7px 0 0; vertical-align:middle; accent-color:var(--path-blue-303up); }
+.drive-bulk-dialog { width:min(720px,calc(100vw - 28px)); max-height:calc(100dvh - 32px); overflow:auto; box-sizing:border-box; border:1px solid var(--color-border); border-radius:14px; padding:24px; color:var(--color-primary-dark); }
+.drive-bulk-dialog::backdrop { background:#102b3a99; }
+.drive-bulk-dialog header { display:flex; align-items:flex-start; justify-content:space-between; gap:16px; }
+.drive-bulk-dialog h2 { font-size:22px; margin:0; }
+.drive-bulk-dialog ul { padding:0; list-style:none; }
+.drive-bulk-dialog li { display:grid; gap:8px; padding:12px 0; border-bottom:1px solid var(--color-border); font-size:13px; overflow-wrap:anywhere; }
+.drive-bulk-state { display:block; width:fit-content; border-radius:8px; padding:5px 8px; font-size:12px; }
+.drive-bulk-state.is-authorized { background:var(--badge-green-bg); color:var(--badge-green-text); }
+.drive-bulk-state.is-failed { background:var(--badge-red-bg); color:var(--badge-red-text); }
+.drive-bulk-state.is-pending { background:var(--badge-yellow-bg); color:var(--badge-yellow-text); }

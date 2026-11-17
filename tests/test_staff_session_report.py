@@ -405,6 +405,50 @@ class StaffSessionReportTest(unittest.TestCase):
         import json
         self.assertTrue(all(not row['comments'] for row in json.loads(m.StaffExamSessionReport.query.one().staff_assessments)))
 
+    def test_zip_upload_saves_each_photo_and_video_as_a_separate_document(self):
+        from io import BytesIO
+        from zipfile import ZipFile
+        content=BytesIO()
+        with ZipFile(content,'w') as archive:
+            archive.writestr('photos/Foto 1.jpg',b'photo bytes')
+            archive.writestr('videos/Video 1.mp4',b'video bytes')
+            archive.writestr('__MACOSX/._Foto 1.jpg',b'metadata')
+        content.seek(0)
+        saved=[]
+        def fake_upload(file,target,destination):
+            saved.append((file.filename,file.read()))
+            db.session.add(m.StaffSessionReportMedia(submission_id=target.submission_id,file_id=f'zip-file-{len(saved)}',folder_id=destination.folder_id,filename=file.filename,mime_type=file.mimetype))
+        with patch('app.routes.staff_report_available',return_value=True),patch('app.staff_report_media.folder_metadata'),patch('app.staff_report_media.upload_document',side_effect=fake_upload):
+            response=self.client.post(self.url+'/media',data={'csrf_token':'test','file':(content,'session.zip')})
+        self.assertEqual(response.status_code,200)
+        self.assertEqual(saved,[('Foto 1.jpg',b'photo bytes'),('Video 1.mp4',b'video bytes')])
+        self.assertEqual(len(response.json['files']),3)
+        self.assertTrue(all(not item['filename'].endswith('.zip') for item in response.json['files']))
+
+    def test_zip_failure_rolls_back_all_new_media_records(self):
+        from io import BytesIO
+        from zipfile import ZipFile
+        content=BytesIO()
+        with ZipFile(content,'w') as archive:
+            archive.writestr('one.jpg',b'photo')
+            archive.writestr('broken.zip',b'not a zip')
+        content.seek(0)
+        def fake_upload(file,target,destination):
+            db.session.add(m.StaffSessionReportMedia(submission_id=target.submission_id,file_id='must-rollback',folder_id=destination.folder_id,filename=file.filename,mime_type=file.mimetype))
+        with patch('app.routes.staff_report_available',return_value=True),patch('app.staff_report_media.folder_metadata'),patch('app.staff_report_media.upload_document',side_effect=fake_upload):
+            response=self.client.post(self.url+'/media',data={'csrf_token':'test','file':(content,'broken-export.zip')})
+        self.assertEqual(response.status_code,400)
+        self.assertEqual(m.StaffSessionReportMedia.query.count(),1)
+        self.assertIsNone(m.StaffSessionReportMedia.query.filter_by(file_id='must-rollback').first())
+
+    def test_invalid_zip_does_not_register_any_media(self):
+        from io import BytesIO
+        with patch('app.routes.staff_report_available',return_value=True),patch('app.staff_report_media.folder_metadata'),patch('app.staff_report_media.upload_document') as upload:
+            response=self.client.post(self.url+'/media',data={'csrf_token':'test','file':(BytesIO(b'invalid archive'),'bad.zip')})
+        self.assertEqual(response.status_code,400)
+        upload.assert_not_called()
+        self.assertEqual(m.StaffSessionReportMedia.query.count(),1)
+
     def test_no_delays_does_not_save_hidden_reasons(self):
         self.assertEqual(self.post(reasons='Old hidden answer').status_code, 200)
         self.assertEqual(m.StaffExamSessionReport.query.one().reasons, '')

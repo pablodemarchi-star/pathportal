@@ -7,6 +7,7 @@ from flask import abort, jsonify, request
 from app import db, validate_csrf
 from app.models import ExamSession, StaffExamSessionsShare, StaffExamSessionSubmission, StaffSessionReportMedia, StaffExamSessionReport
 from app.google_drive import folder_metadata, upload_document, DriveStorageError
+from app.staff_report_archives import individual_media_files, MediaArchiveError
 
 
 @dataclass
@@ -80,8 +81,12 @@ def upload_media(token, submission_id):
     target = ReportMediaTarget(submission.id, f'{record.exam_session_name} - Marketing material')
     try:
         folder_metadata(folder_id)
-        upload_document(files[0], target, SimpleNamespace(folder_id=folder_id))
+        for file in individual_media_files(files[0]):
+            upload_document(file, target, SimpleNamespace(folder_id=folder_id))
         db.session.commit()
+    except MediaArchiveError as error:
+        db.session.rollback()
+        return jsonify(ok=False, error=str(error)), 400
     except OSError as error:
         db.session.rollback()
         return jsonify(ok=False, error=str(error) if isinstance(error, DriveStorageError) else 'The file could not be uploaded. Please try again.'), 502

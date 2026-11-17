@@ -792,6 +792,7 @@
 {% block title %}Exam session planner | Path Examinations{% endblock %}
 
 {% block content %}
+{% set can_authorize_drive = not session_fullscreen and ((g.current_user and g.current_user.is_superadmin) or (not g.user_id and g.user_department == 'Admin')) %}
 <div class="{% if session_fullscreen %}exam-session-fullscreen-page{% endif %}">
 {% if not session_fullscreen %}
 <header class="page-header">
@@ -945,11 +946,19 @@
   </th>
 {%- endmacro %}
 
+{% if can_authorize_drive %}
+<section class="drive-bulk-actions" data-drive-bulk data-csrf="{{ csrf_token }}" data-token-url="{{ url_for('google_drive.picker_token') }}" data-prepare-url="{{ url_for('google_drive.bulk_session_pictures',action='prepare') }}" data-verify-url="{{ url_for('google_drive.bulk_session_pictures',action='verify') }}">
+  <span data-drive-bulk-count>0 sessions selected</span>
+  <details class="bulk-action-menu"><summary>Bulk actions</summary><div class="bulk-action-panel"><button type="button" class="secondary-button" data-drive-bulk-start disabled>Authorize Session pictures folders</button></div></details>
+  <button type="button" class="secondary-button compact-action" data-drive-bulk-clear>Clear selection</button>
+  <dialog class="drive-bulk-dialog" data-drive-bulk-dialog aria-labelledby="drive-bulk-title"><header><h2 id="drive-bulk-title">Authorize Session pictures folders</h2><button type="button" class="icon-button" data-drive-bulk-close aria-label="Close">&times;</button></header><p data-drive-bulk-status role="status" aria-live="polite"></p><ul data-drive-bulk-results></ul></dialog>
+</section>
+{% endif %}
 <section class="table-wrap" aria-label="Exam session list" data-exam-session-list>
   <table class="exam-session-table">
     <thead>
       <tr>
-        <th aria-label="Enter"></th>
+        <th aria-label="Select sessions and enter">{% if can_authorize_drive %}<input type="checkbox" class="drive-bulk-checkbox" data-drive-bulk-all aria-label="Select all sessions on this page">{% endif %}</th>
         {{ exam_session_sort_header('status', 'Status') }}
         {{ exam_session_sort_header('exam_session_name', 'Exam session name') }}
         {{ exam_session_sort_header('session_date', 'Date') }}
@@ -997,7 +1006,7 @@
               {% set warning_ns.count = warning_ns.count + 1 %}
             {% endif %}
           {% endfor %}
-          <td><button class="enter-session-button" type="button" data-open-modal="exam-session-members-{{ session.id }}">Enter</button></td>
+          <td>{% if can_authorize_drive %}<input type="checkbox" class="drive-bulk-checkbox" value="{{ session.id }}" data-drive-bulk-session aria-label="Select {{ session.exam_session_name }}">{% endif %}<button class="enter-session-button" type="button" data-open-modal="exam-session-members-{{ session.id }}">Enter</button></td>
           <td>
             <div class="session-status-with-alerts">
               {{ session_status_badge(session.status, pending_status_tooltips_by_session.get(session.id, '') if session.status == 'Pending' else '') }}
@@ -1804,4 +1813,5 @@
 {% endfor %}
 {% include '_instructions_editor.html' %}
 <script src="{{ url_for('static', filename='js/google_drive.js', v='20261113-session-pictures-2') }}" defer></script>
+{% if can_authorize_drive %}<link rel="stylesheet" href="{{ url_for('static',filename='css/drive_bulk_authorization.css',v='20261117-1') }}"><script src="{{ url_for('static',filename='js/drive_bulk_authorization.js',v='20261117-1') }}" defer></script>{% endif %}
 {% endblock %}
