@@ -170,6 +170,15 @@ class AttendanceTrackingTest(unittest.TestCase):
         self.assertEqual(response.status_code,200)
         self.assertIn('Perform attendance review and notify institutions',response.get_data(as_text=True))
         self.assertIn('open_attendance=',response.get_data(as_text=True))
+        post=self.client.get('/pre-session-control-tower?session_year=2026&view=post')
+        self.assertEqual(post.status_code,200)
+        self.assertIn('<span class="responsible-chip users-department-chip">ADMIN</span>',post.get_data(as_text=True))
+        # The department assignment also applies to ordinary Admin users.
+        user.is_superadmin=False
+        db.session.commit()
+        response=self.client.get('/my-actions?session_year=2026&actions_section=attendance')
+        self.assertEqual(response.status_code,200)
+        self.assertIn('Perform attendance review and notify institutions',response.get_data(as_text=True))
 
     def test_legacy_activity_migration_does_not_invent_internal_work_or_dates(self):
         from sqlalchemy import text
