@@ -4,7 +4,7 @@ from app.models import ExamSession
 from app.staff_report_media import session_pictures_folder
 
 
-def bulk_session_pictures(action):
+def bulk_session_pictures(action, purpose='Session pictures'):
     from app.google_drive import folder_metadata, DriveStorageError
     raw=request.form.getlist('session_ids')
     if not raw or len(raw)>500 or any(not value.isdigit() for value in raw):
@@ -14,11 +14,14 @@ def bulk_session_pictures(action):
     if len(records)!=len(ids):
         return jsonify(ok=False,error='Some selected sessions no longer exist. Refresh the planner and try again.'),400
     folders,issues={},[]
+    from types import SimpleNamespace
+    field = 'absence_documentation_folder_url' if purpose == 'Absence documentation' else 'session_pictures_folder_url'
     for record in records:
-        folder_id=session_pictures_folder(record)
+        link = getattr(record, field)
+        folder_id=session_pictures_folder(SimpleNamespace(session_pictures_folder_url=link))
         if not folder_id:
             issues.append({'session_id':record.id,'session_name':record.exam_session_name,
-                'error':'Session pictures folder is not configured.' if not record.session_pictures_folder_url else 'Session pictures must contain a valid Google Drive folder link.'})
+                'error':f'{purpose} folder is not configured.' if not link else f'{purpose} must contain a valid Google Drive folder link.'})
             continue
         item=folders.setdefault(folder_id,dict(folder_id=folder_id,session_ids=[],session_names=[]))
         item['session_ids'].append(record.id);item['session_names'].append(record.exam_session_name)

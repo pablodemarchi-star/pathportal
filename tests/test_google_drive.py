@@ -332,6 +332,26 @@ class GoogleDriveTest(unittest.TestCase):
         with self.client.session_transaction() as state:state['user_department']='Finance'
         self.assertEqual(self.client.post(url,data={'csrf_token':'test','session_ids':['1']}).status_code,403)
 
+    def test_bulk_absence_folders_use_saved_absence_links_and_recheck_them(self):
+        records=self.bulk_sessions()
+        for row in records[:2]:
+            row.absence_documentation_folder_url='https://drive.google.com/drive/folders/absence-folder-12345'
+        db.session.commit()
+        fields={'csrf_token':'test','session_ids':[str(row.id) for row in records]}
+        base='/integrations/google/drive/absence-documentation/bulk/'
+        response=self.client.post(base+'prepare',data=fields)
+        self.assertEqual(response.status_code,200)
+        self.assertEqual(len(response.json['folders']),1)
+        self.assertEqual(response.json['folders'][0]['session_ids'],[row.id for row in records[:2]])
+        self.assertEqual(len(response.json['issues']),3)
+        with patch('app.google_drive.folder_metadata',return_value={'name':'Absence documents'}) as check:
+            response=self.client.post(base+'verify',data={**fields,'folder_ids':['absence-folder-12345','shared-folder-12345']})
+        check.assert_called_once_with('absence-folder-12345')
+        self.assertEqual([row['status'] for row in response.json['results']],['authorized','not_configured'])
+        self.assertEqual(self.client.post(base+'prepare',data={'session_ids':['1']}).status_code,400)
+        with self.client.session_transaction() as state:state['user_department']='Finance'
+        self.assertEqual(self.client.post(base+'prepare',data=fields).status_code,403)
+
     def test_unconfigured_destination_keeps_existing_local_uploads_working(self):
         root=Path(self.temp.name)/'uploads'
         with patch('app.routes.finance_upload_root',return_value=str(root)):

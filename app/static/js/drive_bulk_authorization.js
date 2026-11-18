@@ -3,7 +3,7 @@
   if(!root)return;
   const checkboxes=Array.from(document.querySelectorAll('[data-drive-bulk-session]'));
   const all=document.querySelector('[data-drive-bulk-all]');
-  const start=root.querySelector('[data-drive-bulk-start]');
+  const starts=Array.from(root.querySelectorAll('[data-drive-bulk-start]'));
   const dialog=root.querySelector('[data-drive-bulk-dialog]');
   const status=root.querySelector('[data-drive-bulk-status]');
   const list=root.querySelector('[data-drive-bulk-results]');
@@ -12,7 +12,7 @@
   const sync=()=>{
     const count=selected().length;
     root.querySelector('[data-drive-bulk-count]').textContent=`${count} session${count===1?'':'s'} selected`;
-    start.disabled=busy||count===0;
+    starts.forEach(button=>button.disabled=busy||count===0);
     if(all){all.checked=count>0&&count===checkboxes.length;all.indeterminate=count>0&&count<checkboxes.length;}
   };
   checkboxes.forEach(input=>input.addEventListener('change',sync));
@@ -43,13 +43,17 @@
     return loading;
   };
   const show=()=>{if(!dialog.open)dialog.showModal();};
-  start.addEventListener('click',async()=>{
+  starts.forEach(start=>start.addEventListener('click',async()=>{
+    const purpose=start.dataset.drivePurpose||'Session pictures';
+    const prepareUrl=start.dataset.prepareUrl||root.dataset.prepareUrl;
+    const verifyUrl=start.dataset.verifyUrl||root.dataset.verifyUrl;
+    dialog.querySelector('h2').textContent=`Authorize ${purpose} folders`;
     const ids=selected();if(!ids.length||busy)return;
-    busy=true;sync();list.replaceChildren();status.textContent='Checking configured Session pictures folders…';show();
+    busy=true;sync();list.replaceChildren();status.textContent=`Checking configured ${purpose} folders…`;show();
     const menu=start.closest('details');if(menu)menu.open=false;
     let picker;
     try{
-      const plan=await post(root.dataset.prepareUrl,{session_ids:ids});
+      const plan=await post(prepareUrl,{session_ids:ids});
       const entries=new Map();
       const add=(names,text,kind='pending')=>{
         const item=document.createElement('li');
@@ -59,13 +63,13 @@
       };
       plan.issues.forEach(issue=>add([issue.session_name],issue.error,'failed'));
       plan.folders.forEach(folder=>entries.set(folder.folder_id,add(folder.session_names,'Awaiting selection')));
-      if(!plan.folders.length){status.textContent='No valid Session pictures folders found. Configure their links in the planner first.';busy=false;sync();return;}
+      if(!plan.folders.length){status.textContent=`No valid ${purpose} folders found. Configure their links in the planner first.`;busy=false;sync();return;}
       await loadPicker();
       let config=await post(root.dataset.tokenUrl);
       const api=window.google.picker;
       const folders=()=>new api.DocsView(api.ViewId.FOLDERS).setIncludeFolders(true).setSelectFolderEnabled(true);
       const builder=new api.PickerBuilder().setAppId(config.app_id).setDeveloperKey(config.api_key).setOAuthToken(config.access_token)
-        .setOrigin(window.location.origin).setTitle('Select the Session pictures folders to authorize')
+        .setOrigin(window.location.origin).setTitle(`Select the ${purpose} folders to authorize`)
         .setSelectableMimeTypes('application/vnd.google-apps.folder').enableFeature(api.Feature.MULTISELECT_ENABLED)
         .addView(folders().setFileIds(plan.folders.map(folder=>folder.folder_id).join(','))).addView(folders());
       let handled=false;
@@ -81,7 +85,7 @@
           status.textContent=`Checking Drive access ${index+1}/${intended.length}…`;
           const badge=entries.get(folder.folder_id);
           try{
-            const result=await post(root.dataset.verifyUrl,{session_ids:ids,folder_ids:[folder.folder_id]});
+            const result=await post(verifyUrl,{session_ids:ids,folder_ids:[folder.folder_id]});
             const item=result.results.find(item=>item.folder_id===folder.folder_id);
             if(item?.status==='authorized'){authorized++;badge.textContent='Authorized';badge.className='drive-bulk-state is-authorized';}
             else{failed++;badge.textContent=item?.error||'Could not verify this folder.';badge.className='drive-bulk-state is-failed';}
@@ -93,6 +97,6 @@
       });
       picker=builder.build();dialog.close();picker.setVisible(true);
     }catch(error){picker?.dispose();show();status.textContent=error.message;busy=false;sync();}
-  });
+  }));
   sync();
 })();

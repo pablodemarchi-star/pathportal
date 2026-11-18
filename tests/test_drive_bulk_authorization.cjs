@@ -3,8 +3,10 @@ const element=()=>({dataset:{},children:[],addEventListener(event,fn){this[event
 const inputs=Array.from({length:4},(_,i)=>({...element(),value:String(i+1),checked:false}));
 const all=element(),start=element(),clear=element(),close=element(),count={},status={},list=element();
 const menu={open:true};start.closest=()=>menu;
-const dialog={open:false,showModal(){this.open=true;},close(){this.open=false;}};
-const root={dataset:{csrf:'test',prepareUrl:'/prepare',verifyUrl:'/verify',tokenUrl:'/token'},querySelector:key=>({'[data-drive-bulk-start]':start,'[data-drive-bulk-clear]':clear,'[data-drive-bulk-dialog]':dialog,'[data-drive-bulk-status]':status,'[data-drive-bulk-results]':list,'[data-drive-bulk-count]':count,'[data-drive-bulk-close]':close}[key])};
+const absence=element();absence.closest=()=>menu;absence.dataset={drivePurpose:"Absence documentation",prepareUrl:"/absence/prepare",verifyUrl:"/absence/verify"};
+const heading={};
+const dialog={querySelector:()=>heading,open:false,showModal(){this.open=true;},close(){this.open=false;}};
+const root={querySelectorAll:()=>[start,absence],dataset:{csrf:'test',prepareUrl:'/prepare',verifyUrl:'/verify',tokenUrl:'/token'},querySelector:key=>({'[data-drive-bulk-start]':start,'[data-drive-bulk-clear]':clear,'[data-drive-bulk-dialog]':dialog,'[data-drive-bulk-status]':status,'[data-drive-bulk-results]':list,'[data-drive-bulk-count]':count,'[data-drive-bulk-close]':close}[key])};
 let picker;
 class DocsView{setIncludeFolders(){return this;}setSelectFolderEnabled(){return this;}setFileIds(ids){this.ids=ids;return this;}}
 class PickerBuilder{
@@ -17,7 +19,7 @@ const requests=[];
 const fetch=async(url,options)=>{
  requests.push({url,body:options.body});assert.equal(options.body.get('csrf_token'),'test');
  let result;
- if(url==='/prepare')result={ok:true,folders:[{folder_id:'shared-folder-12345',session_names:['Session 1','Session 2']},{folder_id:'other-folder-12345',session_names:['Session 3']}],issues:[{session_name:'Session 4',error:'Folder missing'}]};
+ if(url.endsWith('/prepare'))result={ok:true,folders:[{folder_id:'shared-folder-12345',session_names:['Session 1','Session 2']},{folder_id:'other-folder-12345',session_names:['Session 3']}],issues:[{session_name:'Session 4',error:'Folder missing'}]};
  else if(url==='/token')result={ok:true,app_id:'123',api_key:'test',access_token:'test'};
  else result=options.body.get('folder_ids')==='other-folder-12345'?{ok:true,results:[{folder_id:'other-folder-12345',status:'failed',error:'Editor access required'}]}:{ok:true,results:[{folder_id:'shared-folder-12345',status:'authorized'}]};
  return {ok:true,headers:{get:()=> 'application/json'},json:async()=>result};
@@ -39,6 +41,8 @@ vm.runInNewContext(fs.readFileSync('app/static/js/drive_bulk_authorization.js','
  await start.click();
  await picker.callback({action:'picked',docs:[{id:'shared-folder-12345'},{id:'other-folder-12345'}]});
  assert.match(status.textContent,/1 folder\(s\) authorized/);assert.match(status.textContent,/1 failed/);
- clear.click();assert.equal(start.disabled,true);assert.ok(inputs.every(input=>!input.checked));
+ await absence.click();assert.equal(heading.textContent,'Authorize Absence documentation folders');assert.equal(requests.at(-2).url,'/absence/prepare');
+ await picker.callback({action:'picked',docs:[{id:'shared-folder-12345'}]});assert.equal(requests.at(-1).url,'/absence/verify');
+ clear.click();assert.equal(start.disabled,true);assert.equal(absence.disabled,true);assert.ok(inputs.every(input=>!input.checked));
  console.log('Bulk Drive: session selection, targeted multiselect, shared-folder deduplication, partial selection and cancellation passed.');
 })().catch(error=>{console.error(error);process.exitCode=1;});
