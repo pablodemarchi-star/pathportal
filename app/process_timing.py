@@ -215,6 +215,11 @@ def reconcile_rows(rows, unit=None, fresh_ids=(), fresh_owners=(), now=None, cre
                 created_by='Scheduled calendar gate',interval=previous_interval,unit=unit)
             unit.flush()
             previous_interval = unit.query(m.ProcessInterval).filter_by(clock_id=clock.id,ended_at=None).one()
+        if block=='attendance' and clock.next_check_at and utc(clock.next_check_at)<=now and previous_interval:
+            if clock.category in {'Blocked','Waiting external'}:
+                prior='Waiting external' if clock.manual_reason else 'Path time' if clock.has_begun else 'Not started'
+                transition(clock,prior,utc(clock.next_check_at),reason=clock.manual_reason or '',source='calendar',created_by='Scheduled attendance gate',interval=previous_interval,unit=unit)
+                unit.flush();previous_interval=unit.query(m.ProcessInterval).filter_by(clock_id=clock.id,ended_at=None).first()
         transition(clock,category,now,reason=reason,note=note,incident_ids=active_ids,
             source=origin, created_by=created_by or 'System', interval=previous_interval,unit=unit)
         if aggregate['applicable'] and source_info.get('begun') and not clock.has_begun:
@@ -233,6 +238,8 @@ def reconcile_rows(rows, unit=None, fresh_ids=(), fresh_owners=(), now=None, cre
             from datetime import timedelta,time
             opens = datetime.combine(record.session_date-timedelta(days=29),time.min,tzinfo=LOCAL_TZ).astimezone(timezone.utc)
             clock.next_check_at = opens if opens > now else None
+        elif block=='attendance':
+            check=source_info.get('next_check_at');clock.next_check_at=utc(check).astimezone(timezone.utc) if check and utc(check)>now else None
         else:
             clock.next_check_at = None
     unit.flush()
@@ -344,6 +351,8 @@ def timing_detail(clock_id):
     current_rows = load_rows(records)
     data['operational'] = {str(row['session'].id): {'status':c['operational_status'], 'availability':c['availability'], 'applicable':c['applicable'], 'note':c.get('operational_note','')}
         for row in current_rows for c in row['cells'] if c['key']==clock.block}
+    if clock.block=='attendance':
+        data['attendance_stages']=[dict(session=row['session'].exam_session_name,stages=c['attendance']['timing_stages']) for row in current_rows for c in row['cells'] if c['key']=='attendance' and c.get('attendance')]
     data['incidents'] = [{'id':item.id,'title':item.title,'status':item.status,'affected_block':item.affected_block} for item in incident_rows]
     data['waiting_reasons'] = [reason for reason, in db.session.query(m.ProcessInterval.reason).filter_by(clock_id=clock.id,category='Waiting external').distinct()]
     data['history'] = [dict(id=item.id,category=item.category,started_at=utc(item.started_at).isoformat(),

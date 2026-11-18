@@ -14202,6 +14202,8 @@ document.querySelectorAll("[data-fit-two-lines]").forEach((message) => {
 
 // Refresh the upload window at its next boundary, including tabs left open overnight.
 document.querySelectorAll("[data-absence-upload-window]").forEach((chip) => {
+  // Institutional uploads update their own availability without discarding an open form.
+  if (chip.closest(".journey-absence-card")?.querySelector("[data-absence-request]")) return;
   const checkWindow = () => {
     const now = Date.now();
     const starts = Date.parse(chip.dataset.startsAt);

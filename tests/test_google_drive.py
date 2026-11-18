@@ -84,6 +84,35 @@ class GoogleDriveTest(unittest.TestCase):
     def folder(self,key='finance_supporting_documents',folder_id='chosen-folder-12345'):
         db.session.add(GoogleDriveDestination(key=key,folder_id=folder_id,folder_name='Configured folder'));db.session.commit()
 
+    def test_attendance_upload_keeps_generated_name_and_uses_selected_folder(self):
+        from werkzeug.datastructures import FileStorage
+        from app.attendance_drive import upload
+        from app.models import AttendanceDocument
+        with self.app.test_request_context():
+            document=upload(FileStorage(stream=io.BytesIO(b'absence record'),filename='original.pdf',content_type='application/pdf'),
+                'absence-folder-12345','Session name - 17/11/2026 - Speaking')
+            db.session.commit()
+        self.assertEqual(self.metadata[-1]['name'],'Session name - 17/11/2026 - Speaking.pdf')
+        self.assertEqual(self.metadata[-1]['parents'],['absence-folder-12345'])
+        self.assertEqual(document.filename,'Session name - 17/11/2026 - Speaking.pdf')
+        self.assertEqual(AttendanceDocument.query.count(),1)
+        self.assertEqual(GoogleDriveUpload.query.count(),0)
+
+    def test_absence_folder_authorization_and_fixed_lists_destination(self):
+        from app.google_drive import DESTINATIONS
+        url='/integrations/google/drive/absence-documentation/authorize'
+        folder='absence-folder-12345'
+        values={'csrf_token':'test','folder_url':'https://drive.google.com/drive/folders/'+folder,'folder_id':folder}
+        self.assertEqual(self.client.post(url,data=values).status_code,200)
+        self.assertEqual(GoogleDriveDestination.query.count(),0)
+        self.assertEqual(self.client.post(url,data={**values,'folder_id':'different-folder-12345'}).status_code,400)
+        self.assertEqual(self.client.post(url,data={**values,'csrf_token':'bad'}).status_code,400)
+        target='/integrations/google/drive/folders/attendance_lists'
+        self.assertEqual(self.client.post(target,data={'csrf_token':'test','folder_id':folder}).status_code,400)
+        ident=DESTINATIONS['attendance_lists']['suggested_id']
+        self.assertEqual(self.client.post(target,data={'csrf_token':'test','folder_id':ident}).status_code,200)
+        self.assertEqual(GoogleDriveDestination.query.one().folder_id,ident)
+
     def test_drive_scope_is_added_without_losing_email_authorization(self):
         response=self.client.post('/integrations/google/connect',data={'csrf_token':'test','enable_drive':'1'})
         values=parse_qs(urlsplit(response.location).query)

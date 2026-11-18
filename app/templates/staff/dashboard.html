@@ -73,7 +73,7 @@
       <article class="dashboard-card dashboard-action-card">
         <div class="dashboard-card-header">
           <div>
-            <h2>Pre onsite session control tower</h2>
+            <h2>Onsite session control tower</h2>
             {% if pre_session_pending_count %}
               <p>You have {{ pre_session_pending_count }} action{% if pre_session_pending_count != 1 %}s{% endif %} to complete in this menu.</p>
             {% else %}
@@ -84,7 +84,7 @@
             {% endif %}
           </div>
           {% if pre_session_pending_count or pre_session_note_mentions_count %}
-            <div class="dashboard-count-stack" aria-label="Pre onsite session control tower counters">
+            <div class="dashboard-count-stack" aria-label="Onsite session control tower counters">
               {% if pre_session_pending_count %}
                 <span class="dashboard-count-chip">{{ pre_session_pending_count }} action{% if pre_session_pending_count != 1 %}s{% endif %}</span>
               {% endif %}
@@ -95,14 +95,14 @@
           {% endif %}
         </div>
         {% if pre_session_action_links %}
-          <div class="dashboard-mention-links" aria-label="Pre onsite session control tower department actions">
+          <div class="dashboard-mention-links" aria-label="Onsite session control tower department actions">
             {% for action in pre_session_action_links %}
               <a href="{{ action.url }}">{{ action.text if action.text else 'View action in ' ~ action.label }}</a>
             {% endfor %}
           </div>
         {% endif %}
         {% if pre_session_note_mentions_count %}
-          <div class="dashboard-mention-links" aria-label="Pre onsite session control tower note mentions">
+          <div class="dashboard-mention-links" aria-label="Onsite session control tower note mentions">
             {% for mention in pre_session_note_mentions %}
               <a href="{{ mention.url }}">View note in {{ mention.label }}</a>
             {% endfor %}

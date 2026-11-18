@@ -17,3 +17,6 @@
 .qc-column-sort{display:flex;align-items:center;justify-content:space-between;gap:7px;width:100%;border:0;padding:0;background:transparent;color:inherit;font:inherit;text-transform:inherit;letter-spacing:inherit;text-align:left;cursor:pointer;white-space:normal}
 .qc-column-sort [data-sort-indicator]{flex-shrink:0;font-size:12px;opacity:.75}
 .qc-column-sort:focus-visible{outline:2px solid #0096ce;outline-offset:4px;border-radius:3px}
+
+.qc-attendance-deadline{display:block;margin-top:4px;border-radius:6px;padding:4px 6px;font-size:10px;line-height:1.35;background:var(--badge-grey-bg);color:var(--badge-grey-text);white-space:normal;overflow-wrap:anywhere}
+.qc-attendance-deadline.is-met{background:var(--badge-green-bg);color:var(--badge-green-text)}.qc-attendance-deadline.is-missed,.qc-attendance-deadline.is-overdue{background:var(--badge-red-bg);color:var(--badge-red-text)}

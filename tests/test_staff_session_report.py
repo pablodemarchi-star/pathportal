@@ -449,6 +449,16 @@ class StaffSessionReportTest(unittest.TestCase):
         upload.assert_not_called()
         self.assertEqual(m.StaffSessionReportMedia.query.count(),1)
 
+    def test_pdf_is_not_accepted_as_marketing_photos_or_videos(self):
+        from io import BytesIO
+        for filename in ('document.pdf', 'photo.jpg'):
+            with self.subTest(filename=filename), patch('app.routes.staff_report_available',return_value=True), patch('app.staff_report_media.folder_metadata'), patch('app.staff_report_media.upload_document') as upload:
+                response=self.client.post(self.url+'/media',data={'csrf_token':'test','file':(BytesIO(b'%PDF-1.4 linked folder'),filename)})
+                self.assertEqual(response.status_code,400)
+                self.assertIn('original photos and videos',response.json['error'])
+                upload.assert_not_called()
+                self.assertEqual(m.StaffSessionReportMedia.query.count(),1)
+
     def test_no_delays_does_not_save_hidden_reasons(self):
         self.assertEqual(self.post(reasons='Old hidden answer').status_code, 200)
         self.assertEqual(m.StaffExamSessionReport.query.one().reasons, '')

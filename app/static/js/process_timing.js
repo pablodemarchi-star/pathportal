@@ -101,6 +101,7 @@ function processTotals(clock, now=Date.now()) {
     if(!data.coverage_complete){const warning=node('p','Partial data. Earlier periods are unknown. The figures below include only the intervals recorded since '+stamp(data.tracked_from)+'.');warning.className='qc-timing-warning';content.append(warning);}
     const definitions=node('dl');[['Started',stamp(data.started_at)],['Completed',stamp(data.completed_at)],['Reopenings',String(data.reopenings)]].forEach(([label,value])=>definitions.append(node('dt',label),node('dd',value)));
     content.append(definitions);
+    if(data.attendance_stages){content.append(node('h3','Attendance stages'));data.attendance_stages.forEach(group=>group.stages.forEach(stage=>{const item=node('section');item.append(node('h4',stage.name),node('p','Started: '+stamp(stage.started_at)),node('p','Completed: '+stamp(stage.completed_at)),node('p',`Deadline: ${stage.deadline.date} · ${stage.deadline.label}`));content.append(item);}));}
     const split=node('div');split.className='qc-timing-split';const values=processTotals(data);
     [['total','Total time'],['path','Path time'],['external','External waiting'],['incident','Incident time']].forEach(([key,label])=>{
       const item=node('div');item.append(node('span',label),node('strong',processDuration(values[key])));split.append(item);

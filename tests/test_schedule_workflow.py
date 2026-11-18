@@ -918,7 +918,8 @@ class ScheduleWorkflowTest(unittest.TestCase):
                     self.assertIn(f"{label} {record.exam_session_name}", block)
                     self.assertIn(record.session_date.strftime('%d/%m/%Y'), block)
                     self.assertIn(f'data-state="{cards[record.id]["window"]["state"]}"', block)
-                    self.assertEqual(f'href="https://example.com/absence-{record.id}"' in block, record.id == self.session_record.id)
+                    # Institutional links now open the upload modal; previews never expose the Drive folder.
+                    self.assertNotIn(f'href="https://example.com/absence-{record.id}"', block)
                 public = path_session_journey_contract(self.session_record, "public", now=now)
                 public_html = render_template("pre_session_control_tower/session_journey.html", journey=public, share=None)
                 self.assertEqual(len(public["absence_cards"]), 3)

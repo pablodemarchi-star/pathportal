@@ -12,7 +12,7 @@ from app import models as m
 quality_bp = Blueprint('quality_control', __name__)
 PROCESSES = [('date', 'Date'), ('registrations', 'Registrations'), ('schedule', 'Schedule'),
              ('staffing', 'Staffing'), ('package', 'Package'), ('shipment', 'Shipment'),
-             ('logistics', 'Logistics'), ('finance', 'Finance'), ('final_checks', 'Final checks')]
+             ('logistics', 'Logistics'), ('finance', 'Finance'), ('final_checks', 'Final checks'),('attendance','Attendance')]
 FORMATS = ['Onsite', 'Online', 'Online at exam centre']
 ASSIGNMENTS = [m.ExamSessionSupervisorAssignment, m.ExamSessionExaminerAssignment, m.ExamSessionInternAssignment]
 
@@ -64,6 +64,8 @@ def load_rows(records, today=None):
     if missing_primary_ids:
         for workflow in m.ExamSessionScheduleWorkflow.query.filter(m.ExamSessionScheduleWorkflow.exam_session_id.in_(missing_primary_ids)).all():
             workflows[workflow.exam_session_id].append(workflow)
+    from app.attendance_tracking import batch_presentations
+    attendance=batch_presentations(records,today=today)
     staffing_controls = by_session(m.ExamSessionStaffingControl)
     finance = by_session(m.ExamSessionFinanceControl)
     logistics = by_session(m.ExamSessionLogistics)
@@ -218,6 +220,20 @@ def load_rows(records, today=None):
                      today=today, detail=f"{checked}/{total_checks} Sinapsis checks · Return {'complete' if gate and gate['return_complete'] else 'pending'}" +
                          (f" · {gate['message']}" if gate and gate['message'] else '')),
             ]
+            att=attendance.get(sid)
+            att_flow=att['flow'] if att else None
+            att_tracking=att['tracking'] if att else None
+            att_control=att['control'] if att else None
+            att_cell=cell('attendance',att_flow['attendance_progress'] if att else 'Not applicable',complete=bool(att and att_flow['attendance_progress']=='Completed'),
+                active=bool(att_control and att_control.internal_activity),enabled=bool(att and not att_tracking['blocked']),applicable=onsite,
+                near=bool(att and att_tracking['controls_completed']==att_tracking['controls_total']-1),
+                deadline=att_tracking['deadline_date'] if att else None,today=today,
+                detail=(f"{att_tracking['controls_completed']}/{att_tracking['controls_total']} attendance controls completed · {att_tracking['action']}" if att else 'Not applicable'),
+                action_at=att_control.internal_started_at if att_control else None,completed_at=datetime.fromisoformat(att_tracking['completed_at']) if att and att_tracking['completed_at'] else None)
+            if att:
+                att_cell['overdue']=att_tracking['overdue'];att_cell['attendance']=att_tracking
+                if not att_cell['complete'] and att_tracking['overdue']:att_cell['state']='issue'
+            cells.append(att_cell)
             for process_cell in cells:
                 process_cell['operational_status'] = process_cell['label']
                 process_cell['availability'] = ('Not applicable' if not process_cell['applicable'] else
@@ -233,7 +249,7 @@ def load_rows(records, today=None):
             if gate and gate['return_enabled'] and control and control.return_recipient_confirmed_on:
                 opening = record.session_date - timedelta(days=29)
                 if control.return_recipient_confirmed_on < opening:
-                    cells[-1]['available_at'] = datetime.combine(opening, time.min, tzinfo=r.LOCAL_TZ).astimezone(timezone.utc)
+                    cells[8]['available_at'] = datetime.combine(opening, time.min, tzinfo=r.LOCAL_TZ).astimezone(timezone.utc)
             if package['status'] == 'completed':
                 stamps = [getattr(record, field, None) for field in ['package_label_verification_updated_at', 'package_label_printing_updated_at', 'room_package_sealing_updated_at', 'return_packages_updated_at', 'staff_member_ids_updated_at', 'inclusion_final_items_updated_at', 'session_box_sealing_updated_at']]
                 cells[4]['completed_at'] = max((utc(stamp) for stamp in stamps if stamp), default=None)
@@ -252,7 +268,11 @@ def load_rows(records, today=None):
                 'logistics': {'begun': bool(log['applies'])},
                 'finance': {'begun': bool(first(finance, sid) and (fin['standing_selected'] or fin['additional_institutions']))},
                 'final_checks': {'begun': bool(gate and gate['return_enabled'])},
+                'attendance':{'begun':bool(att_control and att_control.internal_activity),
+                    'waiting':bool(att and att_tracking['waiting_external']),'reason':'Institution',
+                    'next_check_at':datetime.fromisoformat(att_tracking['opens_at']) if att and att_tracking['blocked'] else datetime.fromisoformat(att['window']['expires_at']) if att and att_tracking['waiting_external'] else None},
             }
+            # Preserve pre-session readiness while adding post-session oversight.
             rows.append(dict(session=record, cells=cells, timing_sources=timing_sources, shipment_bundle_id=bundle.id if bundle else None,
                              shipment_readiness={'recipient_confirmed': bool(recipient and recipient.participation_status == 'Confirmed'), 'package_completed':package['status']=='completed', 'schedule_completed':r.schedule_workflow_status(first(workflows,sid))=='Approved'}, days=days, business_days=business,
                              recipient=(' '.join(filter(None, [getattr(person, 'title', ''), getattr(person, 'full_name', '')])) if person else None),
@@ -260,7 +280,7 @@ def load_rows(records, today=None):
                              recipient_status=recipient.participation_status if recipient else None,
                              incident_count=incidents.get(sid, 0),
                              attention=bool(incidents.get(sid)) or any(c['overdue'] or c['issue'] for c in cells if c['applicable']),
-                             ready=all(c['complete'] for c in cells if c['applicable']),
+                             ready=all(c['complete'] for c in cells if c['applicable'] and c['key']!='attendance'),
                              concatenated=bool(record.concat_session_ids_list() if hasattr(record, 'concat_session_ids_list') else record.concat_session_ids not in ('', '[]'))))
     finally:
         if has_app_context():
@@ -407,6 +427,8 @@ def index():
                 c['url'] = url_for('staff.exam_session_planner', session_year=year, open_session_modal=record.id)
             elif c['key'] == 'registrations':
                 c['url'] = url_for('staff.monthly_exam_session_registrations', session_year=year, q=record.exam_session_name)
+            elif c['key']=='attendance':
+                c['url']=url_for('staff.pre_session_control_tower',session_year=year,view='post',open_attendance=record.id) if record.format=='Onsite' and record.session_date<=datetime.now(LOCAL_TZ).date() else None
             elif record.format != 'Onsite':
                 c['url'] = url_for('staff.pre_online_session_control_tower', session_year=year,
                                    open_schedule_modal=record.id, open_modal_target='staffing' if c['key'] == 'staffing' else 'schedule-actions') if c['key'] in {'schedule', 'staffing'} else None
@@ -432,7 +454,7 @@ def session_reports_detail(session_id):
 
 # Collect affected sessions during flush (including explicit flushes before commit).
 # Never recalculate all sessions or perform network calls while saving a session.
-TRACKED_MODELS = {m.ExamSession, *ASSIGNMENTS, m.ExamSessionScheduleWorkflow,
+TRACKED_MODELS = {m.PostAttendance,m.AbsenceCandidate,m.AttendanceInstitution,m.AttendanceEvent,m.ExamSession, *ASSIGNMENTS, m.ExamSessionScheduleWorkflow,
                  m.ExamSessionStaffingControl, m.ExamSessionFinanceControl, m.ExamSessionSinapsisControl,
                  m.ExamSessionLogistics, m.ExamSessionLogisticsConcept, m.ExamSessionMonthlyCandidateTotal,
                  m.ExamSessionMonthlyRegistration, m.ExamSessionShipmentBundleSession, m.ExamSessionStaffingEvent, m.ExamSessionIncident}
@@ -480,6 +502,9 @@ def collect_quality_changes(unit, *_):
             parent = unit.get(parent_model, getattr(obj, fk)) if getattr(obj, fk) else None
             if parent:
                 ids.add(parent.exam_session_id)
+        elif isinstance(obj,m.AttendanceModule):
+            institution=unit.get(m.AttendanceInstitution,obj.institution_id)
+            if institution:ids.add(institution.exam_session_id)
         elif isinstance(obj, m.ExamSessionShipmentEvent):
             unit.info.setdefault('quality_bundle_ids', set()).add(obj.bundle_id)
         elif isinstance(obj, m.ExamSessionSinapsisChecklistItem):

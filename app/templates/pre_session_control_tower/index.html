@@ -1430,7 +1430,7 @@
   </section>
 {%- endmacro %}
 
-{% set tower_title = 'Pre online session control tower' if is_online_tower else 'Pre onsite session control tower' %}
+{% set tower_title = 'Pre online session control tower' if is_online_tower else 'Onsite session control tower' %}
 
 {% block title %}{{ 'My actions' if is_my_actions_page else tower_title }} | Path Examinations{% endblock %}
 
@@ -1706,7 +1706,7 @@
       <p class="archived-year-copy">Use the active year selector to manage schedule workflows by year.</p>
     </div>
     {% if archived_session_years %}
-      <section class="archived-year-panel" aria-label="Archived Pre onsite session control tower years">
+      <section class="archived-year-panel" aria-label="Archived Onsite session control tower years">
         <div>
           <p class="archived-year-title">Archived years</p>
           <p class="archived-year-copy">Archived years are hidden from the active selector, but their records are preserved.</p>
@@ -1749,9 +1749,10 @@
 {% endif %}
 
 {% if not is_my_actions_page and not is_online_tower %}
-<nav class="control-tower-view-tabs" aria-label="Pre onsite session control tower views">
+<nav class="control-tower-view-tabs" aria-label="Onsite session control tower views">
   <a class="control-tower-view-tab {% if selected_view == 'bundles' %}active{% endif %}" href="{{ url_for('staff.pre_session_control_tower', session_year=selected_session_year, view='bundles') }}">Bundles</a>
-  <a class="control-tower-view-tab {% if selected_view == 'sessions' %}active{% endif %}" href="{{ url_for('staff.pre_session_control_tower', session_year=selected_session_year, view='sessions', schedule_status=selected_schedule_status) }}">Sessions</a>
+  <a class="control-tower-view-tab {% if selected_view == 'sessions' %}active{% endif %}" href="{{ url_for('staff.pre_session_control_tower', session_year=selected_session_year, view='sessions', schedule_status=selected_schedule_status) }}">Pre checks</a>
+  <a class="control-tower-view-tab" href="{{ url_for('staff.pre_session_control_tower',session_year=selected_session_year,view='post') }}">Post controls</a>
 </nav>
 {% endif %}
 
@@ -1853,6 +1854,9 @@
           <td>{{ bundle_detail_departments_cell(action.actions|default([action])) }}</td>
           <td>{{ bundle_detail_action_descriptions_cell(action.actions|default([action])) }}</td>
           <td>
+            {% if action.section=='attendance' %}
+              <a class="contextual-cell-trigger" href="{{ url_for('staff.pre_session_control_tower',view='post',session_year=session.session_date.year,open_attendance=session.id) }}"><strong class="my-action-section-label">Attendance ↗</strong><span class="badge logistics-control-status-{{ view.attendance.flow.attendance_progress|lower|replace(' ','-') }}">{{ view.attendance.flow.attendance_progress }}</span><small>{{ view.attendance.tracking.controls_completed }}/{{ view.attendance.tracking.controls_total }} attendance controls completed</small></a>
+            {% else %}
             {% set target = 'schedule-actions' if action.section == 'schedule' else action.section %}
             {% call contextual_cell_trigger(session, target, 'Manage ' ~ action.section_label,
                 schedule_only=action.section == 'schedule', staffing_only=action.section == 'staffing',
@@ -1875,6 +1879,7 @@
                 {{ final_checks_table_cell(view, false) }}
               {% endif %}
             {% endcall %}
+            {% endif %}
           </td>
         </tr>
       {% else %}

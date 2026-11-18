@@ -35,6 +35,12 @@ def individual_media_files(upload, budget=None, depth=0):
         is_zip = zipfile.is_zipfile(stream)
         stream.seek(0)
         if not is_zip and not (upload.filename or '').lower().endswith('.zip'):
+            header = stream.read(1024)
+            stream.seek(0)
+            if (upload.mimetype == 'application/pdf'
+                    or (upload.filename or '').lower().endswith('.pdf')
+                    or b'%PDF-' in header):
+                raise MediaArchiveError('A PDF cannot be used as session photos or videos. Select the original photos and videos using the file picker. If needed, download them to your device first.')
             budget['files'] += 1
             if budget['files'] > MAX_FILES:
                 raise MediaArchiveError('This ZIP contains too many files. Upload smaller groups of files.')

@@ -2629,6 +2629,8 @@ def is_valid_rejected_potential_entry_delete_password():
 
 
 def delete_exam_session_dependencies(session_id):
+    from app.post_attendance import delete_session_data
+    delete_session_data(session_id)
     ExamSessionSupervisorAssignment.query.filter_by(exam_session_id=session_id).delete(synchronize_session=False)
     ExamSessionExaminerAssignment.query.filter_by(exam_session_id=session_id).delete(synchronize_session=False)
     ExamSessionInternAssignment.query.filter_by(exam_session_id=session_id).delete(synchronize_session=False)
@@ -13787,7 +13789,7 @@ def visible_department_chip_action_rows(bundle_views, pending_shipment_bundle, s
 
 
 MY_ACTION_SECTIONS = {"shipments": "Shipment", "schedule": "Schedule", "staffing": "Staffing",
-                      "packages": "Package", "logistics": "Logistics", "finance": "Finance", "sinapsis": "Final checks"}
+                      "packages": "Package", "logistics": "Logistics", "finance": "Finance", "sinapsis": "Final checks", "attendance":"Attendance"}
 
 
 def current_action_department():
@@ -13852,6 +13854,15 @@ def department_my_actions(schedule_views, bundle_views, pending_bundle, staffing
             action = finance_action_contract(view.get("finance"))
             if action:
                 add(view, {"department": action["responsible"], "description": action.get("description") or action["label"]}, "finance")
+
+    if department=='ADMIN':
+        from app.attendance_tracking import batch_presentations
+        eligible=[view['session'] for view in schedule_views if view['session'].format=='Onsite' and view['session'].session_date<=(today or datetime.now(LOCAL_TZ).date())]
+        for sid,attendance in batch_presentations(eligible,today=today).items():
+            tracking=attendance['tracking']
+            if tracking['department']=='ADMIN' and sid in views:
+                views[sid]['attendance']=attendance
+                add(views[sid],{'department':'ADMIN','description':tracking['action'],'overdue':tracking['overdue']},'attendance')
 
     # Shipment actions belong to the bundle: show each pending step once.
     for bundle in bundle_views:
@@ -14912,6 +14923,13 @@ def path_session_journey_contract(session_record, audience, today=None, sources=
                 "window": window,
                 "url": (related.absence_documentation_folder_url or "").strip() if window["state"] == "open" else "",
             })
+    from app.absence_submissions import submission_list,institutional_reschedule_options,folder_id as absence_folder_id,COPY as ABSENCE_COPY
+    if audience == "institution" and not is_external:
+        for card in absence_cards:
+            related = db.session.get(ExamSession,card["session_id"])
+            card["absence_entries"] = submission_list(related)
+            card["absence_reschedule_options"] = institutional_reschedule_options(related,"es" if has_request_context() and request.args.get("lang")=="es" else "en")
+            card["absence_folder_configured"] = bool(absence_folder_id(related))
     if staff_cards:
         for milestone in milestones:
             if milestone["key"] == "staffing":
@@ -14926,6 +14944,7 @@ def path_session_journey_contract(session_record, audience, today=None, sources=
         "public_entry_slips_access": public_entry_slips_access,
         "staff_cards": staff_cards,
         "absence_cards": absence_cards,
+        "absence_copy": ABSENCE_COPY["es" if has_request_context() and request.args.get("lang") == "es" else "en"],
         "feedback_copy": feedback_copy(request.args.get("lang") if has_request_context() else "en"),
         "feedback_cards": feedback_states([
             {"session_id": card["session_id"], "session_name": card["session_name"], "session_date": card["session_date"]}
@@ -18070,6 +18089,10 @@ def my_actions_count():
 @login_required
 def pre_session_control_tower(_count_only=False):
     is_online_tower = request.endpoint == "staff.pre_online_session_control_tower"
+    if not is_online_tower and request.endpoint == "staff.pre_session_control_tower" and request.args.get("view") == "post":
+        from app.post_attendance import render_index
+        return render_index()
+
     modal_session_id = request.args.get("session_modal", type=int)
     if request.args.get("session_modal") and not modal_session_id:
         abort(400)
@@ -19411,7 +19434,7 @@ def pre_session_control_tower(_count_only=False):
         department_actions_query=department_actions_query,
         department_actions_overdue=department_actions_overdue,
         department_actions_section=department_actions_section,
-        department_actions_sections=[(key, MY_ACTION_SECTIONS[key]) for key in ("schedule", "staffing", "packages", "shipments", "logistics", "finance", "sinapsis")],
+        department_actions_sections=[(key, MY_ACTION_SECTIONS[key]) for key in ("schedule", "staffing", "packages", "shipments", "logistics", "finance", "sinapsis", "attendance")],
         department_actions_sort=department_actions_sort,
         department_actions_order=department_actions_order,
         department_actions_count=department_my_actions_count(department_all_rows) if is_my_actions_page else None,

@@ -174,3 +174,43 @@ def migrate_session_scoped_staff_reports():
             JOIN staff_exam_session_submission s ON s.id = r.submission_id GROUP BY s.exam_session_id)'''))
     db.session.execute(text('CREATE UNIQUE INDEX IF NOT EXISTS uq_staff_report_session ON staff_exam_session_report (exam_session_id) WHERE exam_session_id IS NOT NULL'))
     db.session.commit()
+
+
+def migrate_absence_reviews():
+    """Existing automatic Yes values are not reviews: initialise them as Pending once."""
+    from sqlalchemy import inspect
+    columns={column['name'] for column in inspect(db.engine).get_columns('absence_candidate')}
+    definitions={'institution_name':"VARCHAR(250) NOT NULL DEFAULT ''",'review_status':"VARCHAR(20) NOT NULL DEFAULT 'Pending'",
+        'decline_reason':"TEXT NOT NULL DEFAULT ''",'requested_rescheduled_for':"VARCHAR(80) NOT NULL DEFAULT ''"}
+    for name,definition in definitions.items():
+        if name not in columns:db.session.execute(text(f'ALTER TABLE absence_candidate ADD COLUMN {name} {definition}'))
+    if 'review_status' not in columns:
+        db.session.execute(text("UPDATE absence_candidate SET approved=FALSE, review_status='Pending', exam='', absent_modules='[]'"))
+    if 'requested_rescheduled_for' not in columns:
+        db.session.execute(text("UPDATE absence_candidate SET requested_rescheduled_for=rescheduled_for"))
+    db.session.commit()
+
+
+def migrate_attendance_review_notification():
+    from sqlalchemy import inspect
+    columns={column['name'] for column in inspect(db.engine).get_columns('post_attendance')}
+    if 'review_results_notified' not in columns:
+        db.session.execute(text('ALTER TABLE post_attendance ADD COLUMN review_results_notified BOOLEAN NOT NULL DEFAULT FALSE'))
+        db.session.commit()
+
+
+def migrate_attendance_tracking():
+    from sqlalchemy import inspect
+    columns={column['name'] for column in inspect(db.engine).get_columns('post_attendance')}
+    definitions={'internal_activity':'BOOLEAN NOT NULL DEFAULT FALSE','internal_started_at':'TIMESTAMP',
+        'records_completed_at':'TIMESTAMP','notifications_completed_at':'TIMESTAMP','review_completed_at':'TIMESTAMP',
+        'no_documentation_received':'BOOLEAN NOT NULL DEFAULT FALSE'}
+    for name,definition in definitions.items():
+        if name not in columns:db.session.execute(text(f'ALTER TABLE post_attendance ADD COLUMN {name} {definition}'))
+    if 'internal_activity' not in columns:
+        # Observable internal work only. Institution uploads alone are never activity.
+        db.session.execute(text("""UPDATE post_attendance SET internal_activity=TRUE WHERE verified=TRUE OR review_results_notified=TRUE
+          OR exam_session_id IN (SELECT exam_session_id FROM attendance_institution WHERE is_main=FALSE OR notifications<>'{}')
+          OR exam_session_id IN (SELECT i.exam_session_id FROM attendance_module a JOIN attendance_institution i ON i.id=a.institution_id WHERE a.document_id IS NOT NULL)
+          OR exam_session_id IN (SELECT exam_session_id FROM absence_candidate WHERE exam<>'' OR notes<>'' OR institution_name<>'' OR review_status<>'Pending' OR credit_balance IS NOT NULL)"""))
+    db.session.commit()

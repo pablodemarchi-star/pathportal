@@ -148,6 +148,9 @@ def create_app():
     from app.routes import staff_bp, SINAPSIS_CHECKLIST_ITEMS
 
     app.register_blueprint(staff_bp)
+    from app.post_attendance import attendance_bp
+    from app import absence_submissions
+    app.register_blueprint(attendance_bp)
     from app.exam_centre_feedback import feedback_bp
     app.register_blueprint(feedback_bp)
     from app.quality_control import quality_bp
@@ -300,6 +303,12 @@ def create_app():
 
     with app.app_context():
         db.create_all()
+        from app.schema_migrations import migrate_absence_reviews
+        migrate_absence_reviews()
+        from app.schema_migrations import migrate_attendance_review_notification
+        migrate_attendance_review_notification()
+        from app.schema_migrations import migrate_attendance_tracking
+        migrate_attendance_tracking()
         from app.schema_migrations import migrate_staff_session_report_attendance
         migrate_staff_session_report_attendance()
         from app.schema_migrations import migrate_session_scoped_staff_reports

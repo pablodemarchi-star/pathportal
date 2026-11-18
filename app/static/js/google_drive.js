@@ -33,6 +33,7 @@
       button.disabled = true; message.className = ''; message.textContent = 'Opening Google Drive…';
       try {
         const authorizeOnly = card.dataset.driveAuthorizeOnly === 'true';
+        const purpose = card.dataset.drivePurpose || 'Session pictures';
         const folderLink = authorizeOnly ? card.querySelector('[data-drive-folder-link]').value.trim() : '';
         let expectedFolderId = '';
         if (authorizeOnly) {
@@ -63,14 +64,14 @@
           if (!folder?.id) {button.disabled = false; return;}
           message.textContent = 'Checking folder access…';
           try {
-            if (expectedFolderId && folder.id !== expectedFolderId) throw new Error('Choose the same folder as the Session pictures folder link.');
+            if (expectedFolderId && folder.id !== expectedFolderId) throw new Error(`Choose the same folder as the ${purpose} folder link.`);
             const saved = await request(card.dataset.saveUrl, {folder_id:folder.id, ...(authorizeOnly ? {folder_url:folderLink} : {})});
             const link = document.createElement('a'); link.href = saved.url; link.textContent = saved.name;
             link.target = '_blank'; link.rel = 'noopener noreferrer';
             card.querySelector('[data-drive-current]').replaceChildren(link);
             card.dataset.suggestedId = folder.id;
             button.textContent = authorizeOnly ? (card.dataset.driveButtonLabel || 'Choose and authorize folder') : 'Change folder'; message.className = 'is-success';
-            message.textContent = authorizeOnly ? 'Drive access authorized for this Session pictures folder.' : 'Folder saved. New uploads will be stored here.';
+            message.textContent = authorizeOnly ? `Drive access authorized for this ${purpose} folder.` : 'Folder saved. New uploads will be stored here.';
           } catch (error) {message.className = 'is-error';message.textContent = error.message;}
           finally {button.disabled = false;picker.dispose();}
         });

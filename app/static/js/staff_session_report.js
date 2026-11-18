@@ -188,6 +188,10 @@
       uploadedCount = list.querySelectorAll('li').length;
       const uploadFiles = async (files) => {
         if (mediaPending || saving || mediaBox.dataset.folderConfigured !== 'true' || !available()) return;
+        if (!files.length) {
+          status.textContent = 'No photo or video files were received. Click the upload area to select the original files. If needed, download them to your device first.';
+          return;
+        }
         mediaPending = true;
         input.disabled = true;
         submit.disabled = true;

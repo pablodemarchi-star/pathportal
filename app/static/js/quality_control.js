@@ -79,7 +79,8 @@
     const d=button.dataset;
     open(d.label,d.session);
     content.append(node('p', d.status), node('p', d.detail));
-    if(d.deadline) content.append(node('p',`Deadline: ${d.deadline}`));
+    if(d.attendance){const attendance=JSON.parse(d.attendance);attendance.deadlines.forEach(item=>content.append(node('p',`${item.stage}: ${item.date} · ${item.label}`)));}
+    if(d.deadline&&!d.attendance) content.append(node('p',`Deadline: ${d.deadline}`));
     if(d.url && d.applicable==='1'){link.href=d.url;link.hidden=false;}
   }));
   dialog.querySelector('.qc-close').addEventListener('click',()=>dialog.close());

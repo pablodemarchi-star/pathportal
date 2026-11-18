@@ -14,7 +14,7 @@ MENU_PERMISSIONS = (
     ("supervisor_certification", "Supervisor certification"),
     ("internship_stages", "Internship stages"),
     ("exam_session_planner", "Exam session planner"),
-    ("pre_session_control_tower", "Pre onsite session control tower"),
+    ("pre_session_control_tower", "Onsite session control tower"),
     ("path_session_journey", "Path Session Journey"),
     ("monthly_exam_session_registrations", "Monthly exam session registrations"),
     ("staff_payments", "Staff payments"),
@@ -3008,3 +3008,84 @@ class ProcessClockIncident(db.Model):
     incident_id = db.Column(db.Integer, db.ForeignKey('exam_session_incident.id', ondelete='CASCADE'), nullable=False, index=True)
     clock = db.relationship('ProcessClock')
     incident = db.relationship('ExamSessionIncident')
+
+
+class PostAttendance(db.Model):
+    exam_session_id = db.Column(db.Integer, db.ForeignKey('exam_session.id'), primary_key=True)
+    verified = db.Column(db.Boolean, nullable=False, default=False)
+    review_results_notified = db.Column(db.Boolean, nullable=False, default=False)
+    internal_activity = db.Column(db.Boolean, nullable=False, default=False)
+    internal_started_at = db.Column(db.DateTime(timezone=True))
+    records_completed_at = db.Column(db.DateTime(timezone=True))
+    notifications_completed_at = db.Column(db.DateTime(timezone=True))
+    review_completed_at = db.Column(db.DateTime(timezone=True))
+    no_documentation_received = db.Column(db.Boolean, nullable=False, default=False)
+    revision = db.Column(db.Integer, nullable=False, default=0)
+    updated_at = db.Column(db.DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))
+
+
+class AttendanceInstitution(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    exam_session_id = db.Column(db.Integer, db.ForeignKey('exam_session.id'), nullable=False, index=True)
+    name = db.Column(db.String(250), nullable=False)
+    is_main = db.Column(db.Boolean, nullable=False, default=False)
+    notifications = db.Column(db.Text, nullable=False, default='{}')
+    __table_args__ = (db.Index('uq_attendance_main_institution','exam_session_id',unique=True,
+                              sqlite_where=db.text('is_main = 1'),postgresql_where=db.text('is_main = TRUE')),)
+
+
+class AttendanceDocument(db.Model):
+    file_id = db.Column(db.String(160), primary_key=True)
+    folder_id = db.Column(db.String(160), nullable=False)
+    filename = db.Column(db.String(500), nullable=False)
+    mime_type = db.Column(db.String(160), nullable=False)
+    created_at = db.Column(db.DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))
+
+
+class AttendanceModule(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    institution_id = db.Column(db.Integer, db.ForeignKey('attendance_institution.id'), nullable=False, index=True)
+    module = db.Column(db.String(60), nullable=False)
+    document_id = db.Column(db.String(160), db.ForeignKey('attendance_document.file_id'), nullable=True)
+    document = db.relationship('AttendanceDocument')
+    __table_args__ = (db.UniqueConstraint('institution_id','module',name='uq_attendance_institution_module'),)
+
+
+class AbsenceCandidate(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    exam_session_id = db.Column(db.Integer, db.ForeignKey('exam_session.id'), nullable=False, index=True)
+    institution_id = db.Column(db.Integer, db.ForeignKey('attendance_institution.id'), nullable=False, index=True)
+    number = db.Column(db.String(80), nullable=False)
+    number_key = db.Column(db.String(80), nullable=False)
+    name = db.Column(db.String(250), nullable=False)
+    document_id = db.Column(db.String(160), db.ForeignKey('attendance_document.file_id'), nullable=False)
+    exam = db.Column(db.String(100), nullable=False, default='')
+    absent_modules = db.Column(db.Text, nullable=False, default='[]')
+    approved = db.Column(db.Boolean, nullable=False, default=False)
+    institution_name = db.Column(db.String(250), nullable=False, default='')
+    review_status = db.Column(db.String(20), nullable=False, default='Pending')
+    decline_reason = db.Column(db.Text, nullable=False, default='')
+    requested_rescheduled_for = db.Column(db.String(80), nullable=False, default='')
+    notes = db.Column(db.Text, nullable=False, default='')
+    rescheduled_for = db.Column(db.String(80), nullable=False, default='')
+    currency = db.Column(db.String(3), nullable=False, default='')
+    credit_balance = db.Column(db.Numeric(18,2), nullable=True)
+    document = db.relationship('AttendanceDocument')
+    __table_args__ = (db.UniqueConstraint('exam_session_id','number_key',name='uq_absence_candidate_session_number'),)
+
+
+class AbsenceSubmissionEvent(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    candidate_id = db.Column(db.Integer, db.ForeignKey('absence_candidate.id'), nullable=False, index=True)
+    file_id = db.Column(db.String(160), nullable=False)
+    action = db.Column(db.String(20), nullable=False)
+    created_at = db.Column(db.DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))
+
+
+class AttendanceEvent(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    exam_session_id = db.Column(db.Integer, db.ForeignKey('exam_session.id'), nullable=False, index=True)
+    source = db.Column(db.String(20), nullable=False)
+    action = db.Column(db.String(60), nullable=False)
+    payload = db.Column(db.Text, nullable=False, default='{}')
+    created_at = db.Column(db.DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))

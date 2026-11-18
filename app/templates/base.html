@@ -118,7 +118,7 @@
               <path d="M8 13h5" />
               <path d="M16 15l2 2 3-5" />
             </svg>
-            <span>Pre onsite session control tower</span>
+            <span>Onsite session control tower</span>
           </a>
           <a class="nav-link standalone-nav-link {% if is_online_tower %}active{% endif %}" href="{{ url_for('staff.pre_online_session_control_tower') }}">
             <svg class="nav-icon" viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="13" rx="2"/><path d="M8 21h8M12 17v4M7 9h10M7 12h6"/></svg>
@@ -239,7 +239,7 @@
         {% block content %}{% endblock %}
       </main>
     </div>
-    <script src="{{ url_for('static', filename='js/app.js', v='20261107-shipment-modal-title-25') }}"></script>
+    <script src="{{ url_for('static', filename='js/app.js', v='20261118-absence-window-1') }}"></script>
     {% if request.endpoint in ['staff.pre_session_control_tower', 'staff.my_actions'] %}<script src="{{ url_for('static', filename='js/return_shipping_labels.js', v='20261105-1') }}"></script>{% endif %}
     {% if request.endpoint in ['staff.pre_session_control_tower', 'staff.my_actions'] %}<script src="{{ url_for('static', filename='js/return_instructions.js', v='20261105-1') }}"></script>{% endif %}
     {% if request.endpoint == 'staff.finance_requests' %}<script src="{{ url_for('static', filename='js/finance_payee_notifications.js', v='20261104-client-notification-3') }}"></script>{% endif %}

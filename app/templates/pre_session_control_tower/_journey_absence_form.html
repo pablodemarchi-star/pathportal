@@ -1,0 +1,16 @@
+{% if not card.absence_folder_configured %}<small class="absence-folder-warning">{{ ac.folder }}</small>{% endif %}
+<ul class="absence-submission-list" data-absence-entries>{% for entry in card.absence_entries %}<li>{{ entry.number }} - {{ entry.name }} · {{ entry.date_label }} · {% if entry.current %}<a href="{{ url_for('attendance.public_document',token=share.token,session_id=card.session_id,candidate_id=entry.candidate_id) }}" target="_blank" rel="noopener noreferrer">{{ ac.see }}</a> <span class="absence-review-chip is-{{ entry.review_status|lower }}">{{ ac[entry.review_status|lower] }}</span>{% if entry.review_status=='Declined' and entry.decline_reason %} <button type="button" class="absence-review-notes" data-absence-review-reason="{{ entry.decline_reason }}" aria-label="{{ ac.review_notes }}">✎ {{ ac.review_notes }}</button>{% endif %}{% else %}<span>{{ ac.see }} — {{ ac.replaced }}</span>{% endif %}</li>{% endfor %}</ul>
+<dialog class="absence-request-dialog" data-absence-request-dialog aria-labelledby="absence-request-title-{{ card.session_id }}"><form data-absence-request-form novalidate>
+<header><h2 id="absence-request-title-{{ card.session_id }}">{{ ac.title }}</h2><button type="button" data-absence-close aria-label="{{ ac.cancel }}">×</button></header>
+<p>{{ card.session_name }} · {{ card.session_date.strftime('%d/%m/%Y') }}</p>
+<input type="hidden" name="csrf_token" value="{{ csrf_token }}"><input type="hidden" name="language" value="{{ journey.language }}">
+<label>{{ ac.number }}<input name="candidate_number" maxlength="80" required></label>
+<label>{{ ac.name }}<input name="candidate_name" maxlength="250" required></label>
+<label>{{ ac.reschedule }}<select name="rescheduled_for" required><option value="" selected disabled>{{ ac.select_date }}</option>{% for option in card.absence_reschedule_options %}<option value="{{ option.value }}">{{ option.label }}</option>{% endfor %}</select></label>
+<label class="absence-request-drop" data-absence-drop>{{ ac.document }}<span>{{ ac.drop }}</span><input type="file" name="document" required data-absence-file aria-label="{{ ac.document }}"></label>
+<p data-absence-filename></p><p role="status" aria-live="polite" data-absence-status></p>
+<div class="absence-request-duplicate" data-absence-duplicate hidden><p>{{ ac.duplicate }}</p><div class="absence-request-actions"><button type="button" class="secondary-button" data-absence-cancel-request>{{ ac.cancel_request }}</button><button type="button" class="primary-button" data-absence-replace>{{ ac.replace }}</button></div></div>
+<div class="absence-request-actions" data-absence-actions><button type="button" class="secondary-button" data-absence-close>{{ ac.cancel }}</button><button type="submit" class="primary-button">{{ ac.submit }}</button></div>
+<p class="absence-approval-notice" role="note">{{ ac.approval_notice }}</p>
+</form></dialog>
+<dialog class="absence-review-dialog" data-absence-review-dialog><h2>{{ ac.decline_title }}</h2><p data-absence-review-text></p><button type="button" class="secondary-button" data-absence-review-close>{{ ac.cancel }}</button></dialog>
