@@ -782,6 +782,84 @@ class PostAttendanceTest(unittest.TestCase):
         self.assertEqual(state['steps']['records']['status'],'in_progress')
         self.assertEqual(state['steps']['notifications']['status'],'locked')
 
+    def test_absence_notifications_encode_both_languages_and_only_first_name(self):
+        from urllib.parse import urlsplit,parse_qs
+        self.record.exam_session_name='Colegio 💙 & + María'
+        self.record.contact_points=json.dumps([{'full_name':'María José Gómez','phone':'+54 9 (11) 2850-8482','email':'maria@example.com'}])
+        db.session.commit()
+        self.upload(module='Speaking');self.upload(module='Listening and speaking')
+        self.raw_action('verified',value='1')
+        state=self.client.get(self.url).json['state'];card=state['institutions'][0]
+        self.assertTrue(state['notifications_enabled'])
+        self.assertEqual(card['sent'],{})
+        actions=card['notification_contacts'][0]['actions']
+        self.assertEqual(len(actions),2)
+        for action in actions:
+            self.assertEqual(action['disabled_reason'],'')
+            parsed=urlsplit(action['url']);query=parse_qs(parsed.query)
+            self.assertEqual(parsed.netloc,'api.whatsapp.com')
+            self.assertEqual(query['phone'],['5491128508482'])
+            self.assertEqual(query['text'],[action['message']])
+            self.assertIn('%20',parsed.query);self.assertNotIn('+',parsed.query)
+            for emoji in ['👋','📋','👉','⏳','💙']:self.assertIn(emoji,query['text'][0])
+            self.assertNotIn('\ufffd',action['message'])
+            self.assertEqual(action['message'].count('📋'),2)
+            self.assertIn('*Speaking*',action['message']);self.assertIn('*Listening and Speaking*',action['message'])
+            self.assertNotIn('*Reading and Writing*',action['message'])
+            self.assertNotIn('José Gómez',action['message'])
+            self.assertIn('María José Gómez',action['label'])
+        self.assertTrue(actions[0]['message'].startswith('Hello, María! 👋'))
+        self.assertIn('*17 November 2026*',actions[0]['message'])
+        self.assertTrue(actions[1]['message'].startswith('¡Hola, María! 👋'))
+        self.assertIn('*17 de noviembre de 2026*',actions[1]['message'])
+        self.assertIn('lang=es',actions[1]['message'])
+        self.assertEqual(attendance.control(self.record).review_results_notified,False)
+        self.assertEqual(m.AttendanceInstitution.query.filter_by(is_main=True).one().notifications,'{}')
+
+    def test_external_absence_messages_use_external_journey_and_public_scoped_lists(self):
+        import re
+        from flask import Response
+        self.record.contact_points=json.dumps([{'full_name':'John Smith','phone':'+442071234567','email':'john@example.com'}]);db.session.commit()
+        self.upload(module='Speaking')
+        state=self.raw_action('add_institution',name='External school').json['state']
+        external=next(card for card in state['institutions'] if not card['main'])
+        self.upload(institution_id=external['id'],module='Reading and writing')
+        self.raw_action('verified',value='1')
+        state=self.client.get(self.url).json['state']
+        ext=next(card for card in state['institutions'] if not card['main'])
+        self.assertTrue(all(action['disabled_reason'] and not action['message'] for action in ext['notification_actions']))
+        share=m.ExamSessionJourneyShare(exam_session_id=self.record.id,audience='external',token='external-absence-notice')
+        db.session.add(share);db.session.commit()
+        state=self.client.get(self.url).json['state']
+        main=next(card for card in state['institutions'] if card['main']);ext=next(card for card in state['institutions'] if not card['main'])
+        for action in ext['notification_actions']:
+            self.assertEqual(action['disabled_reason'],'')
+            self.assertEqual(action['url'],'')
+            self.assertIn('/external-absence-notice/external?lang=',action['message'])
+            self.assertIn('*Reading and Writing*',action['message'])
+            self.assertNotIn('*Speaking*',action['message'])
+        self.assertTrue(ext['notification_actions'][0]['message'].startswith('Hello! 👋'))
+        self.assertTrue(ext['notification_actions'][1]['message'].startswith('¡Hola! 👋'))
+        self.assertEqual(ext['notification_actions'][0]['label'],'Copy absence notification (English)')
+        self.assertEqual(ext['notification_actions'][1]['label'],'Copy absence notification (Spanish)')
+        main_url=re.search(r'https?://\S+/speaking',main['notification_contacts'][0]['actions'][0]['message']).group(0)
+        ext_url=re.search(r'https?://\S+/reading-and-writing',ext['notification_actions'][0]['message']).group(0)
+        anonymous=self.app.test_client()
+        with patch('app.google_drive.stream_document',return_value=Response(b'list',mimetype='application/pdf')) as stream:
+            self.assertEqual(anonymous.get(main_url).status_code,200)
+            self.assertEqual(anonymous.get(ext_url).status_code,200)
+            self.assertEqual(stream.call_count,2)
+            self.assertEqual(anonymous.get(ext_url.replace(f'/{external["id"]}/reading-and-writing',f'/{main["id"]}/speaking')).status_code,404)
+            self.assertEqual(anonymous.get(main_url.replace(f'/{main["id"]}/speaking',f'/{external["id"]}/reading-and-writing')).status_code,404)
+        share.is_enabled=False;db.session.commit()
+        self.assertEqual(anonymous.get(ext_url).status_code,410)
+        self.record.contact_points=json.dumps([{'full_name':'John Smith','phone':'123','email':'john@example.com'}]);db.session.commit()
+        main=next(card for card in self.client.get(self.url).json['state']['institutions'] if card['main'])
+        self.assertIn('phone',main['notification_contacts'][0]['actions'][0]['disabled_reason'])
+        self.share.is_enabled=False;db.session.commit()
+        main=next(card for card in self.client.get(self.url).json['state']['institutions'] if card['main'])
+        self.assertIn('journey',main['notification_contacts'][0]['actions'][0]['disabled_reason'])
+
 
     def test_exam_and_module_choices_follow_each_institution_absence_lists(self):
         self.record.modules='Listening and speaking, Reading and writing';db.session.commit()

@@ -358,7 +358,9 @@ def state(record):
             document=document_data(candidate.document,record),actionable=bool(candidate.review_status=='Confirmed' and candidate_ready(candidate,credit_enabled,choices))))
     window=journey_absence_upload_window(record)
     flow=workflow_state(record,cards,candidates,window)
+    from app.attendance_notifications import decorate_notifications
     concat_ids=monthly_unified_total_session_ids(record)-{record.id}
+    decorate_notifications(record,cards,contacts(record),concat_ids|{record.id})
     concatenated=[{'id':item.id,'name':item.exam_session_name,'date':item.session_date.strftime('%d/%m/%Y')} for item in m.ExamSession.query.filter(m.ExamSession.id.in_(concat_ids)).order_by(m.ExamSession.session_date).all()] if concat_ids else []
     return dict(id=record.id,name=record.exam_session_name,date=record.session_date.strftime('%d/%m/%Y'),format=record.format,
         enabled=local_today()>record.session_date,**flow,progress=flow['attendance_progress'],revision=value.revision if value else 0,

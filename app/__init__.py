@@ -150,6 +150,7 @@ def create_app():
     app.register_blueprint(staff_bp)
     from app.post_attendance import attendance_bp
     from app import absence_submissions
+    from app import attendance_notifications
     app.register_blueprint(attendance_bp)
     from app.exam_centre_feedback import feedback_bp
     app.register_blueprint(feedback_bp)
