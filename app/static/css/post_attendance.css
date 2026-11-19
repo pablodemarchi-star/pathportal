@@ -114,3 +114,5 @@
 .pa-deadline-item{display:grid;gap:3px;margin-top:6px;min-width:0}.pa-deadline-item small{font-size:10px;color:var(--color-muted);font-weight:400}
 .pa-deadline-item .workflow-deadline-chip{max-width:100%;white-space:normal;box-sizing:border-box}
 .workflow-deadline-unknown{background:var(--badge-grey-bg);color:var(--badge-grey-text)}
+
+.pa-submission-status{margin:16px 0;padding:16px;border:1px solid var(--path-blue-303up);border-radius:12px;background:var(--path-blue-50);color:var(--color-text)}.pa-submission-status .pa-check{margin:8px 0}.pa-submission-status:disabled{opacity:.55;filter:grayscale(1)}

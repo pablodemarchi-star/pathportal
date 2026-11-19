@@ -213,4 +213,7 @@ def migrate_attendance_tracking():
           OR exam_session_id IN (SELECT exam_session_id FROM attendance_institution WHERE is_main=FALSE OR notifications<>'{}')
           OR exam_session_id IN (SELECT i.exam_session_id FROM attendance_module a JOIN attendance_institution i ON i.id=a.institution_id WHERE a.document_id IS NOT NULL)
           OR exam_session_id IN (SELECT exam_session_id FROM absence_candidate WHERE exam<>'' OR notes<>'' OR institution_name<>'' OR review_status<>'Pending' OR credit_balance IS NOT NULL)"""))
+    if 'submission_status' not in columns:
+        db.session.execute(text("ALTER TABLE post_attendance ADD COLUMN submission_status VARCHAR(30) NOT NULL DEFAULT ''"))
+        db.session.execute(text("UPDATE post_attendance SET submission_status='completed' WHERE internal_activity=TRUE"))
     db.session.commit()

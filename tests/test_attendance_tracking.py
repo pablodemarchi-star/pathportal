@@ -62,6 +62,7 @@ class AttendanceTrackingTest(unittest.TestCase):
         state=self.get();self.assertEqual(state['progress'],'Not started');self.assertFalse(state['enabled'])
         self.assertEqual(state['tracking']['department'],'-');self.assertEqual(state['tracking']['action'],'Exam session in progress')
         self.assertEqual(self.raw_action('verified',value='1').status_code,403)
+        self.assertEqual(self.raw_action('submission_status',value='completed').status_code,403)
         self.assertFalse(m.PostAttendance.query.one().internal_activity)
         self.assertEqual(self.clock_record().category,'Blocked')
         opens=datetime.fromisoformat(state['tracking']['opens_at'])
@@ -158,6 +159,53 @@ class AttendanceTrackingTest(unittest.TestCase):
         self.assertEqual(state['tracking']['deadlines'][0]['status'],'unknown')
         self.assertIsNone(state['tracking']['timing_stages'][0]['completed_at'])
 
+    def test_submission_status_gates_all_work_and_preserves_completed_data(self):
+        value=attendance.control(self.record,True)
+        value.submission_status=''
+        db.session.commit()
+        state=self.get()
+        self.assertFalse(state['records_enabled'])
+        self.assertEqual(state['tracking']['action'],'Verify attendance submission status in Sinapsis')
+        self.assertEqual(self.raw_action('verified',value='1').status_code,400)
+        self.assertEqual(self.raw_action('submission_status',value='pending').status_code,200)
+        state=self.get()
+        self.assertEqual(state['progress'],'In progress')
+        self.assertEqual(state['tracking']['action'],'Resolve Sinapsis issues with Supervisor and Logistics, if applicable')
+        self.assertTrue(all(step['status']=='locked' for step in state['steps'].values()))
+        self.assertEqual(self.raw_action('submission_status',value='completed').status_code,200)
+        self.assertEqual(self.raw_action('verified',value='1').status_code,200)
+        state=self.get()
+        self.assertEqual(state['progress'],'Completed')
+        deadlines=state['tracking']['deadlines']
+        self.assertEqual(self.raw_action('submission_status',value='pending').status_code,200)
+        state=self.get()
+        self.assertEqual(state['progress'],'In progress')
+        self.assertTrue(state['verified'])
+        self.assertFalse(state['documentation_enabled'])
+        self.assertEqual(self.raw_action('submission_status',value='completed').status_code,200)
+        state=self.get()
+        self.assertEqual(state['progress'],'Completed')
+        self.assertEqual(state['tracking']['deadlines'],deadlines)
+
+    def test_submission_status_migration_preserves_active_work_once(self):
+        from sqlalchemy import text
+        from app.schema_migrations import migrate_attendance_tracking
+        self.raw_action('verified',value='1')
+        inactive=self.new_session('Not started legacy',self.record.session_date)
+        attendance.control(inactive,True)
+        db.session.commit()
+        db.session.execute(text('ALTER TABLE post_attendance DROP COLUMN submission_status'))
+        db.session.commit()
+        migrate_attendance_tracking()
+        db.session.expire_all()
+        self.assertEqual(attendance.control(self.record).submission_status,'completed')
+        self.assertEqual(attendance.control(inactive).submission_status,'')
+        attendance.control(self.record).submission_status='pending'
+        db.session.commit()
+        migrate_attendance_tracking()
+        db.session.expire_all()
+        self.assertEqual(attendance.control(self.record).submission_status,'pending')
+
     def test_quality_pages_and_my_actions_offer_attendance_navigation(self):
         user=m.User(full_name='QA Admin',email='qa@example.com',department='Admin',is_superadmin=True,is_active=True,password_hash='test')
         db.session.add(user);db.session.commit()
@@ -169,10 +217,18 @@ class AttendanceTrackingTest(unittest.TestCase):
         response=self.client.get('/my-actions?session_year=2026&actions_section=attendance')
         self.assertEqual(response.status_code,200)
         self.assertIn('Perform attendance review and notify institutions',response.get_data(as_text=True))
+        self.raw_action('submission_status',value='pending')
+        response=self.client.get('/my-actions?session_year=2026&actions_section=attendance')
+        self.assertIn('Resolve Sinapsis issues with Supervisor and Logistics, if applicable',response.get_data(as_text=True))
+        rows=load_rows([self.record])
+        row=next(row for row in rows if row['session'].id==self.record.id)
+        cell=next(cell for cell in row['cells'] if cell['key']=='attendance')
+        self.assertEqual(cell['state'],'progress')
         self.assertIn('open_attendance=',response.get_data(as_text=True))
         post=self.client.get('/pre-session-control-tower?session_year=2026&view=post')
         self.assertEqual(post.status_code,200)
         self.assertIn('<span class="responsible-chip users-department-chip">ADMIN</span>',post.get_data(as_text=True))
+        self.raw_action('submission_status',value='completed')
         # The department assignment also applies to ordinary Admin users.
         user.is_superadmin=False
         db.session.commit()

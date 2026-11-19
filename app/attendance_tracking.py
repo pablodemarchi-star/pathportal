@@ -26,7 +26,7 @@ def presentation(record,flow,value,window,now=None):
     closed=datetime.fromisoformat(window['expires_at']).astimezone(LOCAL_TZ)
     first_due=datetime.combine(argentina_add_business_days(record.session_date,1),time.max,tzinfo=LOCAL_TZ)
     review_due=datetime.combine(argentina_add_business_days(closed.date(),2),time.max,tzinfo=LOCAL_TZ)
-    first_complete=bool(value and value.verified and (not flow['has_absences'] or flow['all_absence_notifications_sent']))
+    first_complete=bool(flow['records_enabled'] and value and value.verified and (not flow['has_absences'] or flow['all_absence_notifications_sent']))
     complete=flow['attendance_progress']=='Completed'
     badges=[dict(stage='Records & notifications',**badge(first_due,first_complete,value.notifications_completed_at if value else None,now))]
     if flow['has_absences'] and (first_complete or value and value.review_completed_at):
@@ -34,12 +34,14 @@ def presentation(record,flow,value,window,now=None):
     blocked=now<opens
     if complete:department='';action=''
     elif blocked:department='-';action='Exam session in progress'
+    elif flow['submission_status']=='pending':department='ADMIN';action='Resolve Sinapsis issues with Supervisor and Logistics, if applicable'
+    elif not flow['submission_status']:department='ADMIN';action='Verify attendance submission status in Sinapsis'
     elif not first_complete:department='ADMIN';action='Perform attendance review and notify institutions'
     elif now<closed:department='-';action='Awaiting absence documentation from institution'
     elif not flow['reviews_total']:department='ADMIN';action='Confirm no absence documentation was received'
     elif flow['reviews_completed']==flow['reviews_total']:department='ADMIN';action='Notify institutions of absence documentation review results'
     else:department='ADMIN';action='Review absence documentation'
-    applicable=1 if value and value.verified and not flow['has_absences'] else 3
+    applicable=1 if flow['records_enabled'] and value and value.verified and not flow['has_absences'] else 3
     done=sum(step['status']=='completed' for step in flow['steps'].values())
     active_due=first_due if not first_complete or not flow['has_absences'] else review_due
     completed_at=(value.review_completed_at if flow['has_absences'] else value.notifications_completed_at) if complete and value else None
@@ -65,6 +67,7 @@ def sync_milestones(record,before,internal,action):
         flow['has_absences'] and flow['steps']['documentation']['status']=='completed']
     old,new=flags(before),flags(after)
     for field,previous,current in zip(['records_completed_at','notifications_completed_at','review_completed_at'],old,new):
+        if action=='submission_status':continue
         if current and not previous:setattr(value,field,now_utc())
         elif not current:setattr(value,field,None)
     db.session.add(m.AttendanceEvent(exam_session_id=record.id,source='internal' if internal else 'institution',action=action,

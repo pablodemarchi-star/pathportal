@@ -229,7 +229,8 @@ def workflow_state(record,cards=None,candidates=None,window=None,attendance_cont
     absent_cards=[card for card in cards if any(card['modules'].values())]
     has_absences=bool(absent_cards)
     unblocked=(today or local_today())>record.session_date
-    notifications_enabled=bool(unblocked and has_absences and value and value.verified)
+    records_enabled=bool(unblocked and value and value.submission_status=='completed')
+    notifications_enabled=bool(records_enabled and has_absences and value and value.verified)
     contact_keys=[contact['key'] for contact in contacts(record)]
     all_sent=has_absences
     notification_total=0;notification_sent=0;missing_contacts=False
@@ -241,13 +242,13 @@ def workflow_state(record,cards=None,candidates=None,window=None,attendance_cont
     documentation_enabled=bool(notifications_enabled and all_sent)
     review_allowed=bool(documentation_enabled and window['state']=='expired')
     results_enabled=bool(review_allowed and candidates and all(candidate.document_id and candidate.review_status in {'Confirmed','Declined'} for candidate in candidates))
-    records_completed=bool(value and value.verified)
+    records_completed=bool(records_enabled and value and value.verified)
     notifications_completed=bool(notifications_enabled and all_sent)
     no_documents_enabled=bool(review_allowed and not candidates)
     documentation_completed=bool(value and (results_enabled and value.review_results_notified or no_documents_enabled and value.no_documentation_received))
     reviewed=sum(candidate.review_status in {'Confirmed','Declined'} for candidate in candidates)
     not_applicable=records_completed and not has_absences
-    records_status='locked' if not unblocked else 'completed' if records_completed else 'in_progress' if value and value.internal_activity else 'ready'
+    records_status='locked' if not records_enabled else 'completed' if records_completed else 'in_progress' if value and value.internal_activity else 'ready'
     notifications_status='not_applicable' if not_applicable else 'locked' if not notifications_enabled else 'completed' if notifications_completed else 'in_progress' if notification_sent else 'ready'
     documentation_status='not_applicable' if not_applicable else 'locked' if not documentation_enabled else 'completed' if documentation_completed else 'in_progress' if candidates else 'ready'
     labels={'completed':'Completed','in_progress':'In progress','ready':'Ready','locked':'Locked','not_applicable':'Not applicable'}
@@ -258,7 +259,7 @@ def workflow_state(record,cards=None,candidates=None,window=None,attendance_cont
         'notifications':dict(status=notifications_status,label=labels[notifications_status],detail=notification_detail),
         'documentation':dict(status=documentation_status,label=labels[documentation_status],detail=documentation_detail)}
     progress='Completed' if unblocked and (not_applicable or records_completed and notifications_completed and documentation_completed) else 'In progress' if value and value.internal_activity else 'Not started'
-    return dict(notifications_enabled=notifications_enabled,documentation_enabled=documentation_enabled,review_allowed=review_allowed,
+    return dict(records_enabled=records_enabled,submission_status=value.submission_status if value else '',notifications_enabled=notifications_enabled,documentation_enabled=documentation_enabled,review_allowed=review_allowed,
         records_complete=records_completed,no_documentation_confirmation_enabled=no_documents_enabled,results_notification_enabled=results_enabled,all_absence_notifications_sent=bool(all_sent),has_absences=has_absences,steps=steps,attendance_progress=progress,
         notifications_sent=notification_sent,notifications_total=notification_total,reviews_completed=reviewed,reviews_total=len(candidates))
 
@@ -385,6 +386,13 @@ def single_file():
 
 def mutate(record,trashed):
     action=request.form.get('action')
+    if action=='submission_status':
+        status=request.form.get('value','')
+        if status not in {'completed','pending'}:raise ValueError('Select a valid Sinapsis submission status.')
+        control(record,True).submission_status=status
+        touch(record);return
+    if not workflow_state(record)['records_enabled']:
+        raise ValueError('Confirm Submissions completed in Sinapsis before editing Attendance.')
     if action=='add_institution':
         name=request.form.get('name','').strip()
         if not name or len(name)>250:raise ValueError('Enter an institution name (maximum 250 characters).')

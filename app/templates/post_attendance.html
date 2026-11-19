@@ -1,7 +1,7 @@
 {% extends 'base.html' %}
 {% block title %}Onsite session control tower · Post controls{% endblock %}
 {% block content %}
-<link rel="stylesheet" href="{{ url_for('static',filename='css/post_attendance.css',v='20261118-19') }}">
+<link rel="stylesheet" href="{{ url_for('static',filename='css/post_attendance.css',v='20261119-21') }}">
 <header class="page-header"><div><p class="eyebrow">Onsite session control tower</p><h1>Post controls</h1><p>Attendance and absence follow-up for onsite exam sessions.</p></div></header>
 <nav class="control-tower-view-tabs"><a class="control-tower-view-tab" href="{{ url_for('staff.pre_session_control_tower',session_year=selected_year,view='bundles') }}">Bundles</a><a class="control-tower-view-tab" href="{{ url_for('staff.pre_session_control_tower',session_year=selected_year,view='sessions') }}">Pre checks</a><a class="control-tower-view-tab active" href="{{ url_for('staff.pre_session_control_tower',session_year=selected_year,view='post') }}">Post controls</a></nav>
 <form class="pa-filters" method="get"><input type="hidden" name="view" value="post"><label>Year<select name="session_year" onchange="this.form.submit()">{% for item in years %}<option value="{{ item.year }}"{% if item.year==selected_year %} selected{% endif %}>{{ item.year }}</option>{% endfor %}</select></label><label>Exam session<input type="search" data-post-search placeholder="Search by session name"></label></form>
@@ -21,5 +21,5 @@
 </dialog>
 <div data-post-config data-open-session="{{ request.args.get('open_attendance','') }}" data-csrf="{{ csrf_token }}"></div>
 <script src="{{ url_for('static',filename='js/attendance_group_messages.js',v='20261118-1') }}" defer></script>
-<script src="{{ url_for('static',filename='js/post_attendance.js',v='20261118-20') }}" defer></script>
+<script src="{{ url_for('static',filename='js/post_attendance.js',v='20261119-21') }}" defer></script>
 {% endblock %}

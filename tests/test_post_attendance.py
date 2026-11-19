@@ -28,6 +28,8 @@ class PostAttendanceTest(unittest.TestCase):
         with self.client.session_transaction() as session:session.update(user='admin',user_department='Admin',csrf_token='test')
         self.url=f'/pre-session-control-tower/post/sessions/{self.record.id}/attendance'
         self.public=f'/path-session-journey/{self.share.token}/institution/absences/{self.record.id}'
+        attendance.control(self.record,True).submission_status='completed'
+        db.session.commit()
         self.sequence=0;self.uploads=[]
         self.upload_patch=patch('app.attendance_drive.upload',side_effect=self.fake_upload);self.upload_patch.start()
         self.trash_patch=patch('app.attendance_drive.trash');self.trash=self.trash_patch.start()
@@ -102,7 +104,7 @@ class PostAttendanceTest(unittest.TestCase):
         self.assertIn('contextual-cell-trigger pa-attendance-trigger',html)
         self.assertIn('badge logistics-control-status-not-started',html)
         with self.client.session_transaction() as session:self.assertTrue(session['csrf_token'])
-        self.assertEqual(m.PostAttendance.query.count(),0)
+        self.assertEqual(m.PostAttendance.query.count(),1)
 
     def test_read_defaults_and_blocked_day_write_guard(self):
         result=self.client.get(self.url).json['state']
@@ -149,7 +151,7 @@ class PostAttendanceTest(unittest.TestCase):
         self.assertEqual(self.post('module_upload',institution_id='main',module='Speaking').status_code,400)
         response=self.client.post(self.url,data=MultiDict([('csrf_token','test'),('action','module_upload'),('institution_id','main'),('module','Speaking'),('document',(io.BytesIO(b'a'),'a.pdf')),('document',(io.BytesIO(b'b'),'b.pdf'))]))
         self.assertEqual(response.status_code,400);self.assertEqual(len(self.uploads),0)
-        self.assertEqual(m.PostAttendance.query.count(),0)
+        self.assertEqual(m.PostAttendance.query.count(),1)
 
     def test_drive_failure_keeps_previous_file_and_verified(self):
         state=self.upload().json['state'];main=state['institutions'][0];old=main['modules']['Speaking']['id']

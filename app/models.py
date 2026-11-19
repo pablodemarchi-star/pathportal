@@ -3012,6 +3012,7 @@ class ProcessClockIncident(db.Model):
 
 class PostAttendance(db.Model):
     exam_session_id = db.Column(db.Integer, db.ForeignKey('exam_session.id'), primary_key=True)
+    submission_status = db.Column(db.String(30), nullable=False, default='')
     verified = db.Column(db.Boolean, nullable=False, default=False)
     review_results_notified = db.Column(db.Boolean, nullable=False, default=False)
     internal_activity = db.Column(db.Boolean, nullable=False, default=False)
