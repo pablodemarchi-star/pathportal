@@ -60,14 +60,25 @@ class PostAttendanceTest(unittest.TestCase):
             window['state']='expired';return window
         return patch('app.routes.journey_absence_upload_window',side_effect=closed)
 
-    def prepare_review(self):
+    def prepare_review(self,names=()):
         # Field-validation tests start after the real verification/Sent prerequisites.
-        institutions=m.AttendanceInstitution.query.filter_by(exam_session_id=self.record.id).all()
-        entries=m.AttendanceModule.query.filter(m.AttendanceModule.institution_id.in_([item.id for item in institutions])).all() if institutions else []
-        if not any(item.document_id for item in entries):
-            main=attendance.main_institution(self.record,True)
-            doc=m.AttendanceDocument(file_id='fixture-absence-list',folder_id=attendance.drive.LISTS_FOLDER,filename='Absence list.pdf',mime_type='application/pdf')
-            db.session.add(doc);db.session.add(m.AttendanceModule(institution_id=main.id,module='Speaking',document=doc))
+        main=attendance.main_institution(self.record,True)
+        institutions=[main]
+        for name in names:
+            if not name.strip():continue
+            item=next((item for item in m.AttendanceInstitution.query.filter_by(exam_session_id=self.record.id).all() if attendance.institution_key(item.name)==attendance.institution_key(name)),None)
+            if item is None:
+                item=m.AttendanceInstitution(exam_session_id=self.record.id,name=name.strip(),is_main=False)
+                db.session.add(item);db.session.flush()
+            institutions.append(item)
+        for item in institutions:
+            for module in attendance.modules(self.record):
+                entry=m.AttendanceModule.query.filter_by(institution_id=item.id,module=module).first()
+                if entry is None:
+                    entry=m.AttendanceModule(institution_id=item.id,module=module);db.session.add(entry)
+                if not entry.document_id:
+                    doc=m.AttendanceDocument(file_id=f'fixture-{item.id}-{module}',folder_id=attendance.drive.LISTS_FOLDER,filename='Absence list.pdf',mime_type='application/pdf')
+                    db.session.add(doc);entry.document=doc
         attendance.control(self.record,True).verified=True
         for item in m.AttendanceInstitution.query.filter_by(exam_session_id=self.record.id).all():
             keys=[contact['key'] for contact in attendance.contacts(self.record)] if item.is_main else ['external']
@@ -75,7 +86,7 @@ class PostAttendanceTest(unittest.TestCase):
         db.session.commit()
 
     def post(self,action,**data):
-        if action=='candidate':self.prepare_review()
+        if action=='candidate':self.prepare_review(names=[data.get('value','')] if data.get('field')=='institution_name' else [])
         if action=='candidate' and data.get('field')=='review':
             with self.closed_window():return self.client.post(self.url,data=dict(csrf_token='test',action=action,**data))
         return self.client.post(self.url,data=dict(csrf_token='test',action=action,**data))
@@ -177,7 +188,7 @@ class PostAttendanceTest(unittest.TestCase):
         self.assertEqual(response.status_code,200,response.json)
         self.assertEqual(len(response.json['state']['institutions']),1)
         self.assertEqual(m.AbsenceCandidate.query.count(),0);self.assertEqual(m.AbsenceSubmissionEvent.query.count(),0)
-        self.assertEqual(m.AttendanceDocument.query.count(),0);self.assertEqual(self.trash.call_count,2)
+        self.assertEqual(m.AttendanceDocument.query.count(),m.AttendanceModule.query.filter(m.AttendanceModule.document_id.isnot(None)).count());self.assertEqual(self.trash.call_count,2)
         self.assertEqual(self.post('delete_institution',institution_id='main',confirmed='1').status_code,400)
 
     def test_public_upload_duplicate_replace_event_and_internal_auto_row(self):
@@ -228,11 +239,12 @@ class PostAttendanceTest(unittest.TestCase):
         self.assertEqual(candidate.rescheduled_for,str(last.id))
         def edit(field,value='',**extra):return self.post('candidate',candidate_id=candidate.id,field=field,value=value,**extra)
         self.assertEqual(edit('exam','Level IV').status_code,400)
-        self.assertEqual(edit('exam','Ready').status_code,200)
         self.assertEqual(edit('institution_name','School').status_code,200)
+        self.assertEqual(edit('exam','Ready').status_code,200)
         response=edit('modules',modules=['Speaking']);self.assertFalse(response.json['state']['candidates'][0]['actionable'])
         response=edit('review','Confirmed',previous_file_id=candidate.document_id)
         self.assertEqual(response.status_code,200);self.assertTrue(response.json['state']['candidates'][0]['actionable'])
+        self.assertEqual(self.reopen_candidate().status_code,200)
         self.assertEqual(edit('modules',modules=['Wrong']).status_code,400)
         self.assertEqual(edit('rescheduled_for',str(self.record.id)).status_code,400)
         self.assertEqual(edit('rescheduled_for','next_novdec_onsite').status_code,200)
@@ -293,11 +305,17 @@ class PostAttendanceTest(unittest.TestCase):
             html=self.client.get(f'/path-session-journey/{self.share.token}/institution?lang={language}').get_data(as_text=True)
             self.assertIn(title,html);self.assertIn('name="rescheduled_for" required',html)
             self.assertLess(html.index('name="rescheduled_for"'),html.index('name="document"'))
+            self.assertIn('(Last online · 20/12/2026)',html)
             self.assertIn('absence-approval-notice',html)
 
     def review_candidate(self,field,value='',**extra):
         candidate=m.AbsenceCandidate.query.one()
         return self.post('candidate',candidate_id=candidate.id,field=field,value=value,**extra)
+
+    def reopen_candidate(self):
+        candidate=m.AbsenceCandidate.query.one()
+        with self.closed_window():
+            return self.review_candidate('reopen',confirmed='1',previous_file_id=candidate.document_id,previous_status=candidate.review_status)
 
     def test_documentation_is_blocked_without_recorded_absences(self):
         self.record.session_date=self.today;db.session.commit();self.submit()
@@ -326,11 +344,13 @@ class PostAttendanceTest(unittest.TestCase):
             self.assertEqual(response.status_code,200)
             self.assertEqual(response.json['state']['candidates'][0]['allowed_modules'],allowed)
             self.assertEqual(confirm().status_code,200)
+            self.assertEqual(self.reopen_candidate().status_code,200)
         response=self.review_candidate('exam','Ready')
         row=response.json['state']['candidates'][0]
         self.assertEqual(row['review_status'],'Pending');self.assertEqual(row['modules'],[])
         self.assertEqual(confirm().status_code,400)
         self.review_candidate('modules',modules=['Speaking']);self.assertEqual(confirm().status_code,200)
+        self.assertEqual(self.reopen_candidate().status_code,200)
         self.review_candidate('institution_name','')
         self.assertEqual(confirm().status_code,400)
         self.assertEqual(self.review_candidate('approved','1').status_code,400)
@@ -371,7 +391,7 @@ class PostAttendanceTest(unittest.TestCase):
             'exam':'A1 Access','modules':['Listening and speaking','Reading and writing'],'rescheduled_for':'next_novdec_onsite',
             'approval':'Confirmed','currency':'ARS','credit_balance':'100.50','document':(io.BytesIO(b'pdf'),'internal.pdf')}
         values.update(changes)
-        self.prepare_review()
+        self.prepare_review(names=[values['institution_name']])
         with self.closed_window():return self.client.post(self.url.replace('/attendance','/candidates'),data=values)
 
     def test_internal_form_requires_all_fields_and_respects_module_rules(self):
@@ -380,7 +400,7 @@ class PostAttendanceTest(unittest.TestCase):
             self.assertEqual(response.status_code,400,(field,response.json))
         self.assertEqual(self.internal_document(exam='Ready',modules=['Reading and writing']).status_code,400)
         self.assertEqual(self.internal_document(exam='A1 Access',modules=['Speaking']).status_code,400)
-        self.assertEqual(self.internal_document(approval='Pending').status_code,400)
+        self.assertEqual(self.internal_document(approval='Invalid').status_code,400)
         self.assertEqual(self.internal_document(document=(io.BytesIO(b''),'')).status_code,400)
         self.assertEqual(m.AbsenceCandidate.query.count(),0);self.assertEqual(len(self.uploads),0)
 
@@ -396,6 +416,54 @@ class PostAttendanceTest(unittest.TestCase):
         self.assertEqual(row['rescheduled_label'],'Nov/Dec, next year | Onsite')
         self.assertEqual(self.uploads[-1][0],'absence-folder-123456')
         self.assertTrue(row['document']['url'])
+
+    def test_internal_pending_upload_after_deadline_can_be_reviewed_later(self):
+        response=self.internal_document(approval='Pending',currency='',credit_balance='')
+        self.assertEqual(response.status_code,200,response.json)
+        row=response.json['state']['candidates'][0]
+        self.assertEqual(row['review_status'],'Pending')
+        self.assertFalse(row['approved'])
+        self.assertEqual(row['whatsapp_message'],'')
+        self.assertEqual(row['whatsapp_message_es'],'')
+        self.assertFalse(response.json['state']['results_notification_enabled'])
+        self.assertEqual(self.review_candidate('review','Confirmed',previous_file_id=row['document']['id']).status_code,400)
+        response=self.review_candidate('review','Declined',previous_file_id=row['document']['id'],reason='Documentation does not meet requirements')
+        self.assertEqual(response.status_code,200,response.json)
+        self.assertEqual(response.json['state']['candidates'][0]['review_status'],'Declined')
+
+    def test_final_review_is_readonly_and_requires_confirmed_reopening(self):
+        response=self.internal_document()
+        self.assertEqual(response.status_code,200,response.json)
+        candidate=m.AbsenceCandidate.query.one()
+        original=(candidate.document_id,candidate.name,candidate.number,candidate.exam,candidate.absent_modules,candidate.currency,candidate.credit_balance)
+        with self.closed_window():
+            for field,value in [('number','changed'),('name','Changed'),('institution_name','Other'),('institution_id','main'),('exam','Ready'),('modules',''),('rescheduled_for','next_july_online'),('currency','USD'),('credit_balance','2'),('review','Declined')]:
+                result=self.raw_action('candidate',candidate_id=candidate.id,field=field,value=value)
+                self.assertEqual(result.status_code,400,(field,result.json))
+            result=self.raw_action('candidate',candidate_id=candidate.id,field='notes',value='Keep this note')
+            self.assertEqual(result.status_code,200,result.json)
+            self.assertTrue(result.json['state']['candidates'][0]['document']['url'])
+            record_control=attendance.control(self.record,True)
+            record_control.review_results_notified=True;db.session.commit()
+            fields=dict(candidate_id=candidate.id,field='reopen',previous_file_id=candidate.document_id,previous_status='Confirmed')
+            self.assertEqual(self.raw_action('candidate',**fields).status_code,400)
+            self.assertEqual(self.raw_action('candidate',**{**fields,'previous_status':'Declined','confirmed':'1'}).status_code,400)
+            result=self.raw_action('candidate',**fields,confirmed='1')
+            self.assertEqual(result.status_code,200,result.json)
+            candidate=m.AbsenceCandidate.query.one()
+            self.assertEqual(candidate.review_status,'Pending')
+            self.assertEqual((candidate.document_id,candidate.name,candidate.number,candidate.exam,candidate.absent_modules,candidate.currency,candidate.credit_balance),original)
+            self.assertEqual(candidate.notes,'Keep this note')
+            self.assertFalse(attendance.control(self.record).review_results_notified)
+            self.assertEqual(result.json['state']['candidates'][0]['whatsapp_message'],'')
+            self.assertEqual(self.raw_action('candidate',candidate_id=candidate.id,field='name',value='Updated name').status_code,200)
+            result=self.raw_action('candidate',candidate_id=candidate.id,field='review',value='Declined',previous_file_id=candidate.document_id,reason='Old reason')
+            self.assertEqual(result.status_code,200,result.json)
+            self.assertEqual(self.raw_action('candidate',candidate_id=candidate.id,field='exam',value='Ready').status_code,400)
+            fields.update(previous_status='Declined')
+            self.assertEqual(self.raw_action('candidate',**fields,confirmed='1').status_code,200)
+            self.assertEqual(m.AbsenceCandidate.query.one().decline_reason,'')
+            self.assertEqual(m.AbsenceCandidate.query.one().notes,'Keep this note')
 
     def test_internal_decline_reason_and_duplicate_replacement(self):
         self.assertEqual(self.internal_document(approval='Declined').status_code,400)
@@ -418,6 +486,7 @@ class PostAttendanceTest(unittest.TestCase):
         self.review_candidate('currency','USD');self.assertEqual(confirm().status_code,400)
         self.review_candidate('currency','');self.review_candidate('credit_balance','125.25');self.assertEqual(confirm().status_code,400)
         self.review_candidate('currency','UYU');self.assertEqual(confirm().status_code,200)
+        self.assertEqual(self.reopen_candidate().status_code,200)
         self.assertEqual(self.review_candidate('credit_balance','-1').status_code,400)
         self.assertEqual(self.review_candidate('credit_balance','').status_code,200)
         self.assertEqual(m.AbsenceCandidate.query.one().review_status,'Pending')
@@ -432,9 +501,11 @@ class PostAttendanceTest(unittest.TestCase):
         self.assertFalse(row['credit_applicable']);self.assertEqual(row['credit_balance'],'');self.assertEqual(row['currency'],'')
         self.assertIn(str(latest.id),response.json['state']['credit_exempt_options'])
         candidate=m.AbsenceCandidate.query.one()
+        self.assertEqual(self.reopen_candidate().status_code,200)
         response=self.review_candidate('credit_balance','999')
         self.assertEqual(response.status_code,200);self.assertIsNone(m.AbsenceCandidate.query.one().credit_balance)
         self.assertEqual(self.review_candidate('review','Confirmed',previous_file_id=candidate.document_id).status_code,200)
+        self.assertEqual(self.reopen_candidate().status_code,200)
         changed=self.review_candidate('rescheduled_for','next_july_online')
         self.assertEqual(changed.status_code,200);self.assertTrue(changed.json['state']['candidates'][0]['credit_applicable'])
         self.assertEqual(changed.json['state']['candidates'][0]['review_status'],'Pending')
@@ -468,29 +539,41 @@ class PostAttendanceTest(unittest.TestCase):
             'The absence is now considered justified, and *the candidate has been rescheduled for the selected exam session*.','',
             '*Path International Examinations*'])
         self.assertEqual(message,expected)
+        spanish=response.json['state']['candidates'][0]['whatsapp_message_es']
+        self.assertIn('- *Estado:* Confirmado',spanish)
+        self.assertIn('- *Saldo a favor:* USD 1.234,50',spanish)
+        self.assertIn('Nov/Dic, próximo año | Presencial',spanish)
+        self.assertIn('*revisada y aprobada por Path Examinations*',spanish)
 
     def test_whatsapp_message_pending_declined_and_no_credit_when_exempt(self):
         self.submit();candidate=m.AbsenceCandidate.query.one()
         self.assertEqual(self.client.get(self.url).json['state']['candidates'][0]['whatsapp_message'],'')
+        self.assertEqual(self.client.get(self.url).json['state']['candidates'][0]['whatsapp_message_es'],'')
         response=self.review_candidate('review','Declined',previous_file_id=candidate.document_id,reason='Private review reason')
         message=response.json['state']['candidates'][0]['whatsapp_message']
         self.assertIn('- *Status:* Declined',message)
         self.assertIn('*the request has not been approved*',message)
         self.assertIn("The candidate's absence will therefore remain recorded as Absent.",message)
         self.assertNotIn('Credit balance',message);self.assertNotIn('Rescheduled exam date',message);self.assertNotIn('Private review reason',message)
+        spanish=response.json['state']['candidates'][0]['whatsapp_message_es']
+        self.assertIn('- *Estado:* Rechazado',spanish)
+        self.assertIn('*la solicitud no ha sido aprobada*',spanish)
+        self.assertNotIn('Saldo a favor',spanish)
+        self.assertNotIn('Private review reason',spanish)
         latest=self.new_session('Last session',date(2026,12,23),'Online');db.session.commit()
         response=self.internal_document(rescheduled_for=str(latest.id),currency='',credit_balance='')
         row=next(item for item in response.json['state']['candidates'] if item['number']=='internal-1')
         self.assertIn('Last session · 23/12/2026',row['whatsapp_message'])
         self.assertNotIn('Credit balance',row['whatsapp_message'])
+        self.assertNotIn('Saldo a favor',row['whatsapp_message_es'])
         candidate=m.AbsenceCandidate.query.filter_by(number='internal-1').one()
         response=self.submit(candidate_number='internal-1',replace='1',confirmed='1',previous_file_id=candidate.document_id,rescheduled_for=str(latest.id))
         self.assertEqual(response.status_code,200)
         row=next(item for item in self.client.get(self.url).json['state']['candidates'] if item['number']=='internal-1')
         self.assertEqual(row['whatsapp_message'],'')
 
-    def grouped_copy(self,ids,csrf='test'):
-        with self.closed_window():return self.client.post(self.url.replace('/attendance','/absence-message'),data={'csrf_token':csrf,'candidate_ids':[str(value) for value in ids]})
+    def grouped_copy(self,ids,csrf='test',language='en'):
+        with self.closed_window():return self.client.post(self.url.replace('/attendance','/absence-message'),data={'csrf_token':csrf,'language':language,'candidate_ids':[str(value) for value in ids]})
 
     def test_grouped_confirmed_message_preserves_individual_dates_and_credits(self):
         first=self.internal_document(candidate_number='G1',institution_name='  Same   School  ',currency='USD',credit_balance='125.50').json['state']['candidates'][0]
@@ -505,6 +588,13 @@ class PostAttendanceTest(unittest.TestCase):
         self.assertIn('1. *Candidate number:* G1',message);self.assertIn('2. *Candidate number:* G2',message)
         self.assertIn('Nov/Dec, next year | Onsite',message);self.assertIn('Last onsite · 23/12/2026',message)
         self.assertEqual(message.count('*Credit balance:*'),1);self.assertIn('USD 125.50',message)
+        spanish=self.grouped_copy([first['id'],second['id']],language='es').json['message']
+        self.assertIn('- *Estado:* Confirmado',spanish)
+        self.assertIn('*Número de candidato:* G1',spanish)
+        self.assertIn('Nov/Dic, próximo año | Presencial',spanish)
+        self.assertEqual(spanish.count('*Saldo a favor:*'),1)
+        self.assertIn('USD 125,50',spanish)
+        self.assertEqual(self.grouped_copy([first['id']],language='invalid').status_code,400)
         selected=self.grouped_copy([second['id']]).json['message']
         self.assertNotIn('G1',selected);self.assertNotIn('Credit balance',selected)
         self.assertEqual(m.AbsenceCandidate.query.count(),2)
@@ -519,6 +609,12 @@ class PostAttendanceTest(unittest.TestCase):
         paragraph='The reasons for the rejection can be viewed in the corresponding *_Exam session journey_*: http://localhost/path-session-journey/absence-test/institution'
         self.assertIn(paragraph,message);self.assertLess(message.index(paragraph),message.index('*Path International Examinations*'))
         self.assertNotIn('Private reason',message);self.assertNotIn('Credit balance',message);self.assertNotIn('Rescheduled exam date',message)
+        spanish=self.grouped_copy(ids,language='es').json['message']
+        self.assertIn('- *Estado:* Rechazado',spanish)
+        self.assertIn('*las solicitudes no han sido aprobadas*',spanish)
+        self.assertIn('Los motivos del rechazo',spanish)
+        self.assertIn('*_Exam session journey_*: http://localhost/path-session-journey/absence-test/institution',spanish)
+        self.assertNotIn('Saldo a favor',spanish)
         self.share.is_enabled=False;db.session.commit()
         self.assertEqual(self.grouped_copy(ids).status_code,400)
         self.assertFalse(m.ExamSessionJourneyShare.query.one().is_enabled)
@@ -571,7 +667,7 @@ class PostAttendanceTest(unittest.TestCase):
         return main['id'],key
 
     def raw_internal(self,**changes):
-        data={'csrf_token':'test','candidate_number':'manual','candidate_name':'Manual Candidate','institution_name':'School',
+        data={'csrf_token':'test','candidate_number':'manual','candidate_name':'Manual Candidate','institution_name':self.record.exam_session_name,
             'exam':'Ready','modules':['Speaking'],'rescheduled_for':'next_july_online','approval':'Pending',
             'document':(io.BytesIO(b'pdf'),'certificate.pdf')}
         data.update(changes)
@@ -605,7 +701,7 @@ class PostAttendanceTest(unittest.TestCase):
         waiting=m.AbsenceCandidate.query.filter_by(number='waiting-public').one()
         with self.closed_window():
             self.assertTrue(self.client.get(self.url).json['state']['review_allowed'])
-            self.assertEqual(self.raw_internal(candidate_number='closed-pending',approval='Pending').status_code,400)
+            self.assertEqual(self.raw_internal(candidate_number='closed-invalid',approval='Invalid').status_code,400)
             self.assertEqual(self.raw_action('candidate',candidate_id=candidate.id,field='currency',value='ARS').status_code,200)
             self.assertEqual(self.raw_action('candidate',candidate_id=candidate.id,field='credit_balance',value='100').status_code,200)
             response=self.raw_action('candidate',candidate_id=candidate.id,field='review',value='Confirmed',previous_file_id=candidate.document_id)
@@ -685,6 +781,79 @@ class PostAttendanceTest(unittest.TestCase):
         state=self.raw_action('verified',value='0').json['state'];self.assertEqual(state['progress'],'In progress')
         self.assertEqual(state['steps']['records']['status'],'in_progress')
         self.assertEqual(state['steps']['notifications']['status'],'locked')
+
+
+    def test_exam_and_module_choices_follow_each_institution_absence_lists(self):
+        self.record.modules='Listening and speaking, Reading and writing';db.session.commit()
+        self.assertEqual(self.upload(module='Listening and speaking').status_code,200)
+        self.submit()
+        state=self.client.get(self.url).json['state'];main=state['institutions'][0]['id'];key=state['contacts'][0]['key']
+        self.raw_action('verified',value='1');self.raw_action('sent',institution_id=main,key=key,value='1')
+        candidate=m.AbsenceCandidate.query.one()
+        def edit(field,value='',**extra):return self.raw_action('candidate',candidate_id=candidate.id,field=field,value=value,**extra)
+        self.assertEqual(edit('exam','A1- Entry').status_code,400)
+        state=edit('institution_name',self.record.exam_session_name).json['state']
+        row=state['candidates'][0]
+        self.assertNotIn('SPA level 1',row['allowed_exams'])
+        self.assertEqual(edit('exam','Ready').status_code,400)
+        result=edit('exam','A1- Entry')
+        self.assertEqual(result.status_code,200,result.json)
+        self.assertEqual(result.json['state']['candidates'][0]['allowed_modules'],['Listening and speaking'])
+        self.assertEqual(edit('modules',modules=['Reading and writing']).status_code,400)
+        self.assertEqual(edit('modules',modules=['Listening and speaking']).status_code,200)
+        response=self.raw_action('add_institution',name='External school')
+        external=next(item for item in response.json['state']['institutions'] if not item['main'])
+        self.assertEqual(self.upload(institution_id=external['id'],module='Reading and writing').status_code,200)
+        self.raw_action('verified',value='1');self.raw_action('sent',institution_id=main,key=key,value='1');self.raw_action('sent',institution_id=external['id'],key='external',value='1')
+        result=edit('institution_name','  EXTERNAL   school ')
+        self.assertEqual(result.status_code,200,result.json)
+        row=result.json['state']['candidates'][0]
+        self.assertEqual(row['institution_id'],external['id'])
+        self.assertEqual(row['modules'],[])
+        self.assertEqual(row['allowed_modules'],['Reading and writing'])
+        self.assertEqual(edit('modules',modules=['Listening and speaking']).status_code,400)
+        self.assertEqual(edit('modules',modules=['Reading and writing']).status_code,200)
+        self.assertEqual(self.raw_internal(institution_name='Unknown',exam='A1 Access',modules=['Reading and writing']).status_code,400)
+        self.assertEqual(self.raw_internal(institution_name='External school',exam='Ready',modules=['Speaking']).status_code,400)
+        self.assertEqual(self.raw_internal(institution_name='External school',exam='A1 Access',modules=['Listening and speaking']).status_code,400)
+        result=self.raw_internal(institution_name='External school',exam='A1 Access',modules=['Reading and writing'])
+        self.assertEqual(result.status_code,200,result.json)
+        self.assertEqual(m.AbsenceCandidate.query.filter_by(number='manual').one().institution_id,int(external['id']))
+
+    def test_removing_absence_list_reopens_incompatible_review_without_losing_document(self):
+        self.assertEqual(self.upload(module='Listening and speaking').status_code,200)
+        self.assertEqual(self.upload(module='Reading and writing').status_code,200)
+        state=self.client.get(self.url).json['state'];main=state['institutions'][0];key=state['contacts'][0]['key']
+        self.raw_action('verified',value='1');self.raw_action('sent',institution_id=main['id'],key=key,value='1')
+        with self.closed_window():
+            result=self.raw_internal(institution_name=self.record.exam_session_name,exam='A1 Access',modules=['Listening and speaking','Reading and writing'],approval='Confirmed',currency='ARS',credit_balance='100')
+        self.assertEqual(result.status_code,200,result.json)
+        candidate=m.AbsenceCandidate.query.one();document=candidate.document_id
+        attendance.control(self.record).review_results_notified=True;db.session.commit()
+        result=self.raw_action('module_clear',institution_id=main['id'],module='Reading and writing',previous_file_id=main['modules']['Reading and writing']['id'],confirmed='1')
+        self.assertEqual(result.status_code,200,result.json)
+        candidate=m.AbsenceCandidate.query.one()
+        self.assertEqual(candidate.review_status,'Pending')
+        self.assertEqual(candidate.exam,'A1 Access')
+        self.assertEqual(json.loads(candidate.absent_modules),['Listening and speaking'])
+        self.assertEqual(candidate.document_id,document)
+        self.assertFalse(attendance.control(self.record).review_results_notified)
+        from app.routes import apply_exam_session_form
+        fields=['exam_session_name','category','status','session_date','minimum_candidates_required','exam_session_organised_by',
+                'full_address_google_maps','city','province','format','location_url','details_url','schedule_folder_url',
+                'exam_entry_slips_url','session_pictures_folder_url','absence_documentation_folder_url','digitalised_exams_url']
+        data={field:getattr(self.record,field) for field in fields}
+        data.update(contact_points=self.record.contact_points_list(),shifts=['Morning'],modules=list(reversed(self.record.modules_list())))
+        attendance.control(self.record).verified=True;db.session.commit()
+        revision=attendance.control(self.record).revision
+        apply_exam_session_form(self.record,data);db.session.commit()
+        self.assertEqual(attendance.control(self.record).revision,revision)
+        self.assertTrue(attendance.control(self.record).verified)
+        data['modules']=['Speaking']
+        apply_exam_session_form(self.record,data);db.session.commit()
+        self.assertEqual(candidate.exam,'');self.assertEqual(candidate.absent_modules,'[]')
+        self.assertEqual(candidate.document_id,document)
+        self.assertFalse(attendance.control(self.record).verified)
 
     def test_three_steps_completion_counters_and_reopening(self):
         self.record.contact_points=json.dumps([{'full_name':'A','phone':'1','email':'a@example.com'},{'full_name':'B','phone':'2','email':'b@example.com'}]);db.session.commit()

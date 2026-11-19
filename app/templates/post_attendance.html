@@ -1,7 +1,7 @@
 {% extends 'base.html' %}
 {% block title %}Onsite session control tower · Post controls{% endblock %}
 {% block content %}
-<link rel="stylesheet" href="{{ url_for('static',filename='css/post_attendance.css',v='20261119-21') }}">
+<link rel="stylesheet" href="{{ url_for('static',filename='css/post_attendance.css',v='20261119-26') }}">
 <header class="page-header"><div><p class="eyebrow">Onsite session control tower</p><h1>Post controls</h1><p>Attendance and absence follow-up for onsite exam sessions.</p></div></header>
 <nav class="control-tower-view-tabs"><a class="control-tower-view-tab" href="{{ url_for('staff.pre_session_control_tower',session_year=selected_year,view='bundles') }}">Bundles</a><a class="control-tower-view-tab" href="{{ url_for('staff.pre_session_control_tower',session_year=selected_year,view='sessions') }}">Pre checks</a><a class="control-tower-view-tab active" href="{{ url_for('staff.pre_session_control_tower',session_year=selected_year,view='post') }}">Post controls</a></nav>
 <form class="pa-filters" method="get"><input type="hidden" name="view" value="post"><label>Year<select name="session_year" onchange="this.form.submit()">{% for item in years %}<option value="{{ item.year }}"{% if item.year==selected_year %} selected{% endif %}>{{ item.year }}</option>{% endfor %}</select></label><label>Exam session<input type="search" data-post-search placeholder="Search by session name"></label></form>
@@ -12,7 +12,7 @@
 <dialog class="pa-small-dialog" data-attendance-editor><form data-attendance-editor-form><h2 data-editor-title></h2><div data-editor-fields></div><p data-editor-status role="status"></p><div class="pa-actions"><button type="button" class="secondary-button" data-editor-close>Close</button><button type="submit" class="primary-button" data-editor-submit>Add</button></div></form></dialog>
 <dialog class="pa-group-dialog" data-attendance-group aria-labelledby="pa-group-title">
 <header><h2 id="pa-group-title">Copy grouped message</h2><button type="button" class="icon-button" data-group-close aria-label="Close">×</button></header>
-<div class="pa-group-filters"><label>Institution<select data-group-institution></select></label><label>Approval<select data-group-status><option value="Confirmed">Confirmed</option><option value="Declined">Declined</option></select></label></div>
+<div class="pa-group-filters"><label>Language<select data-group-language><option value="es">Spanish</option><option value="en" selected>English</option></select></label><label>Institution<select data-group-institution></select></label><label>Approval<select data-group-status><option value="Confirmed">Confirmed</option><option value="Declined">Declined</option></select></label></div>
 <label class="pa-check"><input type="checkbox" data-group-all><span>Select all candidates</span></label>
 <p class="pa-muted" data-group-count></p><div class="pa-group-candidates" data-group-candidates></div>
 <label class="pa-group-preview">WhatsApp message preview<textarea rows="12" readonly data-group-preview></textarea></label>
@@ -20,6 +20,6 @@
 <div class="pa-actions"><button type="button" class="secondary-button" data-group-close>Close</button><button type="button" class="primary-button" data-group-copy disabled>Copy message</button></div>
 </dialog>
 <div data-post-config data-open-session="{{ request.args.get('open_attendance','') }}" data-csrf="{{ csrf_token }}"></div>
-<script src="{{ url_for('static',filename='js/attendance_group_messages.js',v='20261118-1') }}" defer></script>
-<script src="{{ url_for('static',filename='js/post_attendance.js',v='20261119-21') }}" defer></script>
+<script src="{{ url_for('static',filename='js/attendance_group_messages.js',v='20261119-2') }}" defer></script>
+<script src="{{ url_for('static',filename='js/post_attendance.js',v='20261119-26') }}" defer></script>
 {% endblock %}

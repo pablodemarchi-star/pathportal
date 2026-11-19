@@ -10,7 +10,8 @@ class Element{
  close(){this.open=false;}
 }
 const dialog=new Element(),institution=new Element(),status=new Element(),list=new Element(),all=new Element(),count=new Element(),preview=new Element(),feedback=new Element(),copy=new Element(),close=new Element();institution.isSelect=true;
-const nodes={'[data-group-institution]':institution,'[data-group-status]':status,'[data-group-candidates]':list,'[data-group-all]':all,'[data-group-count]':count,'[data-group-preview]':preview,'[data-group-feedback]':feedback,'[data-group-copy]':copy};
+const language=new Element();language.value='en';
+const nodes={'[data-group-language]':language,'[data-group-institution]':institution,'[data-group-status]':status,'[data-group-candidates]':list,'[data-group-all]':all,'[data-group-count]':count,'[data-group-preview]':preview,'[data-group-feedback]':feedback,'[data-group-copy]':copy};
 dialog.querySelector=selector=>nodes[selector];dialog.querySelectorAll=()=>[close];
 const candidates=[{id:1,number:'A1',name:'One',institution_key:'school',institution_name:'School',review_status:'Confirmed',whatsapp_message:'individual'},
  {id:2,number:'A2',name:'Two',institution_key:'school',institution_name:'  SCHOOL ',review_status:'Confirmed',whatsapp_message:'individual'},
@@ -30,6 +31,8 @@ const flush=async()=>{const jobs=[...timers.values()];timers.clear();for(const j
  institution.value='school';institution.listeners.change();await flush();
  assert.equal(count.textContent,'2/2 candidates selected');assert.equal(preview.value,'Message 1,2 v1');assert.equal(copy.disabled,false);assert.equal(all.checked,true);
  assert.equal(requests.at(-1).csrf_token[0],'csrf-test');assert.deepEqual(Array.from(requests.at(-1).candidate_ids),['1','2']);
+ language.value='es';language.listeners.change();assert.equal(copy.disabled,true);await flush();assert.equal(requests.at(-1).language[0],'es');assert.deepEqual(Array.from(requests.at(-1).candidate_ids),['1','2']);
+ language.value='en';language.listeners.change();await flush();assert.equal(requests.at(-1).language[0],'en');
  list.querySelectorAll('input')[1].checked=false;list.listeners.change();await flush();assert.equal(preview.value,'Message 1 v1');assert.equal(all.indeterminate,true);
  all.checked=true;all.listeners.change();await flush();assert.equal(preview.value,'Message 1,2 v1');
  status.value='Declined';status.listeners.change();await flush();assert.equal(count.textContent,'1/1 candidates selected');assert.equal(preview.value,'Message 3 v1');

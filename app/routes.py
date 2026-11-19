@@ -3053,6 +3053,10 @@ def validate_exam_session_form(form):
 
 
 def apply_exam_session_form(session_record, data):
+    attendance_before=None
+    if session_record.id and set(session_record.modules_list()) != set(data['modules']):
+        from app.post_attendance import control,workflow_state
+        if control(session_record):attendance_before=workflow_state(session_record)
     session_record.exam_session_name = data["exam_session_name"]
     session_record.category = data["category"]
     session_record.status = data["status"]
@@ -3076,6 +3080,13 @@ def apply_exam_session_form(session_record, data):
     session_record.session_pictures_folder_url = data["session_pictures_folder_url"]
     session_record.absence_documentation_folder_url = data["absence_documentation_folder_url"]
     session_record.digitalised_exams_url = data["digitalised_exams_url"]
+    if attendance_before is not None:
+        from app.post_attendance import reconcile_absence_candidates,touch
+        from app.attendance_tracking import sync_milestones
+        db.session.flush()
+        reconcile_absence_candidates(session_record)
+        touch(session_record,reset=True)
+        sync_milestones(session_record,attendance_before,True,'session_modules_changed')
 
 
 def serialize_concat_session_ids(session_ids, current_session_id=None):

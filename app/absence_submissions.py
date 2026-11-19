@@ -51,20 +51,23 @@ def store_candidate(record,text,trashed,internal=False):
     before=workflow_state(record)
     details={}
     if internal:
+        from app.post_attendance import absence_choices
         institution_name=request.form.get('institution_name','').strip()
         exam=request.form.get('exam','')
         absent=list(dict.fromkeys(request.form.getlist('modules')))
         approval=request.form.get('approval','')
         reason=request.form.get('reason','').strip()
         if not institution_name or len(institution_name)>250:raise ValueError('Enter an institution name (maximum 250 characters).')
-        if exam not in EXAMS:raise ValueError('Select a valid Exam.')
-        if not absent or any(module not in exam_modules(exam) for module in absent):raise ValueError('Select the absent modules allowed for this Exam.')
+        choices=absence_choices(record,institution_name)
+        if not choices['institution_id'] or not choices['modules']:raise ValueError(choices['reason'])
+        if exam not in choices['exams']:raise ValueError('Select an Exam with recorded absences for this institution.')
+        if not absent or any(module not in exam_modules(exam) or module not in choices['modules'] for module in absent):raise ValueError('Select the absent modules recorded for this institution and allowed for this Exam.')
         flow=workflow_state(record)
         if not flow['documentation_enabled']:raise ValueError('Verify absence records and mark all applicable notifications as Sent before adding documentation.')
         if not flow['review_allowed']:
             if approval not in {'','Pending'}:raise ValueError('Reviews must remain Pending until the institutional submission window closes.')
             approval='Pending'
-        elif approval not in {'Confirmed','Declined'}:raise ValueError('Select Confirmed or Declined.')
+        elif approval not in {'Pending','Confirmed','Declined'}:raise ValueError('Select Pending, Confirmed or Declined.')
         if approval=='Declined' and (not reason or len(reason)>10000):raise ValueError('Enter a reason for declining (maximum 10,000 characters).')
         currency,amount=credit_values(request.form.get('credit_balance',''),request.form.get('currency',''),credit_applicable(record,requested),approval=='Confirmed')
         details=dict(currency=currency,credit_balance=amount,institution_name=institution_name,exam=exam,absent_modules=json.dumps(absent),review_status=approval,
@@ -75,6 +78,7 @@ def store_candidate(record,text,trashed,internal=False):
     if candidate and (request.form.get('replace')!='1' or request.form.get('confirmed')!='1' or request.form.get('previous_file_id')!=candidate.document_id):
         return conflict(candidate,text)
     institution=institution_for(record,request.form.get('institution_id','main')) if internal and not candidate else main_institution(record,True) if not candidate else db.session.get(m.AttendanceInstitution,candidate.institution_id)
+    if internal:institution=institution_for(record,choices['institution_id'])
     old=candidate.document if candidate else None
     document=drive.upload(files[0],destination,f'{number} - {name} - Absence documentation')
     if not candidate:
@@ -83,6 +87,7 @@ def store_candidate(record,text,trashed,internal=False):
     else:
         candidate.number=number;candidate.name=name;candidate.document=document
     candidate.rescheduled_for=requested;candidate.requested_rescheduled_for=requested
+    if internal:candidate.institution_id=institution.id
     reset_review(candidate)
     if not credit_applicable(record,requested):candidate.currency='';candidate.credit_balance=None
     for key,value in details.items():setattr(candidate,key,value)
@@ -109,10 +114,17 @@ def public_scope(token,session_id):
 
 
 def submission_list(record):
+    from app.post_attendance import requested_date_label
     from app.routes import LOCAL_TZ
     rows=(db.session.query(m.AbsenceSubmissionEvent,m.AbsenceCandidate).join(m.AbsenceCandidate)
         .filter(m.AbsenceCandidate.exam_session_id==record.id).order_by(m.AbsenceSubmissionEvent.created_at,m.AbsenceSubmissionEvent.id).all())
+    labels={}
+    def rescheduled_label(candidate,language):
+        key=(candidate.rescheduled_for or candidate.requested_rescheduled_for,language)
+        if key not in labels:labels[key]=requested_date_label(candidate,language=language)
+        return labels[key]
     return [dict(id=event.id,candidate_id=candidate.id,number=candidate.number,name=candidate.name,action=event.action,
+                 rescheduled_label=rescheduled_label(candidate,'en'),rescheduled_label_es=rescheduled_label(candidate,'es'),
                  current=event.file_id==candidate.document_id,review_status=candidate.review_status,decline_reason=candidate.decline_reason,created_at=event.created_at.replace(tzinfo=event.created_at.tzinfo or timezone.utc).isoformat(),date_label=event.created_at.replace(tzinfo=event.created_at.tzinfo or timezone.utc).astimezone(LOCAL_TZ).strftime('%d/%m/%Y %H:%M')) for event,candidate in rows]
 
 

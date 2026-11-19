@@ -112,7 +112,7 @@ class AttendanceTrackingTest(unittest.TestCase):
         for item in state['tracking']['deadlines']:self.assertEqual(item['status'],'met')
         self.now+=timedelta(days=1)
         response=self.client.post(self.url.replace('/attendance','/candidates'),data={'csrf_token':'test','candidate_number':'new',
-            'candidate_name':'New Candidate','institution_name':'School','exam':'Ready','modules':['Speaking'],
+            'candidate_name':'New Candidate','institution_name':self.record.exam_session_name,'exam':'Ready','modules':['Speaking'],
             'rescheduled_for':'next_july_online','approval':'Confirmed','currency':'USD','credit_balance':'10','document':(io.BytesIO(b'new'),'new.pdf')})
         self.assertEqual(response.status_code,200,response.json)
         state=response.json['state'];self.assertFalse(state['no_documentation_received']);self.assertEqual(state['progress'],'In progress')

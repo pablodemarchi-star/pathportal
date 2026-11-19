@@ -33,6 +33,43 @@ def exam_modules(exam):
     return ['Speaking'] if exam in SPEAKING_EXAMS else ['Listening and speaking','Reading and writing']
 
 
+def absence_cards(record):
+    institutions=m.AttendanceInstitution.query.filter_by(exam_session_id=record.id).all()
+    rows=m.AttendanceModule.query.filter(m.AttendanceModule.institution_id.in_([item.id for item in institutions]),m.AttendanceModule.document_id.isnot(None)).all() if institutions else []
+    present={(item.institution_id,item.module) for item in rows}
+    return [dict(id=str(item.id),name=record.exam_session_name if item.is_main else item.name,
+        modules={module:(item.id,module) in present for module in modules(record)}) for item in institutions]
+
+
+def absence_choices(record,name,cards=None):
+    cards=absence_cards(record) if cards is None else cards
+    matches=[card for card in cards if institution_key(card['name'])==institution_key(name)] if name.strip() else []
+    if len(matches)!=1:return dict(institution_id=None,modules=[],exams=[],reason='Match Institution to one Absence records card before choosing an exam.')
+    card=matches[0]
+    allowed=[module for module in modules(record) if card['modules'].get(module)]
+    return dict(institution_id=card['id'],modules=allowed,exams=[exam for exam in EXAMS if set(exam_modules(exam))&set(allowed)],
+        reason='' if allowed else 'No absent modules with an uploaded list are recorded for this institution.')
+
+
+def reconcile_absence_candidates(record):
+    cards=absence_cards(record)
+    changed=False
+    for candidate in m.AbsenceCandidate.query.filter_by(exam_session_id=record.id).all():
+        choices=absence_choices(record,candidate.institution_name,cards)
+        if choices['institution_id']:candidate.institution_id=int(choices['institution_id'])
+        allowed=set(choices['modules'])&set(exam_modules(candidate.exam))
+        selected=json.loads(candidate.absent_modules or '[]')
+        remaining=[module for module in selected if module in allowed]
+        invalid=bool(candidate.exam and candidate.exam not in choices['exams'])
+        if invalid or remaining!=selected:
+            if invalid:candidate.exam=''
+            candidate.absent_modules=json.dumps([] if invalid else remaining)
+            reset_review(candidate);changed=True
+    if changed:
+        value=control(record,True);value.review_results_notified=False;value.review_completed_at=None
+    return changed
+
+
 def credit_exempt_session_id(record):
     latest=(m.ExamSession.query.filter(extract('year',m.ExamSession.session_date)==record.session_date.year)
         .order_by(m.ExamSession.session_date.desc(),m.ExamSession.id.desc()).first())
@@ -60,20 +97,34 @@ def candidate_credit_applicable(candidate):
     return credit_applicable(record,candidate.rescheduled_for or candidate.requested_rescheduled_for)
 
 
-def candidate_ready(candidate,credit_enabled=None):
+def candidate_ready(candidate,credit_enabled=None,choices=None):
     if credit_enabled is None:credit_enabled=candidate_credit_applicable(candidate)
     absent=json.loads(candidate.absent_modules or '[]')
-    return bool(candidate.institution_name.strip() and candidate.exam in EXAMS and absent and all(module in exam_modules(candidate.exam) for module in absent) and (not credit_enabled or (candidate.currency in CURRENCIES and candidate.credit_balance is not None)))
+    choices=choices if choices is not None else absence_choices(db.session.get(m.ExamSession,candidate.exam_session_id),candidate.institution_name)
+    return bool(candidate.exam in choices['exams'] and absent and all(module in exam_modules(candidate.exam) and module in choices['modules'] for module in absent) and (not credit_enabled or (candidate.currency in CURRENCIES and candidate.credit_balance is not None)))
 
 
 def reset_review(candidate):
     candidate.review_status='Pending';candidate.approved=False;candidate.decline_reason=''
 
 
-def candidate_whatsapp_message(candidate,credit_enabled=None):
+def candidate_whatsapp_message(candidate,credit_enabled=None,language='en',choices=None):
     if candidate.review_status not in {'Confirmed','Declined'}:return ''
     if credit_enabled is None and candidate.review_status=='Confirmed':credit_enabled=candidate_credit_applicable(candidate)
-    if candidate.review_status=='Confirmed' and not candidate_ready(candidate,credit_enabled):return ''
+    if candidate.review_status=='Confirmed' and not candidate_ready(candidate,credit_enabled,choices):return ''
+    if language=='es':
+        lines=[f'- *Estado:* {"Confirmado" if candidate.review_status=="Confirmed" else "Rechazado"}',f'- *Número de candidato:* {candidate.number}',f'- *Nombre del candidato:* {candidate.name}']
+        if candidate.review_status=='Confirmed':
+            lines.append(f'- *Fecha del examen reprogramado:* {requested_date_label(candidate,language="es")}')
+            if credit_enabled:
+                amount=f'{candidate.credit_balance:,.2f}'.translate(str.maketrans({',':'.','.':','}))
+                lines.append(f'- *Saldo a favor:* {candidate.currency} {amount}')
+            paragraphs=['Confirmamos que la documentación presentada para justificar la ausencia de este candidato ha sido *revisada y aprobada por Path Examinations*.',
+                'La ausencia se considera justificada y *el candidato ha sido reprogramado para la sesión de examen seleccionada*.']
+        else:
+            paragraphs=['Confirmamos que la documentación presentada para justificar la ausencia de este candidato ha sido revisada. Lamentablemente, *la solicitud no ha sido aprobada*, ya que la documentación no cumple con los requisitos establecidos.',
+                'Por lo tanto, la ausencia del candidato continuará registrada como Ausente.']
+        return '\n'.join(lines)+'\n\n'+'\n\n'.join(paragraphs)+'\n\n*Path International Examinations*'
     lines=[f'- *Status:* {candidate.review_status}',f'- *Candidate number:* {candidate.number}',f'- *Candidate name:* {candidate.name}']
     if candidate.review_status=='Confirmed':
         lines.append(f'- *Rescheduled exam date:* {requested_date_label(candidate)}')
@@ -98,7 +149,8 @@ def institutional_journey_link(record):
     return url_for('staff.shared_path_session_journey',token=share.token,audience='institution',_external=True) if share else ''
 
 
-def grouped_whatsapp_message(record,candidates):
+def grouped_whatsapp_message(record,candidates,language='en'):
+    if language not in {'en','es'}:raise ValueError('Select Spanish or English.')
     if not candidates:raise ValueError('Select at least one candidate.')
     statuses={candidate.review_status for candidate in candidates}
     institutions={institution_key(candidate.institution_name) for candidate in candidates}
@@ -108,23 +160,35 @@ def grouped_whatsapp_message(record,candidates):
     status=candidates[0].review_status
     last_id=credit_exempt_session_id(record)
     credits={candidate.id:str(candidate.rescheduled_for or candidate.requested_rescheduled_for)!=str(last_id) for candidate in candidates}
-    if status=='Confirmed' and any(not candidate_ready(candidate,credits[candidate.id]) for candidate in candidates):raise ValueError('Complete all required candidate and Credit balance fields before copying.')
+    cards=absence_cards(record)
+    if status=='Confirmed' and any(not candidate_ready(candidate,credits[candidate.id],absence_choices(record,candidate.institution_name,cards)) for candidate in candidates):raise ValueError('Complete all required candidate and Credit balance fields before copying.')
     title=f"- *Status:* {status}\n- *Institution:* {' '.join(candidates[0].institution_name.split())}"
+    if language=='es':title=f"- *Estado:* {'Confirmado' if status=='Confirmed' else 'Rechazado'}\n- *Institución:* {' '.join(candidates[0].institution_name.split())}"
     blocks=[]
     for index,candidate in enumerate(candidates,1):
         lines=[f'{index}. *Candidate number:* {candidate.number}',f'   *Candidate name:* {candidate.name}']
+        if language=='es':lines=[f'{index}. *Número de candidato:* {candidate.number}',f'   *Nombre del candidato:* {candidate.name}']
         if status=='Confirmed':
-            lines.append(f'   *Rescheduled exam date:* {requested_date_label(candidate)}')
-            if credits[candidate.id]:lines.append(f'   *Credit balance:* {candidate.currency} {candidate.credit_balance:,.2f}')
+            lines.append(f'   *{"Fecha del examen reprogramado" if language=="es" else "Rescheduled exam date"}:* {requested_date_label(candidate,language=language)}')
+            if credits[candidate.id]:
+                amount=f'{candidate.credit_balance:,.2f}'
+                if language=='es':amount=amount.translate(str.maketrans({',':'.','.':','}))
+                lines.append(f'   *{"Saldo a favor" if language=="es" else "Credit balance"}:* {candidate.currency} {amount}')
         blocks.append('\n'.join(lines))
     if status=='Confirmed':
         intro='We confirm that the supporting documentation submitted for the absences of the candidates listed below has been *reviewed and approved by Path Examinations*.'
         closing='Their absences are now considered justified, and *the candidates have been rescheduled for their selected exam sessions*.'
+        if language=='es':
+            intro='Confirmamos que la documentación presentada para justificar las ausencias de los candidatos que se detallan a continuación ha sido *revisada y aprobada por Path Examinations*.'
+            closing='Sus ausencias se consideran justificadas y *los candidatos han sido reprogramados para las sesiones de examen seleccionadas*.'
     else:
         journey=institutional_journey_link(record)
         if not journey:raise ValueError('Enable the institutional Exam session journey for this session before copying the declined message.')
         intro='We confirm that the supporting documentation submitted for the absences of the candidates listed below has been reviewed. Unfortunately, *the requests have not been approved*, as the documentation does not meet the established requirements.'
         closing="The candidates' absences will therefore remain recorded as Absent.\n\nThe reasons for the rejection can be viewed in the corresponding *_Exam session journey_*: "+journey
+        if language=='es':
+            intro='Confirmamos que la documentación presentada para justificar las ausencias de los candidatos que se detallan a continuación ha sido revisada. Lamentablemente, *las solicitudes no han sido aprobadas*, ya que la documentación no cumple con los requisitos establecidos.'
+            closing='Por lo tanto, las ausencias de los candidatos continuarán registradas como Ausente.\n\nLos motivos del rechazo pueden consultarse en el correspondiente *_Exam session journey_*: '+journey
     return '\n\n'.join([title,intro,'\n\n'.join(blocks),closing,'*Path International Examinations*'])
 
 
@@ -142,17 +206,17 @@ def grouped_message(session_id):
     candidates=m.AbsenceCandidate.query.filter(m.AbsenceCandidate.exam_session_id==record.id,m.AbsenceCandidate.id.in_(ids)).order_by(m.AbsenceCandidate.id).all()
     if len(candidates)!=len(ids):abort(404)
     if not workflow_state(record)['review_allowed']:return jsonify(ok=False,error='Review notifications are available only after all absence notifications are Sent and the institution submission window has closed.'),400
-    try:message=grouped_whatsapp_message(record,candidates)
+    try:message=grouped_whatsapp_message(record,candidates,language=request.form.get('language','en'))
     except ValueError as error:return jsonify(ok=False,error=str(error)),400
     return jsonify(ok=True,message=message)
 
 
-def requested_date_label(candidate):
+def requested_date_label(candidate,language='en'):
     value=candidate.rescheduled_for or candidate.requested_rescheduled_for
-    labels={'next_july_online':'July, next year | Online | Digital certificate only','next_novdec_online':'Nov/Dec, next year | Online','next_novdec_onsite':'Nov/Dec, next year | Onsite'}
+    labels=({'next_july_online':'Julio, próximo año | Online | Solo certificado digital','next_novdec_online':'Nov/Dic, próximo año | Online','next_novdec_onsite':'Nov/Dic, próximo año | Presencial'} if language=='es' else {'next_july_online':'July, next year | Online | Digital certificate only','next_novdec_online':'Nov/Dec, next year | Online','next_novdec_onsite':'Nov/Dec, next year | Onsite'})
     if value in labels:return labels[value]
     record=db.session.get(m.ExamSession,int(value)) if value and value.isdigit() else None
-    return f'{record.exam_session_name} · {record.session_date:%d/%m/%Y}' if record and record.session_date else 'Session no longer available' if value else 'Not selected'
+    return f'{record.exam_session_name} · {record.session_date:%d/%m/%Y}' if record and record.session_date else ('La sesión ya no está disponible' if language=='es' else 'Session no longer available') if value else ('Sin seleccionar' if language=='es' else 'Not selected')
 
 
 def contacts(record):
@@ -285,12 +349,13 @@ def state(record):
     last_id=credit_exempt_session_id(record)
     candidate_rows=[]
     for candidate in candidates:
+        choices=absence_choices(record,candidate.institution_name,cards)
         absent=json.loads(candidate.absent_modules or '[]')
         credit_enabled=str(candidate.rescheduled_for or candidate.requested_rescheduled_for)!=str(last_id)
         candidate_rows.append(dict(id=candidate.id,number=candidate.number,name=candidate.name,exam=candidate.exam,institution_id=str(candidate.institution_id),
-            modules=absent,approved=candidate.review_status=='Confirmed',review_status=candidate.review_status,decline_reason=candidate.decline_reason,institution_name=candidate.institution_name,institution_key=institution_key(candidate.institution_name),allowed_modules=exam_modules(candidate.exam),rescheduled_label=requested_date_label(candidate),notes=candidate.notes,rescheduled_for=candidate.rescheduled_for or default,
-            whatsapp_message=candidate_whatsapp_message(candidate,credit_enabled),currency=candidate.currency if credit_enabled else '',credit_balance=str(candidate.credit_balance) if credit_enabled and candidate.credit_balance is not None else '',credit_applicable=credit_enabled,
-            document=document_data(candidate.document,record),actionable=bool(candidate.review_status=='Confirmed' and candidate_ready(candidate,credit_enabled))))
+            modules=absent,approved=candidate.review_status=='Confirmed',review_status=candidate.review_status,decline_reason=candidate.decline_reason,institution_name=candidate.institution_name,institution_key=institution_key(candidate.institution_name),allowed_modules=[module for module in exam_modules(candidate.exam) if module in choices['modules']],allowed_exams=choices['exams'],selection_hint=choices['reason'],rescheduled_label=requested_date_label(candidate),notes=candidate.notes,rescheduled_for=candidate.rescheduled_for or default,
+            whatsapp_message=candidate_whatsapp_message(candidate,credit_enabled,choices=choices),whatsapp_message_es=candidate_whatsapp_message(candidate,credit_enabled,language='es',choices=choices),currency=candidate.currency if credit_enabled else '',credit_balance=str(candidate.credit_balance) if credit_enabled and candidate.credit_balance is not None else '',credit_applicable=credit_enabled,
+            document=document_data(candidate.document,record),actionable=bool(candidate.review_status=='Confirmed' and candidate_ready(candidate,credit_enabled,choices))))
     window=journey_absence_upload_window(record)
     flow=workflow_state(record,cards,candidates,window)
     concat_ids=monthly_unified_total_session_ids(record)-{record.id}
@@ -437,6 +502,8 @@ def mutate(record,trashed):
             if not item:item=m.AttendanceModule(institution_id=institution.id,module=module);db.session.add(item)
             item.document=document
             retire(old,trashed)
+        db.session.flush()
+        reconcile_absence_candidates(record)
         touch(record,institution,True);return
     if action=='no_documentation_received':
         selected=request.form.get('value')=='1'
@@ -460,25 +527,45 @@ def mutate(record,trashed):
         candidate=db.session.get(m.AbsenceCandidate,request.form.get('candidate_id',type=int))
         if not candidate or candidate.exam_session_id!=record.id:abort(404)
         field=request.form.get('field');value=request.form.get('value','')
+        reviewed=candidate.review_status in {'Confirmed','Declined'}
+        if field=='reopen':
+            if not reviewed:raise ValueError('This candidate is already Pending. Refresh the review.')
+            if not flow['review_allowed']:raise ValueError('Wait until the documentation review is available.')
+            if request.form.get('confirmed')!='1':raise ValueError('Please confirm reopening this review.')
+            if request.form.get('previous_file_id')!=candidate.document_id or request.form.get('previous_status')!=candidate.review_status:
+                raise ValueError('This review changed. Refresh and try again.')
+            reset_review(candidate)
+            value=touch(record);value.review_results_notified=False
+            return
+        if reviewed and field!='notes':
+            raise ValueError('This review is read-only. Use Review to return it to Pending before editing.')
+        choices=absence_choices(record,candidate.institution_name)
         if field=='exam':
-            if value not in EXAMS+['']:raise ValueError('Select a valid exam level.')
+            if value not in choices['exams']+['']:raise ValueError('Select a valid exam level.')
             if candidate.exam!=value:
                 candidate.exam=value
-                candidate.absent_modules=json.dumps([module for module in json.loads(candidate.absent_modules or '[]') if module in exam_modules(value)])
+                candidate.absent_modules=json.dumps([module for module in json.loads(candidate.absent_modules or '[]') if module in exam_modules(value) and module in choices['modules']])
                 reset_review(candidate)
         elif field=='modules':
             selected=request.form.getlist('modules')
             if not candidate.exam:raise ValueError('Select Exam before choosing absent modules.')
-            if any(module not in exam_modules(candidate.exam) for module in selected):raise ValueError('Select the modules allowed for this exam.')
+            if any(module not in exam_modules(candidate.exam) or module not in choices['modules'] for module in selected):raise ValueError('Select the modules allowed for this exam.')
             value_json=json.dumps(list(dict.fromkeys(selected)))
             if value_json!=candidate.absent_modules:reset_review(candidate)
             candidate.absent_modules=value_json
-        elif field=='institution_id':candidate.institution_id=institution_for(record,value).id
+        elif field=='institution_id':
+            institution=institution_for(record,value)
+            candidate.institution_id=institution.id
+            candidate.institution_name=record.exam_session_name if institution.is_main else institution.name
+            reset_review(candidate)
+            db.session.flush();reconcile_absence_candidates(record)
         elif field=='institution_name':
             value=value.strip()
             if len(value)>250:raise ValueError('Institution name must not exceed 250 characters.')
             if value!=candidate.institution_name:reset_review(candidate)
             candidate.institution_name=value
+            db.session.flush()
+            reconcile_absence_candidates(record)
         elif field=='review':
             if not flow['review_allowed']:raise ValueError('Reviews can only be confirmed or declined after the institutional submission window closes.')
             if request.form.get('previous_file_id')!=candidate.document_id:raise ValueError('This document was replaced. Review the current file before continuing.')

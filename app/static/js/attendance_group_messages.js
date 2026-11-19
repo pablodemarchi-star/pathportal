@@ -1,6 +1,6 @@
 /* Read-only message previews; candidate decisions remain in Attendance. */
 window.createAttendanceGroupMessages=({dialog,getState,getEndpoint,csrf,copyText,hasPending,report})=>{
- const institution=dialog.querySelector('[data-group-institution]'),status=dialog.querySelector('[data-group-status]');
+ const institution=dialog.querySelector('[data-group-institution]'),status=dialog.querySelector('[data-group-status]'),language=dialog.querySelector('[data-group-language]');
  const list=dialog.querySelector('[data-group-candidates]'),all=dialog.querySelector('[data-group-all]'),count=dialog.querySelector('[data-group-count]');
  const preview=dialog.querySelector('[data-group-preview]'),feedback=dialog.querySelector('[data-group-feedback]'),copy=dialog.querySelector('[data-group-copy]');
  let candidates=[],generation=0,timer,copying=false;
@@ -8,7 +8,7 @@ window.createAttendanceGroupMessages=({dialog,getState,getEndpoint,csrf,copyText
  const selected=()=>Array.from(list.querySelectorAll('input:checked')).map(input=>input.value);
  const inform=(message,error=false)=>{feedback.textContent=message;feedback.classList.toggle('is-error',error);};
  const invalidate=()=>{generation++;clearTimeout(timer);copy.disabled=true;preview.value='';};
- async function requestMessage(ids){const data=new FormData();data.set('csrf_token',csrf);ids.forEach(id=>data.append('candidate_ids',id));
+ async function requestMessage(ids){const data=new FormData();data.set('csrf_token',csrf);data.set('language',language.value);ids.forEach(id=>data.append('candidate_ids',id));
   const response=await fetch(getEndpoint(),{method:'POST',body:data,cache:'no-store',headers:{Accept:'application/json'}});
   if(response.redirected||!response.headers.get('Content-Type')?.includes('application/json'))throw new Error('Please sign in again before copying.');
   const result=await response.json();if(!response.ok||!result.ok)throw new Error(result.error||'The message could not be prepared.');return result.message;
@@ -19,6 +19,7 @@ window.createAttendanceGroupMessages=({dialog,getState,getEndpoint,csrf,copyText
  }
  function selectionChanged(){invalidate();const total=eligible().length,n=selected().length;all.checked=Boolean(total&&n===total);all.indeterminate=n>0&&n<total;count.textContent=`${n}/${total} candidates selected`;timer=setTimeout(refreshPreview,180);}
  function renderCandidates(){invalidate();list.replaceChildren();const rows=eligible();rows.forEach(candidate=>{const label=document.createElement('label');label.className='pa-check';const input=document.createElement('input');input.type='checkbox';input.value=String(candidate.id);input.checked=true;input.setAttribute('aria-label','Include '+candidate.number+' - '+candidate.name);const text=document.createElement('span');text.textContent=candidate.number+' - '+candidate.name;label.append(input,text);list.append(label);});all.disabled=!rows.length;selectionChanged();}
+ language.addEventListener('change',()=>{invalidate();timer=setTimeout(refreshPreview,180);});
  institution.addEventListener('change',renderCandidates);status.addEventListener('change',renderCandidates);list.addEventListener('change',selectionChanged);
  all.addEventListener('change',()=>{list.querySelectorAll('input').forEach(input=>input.checked=all.checked);selectionChanged();});
  dialog.querySelectorAll('[data-group-close]').forEach(button=>button.addEventListener('click',()=>{if(!copying){invalidate();dialog.close();}}));
