@@ -3,7 +3,7 @@ import io
 import json
 import os
 import unittest
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta, timezone
 from unittest.mock import patch
 from werkzeug.datastructures import MultiDict
 os.environ['DATABASE_URL']='sqlite:///:memory:'
@@ -19,6 +19,9 @@ class PostAttendanceTest(unittest.TestCase):
         self.context=self.app.app_context();self.context.push();db.drop_all();db.create_all()
         self.today=date(2026,11,18)
         self.clock=patch('app.post_attendance.local_today',return_value=self.today);self.clock.start()
+        from app.routes import journey_absence_upload_window
+        self.window_clock=patch('app.routes.journey_absence_upload_window',side_effect=lambda record,now=None:journey_absence_upload_window(record,now=now or datetime(2026,11,18,12,tzinfo=timezone.utc)))
+        self.window_clock.start()
         self.record=self.new_session('Main session',date(2026,11,17))
         self.record.absence_documentation_folder_url='https://drive.google.com/drive/folders/absence-folder-123456'
         self.record.contact_points=json.dumps([{'full_name':'Contact A','phone':'123','email':'a@example.com'}])
@@ -35,7 +38,7 @@ class PostAttendanceTest(unittest.TestCase):
         self.trash_patch=patch('app.attendance_drive.trash');self.trash=self.trash_patch.start()
 
     def tearDown(self):
-        self.upload_patch.stop();self.trash_patch.stop();self.clock.stop()
+        self.upload_patch.stop();self.trash_patch.stop();self.window_clock.stop();self.clock.stop()
         db.session.remove();db.drop_all();self.context.pop()
 
     def new_session(self,name,day,format='Onsite'):
@@ -540,7 +543,7 @@ class PostAttendanceTest(unittest.TestCase):
             '*Path International Examinations*'])
         self.assertEqual(message,expected)
         spanish=response.json['state']['candidates'][0]['whatsapp_message_es']
-        self.assertIn('- *Estado:* Confirmado',spanish)
+        self.assertIn('ha sido *revisada y aprobada por Path Examinations*',spanish)
         self.assertIn('- *Saldo a favor:* USD 1.234,50',spanish)
         self.assertIn('Nov/Dic, próximo año | Presencial',spanish)
         self.assertIn('*revisada y aprobada por Path Examinations*',spanish)
@@ -584,20 +587,50 @@ class PostAttendanceTest(unittest.TestCase):
         result=self.grouped_copy([first['id'],second['id']])
         self.assertEqual(result.status_code,200,result.json)
         message=result.json['message']
-        self.assertIn('- *Institution:* Same School',message)
-        self.assertIn('1. *Candidate number:* G1',message);self.assertIn('2. *Candidate number:* G2',message)
-        self.assertIn('Nov/Dec, next year | Onsite',message);self.assertIn('Last onsite · 23/12/2026',message)
+        self.assertIn('from the *Main session* examination session, held on *17 November 2026*',message)
+        self.assertIn('*1. Candidate number:* G1',message);self.assertIn('*2. Candidate number:* G2',message)
+        self.assertIn('Nov/Dec, next year | Onsite',message);self.assertIn('*Rescheduled exam session:* Last onsite',message);self.assertIn('*Rescheduled exam date:* 23 December 2026',message)
         self.assertEqual(message.count('*Credit balance:*'),1);self.assertIn('USD 125.50',message)
+        self.assertIn('*Rescheduled exam date:* Date to be confirmed',message)
+        self.assertIn('*Exam time:* To be confirmed next year',message)
+        self.assertIn('both candidates have been successfully rescheduled for the examination sessions indicated for each candidate above',message)
         spanish=self.grouped_copy([first['id'],second['id']],language='es').json['message']
-        self.assertIn('- *Estado:* Confirmado',spanish)
-        self.assertIn('*Número de candidato:* G1',spanish)
+        self.assertIn('ha sido *revisada y aprobada por Path Examinations*',spanish)
+        self.assertIn('*1. Número de candidato:* G1',spanish)
         self.assertIn('Nov/Dic, próximo año | Presencial',spanish)
         self.assertEqual(spanish.count('*Saldo a favor:*'),1)
         self.assertIn('USD 125,50',spanish)
+        self.assertIn('*Fecha del examen reprogramado:* Fecha a confirmar',spanish)
+        self.assertIn('*Horario del examen:* A confirmar el próximo año',spanish)
         self.assertEqual(self.grouped_copy([first['id']],language='invalid').status_code,400)
         selected=self.grouped_copy([second['id']]).json['message']
         self.assertNotIn('G1',selected);self.assertNotIn('Credit balance',selected)
+        self.assertIn('the candidate has been successfully rescheduled for the examination session indicated above',selected)
         self.assertEqual(m.AbsenceCandidate.query.count(),2)
+
+    def test_approved_group_message_four_business_day_deadline_and_dynamic_count(self):
+        target=self.new_session('Rescheduled Exams and Late Entries 2026',date(2026,12,26),'Online')
+        db.session.commit()
+        ids=[]
+        for number in ['112318','112376','112916','112334']:
+            response=self.internal_document(candidate_number=number,rescheduled_for=str(target.id),currency='',credit_balance='')
+            self.assertEqual(response.status_code,200,response.json)
+            ids.append(next(row['id'] for row in response.json['state']['candidates'] if row['number']==number))
+        message=self.grouped_copy(ids).json['message']
+        self.assertTrue(message.startswith("Hello!\n\nWe hope you're well. 😊"))
+        self.assertEqual(message.count('*Rescheduled exam session:* Rescheduled Exams and Late Entries 2026'),4)
+        self.assertEqual(message.count('*Rescheduled exam date:* 26 December 2026'),4)
+        self.assertEqual(message.count('*Exam time:* To be confirmed by 21 December 2026'),4)
+        self.assertIn('all four candidates have been successfully rescheduled for the examination session indicated above',message)
+        self.assertNotIn('Credit balance',message)
+        self.assertTrue(message.endswith('Thanks,\nBrenda\n*Path International Examinations*'))
+        spanish=self.grouped_copy(ids,language='es').json['message']
+        self.assertEqual(spanish.count('*Horario del examen:* A confirmar a más tardar el 21 de diciembre de 2026'),4)
+        self.assertEqual(spanish.count('*Fecha del examen reprogramado:* 26 de diciembre de 2026'),4)
+        self.assertIn('los cuatro candidatos han sido reprogramados correctamente para la sesión de examen indicada anteriormente',spanish)
+        subset=self.grouped_copy(ids[:2]).json['message']
+        self.assertIn('both candidates',subset)
+        self.assertNotIn('112916',subset)
 
     def test_grouped_declined_message_has_active_journey_link_and_whatsapp_format(self):
         ids=[]
@@ -608,9 +641,14 @@ class PostAttendanceTest(unittest.TestCase):
         message=response.json['message']
         paragraph='The reasons for the rejection can be viewed in the corresponding *_Exam session journey_*: http://localhost/path-session-journey/absence-test/institution'
         self.assertIn(paragraph,message);self.assertLess(message.index(paragraph),message.index('*Path International Examinations*'))
+        self.assertTrue(message.startswith("Hello!\n\nWe hope you're well. 😊\n\n"))
+        self.assertIn('If you have any questions, please let us know!',message)
+        self.assertTrue(message.endswith('Thanks,\nBrenda\n*Path International Examinations*'))
         self.assertNotIn('Private reason',message);self.assertNotIn('Credit balance',message);self.assertNotIn('Rescheduled exam date',message)
         spanish=self.grouped_copy(ids,language='es').json['message']
-        self.assertIn('- *Estado:* Rechazado',spanish)
+        self.assertTrue(spanish.startswith('¡Hola!\n\nEsperamos que se encuentren bien. 😊\n\n'))
+        self.assertIn('Si tienen alguna consulta, no duden en contactarnos.',spanish)
+        self.assertTrue(spanish.endswith('Gracias,\nBrenda\n*Path International Examinations*'))
         self.assertIn('*las solicitudes no han sido aprobadas*',spanish)
         self.assertIn('Los motivos del rechazo',spanish)
         self.assertIn('*_Exam session journey_*: http://localhost/path-session-journey/absence-test/institution',spanish)

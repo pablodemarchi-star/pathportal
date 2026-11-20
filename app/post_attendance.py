@@ -149,6 +149,49 @@ def institutional_journey_link(record):
     return url_for('staff.shared_path_session_journey',token=share.token,audience='institution',_external=True) if share else ''
 
 
+def approved_group_message(record,candidates,credits,last_id,language):
+    from app.attendance_notifications import MONTHS_EN,MONTHS_ES
+    from app.routes import argentina_subtract_business_days
+    spanish=language=='es'
+    def date_label(value):
+        return f'{value.day} de {MONTHS_ES[value.month-1]} de {value.year}' if spanish else f'{value.day} {MONTHS_EN[value.month-1]} {value.year}'
+    selected={candidate.id:candidate.rescheduled_for or candidate.requested_rescheduled_for for candidate in candidates}
+    ids={int(value) for value in selected.values() if value and value.isdigit()}
+    sessions={item.id:item for item in m.ExamSession.query.filter(m.ExamSession.id.in_(ids)).all()} if ids else {}
+    blocks=[]
+    for index,candidate in enumerate(candidates,1):
+        value=selected[candidate.id]
+        target=sessions.get(int(value)) if value and value.isdigit() else None
+        name=target.exam_session_name if target else requested_date_label(candidate,language=language)
+        date=date_label(target.session_date) if target and target.session_date else 'Fecha a confirmar' if spanish else 'Date to be confirmed'
+        exam_time='A confirmar el próximo año' if spanish else 'To be confirmed next year'
+        if target and target.session_date and target.id==last_id:
+            due=date_label(argentina_subtract_business_days(target.session_date,4))
+            exam_time=f'A confirmar a más tardar el {due}' if spanish else f'To be confirmed by {due}'
+        labels=['Número de candidato','Nombre del candidato','Sesión de examen reprogramada','Fecha del examen reprogramado','Horario del examen'] if spanish else ['Candidate number','Candidate name','Rescheduled exam session','Rescheduled exam date','Exam time']
+        lines=[f'*{index}. {labels[0]}:* {candidate.number}',f'*{labels[1]}:* {candidate.name}',
+            f'*{labels[2]}:* {name}',f'*{labels[3]}:* {date}',f'*{labels[4]}:* {exam_time}']
+        if credits[candidate.id]:
+            amount=f'{candidate.credit_balance:,.2f}'
+            if spanish:amount=amount.translate(str.maketrans({',':'.','.':','}))
+            lines.append(f'*{"Saldo a favor" if spanish else "Credit balance"}:* {candidate.currency} {amount}')
+        blocks.append('\n'.join(lines))
+    count=len(candidates)
+    same=len(set(selected.values()))==1
+    if spanish:
+        intro=f'Confirmamos que la documentación presentada para justificar {"la ausencia del siguiente candidato" if count==1 else "las ausencias de los siguientes candidatos"} de la sesión de examen *{record.exam_session_name}*, realizada el *{date_label(record.session_date)}*, ha sido *revisada y aprobada por Path Examinations*.'
+        quantity={2:'dos',3:'tres',4:'cuatro',5:'cinco',6:'seis',7:'siete',8:'ocho',9:'nueve',10:'diez'}.get(count,str(count))
+        target='la sesión de examen indicada anteriormente' if same else 'las sesiones de examen indicadas para cada candidato'
+        closing=f'La ausencia se considera justificada y *el candidato ha sido reprogramado correctamente para {target}*.' if count==1 else f'Las ausencias se consideran justificadas y *los {quantity} candidatos han sido reprogramados correctamente para {target}*.'
+        return '\n\n'.join(['¡Hola!','Esperamos que se encuentren bien. 😊',intro,'\n\n'.join(blocks),closing,'Si tienen alguna consulta, no duden en contactarnos.','Gracias,\nBrenda\n*Path International Examinations*'])
+    intro=f'We confirm that the supporting documentation submitted for the {"absence of the following candidate" if count==1 else "absences of the following candidates"} from the *{record.exam_session_name}* examination session, held on *{date_label(record.session_date)}*, has been *reviewed and approved by Path Examinations*.'
+    quantity={2:'two',3:'three',4:'four',5:'five',6:'six',7:'seven',8:'eight',9:'nine',10:'ten'}.get(count,str(count))
+    target='the examination session indicated above' if same else 'the examination sessions indicated for each candidate above'
+    subject='both candidates' if count==2 else f'all {quantity} candidates'
+    closing=f'This candidate’s absence is now considered justified, and *the candidate has been successfully rescheduled for {target}*.' if count==1 else f'Their absences are now considered justified, and *{subject} have been successfully rescheduled for {target}*.'
+    return '\n\n'.join(['Hello!',"We hope you're well. 😊",intro,'\n\n'.join(blocks),closing,'If you have any questions, please let us know!','Thanks,\nBrenda\n*Path International Examinations*'])
+
+
 def grouped_whatsapp_message(record,candidates,language='en'):
     if language not in {'en','es'}:raise ValueError('Select Spanish or English.')
     if not candidates:raise ValueError('Select at least one candidate.')
@@ -162,34 +205,24 @@ def grouped_whatsapp_message(record,candidates,language='en'):
     credits={candidate.id:str(candidate.rescheduled_for or candidate.requested_rescheduled_for)!=str(last_id) for candidate in candidates}
     cards=absence_cards(record)
     if status=='Confirmed' and any(not candidate_ready(candidate,credits[candidate.id],absence_choices(record,candidate.institution_name,cards)) for candidate in candidates):raise ValueError('Complete all required candidate and Credit balance fields before copying.')
-    title=f"- *Status:* {status}\n- *Institution:* {' '.join(candidates[0].institution_name.split())}"
-    if language=='es':title=f"- *Estado:* {'Confirmado' if status=='Confirmed' else 'Rechazado'}\n- *Institución:* {' '.join(candidates[0].institution_name.split())}"
+    if status=='Confirmed':return approved_group_message(record,candidates,credits,last_id,language)
     blocks=[]
     for index,candidate in enumerate(candidates,1):
         lines=[f'{index}. *Candidate number:* {candidate.number}',f'   *Candidate name:* {candidate.name}']
         if language=='es':lines=[f'{index}. *Número de candidato:* {candidate.number}',f'   *Nombre del candidato:* {candidate.name}']
-        if status=='Confirmed':
-            lines.append(f'   *{"Fecha del examen reprogramado" if language=="es" else "Rescheduled exam date"}:* {requested_date_label(candidate,language=language)}')
-            if credits[candidate.id]:
-                amount=f'{candidate.credit_balance:,.2f}'
-                if language=='es':amount=amount.translate(str.maketrans({',':'.','.':','}))
-                lines.append(f'   *{"Saldo a favor" if language=="es" else "Credit balance"}:* {candidate.currency} {amount}')
         blocks.append('\n'.join(lines))
-    if status=='Confirmed':
-        intro='We confirm that the supporting documentation submitted for the absences of the candidates listed below has been *reviewed and approved by Path Examinations*.'
-        closing='Their absences are now considered justified, and *the candidates have been rescheduled for their selected exam sessions*.'
-        if language=='es':
-            intro='Confirmamos que la documentación presentada para justificar las ausencias de los candidatos que se detallan a continuación ha sido *revisada y aprobada por Path Examinations*.'
-            closing='Sus ausencias se consideran justificadas y *los candidatos han sido reprogramados para las sesiones de examen seleccionadas*.'
-    else:
-        journey=institutional_journey_link(record)
-        if not journey:raise ValueError('Enable the institutional Exam session journey for this session before copying the declined message.')
-        intro='We confirm that the supporting documentation submitted for the absences of the candidates listed below has been reviewed. Unfortunately, *the requests have not been approved*, as the documentation does not meet the established requirements.'
-        closing="The candidates' absences will therefore remain recorded as Absent.\n\nThe reasons for the rejection can be viewed in the corresponding *_Exam session journey_*: "+journey
-        if language=='es':
-            intro='Confirmamos que la documentación presentada para justificar las ausencias de los candidatos que se detallan a continuación ha sido revisada. Lamentablemente, *las solicitudes no han sido aprobadas*, ya que la documentación no cumple con los requisitos establecidos.'
-            closing='Por lo tanto, las ausencias de los candidatos continuarán registradas como Ausente.\n\nLos motivos del rechazo pueden consultarse en el correspondiente *_Exam session journey_*: '+journey
-    return '\n\n'.join([title,intro,'\n\n'.join(blocks),closing,'*Path International Examinations*'])
+    journey=institutional_journey_link(record)
+    if not journey:raise ValueError('Enable the institutional Exam session journey for this session before copying the declined message.')
+    intro='We confirm that the supporting documentation submitted for the absences of the candidates listed below has been reviewed. Unfortunately, *the requests have not been approved*, as the documentation does not meet the established requirements.'
+    closing="The candidates' absences will therefore remain recorded as Absent.\n\nThe reasons for the rejection can be viewed in the corresponding *_Exam session journey_*: "+journey
+    if language=='es':
+        intro='Confirmamos que la documentación presentada para justificar las ausencias de los candidatos que se detallan a continuación ha sido revisada. Lamentablemente, *las solicitudes no han sido aprobadas*, ya que la documentación no cumple con los requisitos establecidos.'
+        closing='Por lo tanto, las ausencias de los candidatos continuarán registradas como Ausente.\n\nLos motivos del rechazo pueden consultarse en el correspondiente *_Exam session journey_*: '+journey
+    greeting=['¡Hola!','Esperamos que se encuentren bien. 😊'] if language=='es' else ['Hello!',"We hope you're well. 😊"]
+    invitation='Si tienen alguna consulta, no duden en contactarnos.' if language=='es' else 'If you have any questions, please let us know!'
+    signature='Gracias,\nBrenda\n*Path International Examinations*' if language=='es' else 'Thanks,\nBrenda\n*Path International Examinations*'
+    return '\n\n'.join(greeting+[intro,'\n\n'.join(blocks),closing,invitation,signature])
+
 
 
 @attendance_bp.post('/pre-session-control-tower/post/sessions/<int:session_id>/absence-message')
