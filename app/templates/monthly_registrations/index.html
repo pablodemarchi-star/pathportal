@@ -29,6 +29,12 @@
   <form method="get" class="filters monthly-registration-filters" data-auto-filter>
     <input type="hidden" name="session_year" value="{{ selected_session_year }}">
     <input type="search" name="q" value="{{ filters.q }}" placeholder="Exam session name" aria-label="Search by exam session name">
+    <select name="format" aria-label="Filter by format">
+      <option value="">Format</option>
+      {% for format_option in format_options %}
+        <option value="{{ format_option }}"{% if filters.format == format_option %} selected{% endif %}>{{ format_option }}</option>
+      {% endfor %}
+    </select>
     <select name="status" aria-label="Filter by status">
       <option value="">Status</option>
       <option value="pending" {% if filters.status == 'pending' %}selected{% endif %}>Pending</option>
@@ -90,7 +96,7 @@
               <span>{{ year_item.year }}</span>
               <form method="post" action="{{ url_for('staff.unarchive_exam_session_year', year=year_item.year) }}" data-confirm-submit="Restore {{ year_item.year }} to active years?">
                 <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-                <input type="hidden" name="return_to" value="{{ url_for('staff.monthly_exam_session_registrations', session_year=year_item.year) }}">
+                <input type="hidden" name="return_to" value="{{ url_for('staff.monthly_exam_session_registrations', session_year=year_item.year, format=filters.format) }}">
                 <button class="secondary-button compact-action" type="submit">Unarchive</button>
               </form>
               <form method="post" action="{{ url_for('staff.delete_exam_session_year', year=year_item.year) }}" data-confirm-submit="Permanently delete {{ year_item.year }} and all its exam session records? This cannot be undone.">

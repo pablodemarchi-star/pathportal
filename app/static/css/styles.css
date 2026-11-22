@@ -2213,15 +2213,62 @@ textarea {
 }
 
 .monthly-registration-filters-toolbar {
-  display: grid;
-  grid-template-columns: minmax(210px, 1.2fr) minmax(140px, 0.8fr) minmax(140px, 0.8fr) minmax(190px, 1fr) auto auto minmax(220px, 1fr);
-  gap: 10px;
-  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px 16px;
+  align-items: flex-start;
   overflow: visible;
 }
 
 .monthly-registration-filters {
-  display: contents;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  flex: 1 1 900px;
+  min-width: 0;
+  gap: 10px;
+}
+
+.monthly-registration-filters input[name="q"] {
+  flex: 1.4 1 210px;
+  width: auto;
+  min-width: 0;
+}
+
+.monthly-registration-filters select {
+  flex: 1 1 120px;
+  width: auto;
+  min-width: 0;
+}
+
+.monthly-registration-filters select[name="format"] {
+  flex-basis: 185px;
+}
+
+.monthly-registration-filters .exam-filter-dropdown {
+  flex: 1 1 120px;
+}
+
+.monthly-registration-filters .exam-filter-dropdown:has(input[name="candidate_variation"]) {
+  flex-basis: 180px;
+}
+
+.monthly-registration-filters input[name="q"],
+.monthly-registration-filters select,
+.monthly-registration-filters .exam-filter-dropdown summary,
+.monthly-registration-filters .monthly-marker-filter {
+  box-sizing: border-box;
+  height: 40px;
+}
+
+.monthly-registration-filters .monthly-marker-filter {
+  flex: 0 0 auto;
+}
+
+.monthly-registration-filters-toolbar .monthly-registration-filter-actions {
+  flex: 0 0 auto;
+  min-height: 40px;
+  margin-left: auto;
 }
 
 .monthly-registration-filters input[name="q"],

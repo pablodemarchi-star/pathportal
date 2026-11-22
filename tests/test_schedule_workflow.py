@@ -4488,6 +4488,35 @@ class ScheduleWorkflowTest(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertIn('class="badge exam-status-closed" data-monthly-session-status>Closed</span>', html)
 
+    def test_monthly_registration_format_filter(self):
+        records = {}
+        for index, format_name in enumerate(('Online', 'Online at exam centre', 'Onsite')):
+            record = ExamSession(exam_session_name=f'Format sample {index}', category='Path School', status='Pending',
+                session_date=date(2026, 7, 25), shifts='Morning', modules='Speaking', format=format_name,
+                monthly_registrations_closed=format_name == 'Online')
+            db.session.add(record)
+            records[format_name] = record
+        db.session.commit()
+        client = self.login_client()
+        def fetch(**filters):
+            response = client.get('/monthly-exam-session-registrations', query_string=dict(session_year=2026, **filters))
+            self.assertEqual(response.status_code, 200)
+            html = response.get_data(as_text=True)
+            ids = {int(value) for value in re.findall(r'data-monthly-session-row data-session-id="(\d+)"', html)}
+            return html, ids
+        html, ids = fetch()
+        self.assertEqual(len(ids), 4)
+        self.assertIn('aria-label="Filter by format"', html)
+        for format_name, record in records.items():
+            html, ids = fetch(format=format_name)
+            expected = {record.id} | ({self.session_record.id} if format_name == 'Onsite' else set())
+            self.assertEqual(ids, expected)
+            self.assertIn(f'value="{format_name}" selected', html)
+        self.assertEqual(fetch(format='Online', status='pending')[1], set())
+        self.assertEqual(fetch(format='Online', status='closed')[1], {records['Online'].id})
+        self.assertEqual(fetch(format='Onsite', q='Format sample')[1], {records['Onsite'].id})
+        self.assertEqual(len(fetch(format='invalid')[1]), 4)
+
     def test_monthly_registration_filters_render_and_filter_sessions(self):
         self.session_record.exam_session_name = "Alpha monthly session"
         self.session_record.rsg_enabled = True

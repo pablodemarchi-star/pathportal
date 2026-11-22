@@ -24529,6 +24529,9 @@ def monthly_exam_session_registrations():
     selected_year, session_years = selected_exam_session_year()
     query_text = request.args.get("q", "").strip()
     status_filter = request.args.get("status", "").strip()
+    format_filter = request.args.get("format", "").strip()
+    if format_filter not in EXAM_SESSION_FORMAT_OPTIONS:
+        format_filter = ""
     selected_month_values = request.args.getlist("months")
     all_months_selected = "all" in selected_month_values
     selected_months = [
@@ -24549,6 +24552,8 @@ def monthly_exam_session_registrations():
     if status_filter not in {"pending", "closed"}:
         status_filter = ""
     query = ExamSession.query.filter(db.extract("year", ExamSession.session_date) == selected_year)
+    if format_filter:
+        query = query.filter(ExamSession.format == format_filter)
     if query_text:
         query = query.filter(ExamSession.exam_session_name.ilike(f"%{query_text}%"))
     if status_filter == "pending":
@@ -24663,6 +24668,7 @@ def monthly_exam_session_registrations():
         sessions=sessions,
         pagination=pagination,
         months=MONTHLY_REGISTRATION_MONTHS,
+        format_options=["Online", "Online at exam centre", "Onsite"],
         registrations=registrations,
         candidate_totals=candidate_totals,
         candidate_total_trends=monthly_candidate_total_trends(candidate_totals),
@@ -24679,6 +24685,7 @@ def monthly_exam_session_registrations():
         selected_session_year=selected_year,
         filters={
             "q": query_text,
+            "format": format_filter,
             "status": status_filter,
             "months": selected_months,
             "all_months": all_months_selected,
