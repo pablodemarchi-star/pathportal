@@ -2148,7 +2148,7 @@ This stage has already been marked as complete. Reopening it may affect package 
             <strong>{{ final_checks_metadata.responsible }}</strong>
           </div>
           <div>
-            <span>{{ 'Sinapsis checks deadline' if view.final_checks_gate.checks_enabled else 'Return configuration deadline' }}</span>
+            <span>{{ 'Sinapsis checks deadline' if view.final_checks_gate.checks_enabled or session.format in ['Online', 'Online at exam centre'] else 'Return configuration deadline' }}</span>
             <strong>{{ final_checks_metadata.deadline }}</strong>
           </div>
         </section>
@@ -2164,6 +2164,7 @@ This stage has already been marked as complete. Reopening it may affect package 
           </div>
         {% endif %}
 
+        {% if session.format not in ['Online', 'Online at exam centre'] %}
         <section class="sinapsis-checklist return-materials-section{% if not view.final_checks_gate.return_enabled %} final-checks-disabled{% endif %}"{% if not view.final_checks_gate.return_enabled %} inert{% endif %} aria-labelledby="return-materials-title-{{ session.id }}">
           <h4 id="return-materials-title-{{ session.id }}">Return of exam materials</h4>
           {% for row in view.staffing_rows if row.receives_shipment and row.has_staff_member %}
@@ -2265,6 +2266,8 @@ This stage has already been marked as complete. Reopening it may affect package 
           {% endif %}
           </fieldset>
         </section>
+
+        {% endif %}
 
         <section class="sinapsis-checklist{% if not view.final_checks_gate.checks_enabled %} final-checks-disabled{% endif %}" aria-label="Sinapsis checks"{% if not view.final_checks_gate.checks_enabled %} inert{% endif %}>
           <fieldset class="final-checks-fields"{% if not view.final_checks_gate.checks_enabled %} disabled{% endif %}>

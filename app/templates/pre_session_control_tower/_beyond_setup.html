@@ -1,0 +1,69 @@
+{% set setup_title = setup_title|default('Reading and Writing records') %}
+{% set setup_kind = setup_kind|default('beyond') %}
+{% set setup_digit = '2' if setup_kind == 'listening' else '1' %}
+{% set setup_module = setup_module|default('Reading and Writing') %}
+{% set setup_upload_action = 'listening_upload' if setup_kind == 'listening' else 'rw_upload' %}
+{% macro beyond_step(number, title) -%}
+{% set done = number <= records.beyond.count %}
+{% set enabled = can_act and number <= records.beyond.count + 1 and (number != 6 or records.beyond.document) %}
+<li class="beyond-step{% if done %} is-complete{% elif not enabled %} is-locked{% else %} is-current{% endif %}">
+  <div class="beyond-step-marker" aria-hidden="true">{% if done %}✓{% else %}{{ number }}{% endif %}</div>
+  <div class="beyond-step-content">
+    <label class="beyond-step-heading"><input type="checkbox" data-beyond-step="{{ number }}"{% if done %} checked{% endif %}{% if not enabled %} disabled{% endif %}><span>{{ number }}. {{ title }}</span></label>
+    <div class="beyond-step-description">{{ caller() }}</div>
+  </div>
+</li>
+{%- endmacro %}
+<section class="staffing-control-section exam-records-section beyond-setup-section" data-beyond-setup data-setup-action="{{ setup_kind }}" data-revision="{{ records.beyond.revision }}" data-completed-steps="{{ records.beyond.count }}" aria-label="{{ setup_title }}">
+  <div class="staffing-control-header beyond-setup-header">
+    <div><h3>{{ setup_title }}</h3><p>Complete each step in order to prepare the session in Beyond.</p></div>
+    <span class="badge beyond-progress">{{ records.beyond.count }}/6 steps</span>
+  </div>
+  <div class="beyond-progress-track" role="progressbar" aria-label="Beyond setup progress" aria-valuemin="0" aria-valuemax="6" aria-valuenow="{{ records.beyond.count }}"><span style="width: {{ records.beyond.count * 100 / 6 }}%"></span></div>
+  <ol class="beyond-steps">
+    {% call beyond_step(1, 'Create the exam session in Beyond.') %}
+      <p>Use the name <button class="beyond-session-name" type="button" data-copy-beyond="{{ records.beyond.name }}" aria-label="Copy {{ records.beyond.name }}"{% if not can_act %} disabled{% endif %}><span>{{ records.beyond.name }}</span><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><rect x="8" y="8" width="12" height="12" rx="2"/><path d="M16 8V4H4v12h4"/></svg></button>. Set the session date to <strong>{{ session.session_date.strftime('%d/%m/%Y') if session.session_date else 'Date not set' }}</strong> and use the start time specified in the schedule.</p>
+    {% endcall %}
+    {% call beyond_step(2, 'Export candidates from Sinapsis.') %}
+      <p>Navigate to the <strong>Candidates</strong> menu in Sinapsis and apply the following filters:</p>
+      <ul class="beyond-filters"><li><strong>Exam session:</strong> Select the corresponding session.</li><li><strong>Module:</strong> {{ setup_module }}.</li><li><strong>Payment status:</strong> Paid and Paying.</li></ul>
+      <p>Export all candidates matching these criteria.</p>
+    {% endcall %}
+    {% call beyond_step(3, 'Prepare the Beyond import file.') %}
+      <p>Complete the <a class="beyond-template-link{% if not can_act or records.beyond.count < 2 %} is-disabled{% endif %}" href="{{ url_for('exam_records.beyond_template', session_id=session.id, kind=setup_kind) if can_act and records.beyond.count >= 2 else '#' }}"{% if not can_act or records.beyond.count < 2 %} aria-disabled="true" tabindex="-1"{% else %} download{% endif %}>{{ 'Reading and Writing import Excel template' if setup_kind == 'beyond' else 'Listening import Excel template' }} <span aria-hidden="true">↓</span></a> with the candidates' information, without modifying the original file format or structure.</p>
+      <ol class="beyond-import-instructions">
+        <li><strong>Append the digit <span class="beyond-digit-chip">{{ setup_digit }}</span> to the end of each candidate number exported from Sinapsis, without changing the original number.</strong></li>
+        <li>Use the <strong>exam names exactly as they appear in Beyond</strong>.</li>
+        <li>Enter the <strong>corresponding exam session name</strong> for each candidate.</li>
+        {% if setup_kind == 'beyond' %}
+        <li>Leave the <strong>Reading and Writing final mark</strong> column blank.</li>
+        {% else %}
+        <li>Leave the <strong>Listening mark</strong> column blank.</li>
+        {% endif %}
+      </ol>
+    {% endcall %}
+    {% call beyond_step(4, 'Verify and import candidates.') %}
+      <p>Carefully review the completed file to ensure that <strong>all eligible candidates are included, with no missing or additional candidates</strong>. Once verified, import the file into Beyond.</p>
+    {% endcall %}
+    {% call beyond_step(5, 'Perform the final verification.') %}
+      <p>Confirm that the exam session in Beyond is correctly configured, all candidates have been successfully imported and the session is fully ready.</p>
+    {% endcall %}
+    {% call beyond_step(6, setup_title) %}
+      <ol class="beyond-import-instructions">
+        <li>Remove the appended digit {{ setup_digit }} from each candidate number, preserving the original numbers.</li>
+        <li>Upload the modified file to this section.</li>
+      </ol>
+      {% set rw_document = records.beyond.document %}
+      {% set rw_enabled = can_act and records.beyond.count >= 5 and session.digitalised_exams_url %}
+      {% if rw_document %}<a class="exam-records-document{% if not records.unlocked %} is-disabled{% endif %}" href="https://drive.google.com/file/d/{{ rw_document.file_id }}/view" target="_blank" rel="noopener noreferrer"{% if not records.unlocked %} aria-disabled="true" tabindex="-1"{% endif %}>{{ rw_document.filename }}</a>{% endif %}
+      <label class="exam-records-drop{% if not rw_enabled %} is-disabled{% endif %}" data-record-drop>
+        <svg class="exam-records-upload-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 16V4m-4 4 4-4 4 4M5 15v4a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-4"/></svg>
+        <span class="exam-records-drop-copy">{{ 'Drop an Excel file to replace' if rw_document else 'Drop one Excel file here' }}<small>.xlsx or .xls · one file</small></span>
+        <span class="exam-records-browse">{{ 'Replace file' if rw_document else 'Choose file' }}</span>
+        <input type="file" data-record-file data-upload-action="{{ setup_upload_action }}" data-previous-file-id="{{ rw_document.file_id if rw_document else '' }}" accept=".xlsx,.xls" aria-label="{{ setup_title }} marking record"{% if not rw_enabled %} disabled{% endif %}>
+      </label>
+      {% if not session.digitalised_exams_url %}<p class="beyond-setup-note">Configure the Digitalised exams folder in Exam sessions to enable uploads.</p>{% elif not rw_document %}<p class="beyond-setup-note">Upload the file successfully before checking this step.</p>{% endif %}
+    {% endcall %}
+  </ol>
+  <p class="beyond-setup-note">Changing the session name, date or schedule link resets these checks. Unchecking a step also clears all subsequent steps.</p>
+</section>

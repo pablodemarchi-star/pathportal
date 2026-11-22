@@ -372,3 +372,48 @@ class FinalChecksWorkflowTest(unittest.TestCase):
         self.assertEqual(restored.return_drop_off_address_url, 'https://example.com/drop-off')
         self.assertEqual(restored.return_started_on, datetime.now(LOCAL_TZ).date())
         self.assertFalse(restored.return_review_required)
+
+    def test_online_final_checks_exclude_material_returns(self):
+        for format_name in ('Online', 'Online at exam centre'):
+            with self.subTest(format=format_name):
+                self.session_record.format = format_name
+                db.session.commit()
+                early = self.state(today=self.session_record.session_date - timedelta(days=60))
+                self.assertFalse(early['return_enabled'])
+                self.assertTrue(early['return_complete'])
+                self.assertFalse(early['checks_enabled'])
+                self.assertNotIn('shipment', early['message'].lower())
+                self.assertIsNone(early['return_deadline_badge'])
+                current = self.state(today=self.session_record.session_date)
+                self.assertTrue(current['checks_enabled'])
+                self.assertEqual(current['status'], 'unblocked')
+                self.assertTrue(all(a['department'] == 'ADMIN' for a in current['actions']))
+                control = self.control()
+                for item in control.checklist_items:
+                    item.is_checked = True
+                    item.checked_at = datetime.now(timezone.utc)
+                db.session.commit()
+                self.assertEqual(self.state(today=self.session_record.session_date)['progress'], 'completed')
+
+    def test_online_checklist_can_be_saved_without_a_shipment_recipient(self):
+        self.session_record.format = 'Online'
+        self.session_record.session_date = datetime.now(LOCAL_TZ).date()
+        db.session.commit()
+        control = self.control()
+        item = control.checklist_items[0]
+        response = self.login_client().post(
+            f'/pre-session-control-tower/sessions/{self.session_record.id}/sinapsis-checklist/{item.id}',
+            data={'csrf_token': 'token', 'is_checked': '1', 'view': 'online'},
+            headers={'X-Requested-With': 'XMLHttpRequest'})
+        self.assertEqual(response.status_code, 200)
+        db.session.refresh(item)
+        self.assertTrue(item.is_checked)
+        for row in control.checklist_items:
+            row.is_checked = True
+            row.checked_at = datetime.now(timezone.utc)
+        db.session.commit()
+        current = self.state()
+        self.assertEqual(current['progress'], 'completed')
+        self.assertFalse(current['return_enabled'])
+        self.assertIsNone(current['return_deadline_badge'])
+        self.assertFalse(current['actions'])

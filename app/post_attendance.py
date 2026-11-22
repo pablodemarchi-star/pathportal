@@ -1,4 +1,4 @@
-"""Onsite post-session attendance, evidence and justified absence management."""
+"""Shared onsite and online post-session attendance and absence management."""
 import hashlib
 import json
 import re
@@ -16,6 +16,8 @@ attendance_bp=Blueprint('attendance',__name__)
 CURRENCIES=['ARS','EUR','GBP','USD','UYU']
 SPEAKING_EXAMS=['Ready','Steady','Go!','SPA level 1','SPA level 2','SPA level 3']
 EXAMS=SPEAKING_EXAMS+['A1- Entry','A1 Access','A1+ Achiever','A2 Preliminary','A2+ Elementary','B1 Progress','B1+ Onwards','B2 Competency','B2+ Forward','C1 | C1+ | C2 Multi-level Proficiency Test']
+ONLINE_FORMATS = {'Online', 'Online at exam centre'}
+ATTENDANCE_FORMATS = {'Onsite', *ONLINE_FORMATS}
 PLACEHOLDERS={'next_july_online':'July - Online - Next year','next_novdec_online':'Nov/Dec - Online - Next year','next_novdec_onsite':'Nov/Dec - Onsite - Next year'}
 
 
@@ -232,7 +234,7 @@ def grouped_message(session_id):
     require_menu_view('pre_session_control_tower')
     if not validate_csrf():return jsonify(ok=False,error='Security token expired. Reload the page.'),400
     record=db.session.get(m.ExamSession,session_id)
-    if not record or record.format!='Onsite' or not record.session_date or record.session_date>local_today():abort(404)
+    if not record or record.format not in ATTENDANCE_FORMATS or not record.session_date or record.session_date>local_today():abort(404)
     raw=request.form.getlist('candidate_ids')
     if not raw or any(not value.isdigit() for value in raw):return jsonify(ok=False,error='Select at least one valid candidate.'),400
     ids={int(value) for value in raw}
@@ -404,11 +406,12 @@ def state(record):
         no_documentation_received=bool(value and value.no_documentation_received),can_edit=user_can_edit('pre_session_control_tower'))
 
 
-def render_index():
+def render_index(online=False):
     from app.routes import selected_exam_session_year,require_menu_view
     require_menu_view('pre_session_control_tower')
     year,years=selected_exam_session_year()
-    records=m.ExamSession.query.filter(m.ExamSession.format=='Onsite',m.ExamSession.session_date<=local_today(),extract('year',m.ExamSession.session_date)==year).order_by(m.ExamSession.session_date.desc(),m.ExamSession.exam_session_name).all()
+    formats = ONLINE_FORMATS if online else {'Onsite'}
+    records=m.ExamSession.query.filter(m.ExamSession.format.in_(formats),m.ExamSession.session_date<=local_today(),extract('year',m.ExamSession.session_date)==year).order_by(m.ExamSession.session_date.desc(),m.ExamSession.exam_session_name).all()
     values={item.exam_session_id:item for item in m.PostAttendance.query.filter(m.PostAttendance.exam_session_id.in_([r.id for r in records])).all()} if records else {}
     ids=[record.id for record in records]
     institutions=m.AttendanceInstitution.query.filter(m.AttendanceInstitution.exam_session_id.in_(ids)).all() if ids else []
@@ -428,7 +431,7 @@ def render_index():
     from app.routes import exam_session_concat_component_map
     components=exam_session_concat_component_map()
     peers={item.id:item for item in m.ExamSession.query.filter(m.ExamSession.id.in_(set().union(*(components.get(r.id,set()) for r in records)))).all()} if records else {}
-    response=current_app.make_response(render_template('post_attendance.html',records=records,controls=values,progress_by_session=progress,selected_year=year,years=years,today=local_today(),
+    response=current_app.make_response(render_template('post_attendance.html',is_online_tower=online,tower_title='Online session control tower' if online else 'Onsite session control tower',tower_endpoint='staff.pre_online_session_control_tower' if online else 'staff.pre_session_control_tower',records=records,controls=values,progress_by_session=progress,selected_year=year,years=years,today=local_today(),
         components=components,peers=peers,csrf_token=session.setdefault('csrf_token',secrets.token_hex(32))))
     response.headers['Cache-Control']='private, no-store'
     return response
@@ -440,7 +443,7 @@ def manage(session_id):
     from app.routes import require_menu_view,require_menu_edit
     require_menu_view('pre_session_control_tower')
     record=db.session.get(m.ExamSession,session_id)
-    if not record or record.format!='Onsite' or not record.session_date or record.session_date>local_today():abort(404)
+    if not record or record.format not in ATTENDANCE_FORMATS or not record.session_date or record.session_date>local_today():abort(404)
     if request.method=='GET':return jsonify(ok=True,state=state(record))
     require_menu_edit('pre_session_control_tower')
     if not validate_csrf():return jsonify(ok=False,error='Security token expired. Reload the page.'),400

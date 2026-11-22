@@ -2629,6 +2629,14 @@ def is_valid_rejected_potential_entry_delete_password():
 
 
 def delete_exam_session_dependencies(session_id):
+    from app.models import ExamRecordsControl, ExaminerSpeakingRecord, BeyondSetupControl, RWMarkingRecord, SpeakingRecordsSetup, ListeningRecordsSetup, ListeningMarkingRecord
+    ListeningRecordsSetup.query.filter_by(exam_session_id=session_id).delete(synchronize_session=False)
+    ListeningMarkingRecord.query.filter_by(exam_session_id=session_id).delete(synchronize_session=False)
+    SpeakingRecordsSetup.query.filter_by(exam_session_id=session_id).delete(synchronize_session=False)
+    RWMarkingRecord.query.filter_by(exam_session_id=session_id).delete(synchronize_session=False)
+    BeyondSetupControl.query.filter_by(exam_session_id=session_id).delete(synchronize_session=False)
+    ExaminerSpeakingRecord.query.filter_by(exam_session_id=session_id).delete(synchronize_session=False)
+    ExamRecordsControl.query.filter_by(exam_session_id=session_id).delete(synchronize_session=False)
     from app.post_attendance import delete_session_data
     delete_session_data(session_id)
     ExamSessionSupervisorAssignment.query.filter_by(exam_session_id=session_id).delete(synchronize_session=False)
@@ -7931,6 +7939,7 @@ def sinapsis_readiness_contract(session_record, sinapsis_control=None, checklist
             "message": "Session details link is not available.",
         })
     return {
+        "return_applicable": session_record.format not in PRE_SESSION_SESSIONS_VIEW_EXCLUDED_FORMATS,
         "status": sinapsis_status_slug(status),
         "raw_status": raw_status,
         "label": status,
@@ -10170,6 +10179,21 @@ def schedule_preparation_blocker_message(monthly_registrations_closed, date_conf
     return ""
 
 
+def session_finance_action_items(finance, schedule_preparation_unlocked):
+    finance = finance or {}
+    descriptions = {
+        "Not reviewed": "Review account standing of the institutions listed in this session.",
+        "Monitoring required": "Follow up on the account standing of the institutions listed in this session.",
+        "Close monitoring required": "Closely monitor financial standing and notify Management.",
+        "Verification missing": "Verify with Admin whether any other institutions are included in this session.",
+    }
+    description = descriptions.get(finance.get("readiness_label") or finance.get("block_label"))
+    if not description or not schedule_preparation_unlocked:
+        return []
+    return [{"department": "FINANCE", "description": description, "section": "finance",
+             "preserve_period": True, "overdue": bool(finance.get("is_overdue"))}]
+
+
 def bundle_detail_action_items(
     schedule_status,
     schedule_gate,
@@ -10265,17 +10289,7 @@ def bundle_detail_action_items(
     logistics = logistics or {}
     if sessions_logistics_action_mode:
         finance = finance or {}
-        finance_descriptions = {
-            "Not reviewed": "Review account standing of the institutions listed in this session.",
-            "Monitoring required": "Follow up on the account standing of the institutions listed in this session.",
-            "Close monitoring required": "Closely monitor financial standing and notify Management.",
-            "Verification missing": "Verify with Admin whether any other institutions are included in this session.",
-        }
-        finance_state = finance.get("readiness_label") or finance.get("block_label")
-        finance_description = finance_descriptions.get(finance_state)
-        finance_actions = [{"department": "FINANCE", "description": finance_description,
-                            "preserve_period": True, "overdue": bool(finance.get("is_overdue"))}] if finance_description and schedule_preparation_unlocked else []
-        finance_actions = tag(finance_actions, "finance")
+        finance_actions = session_finance_action_items(finance, schedule_preparation_unlocked)
         logistics_status = logistics.get("status")
         logistics_unblocked = (logistics_gate or {}).get("is_unblocked")
         if logistics_status in {"not_applicable", "completed"} or not logistics_unblocked:
@@ -14133,7 +14147,7 @@ def session_readiness_contract(operational_readiness, finance, sinapsis, communi
             "label": "Final checks",
             "ready": sinapsis_ready,
             "status": "Completed" if sinapsis_ready else "In progress",
-            "message": "Final checks is Completed." if sinapsis_ready else "Complete Return of exam materials and all Sinapsis checks.",
+            "message": "Final checks is Completed." if sinapsis_ready else ("Complete Return of exam materials and all Sinapsis checks." if sinapsis.get("return_applicable", True) else "Complete all Sinapsis checks."),
         },
         {
             "key": "incidents",
@@ -14192,7 +14206,7 @@ def session_readiness_contract(operational_readiness, finance, sinapsis, communi
             if message:
                 blockers.append({"source": source, "code": code, "message": message})
     if not sinapsis_ready:
-        blockers.append({"source": "sinapsis", "code": "FINAL_CHECKS_INCOMPLETE", "message": "Complete Return of exam materials and all Sinapsis checks."})
+        blockers.append({"source": "sinapsis", "code": "FINAL_CHECKS_INCOMPLETE", "message": ("Complete Return of exam materials and all Sinapsis checks." if sinapsis.get("return_applicable", True) else "Complete all Sinapsis checks.")})
     deduped_blockers = []
     seen = set()
     for blocker in blockers:
@@ -15253,8 +15267,16 @@ def schedule_workflow_view(session_record, workflow=None, today=None, staffing=N
     sinapsis_view['checks_enabled'] = final_checks_gate['checks_enabled']
     sinapsis_view['return_configuration_pending'] = not final_checks_gate['return_complete']
     sinapsis_view['overall_progress'] = final_checks_gate['progress']
+    if session_record.format in PRE_SESSION_SESSIONS_VIEW_EXCLUDED_FORMATS:
+        from app.exam_records import online_session_readiness
+        session_readiness = online_session_readiness(
+            session_record, gate, staffing or staffing_presentation_from_contract(fallback_staffing_contract),
+            finance_view, final_checks_gate,
+        )
     notification_pending = bool(auto_approval_event and not auto_approval_event.approval_notification_acknowledged)
     detail_actions = list(bundle_detail_actions or [])
+    if session_record.format in PRE_SESSION_SESSIONS_VIEW_EXCLUDED_FORMATS and not any(action.get("section") == "finance" for action in detail_actions):
+        detail_actions.extend(session_finance_action_items(finance_view, schedule_preparation_unlocked))
     detail_actions.extend(final_checks_gate["actions"])
     if notification_pending:
         detail_actions.insert(0, {"department": "ADMIN", "description": "Notify institution of schedule auto-approval", "section": "schedule"})
@@ -18100,9 +18122,9 @@ def my_actions_count():
 @login_required
 def pre_session_control_tower(_count_only=False):
     is_online_tower = request.endpoint == "staff.pre_online_session_control_tower"
-    if not is_online_tower and request.endpoint == "staff.pre_session_control_tower" and request.args.get("view") == "post":
+    if request.endpoint in {"staff.pre_session_control_tower", "staff.pre_online_session_control_tower"} and request.args.get("view") == "post":
         from app.post_attendance import render_index
-        return render_index()
+        return render_index(online=is_online_tower)
 
     modal_session_id = request.args.get("session_modal", type=int)
     if request.args.get("session_modal") and not modal_session_id:
@@ -21562,7 +21584,7 @@ def update_sinapsis_checklist_item(session_id, item_id):
     session_record = ExamSession.query.get_or_404(session_id)
     from app.final_checks import final_checks_state
     if not final_checks_state(session_record)['checks_enabled']:
-        return jsonify(error="Sinapsis checks are blocked until the shipment recipient is confirmed and the session is within 8 business days."), 403
+        return jsonify(error="Sinapsis checks are blocked until the session is within 8 business days." if session_record.format in PRE_SESSION_SESSIONS_VIEW_EXCLUDED_FORMATS else "Sinapsis checks are blocked until the shipment recipient is confirmed and the session is within 8 business days."), 403
     status_filter = request.form.get("schedule_status", "").strip()
     if status_filter not in SCHEDULE_WORKFLOW_STATUSES:
         status_filter = ""
@@ -21638,7 +21660,7 @@ def mark_sinapsis_checklist_issue(session_id, item_id):
     session_record = ExamSession.query.get_or_404(session_id)
     from app.final_checks import final_checks_state
     if not final_checks_state(session_record)['checks_enabled']:
-        return jsonify(error="Sinapsis checks are blocked until the shipment recipient is confirmed and the session is within 8 business days."), 403
+        return jsonify(error="Sinapsis checks are blocked until the session is within 8 business days." if session_record.format in PRE_SESSION_SESSIONS_VIEW_EXCLUDED_FORMATS else "Sinapsis checks are blocked until the shipment recipient is confirmed and the session is within 8 business days."), 403
     if not validate_csrf():
         if is_async:
             return jsonify(error="Security token expired. Please try again."), 403

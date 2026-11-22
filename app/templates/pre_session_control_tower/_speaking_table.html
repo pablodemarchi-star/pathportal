@@ -1,0 +1,13 @@
+      <div class="table-wrap exam-records-table-wrap"><table class="exam-records-table"><colgroup><col class="exam-records-examiner-column"><col></colgroup><thead><tr><th>Examiner</th><th>Speaking exam record</th></tr></thead><tbody>
+        {% for person in records.people %}
+        <tr><td><span class="exam-records-person">{{ person.name }}</span>{% if not person.confirmed %}<small class="exam-records-person-note">Participation not confirmed</small>{% endif %}</td><td>
+          {% if person.document %}<a class="exam-records-document{% if not records.unlocked %} is-disabled{% endif %}" href="https://drive.google.com/file/d/{{ person.document.file_id }}/view" target="_blank" rel="noopener noreferrer"{% if not records.unlocked %} aria-disabled="true" tabindex="-1"{% endif %}>{{ person.document.filename }}</a>{% endif %}
+          <label class="exam-records-drop{% if not speaking_upload_enabled or not session.digitalised_exams_url or not person.confirmed %} is-disabled{% endif %}" data-record-drop>
+            <svg class="exam-records-upload-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 16V4m-4 4 4-4 4 4M5 15v4a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-4"/></svg>
+            <span class="exam-records-drop-copy">{{ 'Drop a file to replace' if person.document else 'Drop one file here' }}<small>or browse your files</small></span>
+            <span class="exam-records-browse">{{ 'Replace file' if person.document else 'Choose file' }}</span>
+            <input type="file" data-record-file data-upload-action="upload" data-person-ref="{{ person.ref }}" data-previous-file-id="{{ person.document.file_id if person.document else '' }}" aria-label="Speaking exam record for {{ person.name }}"{% if not speaking_upload_enabled or not session.digitalised_exams_url or not person.confirmed %} disabled{% endif %}>
+          </label>
+        </td></tr>
+        {% else %}<tr><td colspan="2">No Examiners assigned.</td></tr>{% endfor %}
+      </tbody></table></div>

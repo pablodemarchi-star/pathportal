@@ -142,19 +142,25 @@ def final_checks_state(record, control=None, today=None):
     cached = getattr(g, '_final_checks_controls', {}) if has_app_context() else {}
     if control is None:
         control = cached[record.id] if record.id in cached else db.session.query(ExamSessionSinapsisControl).filter_by(exam_session_id=record.id).first()
-    assigned = recipient(record)
+    online = record.format in {'Online', 'Online at exam centre'}
+    assigned = None if online else recipient(record)
     opens_on = record.session_date - timedelta(days=29) if record.session_date else None
     confirmed = bool(assigned and assigned.participation_status == 'Confirmed')
     enabled = bool(record.format == 'Onsite' and confirmed and opens_on and today >= opens_on)
     days = 0 if record.session_date and record.session_date < today else argentina_business_days_until(record.session_date, today=today)
-    checks_enabled = enabled and days is not None and days <= 8
+    checks_enabled = (online or enabled) and record.session_date is not None and days is not None and days <= 8
     status = 'unblocked' if checks_enabled else 'semi_unblocked' if enabled else 'blocked'
-    started = control.return_started_on if control else None
+    started = control.return_started_on if control and not online else None
     if not started and enabled:
         started = max(control.return_recipient_confirmed_on or today, opens_on) if control else today
     checks_opens_on = argentina_subtract_business_days(record.session_date, 8) if record.session_date else None
     reasons = []
-    if status == 'blocked':
+    if online:
+        if not record.session_date:
+            reasons.append('Set an exam session date.')
+        elif not checks_enabled:
+            reasons.append(f'Sinapsis checks becomes available 8 Argentine business days before the exam, on {checks_opens_on:%d/%m/%Y}.')
+    elif status == 'blocked':
         if not assigned:
             reasons.append('Assign a staff member with Receives shipment.')
         elif not confirmed:
@@ -166,7 +172,7 @@ def final_checks_state(record, control=None, today=None):
     elif status == 'semi_unblocked':
         reasons.append(f'Sinapsis checks becomes available 8 Argentine business days before the exam, on {checks_opens_on:%d/%m/%Y}.')
     deadline = min(started + timedelta(days=10), record.session_date - timedelta(days=7)) if started and record.session_date else None
-    complete = return_configuration_complete(record, control)
+    complete = online or return_configuration_complete(record, control)
     required_keys = {item['key'] for item in SINAPSIS_CHECKLIST_ITEMS}
     items = [item for item in (control.checklist_items if control else []) if item.item_key in required_keys]
     all_checked = len({item.item_key for item in items if item.is_checked}) == len(required_keys)
@@ -174,9 +180,9 @@ def final_checks_state(record, control=None, today=None):
     events = events_cache.get(record.id, []) if record.id in events_cache else (control.events if control else [])
     activity_types = {'checklist_checked', 'checklist_unchecked', 'checklist_updated', 'checklist_issue',
                       'return_materials_method', 'return_review_confirmed', 'return_instructions_updated'}
-    has_activity = bool((control and (control.return_materials_method or control.reviewed_at or control.return_reviewed_at or control.return_instructions_html))
+    has_activity = bool((not online and control and (control.return_materials_method or control.reviewed_at or control.return_reviewed_at or control.return_instructions_html))
                         or any(item.is_checked or item.note or item.needs_review for item in items)
-                        or any(event.event_type in activity_types for event in events))
+                        or any(event.event_type in (activity_types - {'return_materials_method', 'return_review_confirmed', 'return_instructions_updated'} if online else activity_types) for event in events))
     progress = 'completed' if complete and all_checked else 'in_progress' if has_activity else 'not_started'
     finished = max((local_date(item.checked_at) for item in items if item.checked_at), default=None) if all_checked else None
     checks_deadline = argentina_subtract_business_days(record.session_date, 4) if record.session_date else None
@@ -205,8 +211,8 @@ def final_checks_state(record, control=None, today=None):
             'progress': progress,
             'checks_enabled': checks_enabled, 'within_window': days is not None and days <= 8,
             'business_days_until_session': days, 'return_complete': complete,
-            'review_required': bool(control and control.return_review_required), 'actions': actions,
+            'return_applicable': not online, 'review_required': bool(not online and control and control.return_review_required), 'actions': actions,
             'return_deadline_badge': deadline_badge_contract(deadline, completed=complete,
-                completed_date=local_date(control.return_completed_at) if complete and control else None, today=today) if started else None,
+                completed_date=local_date(control.return_completed_at) if complete and control else None, today=today) if started and not online else None,
             'checks_deadline_badge': deadline_badge_contract(checks_deadline, completed=all_checked, completed_date=finished, today=today),
             'checks_complete': all_checked}

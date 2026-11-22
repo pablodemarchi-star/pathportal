@@ -1,0 +1,45 @@
+<div class="modal exam-records-modal" data-csrf="{{ csrf_token }}" data-endpoint="{{ url_for('exam_records.update', session_id=session.id) }}" id="exam-records-{{ session.id }}" aria-hidden="true" role="dialog" aria-modal="true" aria-labelledby="exam-records-title-{{ session.id }}">
+  <div class="modal-panel large schedule-workflow-panel">
+    <div class="modal-header">
+      <div>
+        <p class="eyebrow">EXAM RECORDS</p>
+        <div class="staffing-session-title-row">
+          <h2 id="exam-records-title-{{ session.id }}" tabindex="-1">{{ session.exam_session_name }}</h2>
+          <span class="staffing-session-considerations{% if not records.unlocked %} is-disabled{% endif %}"{% if not records.unlocked %} inert{% endif %}>
+            {% with session_considerations=session.considerations_thread(), considerations_control_tower=true %}{% include 'exam_sessions/_considerations.html' %}{% endwith %}
+          </span>
+        </div>
+        <div class="modal-session-header-actions" aria-label="Session quick links">
+          <a class="secondary-button compact-action link-button{% if not records.unlocked %} is-disabled{% endif %}" href="{{ url_for('staff.exam_session_planner', session_year=session.session_date.year if session.session_date else selected_session_year, open_session_modal=session.id, session_fullscreen=1) if records.unlocked else '#' }}" target="_blank" rel="noopener noreferrer"{% if not records.unlocked %} aria-disabled="true" tabindex="-1"{% endif %}>View session planner</a>
+          <a class="secondary-button compact-action link-button{% if not records.unlocked or not view.sinapsis_available %} is-disabled{% endif %}" href="{{ view.sinapsis_url if records.unlocked and view.sinapsis_available else '#' }}" target="_blank" rel="noopener noreferrer"{% if not records.unlocked or not view.sinapsis_available %} aria-disabled="true" tabindex="-1"{% endif %}>View in Sinapsis</a>
+        </div>
+        <p class="modal-subtitle">{{ session.session_date|long_session_date }}</p>
+      </div>
+      <button class="icon-button" type="button" data-close-modal aria-label="Close modal">&times;</button>
+    </div>
+    {% set can_act = records.unlocked and user_can_edit('pre_session_control_tower') %}
+    {% set schedule_url = session.schedule_folder_url or session.details_url %}
+    <section class="staffing-control-metadata" aria-label="Exam session details">
+      <div><span>Session</span><strong>{{ session.exam_session_name }}</strong></div>
+      <div><span>Date</span><strong>{{ session.session_date|long_session_date }}</strong></div>
+      <div><span>Format</span><strong>{{ session.format }}</strong></div>
+      <div><span>Deadline</span>{{ workflow_deadline_chip(records.deadline, 'staffing-column-deadline-chip') }}</div>
+      <div><span>Schedule</span>
+        <a class="secondary-button compact-action{% if not can_act or not schedule_url %} is-disabled{% endif %}" href="{{ schedule_url if can_act and schedule_url else '#' }}" target="_blank" rel="noopener noreferrer"{% if not can_act or not schedule_url %} aria-disabled="true" tabindex="-1"{% endif %}>Session schedule ↗</a>
+      </div>
+    </section>
+    {% if not records.unlocked %}<p class="exam-records-warning" role="status">Exam records is blocked. Schedule must be approved, all staff members and Staffing must be confirmed, and at least one Examiner must be confirmed.</p>{% endif %}
+    {% set active_modules = session.modules_list()|map('lower')|list %}
+    {% if 'speaking' in active_modules or 'listening and speaking' in active_modules %}
+      {% include 'pre_session_control_tower/_speaking_records.html' %}
+    {% endif %}
+    {% if 'reading and writing' in active_modules %}
+      {% include 'pre_session_control_tower/_beyond_setup.html' %}
+    {% endif %}
+    {% if 'listening and speaking' in active_modules %}
+      {% with records=dict(records, beyond=records.listening), setup_kind='listening', setup_title='Listening records', setup_module='Listening and Speaking' %}
+        {% include 'pre_session_control_tower/_beyond_setup.html' %}
+      {% endwith %}
+    {% endif %}
+  </div>
+</div>

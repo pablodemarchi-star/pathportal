@@ -78,9 +78,9 @@ def batch_presentations(records,today=None):
     """Bounded query batches, including when called by Quality control observers."""
     from collections import defaultdict
     from sqlalchemy.orm import load_only
-    from app.post_attendance import workflow_state
+    from app.post_attendance import ATTENDANCE_FORMATS, workflow_state
     from app.routes import LOCAL_TZ,journey_absence_upload_window
-    records=[record for record in records if record.format=='Onsite']
+    records=[record for record in records if record.format in ATTENDANCE_FORMATS]
     if not records:return {}
     ids=[record.id for record in records]
     now=now_utc().astimezone(LOCAL_TZ)

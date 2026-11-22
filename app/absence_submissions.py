@@ -4,7 +4,7 @@ from datetime import timezone
 from flask import abort, jsonify, request, current_app
 from app import db, login_required, validate_csrf
 from app import models as m
-from app.post_attendance import attendance_bp,lock_session,main_institution,institution_for,touch,local_today,retire,restore,reschedule_options,reset_review,EXAMS,exam_modules,credit_applicable,credit_values,workflow_state,modules
+from app.post_attendance import ATTENDANCE_FORMATS,attendance_bp,lock_session,main_institution,institution_for,touch,local_today,retire,restore,reschedule_options,reset_review,EXAMS,exam_modules,credit_applicable,credit_values,workflow_state,modules
 from app import attendance_drive as drive
 from app.staff_report_media import session_pictures_folder
 from types import SimpleNamespace
@@ -169,7 +169,7 @@ def internal_submit(session_id):
     from app.post_attendance import state
     require_menu_edit('pre_session_control_tower')
     record=db.session.get(m.ExamSession,session_id)
-    if not record or record.format!='Onsite' or not record.session_date:abort(404)
+    if not record or record.format not in ATTENDANCE_FORMATS or not record.session_date:abort(404)
     if not validate_csrf():return jsonify(ok=False,error=COPY['en']['csrf']),400
     if local_today()<=record.session_date:return jsonify(ok=False,error='Attendance is read-only until the day after the exam session (GMT-3).'),403
     lock_session(record);trashed=[]

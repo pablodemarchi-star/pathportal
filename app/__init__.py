@@ -148,6 +148,8 @@ def create_app():
     from app.routes import staff_bp, SINAPSIS_CHECKLIST_ITEMS
 
     app.register_blueprint(staff_bp)
+    from app.exam_records import exam_records_bp
+    app.register_blueprint(exam_records_bp)
     from app.post_attendance import attendance_bp
     from app import absence_submissions
     from app import attendance_notifications

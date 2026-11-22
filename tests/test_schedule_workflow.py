@@ -1625,16 +1625,17 @@ class ScheduleWorkflowTest(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         page = response.get_data(as_text=True)
         table = re.search(r'<table class="control-tower-table online-control-tower-table">.*?</table>', page, re.S).group(0)
-        self.assertEqual(re.findall(r'<th>(.*?)</th>', table), ["Exam session", "Department", "Action description", "Schedule", "Staffing"])
+        self.assertEqual(re.findall(r'<th>(.*?)</th>', table), ["Exam session", "Department", "Action description", "Schedule", "Staffing", "Finance", "Exam records", "Final checks", "Session readiness"])
         self.assertIn("Online format 0", table)
         self.assertIn("Online format 1", table)
         self.assertNotIn("June exam session", table)
-        self.assertNotIn('control-tower-view-tabs', page)
+        self.assertIn('aria-label="Online session control tower views"', page)
+        self.assertIn('>Pre checks</a>', page)
         self.assertIn('data-modal-schedule-only="true"', table)
         self.assertIn('data-modal-staffing-only="true"', table)
         modal = client.get(f"/pre-online-session-control-tower?session_year=2026&session_modal={online_records[0].id}&open_schedule_modal={online_records[0].id}&schedule_only=1").get_data(as_text=True)
         self.assertIn('name="view" value="online"', modal)
-        self.assertLess(page.index('<span>Pre onsite session control tower</span>'), page.index('<span>Pre online session control tower</span>'))
+        self.assertLess(page.index('<span>Onsite session control tower</span>'), page.index('<span>Online session control tower</span>'))
         onsite = client.get("/pre-session-control-tower?session_year=2026&view=sessions").get_data(as_text=True)
         self.assertIn("June exam session", onsite)
         self.assertNotIn("Online format 0", onsite)
@@ -1648,7 +1649,7 @@ class ScheduleWorkflowTest(unittest.TestCase):
         self.assertNotIn("Online format 0", bundle_table)
         self.assertNotIn("Online format 1", bundle_table)
 
-    def test_online_control_tower_department_actions_match_schedule_and_staffing_only(self):
+    def test_online_control_tower_department_actions_include_finance_and_final_checks(self):
         from flask import template_rendered
         self.session_record.format = "Online"
         self.session_record.monthly_registrations_closed = True
@@ -1664,9 +1665,11 @@ class ScheduleWorkflowTest(unittest.TestCase):
         with template_rendered.connected_to(capture, self.app):
             page = self.login_client().get("/pre-online-session-control-tower?session_year=2026").get_data(as_text=True)
         view = contexts[-1]["schedule_views"][0]
-        expected = [action for action in view["bundle_detail_actions"] if action.get("section") in {"schedule", "staffing"}]
+        expected = [action for action in view["bundle_detail_actions"] if action.get("section") in {"schedule", "staffing", "finance", "sinapsis"}]
         self.assertTrue(any(action["section"] == "schedule" for action in expected))
         self.assertTrue(any(action["section"] == "staffing" for action in expected))
+        self.assertTrue(any(action["section"] == "finance" for action in expected))
+        self.assertTrue(any(action["section"] == "sinapsis" for action in expected))
         table = re.search(r'<table class="control-tower-table online-control-tower-table">.*?</table>', page, re.S).group(0)
         cells = re.findall(r'<td>(.*?)</td>', table, re.S)
         self.assertEqual(cells[1].count('class="bundle-action-department-slot"'), len(expected))
@@ -1677,7 +1680,7 @@ class ScheduleWorkflowTest(unittest.TestCase):
                 description = description[:-1]
             self.assertIn(html_lib.escape(description), cells[2])
         for action in view["bundle_detail_actions"]:
-            if action.get("section") not in {"schedule", "staffing"}:
+            if action.get("section") not in {"schedule", "staffing", "finance", "sinapsis"}:
                 self.assertNotIn(html_lib.escape(action["description"].strip().rstrip('.')), cells[2])
 
     def test_online_control_tower_mixed_concat_primary_links_and_shared_transitions(self):
@@ -19936,11 +19939,9 @@ assert.equal(storage.size, 0);
         self.assertIn("session-readiness-final-ready", session_row)
         self.assertIn("session-readiness-final-frame-ready", session_row)
         self.assertIn(">Ready</span>", session_row)
-        self.assertIn("Register incidents", session_row)
-        self.assertIn("session-readiness-incidents-button-ready", session_row)
-        self.assertNotIn('disabled aria-disabled="true">Register incidents</button>', session_row)
+        self.assertNotIn("Register incidents", session_row)
+        self.assertNotIn("session-readiness-incidents-button", session_row)
         self.assertIn(f'data-open-modal="schedule-workflow-{self.session_record.id}"', session_row)
-        self.assertIn(f'data-modal-scroll-target="incidents-{self.session_record.id}"', session_row)
 
         response = client.get(f"/pre-session-control-tower?session_year=2026&open_schedule_modal={self.session_record.id}")
         manage_html = response.data.decode()
@@ -23933,9 +23934,8 @@ for (const role of ["Examiner", "Supervisor", "Intern", "Emergency contact"]) {
         self.assertIn("session-readiness-final-not-ready", no_logistics_row)
         self.assertIn("session-readiness-final-frame-not-ready", no_logistics_row)
         self.assertIn(">Not ready</span>", no_logistics_row)
-        self.assertIn("Register incidents", no_logistics_row)
-        self.assertIn("session-readiness-incidents-button-disabled", no_logistics_row)
-        self.assertIn('disabled aria-disabled="true">Register incidents</button>', no_logistics_row)
+        self.assertNotIn("Register incidents", no_logistics_row)
+        self.assertNotIn("session-readiness-incidents-button", no_logistics_row)
         self.assertNotIn("BLOCKED", no_logistics_row)
         self.assertNotIn("UNBLOCKED", no_logistics_row)
         self.assertNotIn("Deadline", no_logistics_row)

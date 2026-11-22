@@ -4,7 +4,7 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>{% block title %}Path Examinations Internal App{% endblock %}</title>
-    <link rel="stylesheet" href="{{ url_for('static', filename='css/styles.css', v='20261117-review-comments-56') }}">
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/styles.css', v='20261122-online-action-wrap-1') }}">
   </head>
   <body>
     <div class="app-shell {% if request.args.get('session_fullscreen') == '1' %}session-fullscreen-shell{% endif %}">
@@ -122,7 +122,7 @@
           </a>
           <a class="nav-link standalone-nav-link {% if is_online_tower %}active{% endif %}" href="{{ url_for('staff.pre_online_session_control_tower') }}">
             <svg class="nav-icon" viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="13" rx="2"/><path d="M8 21h8M12 17v4M7 9h10M7 12h6"/></svg>
-            <span>Pre online session control tower</span>
+            <span>Online session control tower</span>
           </a>
           {% endif %}
           {% if g.current_user and g.current_user.is_superadmin %}

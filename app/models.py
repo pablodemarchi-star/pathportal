@@ -3090,3 +3090,63 @@ class AttendanceEvent(db.Model):
     action = db.Column(db.String(60), nullable=False)
     payload = db.Column(db.Text, nullable=False, default='{}')
     created_at = db.Column(db.DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))
+
+
+class ExamRecordsControl(db.Model):
+    exam_session_id = db.Column(db.Integer, db.ForeignKey("exam_session.id"), primary_key=True)
+    started = db.Column(db.Boolean, nullable=False, default=False)
+    final_status = db.Column(db.String(30), nullable=False, default="Not started")
+    checked_revision = db.Column(db.Text, nullable=True)
+    incidents = db.Column(db.Text, nullable=False, default="[]")
+    updated_by = db.Column(db.String(160), nullable=True)
+
+
+class ExaminerSpeakingRecord(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    exam_session_id = db.Column(db.Integer, db.ForeignKey("exam_session.id"), nullable=False, index=True)
+    person_ref = db.Column(db.String(60), nullable=False)
+    file_id = db.Column(db.String(160), nullable=False)
+    folder_id = db.Column(db.String(160), nullable=False)
+    filename = db.Column(db.String(500), nullable=False)
+    mime_type = db.Column(db.String(160), nullable=False)
+    updated_at = db.Column(db.DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
+    __table_args__ = (db.UniqueConstraint("exam_session_id", "person_ref"),)
+
+
+class BeyondSetupControl(db.Model):
+    exam_session_id = db.Column(db.Integer, db.ForeignKey("exam_session.id"), primary_key=True)
+    completed_steps = db.Column(db.Integer, nullable=False, default=0)
+    revision = db.Column(db.String(64), nullable=False)
+    updated_by = db.Column(db.String(160), nullable=True)
+
+
+class RWMarkingRecord(db.Model):
+    exam_session_id = db.Column(db.Integer, db.ForeignKey("exam_session.id"), primary_key=True)
+    file_id = db.Column(db.String(160), nullable=False)
+    folder_id = db.Column(db.String(160), nullable=False)
+    filename = db.Column(db.String(500), nullable=False)
+    mime_type = db.Column(db.String(160), nullable=False)
+    updated_at = db.Column(db.DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
+
+
+class SpeakingRecordsSetup(db.Model):
+    exam_session_id = db.Column(db.Integer, db.ForeignKey("exam_session.id"), primary_key=True)
+    completed_steps = db.Column(db.Integer, nullable=False, default=0)
+    revision = db.Column(db.String(64), nullable=False)
+    updated_by = db.Column(db.String(160), nullable=True)
+
+
+class ListeningRecordsSetup(db.Model):
+    exam_session_id = db.Column(db.Integer, db.ForeignKey("exam_session.id"), primary_key=True)
+    completed_steps = db.Column(db.Integer, nullable=False, default=0)
+    revision = db.Column(db.String(64), nullable=False)
+    updated_by = db.Column(db.String(160), nullable=True)
+
+
+class ListeningMarkingRecord(db.Model):
+    exam_session_id = db.Column(db.Integer, db.ForeignKey("exam_session.id"), primary_key=True)
+    file_id = db.Column(db.String(160), nullable=False)
+    folder_id = db.Column(db.String(160), nullable=False)
+    filename = db.Column(db.String(500), nullable=False)
+    mime_type = db.Column(db.String(160), nullable=False)
+    updated_at = db.Column(db.DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))

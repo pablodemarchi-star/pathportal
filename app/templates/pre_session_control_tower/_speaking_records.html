@@ -1,0 +1,33 @@
+{% macro speaking_step(number, title) -%}
+{% set done = number <= records.speaking.count %}
+{% set available = can_act and number <= records.speaking.count + 1 %}
+{% set enabled = available and (number != 3 or (records.total > 0 and records.count == records.total)) %}
+<li class="beyond-step{% if done %} is-complete{% elif not available %} is-locked{% else %} is-current{% endif %}">
+  <div class="beyond-step-marker" aria-hidden="true">{% if done %}✓{% else %}{{ number }}{% endif %}</div>
+  <div class="beyond-step-content">
+    <label class="beyond-step-heading"><input type="checkbox" data-speaking-step="{{ number }}"{% if done %} checked{% endif %}{% if not enabled %} disabled{% endif %}><span>{{ number }}. {{ title }}</span></label>
+    <div class="beyond-step-description">{{ caller() }}</div>
+  </div>
+</li>
+{%- endmacro %}
+<section class="staffing-control-section exam-records-section speaking-records-section" data-speaking-setup data-revision="{{ records.speaking.revision }}" data-completed-steps="{{ records.speaking.count }}" aria-label="Speaking records">
+  <div class="staffing-control-header beyond-setup-header"><div><h3>Speaking records</h3><p>Complete each step in order to prepare the records for each examiner.</p></div><span class="badge beyond-progress">{{ records.speaking.count }}/3 steps</span></div>
+  <div class="beyond-progress-track" role="progressbar" aria-label="Speaking records progress" aria-valuemin="0" aria-valuemax="3" aria-valuenow="{{ records.speaking.count }}"><span style="width: {{ records.speaking.count * 100 / 3 }}%"></span></div>
+  <ol class="beyond-steps">
+    {% call speaking_step(1, 'Export candidates from Sinapsis.') %}
+      <p>Navigate to the <strong>Candidates</strong> menu in Sinapsis and apply the following filters:</p>
+      <ul class="beyond-filters"><li><strong>Exam session:</strong> Select the corresponding session.</li><li><strong>Module:</strong> Listening and Speaking &amp; Speaking.</li><li><strong>Payment status:</strong> Paid and Paying.</li></ul>
+      <p>Export all candidates matching these criteria.</p>
+    {% endcall %}
+    {% call speaking_step(2, 'Prepare the Speaking records for each examiner.') %}
+      <p>Complete the <a class="beyond-template-link{% if not can_act or records.speaking.count < 1 %} is-disabled{% endif %}" href="{{ url_for('exam_records.speaking_template', session_id=session.id) if can_act and records.speaking.count >= 1 else '#' }}"{% if not can_act or records.speaking.count < 1 %} aria-disabled="true" tabindex="-1"{% else %} download{% endif %}>Speaking import Excel template <span aria-hidden="true">↓</span></a> with the candidates' information, without modifying the original file format or structure. Prepare a separate file for each examiner, ensuring that candidates are assigned according to the schedules and room allocations established in the <a class="beyond-template-link{% if not can_act or not schedule_url %} is-disabled{% endif %}" href="{{ schedule_url if can_act and schedule_url else '#' }}" target="_blank" rel="noopener noreferrer"{% if not can_act or not schedule_url %} aria-disabled="true" tabindex="-1"{% endif %}>Session schedule</a>. Leave the <strong>Speaking mark</strong> column blank.</p>
+    {% endcall %}
+    {% call speaking_step(3, 'Verify and upload the Speaking records.') %}
+      <p>Carefully review each file to ensure that <strong>all candidates assigned to each examiner are included, with no missing or additional candidates</strong>. Once verified, upload the completed files to the table below.</p>
+      {% if not session.digitalised_exams_url %}<p class="exam-records-warning">Configure the Digitalised exams folder in Exam sessions to enable uploads.</p>{% endif %}
+      {% set speaking_upload_enabled = can_act and records.speaking.count >= 2 %}
+      {% include 'pre_session_control_tower/_speaking_table.html' %}
+    {% endcall %}
+  </ol>
+  <p class="beyond-setup-note">Changing the session name, date, schedule link or Examiner assignments resets these checks and keeps uploaded files. Unchecking a step clears all subsequent steps. Replacing a file clears step 3.</p>
+</section>
