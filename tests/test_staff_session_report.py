@@ -18,6 +18,7 @@ class StaffSessionReportTest(unittest.TestCase):
         db.create_all()
         self.record = m.ExamSession(exam_session_name='Report session', category='Path School', status='Pending',
             session_date=date(2026, 11, 13), shifts='Morning', modules='Speaking', format='Onsite',
+            digitalised_exams_url='https://drive.google.com/drive/folders/testDigitalised123',
             session_pictures_folder_url='https://drive.google.com/drive/folders/testPicturesFolder123')
         self.person = m.AcademicStaff(full_name='Report Supervisor', status='Active', roles='Supervisor')
         db.session.add_all([self.record, self.person]); db.session.flush()
@@ -41,6 +42,12 @@ class StaffSessionReportTest(unittest.TestCase):
     def post(self, **values):
         data = dict(csrf_token='test', schedule_outcome='There were no delays', absent_candidates_checked='1', submitted_candidates_checked='1', facilities_outcome='Satisfactory', emergency_pack_outcome='No, it was not needed', marketing_confirmed='1', centre_feedback_confirmed='1')
         data['return_verification'] = ['submitted_papers', 'submitted_packages', 'absent_packages', 'sealing', 'labelling', 'institutional_verification']
+        from app.routes import staff_report_online_attendance_fields, staff_report_module_sections
+        for field in staff_report_online_attendance_fields(self.record):
+            data[field] = '1'
+        for section in staff_report_module_sections(self.record):
+            for field in section['fields']:
+                data[field] = '1'
         feedback_submitted = values.pop('_feedback_submitted', True)
         data.update(values)
         with patch('app.routes.staff_report_available', return_value=True), patch('app.routes.staff_report_feedback_submitted', return_value=feedback_submitted):
@@ -503,7 +510,7 @@ class StaffSessionReportTest(unittest.TestCase):
         self.assertIn('data-report-date-unrestricted="true"', html)
         self.assertNotIn('data-staff-end-checks ', html)
         self.assertIn('data-staff-exam-day-report', html)
-        self.assertIn('Exam return package verification', html)
+        self.assertNotIn('Exam return package verification', html)
         self.assertNotIn('on the exam day only', html)
         self.assertNotRegex(html, r'data-exam-day-report-link[^>]*aria-disabled="true"')
         feedback = self.client.get(self.url + '/feedback-status')
@@ -521,13 +528,13 @@ class StaffSessionReportTest(unittest.TestCase):
         self.assertIn('Report submitted', html)
         self.assertRegex(html, r'data-exam-day-report-link[^>]*aria-disabled="true"')
 
-    def test_online_report_uploads_are_allowed_outside_exam_day(self):
+    def test_online_report_no_longer_accepts_marketing_uploads(self):
         from io import BytesIO
         self.record.format = 'Online'; db.session.commit()
         with patch('app.staff_report_media.folder_metadata'), patch('app.staff_report_media.upload_document') as sender:
             response = self.client.post(self.url + '/media', data=dict(csrf_token='test', file=(BytesIO(b'picture'), 'photo.jpg')))
-        self.assertEqual(response.status_code, 200)
-        sender.assert_called_once()
+        self.assertEqual(response.status_code, 403)
+        sender.assert_not_called()
 
     def test_online_report_keeps_validation_feedback_and_submission_lock(self):
         self.record.format = 'Online'
@@ -541,3 +548,135 @@ class StaffSessionReportTest(unittest.TestCase):
         self.assertEqual(self.post(_feedback_submitted=False).status_code, 400)
         self.assertEqual(self.post().status_code, 200)
         self.assertEqual(self.post().status_code, 409)
+
+    def test_online_module_sections_follow_modules(self):
+        cases = [('Reading and writing', [True, False, False]),
+                 ('Listening and speaking', [False, True, True]), ('Speaking', [False, False, True])]
+        titles = ['Reading and Writing module verification', 'Listening component verifications', 'Speaking component verifications']
+        for modules, expected in cases:
+            self.record.format = 'Online'; self.record.modules = modules; db.session.commit()
+            html = self.client.get(f'/my-exam-sessions/{self.share.token}?session_year=2026').get_data(as_text=True)
+            for title, visible in zip(titles, expected):
+                self.assertEqual(title in html, visible)
+                if visible:
+                    self.assertGreater(html.index('<b>' + title + '</b>'), html.index('<b>Candidate attendance</b>'))
+            if expected[0] or expected[1]:
+                self.assertIn(self.record.digitalised_exams_url, html)
+        self.record.format = 'Onsite'; db.session.commit()
+        html = self.client.get(f'/my-exam-sessions/{self.share.token}?session_year=2026').get_data(as_text=True)
+        for title in titles:
+            self.assertNotIn(title, html)
+
+    def test_online_module_checks_required_and_saved(self):
+        from app.routes import MODULE_VERIFICATION_FIELDS
+        self.record.format = 'Online'; self.record.modules = 'Reading and writing,Listening and speaking'; db.session.commit()
+        for field in MODULE_VERIFICATION_FIELDS:
+            self.assertEqual(self.post(**{field: '0'}).status_code, 400, field)
+        self.assertEqual(self.post().status_code, 200)
+        saved = m.StaffExamSessionReport.query.one()
+        for field in MODULE_VERIFICATION_FIELDS:
+            self.assertTrue(getattr(saved, field), field)
+
+    def test_online_speaking_records_use_uploaded_examiner_files(self):
+        self.record.format = 'Online'
+        examiner, _ = self.review_people()
+        db.session.add(m.ExaminerSpeakingRecord(exam_session_id=self.record.id,
+            person_ref=f'staff:{examiner.id}', file_id='examinerFile123', folder_id='folder123',
+            filename='Speaking.xlsx', mime_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'))
+        db.session.commit()
+        html = self.client.get(f'/my-exam-sessions/{self.share.token}?session_year=2026').get_data(as_text=True)
+        speaking_section = html.split('<b>Speaking component verifications</b>', 1)[1].split('</li>\n              ', 1)[0]
+        self.assertIn(examiner.full_name, speaking_section)
+        self.assertIn('https://drive.google.com/file/d/examinerFile123/view', speaking_section)
+        self.assertIn('target="_blank"', speaking_section)
+
+    def test_online_module_folder_required(self):
+        self.record.format = 'Online'; self.record.modules = 'Reading and writing'
+        self.record.digitalised_exams_url = None; db.session.commit()
+        html = self.client.get(f'/my-exam-sessions/{self.share.token}?session_year=2026').get_data(as_text=True)
+        self.assertIn('data-report-records-folder-missing', html)
+        response = self.post()
+        self.assertEqual(response.status_code, 400)
+        self.assertIn('Digitalised exams', response.json['error'])
+        self.assertEqual(m.StaffExamSessionReport.query.count(), 0)
+
+    def test_online_attendance_fields_follow_modules_and_preserve_onsite_text(self):
+        cases = [('Online', 'Speaking', True, False), ('Online', 'Listening and speaking', True, True),
+                 ('Online', 'Reading and writing', False, False), ('Onsite', 'Listening and speaking', False, False)]
+        for format_name, modules, speaking, components in cases:
+            with self.subTest(format=format_name, modules=modules):
+                self.record.format = format_name; self.record.modules = modules; db.session.commit()
+                html = self.client.get(f'/my-exam-sessions/{self.share.token}?session_year=2026').get_data(as_text=True)
+                self.assertEqual('name="speaking_records_checked"' in html, speaking)
+                self.assertEqual('name="listening_speaking_components_checked"' in html, components)
+                self.assertEqual('in Sinapsis and on the printed candidate list.' in html, format_name == 'Onsite')
+                if speaking:
+                    self.assertIn('name="speaking_records_checked" value="1" required', html)
+                    self.assertLess(html.index('name="speaking_records_checked"'), html.index('name="session_completed_checked"'))
+                if components:
+                    self.assertIn('name="listening_speaking_components_checked" value="1" required', html)
+                    self.assertLess(html.index('name="speaking_records_checked"'), html.index('name="listening_speaking_components_checked"'))
+                    self.assertLess(html.index('name="listening_speaking_components_checked"'), html.index('name="session_completed_checked"'))
+
+    def test_online_attendance_requires_and_persists_applicable_checks(self):
+        self.record.format = 'Online'; self.record.modules = 'Listening and speaking'; db.session.commit()
+        self.assertEqual(self.post(speaking_records_checked='0').status_code, 400)
+        self.assertEqual(self.post(listening_speaking_components_checked='0').status_code, 400)
+        self.assertEqual(m.StaffExamSessionReport.query.count(), 0)
+        self.assertEqual(self.post().status_code, 200)
+        report = m.StaffExamSessionReport.query.one()
+        self.assertTrue(report.speaking_records_checked)
+        self.assertTrue(report.listening_speaking_components_checked)
+        self.assertFalse(report.session_completed_checked)
+
+    def test_inapplicable_online_attendance_checks_are_not_required_or_saved(self):
+        self.record.format = 'Online'; self.record.modules = 'Reading and writing'; db.session.commit()
+        self.assertEqual(self.post(speaking_records_checked='1', listening_speaking_components_checked='1').status_code, 200)
+        report = m.StaffExamSessionReport.query.one()
+        self.assertFalse(report.speaking_records_checked)
+        self.assertFalse(report.listening_speaking_components_checked)
+
+    def test_online_attendance_migration_preserves_existing_reports(self):
+        from sqlalchemy import text
+        from app.schema_migrations import migrate_staff_session_report_attendance
+        self.assertEqual(self.post(optional_comments='Existing report').status_code, 200)
+        report_id = m.StaffExamSessionReport.query.one().id
+        db.session.expunge_all()
+        for field in ('speaking_records_checked', 'listening_speaking_components_checked', 'rw_files_uploaded_checked', 'rw_files_matched_checked', 'listening_files_uploaded_checked', 'listening_files_matched_checked', 'examiner_marks_checked'):
+            db.session.execute(text(f'ALTER TABLE staff_exam_session_report DROP COLUMN {field}'))
+        db.session.commit()
+        migrate_staff_session_report_attendance()
+        migrate_staff_session_report_attendance()
+        report = db.session.get(m.StaffExamSessionReport, report_id)
+        self.assertEqual(report.optional_comments, 'Existing report')
+        self.assertFalse(report.speaking_records_checked)
+        self.assertFalse(report.listening_speaking_components_checked)
+
+    def test_online_report_omits_onsite_sections_and_needs_no_marketing_folder(self):
+        import json
+        self.record.format = 'Online'
+        self.record.session_pictures_folder_url = ''
+        m.StaffSessionReportMedia.query.delete()
+        db.session.commit()
+        html = self.client.get(f'/my-exam-sessions/{self.share.token}?session_year=2026').get_data(as_text=True)
+        for marker in ('name="return_verification"', 'name="facilities_outcome"', 'name="emergency_pack_outcome"', 'data-report-media ', 'name="marketing_confirmed"'):
+            self.assertNotIn(marker, html)
+        for marker in ('name="schedule_outcome"', 'name="absent_candidates_checked"', 'Staff member performance review', 'name="centre_feedback_confirmed"', 'name="optional_comments"'):
+            self.assertIn(marker, html)
+        response = self.post(return_verification=[], facilities_outcome='', emergency_pack_outcome='', marketing_confirmed='0')
+        self.assertEqual(response.status_code, 200, response.json)
+        report = m.StaffExamSessionReport.query.one()
+        self.assertEqual(json.loads(report.return_verification), [])
+        self.assertEqual(report.facilities_outcome, '')
+        self.assertEqual(report.emergency_pack_outcome, '')
+        self.assertFalse(report.marketing_confirmed)
+        self.assertEqual(json.loads(report.marketing_media), [])
+
+    def test_onsite_report_still_requires_return_facilities_emergency_and_marketing(self):
+        self.assertEqual(self.post(return_verification=[]).status_code, 400)
+        self.assertEqual(self.post(facilities_outcome='').status_code, 400)
+        self.assertEqual(self.post(emergency_pack_outcome='').status_code, 400)
+        self.assertEqual(self.post(marketing_confirmed='0').status_code, 400)
+        html = self.client.get(f'/my-exam-sessions/{self.share.token}?session_year=2026').get_data(as_text=True)
+        for marker in ('name="return_verification"', 'name="facilities_outcome"', 'name="emergency_pack_outcome"', 'name="marketing_confirmed"'):
+            self.assertIn(marker, html)

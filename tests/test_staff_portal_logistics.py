@@ -152,7 +152,7 @@ class StaffPortalLogisticsTest(unittest.TestCase):
                 self.assertIn('data-report-date-unrestricted="true"', html)
                 self.assertIn('End-of-session report ↗', html)
                 self.assertIn('name="absent_candidates_checked"', html)
-                self.assertIn('name="return_verification"', html)
+                self.assertNotIn('name="return_verification"', html)
                 self.assertIn('name="recordings_reminder_confirmed"', html)
         share=StaffExamSessionsShare.query.one()
         submission=StaffExamSessionSubmission.query.one()

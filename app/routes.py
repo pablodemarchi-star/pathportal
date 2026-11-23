@@ -20538,6 +20538,46 @@ def staff_end_checks_available(record, now=None):
     return bool(record.session_date and now.astimezone(LOCAL_TZ).date() >= record.session_date)
 
 
+def staff_report_online_attendance_fields(record):
+    if record.format != "Online":
+        return ()
+    modules = {module.lower() for module in record.modules_list()}
+    fields = []
+    if modules & {"speaking", "listening and speaking"}:
+        fields.append("speaking_records_checked")
+    if "listening and speaking" in modules:
+        fields.append("listening_speaking_components_checked")
+    return tuple(fields)
+
+
+MODULE_VERIFICATION_FIELDS = ('rw_files_uploaded_checked', 'rw_files_matched_checked', 'listening_files_uploaded_checked', 'listening_files_matched_checked', 'examiner_marks_checked')
+
+
+def staff_report_module_sections(record):
+    if record.format != "Online":
+        return []
+    modules = {module.lower() for module in record.modules_list()}
+    sections = []
+    for module, title, prefix, component in (
+        ("reading and writing", "Reading and Writing module verification", "rw", "Reading and Writing"),
+        ("listening and speaking", "Listening component verifications", "listening", "Listening"),
+    ):
+        if module in modules:
+            sections.append(dict(title=title, component=component, fields=[prefix + "_files_uploaded_checked", prefix + "_files_matched_checked"]))
+    if modules & {"speaking", "listening and speaking"}:
+        sections.append(dict(title="Speaking component verifications", component="Speaking", fields=["examiner_marks_checked"]))
+    return sections
+
+
+def staff_report_speaking_documents(record):
+    from app.exam_records import examiners
+    from app.models import ExaminerSpeakingRecord
+    documents = {item.person_ref: item for item in ExaminerSpeakingRecord.query.filter_by(exam_session_id=record.id)}
+    return [dict(name=person["name"], url="https://drive.google.com/file/d/" + documents[person["ref"]].file_id + "/view"
+                 if person["ref"] in documents and documents[person["ref"]].file_id else "")
+            for person in examiners(record)]
+
+
 def staff_report_assignment_eligible(record, assignment, assignment_type):
     return bool(assignment_type == "supervisor" and assignment
                 and assignment.participation_status == "Confirmed"
@@ -20587,36 +20627,57 @@ def submit_staff_session_report(token, submission_id):
     attendance = {key: request.form.get(key) == "1" for key in attendance_fields}
     if not attendance["absent_candidates_checked"] or not attendance["submitted_candidates_checked"]:
         return jsonify(ok=False, error="Please confirm the first two Candidate Attendance statements."), 400
-    facilities_outcome = request.form.get("facilities_outcome", "").strip()
-    facilities_comments = request.form.get("facilities_comments", "").strip()
-    if facilities_outcome not in {"Satisfactory", "Satisfactory, with comments", "Unsatisfactory"}:
-        return jsonify(ok=False, error="Please select an exam centre facilities and organisation outcome."), 400
-    if facilities_outcome != "Satisfactory" and not facilities_comments:
-        return jsonify(ok=False, error="Please provide comments on the exam centre facilities and organisation."), 400
-    if len(facilities_comments) > 10000:
-        return jsonify(ok=False, error="Comments must not exceed 10,000 characters."), 400
-    emergency_pack_outcome = request.form.get("emergency_pack_outcome", "").strip()
-    emergency_pack_reasons = request.form.get("emergency_pack_reasons", "").strip()
-    if emergency_pack_outcome not in {"No, it was not needed", "Yes, it was opened and used", "It was opened but not used"}:
-        return jsonify(ok=False, error="Please select whether the Emergency exam pack was used."), 400
-    if emergency_pack_outcome != "No, it was not needed" and not emergency_pack_reasons:
-        return jsonify(ok=False, error="Please provide reasons for opening the Emergency exam pack."), 400
-    if len(emergency_pack_reasons) > 10000:
-        return jsonify(ok=False, error="Reasons must not exceed 10,000 characters."), 400
-    return_steps = request.form.getlist("return_verification")
-    required_return_steps = ["submitted_papers", "submitted_packages", "absent_packages", "sealing", "labelling", "institutional_verification"]
-    if return_steps != required_return_steps:
-        return jsonify(ok=False, error="Please complete all six Exam return package verification steps in order."), 400
+    required_online_checks = staff_report_online_attendance_fields(record)
+    online_attendance = {key: key in required_online_checks and request.form.get(key) == "1"
+                         for key in ("speaking_records_checked", "listening_speaking_components_checked")}
+    if "speaking_records_checked" in required_online_checks and not online_attendance["speaking_records_checked"]:
+        return jsonify(ok=False, error="Please confirm that the Examiners' Speaking records match candidate statuses in Sinapsis."), 400
+    if "listening_speaking_components_checked" in required_online_checks and not online_attendance["listening_speaking_components_checked"]:
+        return jsonify(ok=False, error="Please confirm that all Submitted candidates completed both the Listening and Speaking components."), 400
+    module_sections = staff_report_module_sections(record)
+    required_module_fields = {field for section in module_sections for field in section["fields"]}
+    module_verifications = {field: field in required_module_fields and request.form.get(field) == "1"
+                            for field in MODULE_VERIFICATION_FIELDS}
+    if any(not module_verifications[field] for field in required_module_fields):
+        return jsonify(ok=False, error="Please complete all module verifications."), 400
+    if any(section["component"] != "Speaking" for section in module_sections) and not (record.digitalised_exams_url or "").strip():
+        return jsonify(ok=False, error="Digitalised exams folder is not configured for this session. Please contact Logistics."), 400
+    online = record.format == "Online"
+    facilities_outcome = facilities_comments = emergency_pack_outcome = emergency_pack_reasons = ""
+    return_steps = []
+    if not online:
+        facilities_outcome = request.form.get("facilities_outcome", "").strip()
+        facilities_comments = request.form.get("facilities_comments", "").strip()
+        if facilities_outcome not in {"Satisfactory", "Satisfactory, with comments", "Unsatisfactory"}:
+            return jsonify(ok=False, error="Please select an exam centre facilities and organisation outcome."), 400
+        if facilities_outcome != "Satisfactory" and not facilities_comments:
+            return jsonify(ok=False, error="Please provide comments on the exam centre facilities and organisation."), 400
+        if len(facilities_comments) > 10000:
+            return jsonify(ok=False, error="Comments must not exceed 10,000 characters."), 400
+        emergency_pack_outcome = request.form.get("emergency_pack_outcome", "").strip()
+        emergency_pack_reasons = request.form.get("emergency_pack_reasons", "").strip()
+        if emergency_pack_outcome not in {"No, it was not needed", "Yes, it was opened and used", "It was opened but not used"}:
+            return jsonify(ok=False, error="Please select whether the Emergency exam pack was used."), 400
+        if emergency_pack_outcome != "No, it was not needed" and not emergency_pack_reasons:
+            return jsonify(ok=False, error="Please provide reasons for opening the Emergency exam pack."), 400
+        if len(emergency_pack_reasons) > 10000:
+            return jsonify(ok=False, error="Reasons must not exceed 10,000 characters."), 400
+        return_steps = request.form.getlist("return_verification")
+        required_return_steps = ["submitted_papers", "submitted_packages", "absent_packages", "sealing", "labelling", "institutional_verification"]
+        if return_steps != required_return_steps:
+            return jsonify(ok=False, error="Please complete all six Exam return package verification steps in order."), 400
     from app.staff_report_review import validate_assessments
     try:
         assessments = validate_assessments(record, request.form)
     except ValueError as error:
         return jsonify(ok=False, error=str(error)), 400
-    if not session_pictures_folder(record):
-        return jsonify(ok=False, error="Session pictures folder is not configured. Please contact Path Examinations."), 400
-    media = media_for_submission(record, submission)
-    if not media or request.form.get("marketing_confirmed") != "1":
-        return jsonify(ok=False, error="Upload at least one file and confirm Marketing material before submitting."), 400
+    media = []
+    if not online:
+        if not session_pictures_folder(record):
+            return jsonify(ok=False, error="Session pictures folder is not configured. Please contact Path Examinations."), 400
+        media = media_for_submission(record, submission)
+        if not media or request.form.get("marketing_confirmed") != "1":
+            return jsonify(ok=False, error="Upload at least one file and confirm Marketing material before submitting."), 400
     if not staff_report_feedback_submitted(record):
         return jsonify(ok=False, error="The exam centre must submit its Exam session feedback form before this report can be submitted."), 400
     if request.form.get("centre_feedback_confirmed") != "1":
@@ -20634,14 +20695,14 @@ def submit_staff_session_report(token, submission_id):
                                         optional_comments=optional_comments,
                                         centre_feedback_confirmed=True,
                                         recordings_reminder_confirmed=recordings_required and recordings_confirmed,
-                                        marketing_confirmed=True, marketing_media=json.dumps([item.file_id for item in media]),
+                                        marketing_confirmed=not online, marketing_media=json.dumps([item.file_id for item in media]),
                                         staff_assessments=json.dumps(assessments),
                                         return_verification=json.dumps(return_steps),
                                         emergency_pack_outcome=emergency_pack_outcome,
                                         emergency_pack_reasons=emergency_pack_reasons if emergency_pack_outcome != "No, it was not needed" else "",
                                         facilities_outcome=facilities_outcome,
                                         facilities_comments=facilities_comments if facilities_outcome != "Satisfactory" else "",
-                                        reasons=reasons if outcome != "There were no delays" else "", **attendance))
+                                        reasons=reasons if outcome != "There were no delays" else "", **attendance, **online_attendance, **module_verifications))
     try:
         db.session.commit()
     except IntegrityError:
@@ -20693,6 +20754,9 @@ def staff_end_checks_view(record, role, status, submission, share):
         "digitalised_url": (record.digitalised_exams_url or "").strip(),
         "digitalised_available": datetime.now(LOCAL_TZ).date() == record.session_date,
         "report_url": "" if role == "examiner" else current_app.config.get("STAFF_END_OF_SESSION_REPORT_URL", ""),
+        "online_attendance_fields": staff_report_online_attendance_fields(record),
+        "module_sections": staff_report_module_sections(record),
+        "speaking_documents": staff_report_speaking_documents(record) if record.format == "Online" and report_eligible else [],
         "session_report_available": report_eligible and staff_report_available(record),
         "session_report_date_unrestricted": record.format == "Online",
         "session_report_submitted": bool(report_for_session(record)) if report_eligible else False,

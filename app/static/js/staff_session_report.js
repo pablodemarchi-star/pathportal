@@ -11,6 +11,8 @@
     const emergencyReasons = form.querySelector('[data-report-emergency-reasons]');
     const feedback = form.querySelector('[data-report-feedback]');
     const submit = form.querySelector('[type="submit"]');
+    const recordsFolderMissing = Boolean(form.querySelector('[data-report-records-folder-missing]'));
+    if (recordsFolderMissing) submit.disabled = true;
     const institutionalFeedback = form.querySelector('[data-report-feedback-checkbox]');
     let institutionSubmitted = institutionalFeedback?.dataset.submitted === 'true';
     let saving = false;
@@ -73,7 +75,7 @@
         badge.textContent = institutionSubmitted ? 'Feedback form submitted' : 'Feedback form not submitted';
         badge.classList.toggle('is-available', institutionSubmitted);
         form.querySelector('[data-report-feedback-help]').hidden = institutionSubmitted;
-        submit.disabled = !institutionSubmitted || mediaPending;
+        submit.disabled = recordsFolderMissing || !institutionSubmitted || mediaPending;
       } catch {} finally { checkingFeedback = false; }
     };
     opener.addEventListener('click', refreshFeedbackStatus);
@@ -103,22 +105,25 @@
     dialog.addEventListener('cancel', (event) => { if (saving) event.preventDefault(); });
     outcome.addEventListener('change', updateReasons);
     const updateComments = () => {
+      if (!facilities || !comments) return;
       const needed = ['Satisfactory, with comments', 'Unsatisfactory'].includes(facilities.value);
       form.querySelector('[data-report-comments-field]').hidden = !needed;
       comments.disabled = !needed;
       comments.required = needed;
     };
-    facilities.addEventListener('change', updateComments);
+    facilities?.addEventListener('change', updateComments);
     const updateEmergencyReasons = () => {
+      if (!emergencyPack || !emergencyReasons) return;
       const needed = ['Yes, it was opened and used', 'It was opened but not used'].includes(emergencyPack.value);
       form.querySelector('[data-report-emergency-reasons-field]').hidden = !needed;
       emergencyReasons.disabled = !needed;
       emergencyReasons.required = needed;
     };
-    emergencyPack.addEventListener('change', updateEmergencyReasons);
+    emergencyPack?.addEventListener('change', updateEmergencyReasons);
     const timeline = form.querySelector('[data-report-return-timeline]');
-    const returnSteps = Array.from(timeline.querySelectorAll('[data-return-step]'));
+    const returnSteps = Array.from(timeline?.querySelectorAll('[data-return-step]') || []);
     const updateReturnSteps = () => {
+      if (!timeline) return;
       let previousChecked = true;
       returnSteps.forEach((step) => {
         step.disabled = !previousChecked;
@@ -223,7 +228,7 @@
         } finally {
           mediaPending = false;
           input.disabled = false;
-          submit.disabled = !institutionSubmitted;
+          submit.disabled = recordsFolderMissing || !institutionSubmitted;
           marketingCheckbox.disabled = uploadedCount === 0;
           input.value = '';
           saveDraft();
@@ -245,12 +250,13 @@
         return;
       }
       if (saving || mediaPending) return;
+      if (recordsFolderMissing) { feedback.textContent = 'Digitalised exams folder is not configured. Please contact Logistics.'; return; }
       updateReview();
       reviewRows.forEach(row => {
         if (Array.from(row.querySelectorAll('[data-review-comment]')).some(input => input.required && !input.value.trim())) row.querySelector('[data-review-notes]').open = true;
       });
       if (!form.reportValidity()) return;
-      if (!mediaBox || mediaBox.dataset.folderConfigured !== 'true' || !uploadedCount || !marketingCheckbox.checked) {
+      if (mediaBox && (mediaBox.dataset.folderConfigured !== 'true' || !uploadedCount || !marketingCheckbox.checked)) {
         feedback.textContent = 'Upload at least one file and confirm Marketing material before submitting.';
         return;
       }
@@ -282,7 +288,7 @@
         feedback.textContent = error.message || 'The report could not be submitted. Please try again.';
       } finally {
         saving = false;
-        submit.disabled = !institutionSubmitted || !opener.dataset.folderUrl;
+        submit.disabled = recordsFolderMissing || !institutionSubmitted || !opener.dataset.folderUrl;
       }
     });
     if (opener.dataset?.folderUrl && section.dataset.reportDraftKey) {

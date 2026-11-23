@@ -4,7 +4,7 @@ const vm=require('node:vm');
 const storage=new Map();
 const classes=()=>({values:new Set(),toggle(key,value){if(value)this.values.add(key);else this.values.delete(key);},add(key){this.values.add(key);}});
 const source=fs.readFileSync('app/static/js/staff_session_report.js','utf8');
-function page(){
+function page(online=false){
  const make=(name,type='text',value='')=>({name,type,value,checked:false,disabled:false,dataset:{},handlers:{},classList:classes(),addEventListener(event,fn){(this.handlers[event]||=[]).push(fn);},setAttribute(key,value){this[key]=value;}});
  const outcome=make('schedule_outcome','select');const reasons=make('reasons','textarea');
  const facilities=make('facilities_outcome','select');const comments=make('facilities_comments','textarea');
@@ -19,14 +19,16 @@ function page(){
  '[data-report-feedback-checkbox]':feedbackCheckbox,'[data-report-feedback-status]':badge,'[data-report-feedback-help]':help,
  '[data-report-return-timeline]':{classList:classes(),querySelectorAll:()=>steps},'[data-return-progress]':{},'[data-review-count]':{classList:classes()}};
  for(const name of ['reasons-field','comments-field','emergency-reasons-field'])nodes[`[data-report-${name}]`]={};
- const form={handlers:{},querySelector:key=>nodes[key],querySelectorAll:key=>key==='[data-review-row]'?[]:fields,addEventListener(event,fn){(this.handlers[event]||=[]).push(fn);}};
+ if(online) for(const key of ['[data-report-facilities]','[data-report-comments]','[data-report-emergency-pack]','[data-report-emergency-reasons]','[data-report-return-timeline]','[data-return-progress]'])delete nodes[key];
+ const form={reportValidity:()=>true,reset(){},handlers:{},querySelector:key=>nodes[key],querySelectorAll:key=>key==='[data-review-row]'?[]:fields,addEventListener(event,fn){(this.handlers[event]||=[]).push(fn);}};
  const dialog={open:true,querySelector:()=>form,querySelectorAll:()=>[],addEventListener(){},close(){this.open=false;}};
  const opener=make('opener');opener.dataset.folderUrl='/report';
  const section={dataset:{reportDraftKey:'shared-session-draft',feedbackStatusUrl:'/status',opensAt:'2026-11-13T00:00:00-03:00'},querySelector:key=>key==='[data-exam-day-report-link]'?opener:dialog,closest:()=>({open:true})};
+ if(online)section.dataset.reportDateUnrestricted='true';
  const events={},documentEvents={};let result={ok:true,submitted:false,report_submitted:false};let poll;
  const window={addEventListener(name,fn){events[name]=fn;},setInterval(fn,ms){assert.equal(ms,5000);poll=fn;}};
  const document={hidden:false,querySelectorAll:()=>[section],addEventListener(name,fn){documentEvents[name]=fn;}};
- vm.runInNewContext(source,{window,document,sessionStorage:{getItem:key=>storage.get(key),setItem:(key,value)=>storage.set(key,value),removeItem:key=>storage.delete(key)},fetch:async()=>({ok:true,json:async()=>result})});
+ vm.runInNewContext(source,{window,document,FormData:class {},sessionStorage:{getItem:key=>storage.get(key),setItem:(key,value)=>storage.set(key,value),removeItem:key=>storage.delete(key)},fetch:async()=>({ok:true,json:async()=>result})});
  return {outcome,reasons,notes,comment,assessment,steps,fields,form,feedbackCheckbox,badge,help,submit,feedback,opener,events,documentEvents,setResult(value){result=value;}};
 }
 (async()=>{
@@ -47,5 +49,12 @@ function page(){
  await restored.events.focus();
  assert.equal(restored.opener.disabled,true);assert.ok(restored.fields.every(field=>field.disabled));assert.equal(storage.has('shared-session-draft'),false);
  assert.match(restored.feedback.textContent,/Other Supervisor/);
+ const online=page(true);
+ online.setResult({ok:true,submitted:true,report_submitted:false});
+ await online.events.focus();
+ await online.form.handlers.submit[0]({preventDefault(){}});
+ assert.equal(online.opener.disabled,true);
+ assert.equal(online.opener.textContent,'Report submitted');
+ console.log('Online report submits without return, facilities, emergency pack or marketing sections.');
  console.log('Supervisor report: drafts survive reload, feedback refresh preserves answers, and another Supervisor submission locks the session.');
 })().catch(error=>{console.error(error);process.exitCode=1;});
