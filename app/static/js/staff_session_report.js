@@ -14,7 +14,7 @@
     const recordsFolderMissing = Boolean(form.querySelector('[data-report-records-folder-missing]'));
     if (recordsFolderMissing) submit.disabled = true;
     const institutionalFeedback = form.querySelector('[data-report-feedback-checkbox]');
-    let institutionSubmitted = institutionalFeedback?.dataset.submitted === 'true';
+    let institutionSubmitted = !institutionalFeedback || institutionalFeedback.dataset.submitted === 'true';
     let saving = false;
     let mediaPending = false;
     const draftFields = Array.from(form.querySelectorAll('input[name]:not([type="file"]):not([type="hidden"]), select[name], textarea[name]'));
@@ -67,14 +67,16 @@
           marketingCheckbox.disabled = !uploadedCount || mediaBox.dataset.folderConfigured !== 'true';
           if (!uploadedCount) marketingCheckbox.checked = false;
         }
-        institutionSubmitted = Boolean(result.submitted);
-        institutionalFeedback.dataset.submitted = String(institutionSubmitted);
-        institutionalFeedback.disabled = !institutionSubmitted;
-        if (!institutionSubmitted) institutionalFeedback.checked = false;
-        const badge = form.querySelector('[data-report-feedback-status]');
-        badge.textContent = institutionSubmitted ? 'Feedback form submitted' : 'Feedback form not submitted';
-        badge.classList.toggle('is-available', institutionSubmitted);
-        form.querySelector('[data-report-feedback-help]').hidden = institutionSubmitted;
+        if (institutionalFeedback) {
+          institutionSubmitted = Boolean(result.submitted);
+          institutionalFeedback.dataset.submitted = String(institutionSubmitted);
+          institutionalFeedback.disabled = !institutionSubmitted;
+          if (!institutionSubmitted) institutionalFeedback.checked = false;
+          const badge = form.querySelector('[data-report-feedback-status]');
+          badge.textContent = institutionSubmitted ? 'Feedback form submitted' : 'Feedback form not submitted';
+          badge.classList.toggle('is-available', institutionSubmitted);
+          form.querySelector('[data-report-feedback-help]').hidden = institutionSubmitted;
+        }
         submit.disabled = recordsFolderMissing || !institutionSubmitted || mediaPending;
       } catch {} finally { checkingFeedback = false; }
     };

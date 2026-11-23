@@ -7,7 +7,7 @@ from flask import abort, current_app, g, render_template, request, url_for
 from app import db
 from app import models as m
 from app.exam_centre_feedback_text import QUESTIONS, OPEN_QUESTIONS
-from app.staff_report_review import CRITERIA
+from app.staff_report_review import CRITERIA, assessment_criteria
 
 
 def decoded(value):
@@ -80,7 +80,7 @@ def load_report_rows(year):
             if report.schedule_outcome != 'There were no delays': alerts.append(report.schedule_outcome)
             if report.facilities_outcome != 'Satisfactory': alerts.append('Facilities: '+report.facilities_outcome)
             if report.emergency_pack_outcome != 'No, it was not needed': alerts.append('Emergency pack opened')
-            concerning={'Too risky','Too doubtful','Not helpful','Needed guidance','Made mistakes','Not worn','Could improve','Inappropriate','Mother tongue','Unsatisfactory'}
+            concerning={'Too risky','Too doubtful','Not helpful','Needed guidance','Made mistakes','Not worn','Could improve','Inappropriate','Mother tongue','Unsatisfactory','Limited'}
             flagged=sum(any(value in concerning for value in row.get('criteria',{}).values()) for row in reviews)
             if flagged: alerts.append(f'{flagged} staff assessment(s) need attention')
         scores=[dict(key=key,label=title,value=getattr(feedback,key+'_score')) for key,title,*_ in QUESTIONS] if feedback else []
@@ -115,7 +115,9 @@ def render_detail(session_id):
     for report in reports:
         file_ids=decoded(report.marketing_media)
         files=m.StaffSessionReportMedia.query.filter(m.StaffSessionReportMedia.file_id.in_(file_ids)).all() if file_ids else []
-        report_views.append(dict(record=report,author=author(report),reviews=decoded(report.staff_assessments),return_steps=decoded(report.return_verification),files=files,historical=report.exam_session_id is None))
+        reviews = decoded(report.staff_assessments)
+        criteria = assessment_criteria(record) if any('exam_environment' in row.get('criteria', {}) for row in reviews) else CRITERIA
+        report_views.append(dict(criteria=criteria, record=report,author=author(report),reviews=decoded(report.staff_assessments),return_steps=decoded(report.return_verification),files=files,historical=report.exam_session_id is None))
     feedback=m.ExamCentreFeedback.query.filter_by(exam_session_id=record.id).first()
     response=current_app.make_response(render_template('_session_reports_detail.html',session_record=record,reports=report_views,feedback=feedback,criteria=CRITERIA,questions=QUESTIONS,open_questions=OPEN_QUESTIONS))
     response.headers['Cache-Control']='private, no-store'

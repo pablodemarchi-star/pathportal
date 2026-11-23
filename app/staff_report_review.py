@@ -24,6 +24,18 @@ for criterion in CRITERIA:
         criterion['comment_title'], criterion['comment_when'] = COMMENT_RULES[criterion['key']]
 
 
+def assessment_criteria(record):
+    if record.format != 'Online':
+        return CRITERIA
+    replacements = {
+        'staff_id': dict(key='exam_environment', label='Exam environment', options=['Appropriate', 'Inappropriate'],
+                         comment_title='Comment on Exam environment', comment_when=['Inappropriate']),
+        'language': dict(key='it_skills', label='IT skills', options=['Limited', 'Adequate', 'Proficient'],
+                         comment_title='Comment on IT skills', comment_when=['Limited']),
+    }
+    return [replacements.get(criterion['key'], criterion) for criterion in CRITERIA]
+
+
 def assessment_roster(record):
     from app.routes import staffing_assignment_person_ref
     rows = {}
@@ -44,7 +56,7 @@ def validate_assessments(record, form):
     assessments = []
     for row in assessment_roster(record):
         values = {}
-        for criterion in CRITERIA:
+        for criterion in assessment_criteria(record):
             value = form.get(f"review.{row['key']}.{criterion['key']}", '').strip()
             if value not in criterion['options']:
                 raise ValueError(f"Please complete all seven assessment criteria for {row['name']} ({row['role']}). If the session team changed, reload the page to see the current staff list.")
@@ -53,7 +65,10 @@ def validate_assessments(record, form):
         if len(notes) > 10000:
             raise ValueError(f"Notes for {row['name']} must not exceed 10,000 characters.")
         comments = {}
-        for key, (title, required_values) in COMMENT_RULES.items():
+        for criterion in assessment_criteria(record):
+            if not criterion.get('comment_when'):
+                continue
+            key, title, required_values = criterion['key'], criterion['comment_title'], criterion['comment_when']
             if values[key] not in required_values:
                 continue
             comment = form.get(f"review.{row['key']}.comments.{key}", '').strip()

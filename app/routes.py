@@ -20578,6 +20578,12 @@ def staff_report_speaking_documents(record):
             for person in examiners(record)]
 
 
+def staff_report_recordings_required(record):
+    if record.format == "Online":
+        return bool({module.lower() for module in record.modules_list()} & {"speaking", "listening and speaking"})
+    return staff_session_has_recording_candidates(record)
+
+
 def staff_report_assignment_eligible(record, assignment, assignment_type):
     return bool(assignment_type == "supervisor" and assignment
                 and assignment.participation_status == "Confirmed"
@@ -20678,11 +20684,12 @@ def submit_staff_session_report(token, submission_id):
         media = media_for_submission(record, submission)
         if not media or request.form.get("marketing_confirmed") != "1":
             return jsonify(ok=False, error="Upload at least one file and confirm Marketing material before submitting."), 400
-    if not staff_report_feedback_submitted(record):
+    final_checks_required = not online or staff_report_recordings_required(record)
+    if final_checks_required and not staff_report_feedback_submitted(record):
         return jsonify(ok=False, error="The exam centre must submit its Exam session feedback form before this report can be submitted."), 400
-    if request.form.get("centre_feedback_confirmed") != "1":
+    if final_checks_required and request.form.get("centre_feedback_confirmed") != "1":
         return jsonify(ok=False, error="Please confirm that the exam centre has completed its feedback form."), 400
-    recordings_required = staff_session_has_recording_candidates(record)
+    recordings_required = staff_report_recordings_required(record)
     recordings_confirmed = request.form.get("recordings_reminder_confirmed") == "1"
     if recordings_required and not recordings_confirmed:
         return jsonify(ok=False, error="Please confirm that all examiners have been reminded to upload their recordings."), 400
@@ -20693,7 +20700,7 @@ def submit_staff_session_report(token, submission_id):
     db.session.add(StaffExamSessionReport(submission_id=submission.id, exam_session_id=record.id,
                                         author_name=person.full_name if person else "", author_person_ref=person_ref, schedule_outcome=outcome,
                                         optional_comments=optional_comments,
-                                        centre_feedback_confirmed=True,
+                                        centre_feedback_confirmed=final_checks_required,
                                         recordings_reminder_confirmed=recordings_required and recordings_confirmed,
                                         marketing_confirmed=not online, marketing_media=json.dumps([item.file_id for item in media]),
                                         staff_assessments=json.dumps(assessments),
@@ -20736,7 +20743,7 @@ def staff_report_feedback_status(token, submission_id):
 
 
 def staff_end_checks_view(record, role, status, submission, share):
-    from app.staff_report_review import assessment_roster, CRITERIA
+    from app.staff_report_review import assessment_roster, assessment_criteria
     from app.staff_report_media import media_view, report_for_session
     if status != "Confirmed":
         return {}
@@ -20764,11 +20771,11 @@ def staff_end_checks_view(record, role, status, submission, share):
         "session_report_url": url_for("staff.submit_staff_session_report", token=share.token, submission_id=submission.id),
         "session_report_media_url": url_for("staff.upload_staff_report_media", token=share.token, submission_id=submission.id),
         "session_report_media": media_view(record, submission) if report_eligible else {"folder_configured": False, "files": []},
-        "institutional_feedback_submitted": staff_report_feedback_submitted(record),
+        "institutional_feedback_submitted": (record.format == "Online" and not staff_report_recordings_required(record)) or staff_report_feedback_submitted(record),
         "feedback_status_url": url_for("staff.staff_report_feedback_status", token=share.token, submission_id=submission.id),
-        "report_recordings_required": staff_session_has_recording_candidates(record),
+        "report_recordings_required": staff_report_recordings_required(record),
         "assessment_roster": assessment_roster(record) if report_eligible else [],
-        "assessment_criteria": CRITERIA,
+        "assessment_criteria": assessment_criteria(record),
         "url": url_for("staff.update_staff_end_checks", token=share.token, submission_id=submission.id),
     }}
 

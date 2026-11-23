@@ -48,6 +48,8 @@ class StaffSessionReportTest(unittest.TestCase):
         for section in staff_report_module_sections(self.record):
             for field in section['fields']:
                 data[field] = '1'
+        if self.record.format == 'Online':
+            data['recordings_reminder_confirmed'] = '1'
         feedback_submitted = values.pop('_feedback_submitted', True)
         data.update(values)
         with patch('app.routes.staff_report_available', return_value=True), patch('app.routes.staff_report_feedback_submitted', return_value=feedback_submitted):
@@ -133,9 +135,9 @@ class StaffSessionReportTest(unittest.TestCase):
         return examiner, intern
 
     def review_answers(self):
-        from app.staff_report_review import assessment_roster, CRITERIA
-        return {f"review.{row['key']}.{criterion['key']}": criterion['options'][0]
-                for row in assessment_roster(self.record) for criterion in CRITERIA}
+        from app.staff_report_review import assessment_roster, assessment_criteria
+        return {f"review.{row['key']}.{criterion['key']}": ('Proficient' if criterion['key'] == 'it_skills' else criterion['options'][0])
+                for row in assessment_roster(self.record) for criterion in assessment_criteria(self.record)}
 
     def test_staff_review_roster_filters_roles_and_deduplicates(self):
         from app.staff_report_review import assessment_roster
@@ -274,6 +276,21 @@ class StaffSessionReportTest(unittest.TestCase):
         self.assertEqual(self.post().status_code, 200)
         self.assertTrue(m.StaffExamSessionReport.query.one().centre_feedback_confirmed)
 
+    def test_online_final_checks_follow_session_modules(self):
+        self.record.format = 'Online'
+        for modules, visible in [('Reading and writing', False), ('Speaking', True), ('Listening and speaking', True)]:
+            self.record.modules = modules; db.session.commit()
+            html = self.client.get(f'/my-exam-sessions/{self.share.token}?session_year=2026').get_data(as_text=True)
+            self.assertEqual('<b>Final checks</b>' in html, visible)
+            self.assertEqual('name="recordings_reminder_confirmed"' in html, visible)
+        self.assertEqual(self.post(recordings_reminder_confirmed='0').status_code, 400)
+        self.record.modules = 'Reading and writing'; db.session.commit()
+        response = self.post(recordings_reminder_confirmed='0', centre_feedback_confirmed='', _feedback_submitted=False)
+        self.assertEqual(response.status_code, 200, response.json)
+        saved = m.StaffExamSessionReport.query.one()
+        self.assertFalse(saved.recordings_reminder_confirmed)
+        self.assertFalse(saved.centre_feedback_confirmed)
+
     def test_recordings_reminder_required_only_with_applicable_candidates(self):
         for module in ('Speaking', 'Listening and speaking'):
             m.ExamSessionMonthlyRegistration.query.delete()
@@ -378,6 +395,36 @@ class StaffSessionReportTest(unittest.TestCase):
         with self.assertRaises(IntegrityError): db.session.commit()
         db.session.rollback()
         self.assertEqual(m.StaffExamSessionReport.query.count(),1)
+
+    def test_online_review_criteria_and_required_comments(self):
+        import json
+        from app.staff_report_review import assessment_criteria
+        self.record.format = 'Online'
+        examiner, intern = self.review_people()
+        criteria = {item['key']: item for item in assessment_criteria(self.record)}
+        self.assertEqual(criteria['exam_environment']['options'], ['Appropriate', 'Inappropriate'])
+        self.assertEqual(criteria['it_skills']['options'], ['Limited', 'Adequate', 'Proficient'])
+        self.assertNotIn('staff_id', criteria)
+        self.assertNotIn('language', criteria)
+        html = self.client.get(f'/my-exam-sessions/{self.share.token}?session_year=2026').get_data(as_text=True)
+        self.assertIn('Comment on Exam environment', html)
+        self.assertIn('Comment on IT skills', html)
+        answers = self.review_answers()
+        prefix = f'review.examiner:{examiner.id}.'
+        for key, value in [('exam_environment', 'Inappropriate'), ('it_skills', 'Limited')]:
+            for comment in ('', '  '):
+                response = self.post(**{**answers, prefix + key: value, prefix + 'comments.' + key: comment})
+                self.assertEqual(response.status_code, 400)
+                self.assertIn(criteria[key]['comment_title'], response.json['error'])
+        self.assertEqual(self.post(**{**answers, prefix + 'exam_environment': 'Worn'}).status_code, 400)
+        self.assertEqual(self.post(**{**answers, prefix + 'it_skills': 'English'}).status_code, 400)
+        answers.update({prefix + 'exam_environment': 'Inappropriate', prefix + 'comments.exam_environment': 'Unsuitable room',
+                        prefix + 'it_skills': 'Limited', prefix + 'comments.it_skills': 'Needed technical help'})
+        self.assertEqual(self.post(**answers).status_code, 200)
+        reviews = json.loads(m.StaffExamSessionReport.query.one().staff_assessments)
+        reviewed = next(row for row in reviews if row['key'] == f'examiner:{examiner.id}')
+        self.assertEqual(reviewed['comments']['it_skills'], 'Needed technical help')
+        self.assertEqual(reviewed['criteria']['exam_environment'], 'Inappropriate')
 
     def test_criterion_specific_comments_required_for_each_negative_selection(self):
         from app.staff_report_review import COMMENT_RULES
@@ -612,11 +659,10 @@ class StaffSessionReportTest(unittest.TestCase):
                 self.assertEqual('in Sinapsis and on the printed candidate list.' in html, format_name == 'Onsite')
                 if speaking:
                     self.assertIn('name="speaking_records_checked" value="1" required', html)
-                    self.assertLess(html.index('name="speaking_records_checked"'), html.index('name="session_completed_checked"'))
+                    self.assertGreater(html.index('name="speaking_records_checked"'), html.index('name="examiner_marks_checked"'))
                 if components:
                     self.assertIn('name="listening_speaking_components_checked" value="1" required', html)
-                    self.assertLess(html.index('name="speaking_records_checked"'), html.index('name="listening_speaking_components_checked"'))
-                    self.assertLess(html.index('name="listening_speaking_components_checked"'), html.index('name="session_completed_checked"'))
+                    self.assertGreater(html.index('name="listening_speaking_components_checked"'), html.index('name="speaking_records_checked"'))
 
     def test_online_attendance_requires_and_persists_applicable_checks(self):
         self.record.format = 'Online'; self.record.modules = 'Listening and speaking'; db.session.commit()
