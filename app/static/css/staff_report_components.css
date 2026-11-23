@@ -40,3 +40,12 @@
 .staff-report-consideration-dialog label{display:grid;gap:7px;font-size:13px;font-weight:600}
 .staff-report-consideration-dialog input,.staff-report-consideration-dialog textarea{width:100%;min-width:0;box-sizing:border-box;padding:10px;border:1px solid #c5d7df;border-radius:8px;font:inherit;font-weight:400}
 .staff-report-consideration-dialog button:focus-visible,.staff-report-consideration-chip button:focus-visible{outline:2px solid #00506b;outline-offset:2px}
+
+.staff-report-candidate-chips{margin:14px 0}
+.staff-report-candidate-dialog{box-sizing:border-box;width:min(720px,calc(100vw - 32px));max-height:90dvh;overflow:auto;padding:24px;border:1px solid #c5d7df;border-radius:16px;color:#00506b;background:#fff;box-shadow:0 18px 70px #102f4140}
+.staff-report-candidate-dialog::backdrop{background:#122c4173}
+.staff-report-candidate-dialog>form{display:grid;gap:16px}
+.staff-report-candidate-dialog h3{margin:0;font-size:20px}
+.staff-report-candidate-dialog .staff-report-component-candidate{margin:0}
+.staff-report-candidate-dialog button:focus-visible{outline:2px solid #00506b;outline-offset:2px}
+@media(max-width:600px){.staff-report-candidate-dialog{padding:16px}}

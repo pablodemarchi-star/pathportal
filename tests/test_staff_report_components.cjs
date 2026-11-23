@@ -1,83 +1,66 @@
-const assert = require('node:assert/strict');
-const fs = require('node:fs');
-const vm = require('node:vm');
-const control = () => ({value:'', checked:false, hidden:false, handlers:{}, addEventListener(key, fn){this.handlers[key]=fn;}, setCustomValidity(text){this.validationMessage=text;}});
-const form = control(), panel=control(), json=control(), error=control(), add=control();
-let draftEvents=0;
-json.dispatchEvent=()=>{draftEvents++;};
-const choices=[{...control(),value:'complete'}, {...control(),value:'component_absences'}];
-const rows={...control(),children:[],appendChild(row){this.children.push(row);},replaceChildren(){this.children=[];}};
-function candidateRow(){
- const inputs=['number','name','institution','exam','component','reason'].map(key=>({...control(),dataset:{componentField:key},focus(){this.focused=true;}}));
- return {inputs,querySelectorAll:()=>inputs,remove(){rows.children=rows.children.filter(row=>row!==this);}};
+const assert=require('node:assert/strict');
+const fs=require('node:fs');
+const vm=require('node:vm');
+class Element {
+ constructor(tag='div'){this.tag=tag;this.children=[];this.handlers={};this.dataset={};this.value='';this.disabled=false;this.checked=false;}
+ append(...nodes){this.children.push(...nodes);}
+ replaceChildren(...nodes){this.children=nodes;}
+ setAttribute(name,value){this[name]=value;}
+ addEventListener(name,fn){this.handlers[name]=fn;}
+ setCustomValidity(value){this.validationMessage=value;}
+ showModal(){this.open=true;}
+ close(){this.open=false;}
+ focus(){this.focused=true;}
+ matches(selector){return selector==='[data-it-module]'&&this.isModule;}
+ reportValidity(){return !this.disabled&&!this.validationMessage&&(!this.required||Boolean(this.value.trim()))&&this.children.every(node=>node.disabled||node.reportValidity());}
 }
-const nodes={'[data-component-absence-panel]':panel,'[data-component-absence-rows]':rows,'[data-component-absence-json]':json,
- 'template':{content:{firstElementChild:{cloneNode:candidateRow}}},'[data-component-absence-error]':error,'[data-add-component-absence]':add};
-const section={closest:()=>form,querySelector:key=>nodes[key],querySelectorAll:()=>choices};
-vm.runInNewContext(fs.readFileSync('app/static/js/staff_report_components.js','utf8'),{
- document:{querySelectorAll:()=>[section]},Event:class{constructor(type,options){this.type=type;this.options=options;}}
-});
-assert.equal(panel.hidden,true);
-choices[1].checked=true;choices[1].handlers.change();
-assert.equal(panel.hidden,false);assert.match(choices[1].validationMessage,/at least one/);
-add.handlers.click();
-assert.equal(rows.children.length,1);assert.equal(choices[1].validationMessage,'');
-const row=rows.children[0];assert.equal(row.inputs[0].focused,true);
-const values=['00120','Candidate','School','B2 Competency','Listening','Connection lost'];
-row.inputs.forEach((input,index)=>input.value=values[index]);rows.handlers.input();
-assert.equal(JSON.parse(json.value)[0].number,'00120');assert.ok(draftEvents>0);
-choices[1].checked=false;choices[0].checked=true;choices[0].handlers.change();
-assert.equal(panel.hidden,true);assert.equal(row.disabled,true);
-choices[0].checked=false;choices[1].checked=true;choices[1].handlers.change();
-assert.equal(row.disabled,false);assert.equal(row.inputs[0].value,'00120');
-rows.handlers.click({target:{closest:()=>({closest:()=>row})}});
-assert.equal(rows.children.length,0);assert.match(choices[1].validationMessage,/at least one/);
-json.value=JSON.stringify([{number:'0001',name:'One',component:'Listening'},{number:'0002',name:'Two',component:'Speaking'}]);
-form.handlers['report:draft-restored']();
-assert.equal(rows.children.length,2);assert.equal(rows.children[1].inputs[0].value,'0002');
-assert.equal(JSON.parse(json.value)[0].number,'0001');
-console.log('Component absences: conditional fields, required candidate, original numbers, add/remove, drafts and switching options passed.');
-
-// The IT variant shares row/draft handling, with exam-specific multi-select rules.
-const itForm=control(), itPanel=control(), itJson=control(), itError=control(), itAdd=control();
-const itChoice={...control(),value:'1'}, noITChoice={...control(),value:'0'};
-itJson.dispatchEvent=()=>{};
-const itRows={...control(),children:[],appendChild(row){this.children.push(row);},replaceChildren(){this.children=[];}};
-function itCandidateRow(){
- const inputs=['number','name','institution','exam','reason'].map(key=>({...control(),dataset:{componentField:key},focus(){},matches:()=>false}));
- const modules=['Speaking','Listening and speaking','Reading and writing'].map(value=>({...control(),value,matches:()=>true,label:{hidden:false}}));
- const row={inputs,modules,hint:{},querySelectorAll:selector=>selector==='[data-it-module]'?modules:inputs,querySelector:()=>row.hint,remove(){itRows.children=itRows.children.filter(item=>item!==row);}};
- modules.forEach(input=>{input.closest=selector=>selector==='label'?input.label:row;});
- return row;
+function page(isIT=false){
+ const host=new Element(),form=new Element('form'),json=new Element('input'),chips=new Element(),add=new Element('button'),panel=new Element(),error=new Element();
+ const choices=[new Element('input'),new Element('input')];choices[0].value=isIT?'0':'complete';choices[1].value=isIT?'1':'component_absences';
+ let drafts=0;json.value='[]';json.dispatchEvent=()=>drafts++;form.closest=()=>host;
+ const fieldset=new Element('fieldset');
+ const keys=['number','name','institution','exam',...(isIT?[]:['component']),'reason'];
+ const fields=keys.map(key=>{const node=new Element('input');node.dataset.componentField=key;node.required=true;return node;});
+ const moduleInputs=isIT?['Speaking','Listening and speaking','Reading and writing'].map(value=>{const node=new Element('input');node.value=value;node.isModule=true;const label={};node.closest=()=>label;return node;}):[];
+ const hint={};fieldset.append(...fields,...moduleInputs);
+ fieldset.querySelectorAll=selector=>selector==='[data-it-module]'?moduleInputs:fields;
+ fieldset.querySelector=()=>hint;
+ const nodes={'[data-component-absence-panel]':panel,'[data-component-absence-rows]':chips,'[data-component-absence-json]':json,'template':{content:{firstElementChild:{cloneNode:()=>fieldset}}},'[data-component-absence-error]':error,'[data-add-component-absence]':add};
+ const section={dataset:{absenceKind:isIT?'it':'component',moduleOptions:JSON.stringify({'Ready':['Speaking'],'B2 Competency':['Listening and speaking','Reading and writing'],'Mixed':['Speaking','Listening and speaking','Reading and writing']})},closest:()=>form,querySelector:key=>nodes[key],querySelectorAll:()=>choices};
+ vm.runInNewContext(fs.readFileSync('app/static/js/staff_report_components.js','utf8'),{document:{querySelectorAll:()=>[section],createElement:tag=>new Element(tag)},Event:class{}});
+ const dialog=host.children[0],editor=dialog.children[0];
+ const set=entry=>fields.forEach(input=>{input.value=entry[input.dataset.componentField]||'';});
+ const save=()=>editor.handlers.submit({preventDefault(){}});
+ const change=input=>editor.handlers.change?.({target:input});
+ return{host,form,json,chips,add,panel,error,choices,dialog,editor,fields,moduleInputs,set,save,change,drafts:()=>drafts,cancel:editor.children[2].children[0]};
 }
-const itNodes={'[data-component-absence-panel]':itPanel,'[data-component-absence-rows]':itRows,'[data-component-absence-json]':itJson,
- 'template':{content:{firstElementChild:{cloneNode:itCandidateRow}}},'[data-component-absence-error]':itError,'[data-add-component-absence]':itAdd};
-const itSection={dataset:{absenceKind:'it',moduleOptions:JSON.stringify({'Ready':['Speaking'],'B2 Competency':['Listening and speaking','Reading and writing'],'Mixed':['Speaking','Listening and speaking','Reading and writing']})},closest:()=>itForm,querySelector:key=>itNodes[key],querySelectorAll:()=>[noITChoice,itChoice]};
-vm.runInNewContext(fs.readFileSync('app/static/js/staff_report_components.js','utf8'),{document:{querySelectorAll:()=>[itSection]},Event:class{}});
-assert.equal(itPanel.hidden,true);
-noITChoice.checked=true;noITChoice.handlers.change();assert.equal(itPanel.hidden,true);
-noITChoice.checked=false;
-itChoice.checked=true;itChoice.handlers.change();assert.match(itChoice.validationMessage,/at least one/);
-itAdd.handlers.click();
-const itRow=itRows.children[0],exam=itRow.inputs[3];
-assert.ok(itRow.modules.every(input=>input.disabled));
-exam.value='B2 Competency';itRows.handlers.change({target:exam});
-assert.equal(itRow.modules[0].label.hidden,true);
-assert.equal(itRow.modules[1].disabled,false);
-assert.match(itRow.modules[1].validationMessage,/at least one/);
-itRow.modules[1].checked=true;itRows.handlers.change({target:itRow.modules[1]});
-itRow.modules[2].checked=true;itRows.handlers.change({target:itRow.modules[2]});
-assert.deepEqual(JSON.parse(itJson.value)[0].modules,['Listening and speaking','Reading and writing']);
-exam.value='Mixed';itRow.modules[1].checked=false;itRow.modules[2].checked=false;itRows.handlers.change({target:exam});
-itRow.modules[0].checked=true;itRows.handlers.change({target:itRow.modules[0]});
-assert.equal(itRow.modules[1].disabled,true);assert.equal(itRow.modules[2].disabled,true);
-assert.deepEqual(JSON.parse(itJson.value)[0].modules,['Speaking']);
-itRow.modules[0].checked=false;itRows.handlers.change({target:itRow.modules[0]});
-itRow.modules[1].checked=true;itRows.handlers.change({target:itRow.modules[1]});assert.equal(itRow.modules[0].disabled,true);
-exam.value='Ready';itRows.handlers.change({target:exam});assert.deepEqual(JSON.parse(itJson.value)[0].modules,[]);
-itRow.modules[0].checked=true;itRows.handlers.change({target:itRow.modules[0]});
-itChoice.checked=false;itChoice.handlers.change();assert.equal(itRow.disabled,true);assert.equal(itChoice.validationMessage,'');
-itChoice.checked=true;itChoice.handlers.change();assert.equal(itRow.modules[0].checked,true);
-itJson.value=JSON.stringify([{number:'0012',exam:'B2 Competency',modules:['Reading and writing']}]);itForm.handlers['report:draft-restored']();
-assert.equal(itRows.children[0].inputs[0].value,'0012');assert.deepEqual(JSON.parse(itJson.value)[0].modules,['Reading and writing']);
-console.log('IT issues: optional section, required candidate/modules, exam filtering, Speaking exclusivity, combined modules and draft restoration passed.');
+const candidate={number:'00120',name:'Josefina Ramirez',institution:'School',exam:'B2 Competency',component:'Listening',reason:'Connection lost'};
+const p=page();assert.equal(p.panel.hidden,true);
+p.choices[1].checked=true;p.choices[1].handlers.change();assert.match(p.choices[1].validationMessage,/at least one/);
+p.add.handlers.click();assert.equal(p.dialog.open,true);assert.equal(p.host.children.length,1);assert.equal(p.form.children.length,0);
+p.save();assert.equal(p.chips.children.length,0);
+p.set(candidate);p.save();assert.equal(p.dialog.open,false);assert.equal(p.chips.children[0].children[0].textContent,'00120 - Josefina Ramirez');
+assert.deepEqual(JSON.parse(p.json.value),[candidate]);assert.equal(p.choices[1].validationMessage,'');
+p.chips.children[0].children[0].handlers.click();assert.equal(p.fields[1].value,'Josefina Ramirez');
+p.fields[1].value='Not saved';p.cancel.handlers.click();assert.equal(JSON.parse(p.json.value)[0].name,'Josefina Ramirez');
+p.chips.children[0].children[0].handlers.click();p.fields[1].value='Updated';p.save();assert.equal(JSON.parse(p.json.value)[0].name,'Updated');assert.equal(p.chips.children.length,1);
+p.add.handlers.click();p.set(candidate);p.save();assert.equal(p.chips.children.length,1);assert.match(p.fields[0].validationMessage,/already listed/);
+p.set({...candidate,number:'00121'});p.save();assert.equal(p.chips.children.length,2);
+p.choices[1].checked=false;p.choices[0].checked=true;p.choices[0].handlers.change();assert.equal(p.panel.hidden,true);assert.equal(JSON.parse(p.json.value).length,2);
+p.choices[0].checked=false;p.choices[1].checked=true;p.choices[1].handlers.change();assert.equal(p.panel.hidden,false);
+p.chips.children[1].children[1].handlers.click();p.chips.children[0].children[1].handlers.click();assert.equal(p.chips.children.length,0);assert.match(p.choices[1].validationMessage,/at least one/);
+p.json.value=JSON.stringify([candidate]);p.form.handlers['report:draft-restored']();assert.equal(p.chips.children.length,1);assert.equal(p.chips.children[0].children[0].textContent,'00120 - Josefina Ramirez');
+p.json.value=JSON.stringify([{number:'00120',name:'Unfinished draft'}]);p.form.handlers['report:draft-restored']();assert.match(p.choices[1].validationMessage,/Complete every/);
+p.json.value=JSON.stringify([candidate]);p.form.handlers['report:draft-restored']();
+p.json.disabled=true;p.form.handlers['report:locked']();assert.equal(p.add.disabled,true);assert.equal(p.chips.children[0].children[0].disabled,true);p.chips.children[0].children[1].handlers.click();assert.equal(p.chips.children.length,1);
+console.log('Candidate chips: add, validate, edit, cancel, remove, required cases, restored records and submitted locks passed.');
+const it=page(true);it.choices[1].checked=true;it.choices[1].handlers.change();it.add.handlers.click();it.set(candidate);
+it.editor.handlers.change({target:it.fields[3]});it.save();assert.equal(it.chips.children.length,0);
+it.moduleInputs[1].checked=true;it.editor.handlers.change({target:it.moduleInputs[1]});it.moduleInputs[2].checked=true;it.editor.handlers.change({target:it.moduleInputs[2]});it.save();
+assert.equal(it.chips.children.length,1);assert.deepEqual(JSON.parse(it.json.value)[0].modules,['Listening and speaking','Reading and writing']);
+it.chips.children[0].children[0].handlers.click();assert.equal(it.moduleInputs[1].checked,true);assert.equal(it.moduleInputs[2].checked,true);
+it.fields[3].value='Mixed';it.moduleInputs[1].checked=false;it.moduleInputs[2].checked=false;it.editor.handlers.change({target:it.fields[3]});
+it.moduleInputs[0].checked=true;it.editor.handlers.change({target:it.moduleInputs[0]});assert.equal(it.moduleInputs[1].disabled,true);it.save();assert.deepEqual(JSON.parse(it.json.value)[0].modules,['Speaking']);
+it.chips.children[0].children[0].handlers.click();it.fields[3].value='B2 Competency';it.editor.handlers.change({target:it.fields[3]});assert.equal(it.moduleInputs[0].checked,false);assert.equal(it.moduleInputs[0].disabled,true);
+it.cancel.handlers.click();assert.deepEqual(JSON.parse(it.json.value)[0].modules,['Speaking']);assert.ok(it.drafts()>0);
+console.log('IT candidate editor: exam filtering, required modules, combined modules, Speaking exclusivity, restored choices and cancellation passed.');
