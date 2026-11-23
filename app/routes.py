@@ -20543,8 +20543,6 @@ def staff_report_online_attendance_fields(record):
         return ()
     modules = {module.lower() for module in record.modules_list()}
     fields = []
-    if modules & {"speaking", "listening and speaking"}:
-        fields.append("speaking_records_checked")
     if "listening and speaking" in modules:
         fields.append("listening_speaking_components_checked")
     return tuple(fields)
@@ -20636,8 +20634,6 @@ def submit_staff_session_report(token, submission_id):
     required_online_checks = staff_report_online_attendance_fields(record)
     online_attendance = {key: key in required_online_checks and request.form.get(key) == "1"
                          for key in ("speaking_records_checked", "listening_speaking_components_checked")}
-    if "speaking_records_checked" in required_online_checks and not online_attendance["speaking_records_checked"]:
-        return jsonify(ok=False, error="Please confirm that the Examiners' Speaking records match candidate statuses in Sinapsis."), 400
     if "listening_speaking_components_checked" in required_online_checks and not online_attendance["listening_speaking_components_checked"]:
         return jsonify(ok=False, error="Please confirm that all Submitted candidates completed both the Listening and Speaking components."), 400
     module_sections = staff_report_module_sections(record)

@@ -657,24 +657,24 @@ class StaffSessionReportTest(unittest.TestCase):
             with self.subTest(format=format_name, modules=modules):
                 self.record.format = format_name; self.record.modules = modules; db.session.commit()
                 html = self.client.get(f'/my-exam-sessions/{self.share.token}?session_year=2026').get_data(as_text=True)
-                self.assertEqual('name="speaking_records_checked"' in html, speaking)
+                self.assertNotIn('name="speaking_records_checked"', html)
                 self.assertEqual('name="listening_speaking_components_checked"' in html, components)
                 self.assertEqual('in Sinapsis and on the printed candidate list.' in html, format_name == 'Onsite')
                 if speaking:
-                    self.assertIn('name="speaking_records_checked" value="1" required', html)
-                    self.assertGreater(html.index('name="speaking_records_checked"'), html.index('name="examiner_marks_checked"'))
+                    self.assertIn('name="examiner_marks_checked" value="1" required', html)
+                    self.assertIn('with all statuses matching those recorded in Sinapsis.', html)
                 if components:
                     self.assertIn('name="listening_speaking_components_checked" value="1" required', html)
-                    self.assertGreater(html.index('name="listening_speaking_components_checked"'), html.index('name="speaking_records_checked"'))
+                    self.assertGreater(html.index('name="listening_speaking_components_checked"'), html.index('name="examiner_marks_checked"'))
 
     def test_online_attendance_requires_and_persists_applicable_checks(self):
         self.record.format = 'Online'; self.record.modules = 'Listening and speaking'; db.session.commit()
-        self.assertEqual(self.post(speaking_records_checked='0').status_code, 400)
+        self.assertEqual(self.post(examiner_marks_checked='0').status_code, 400)
         self.assertEqual(self.post(listening_speaking_components_checked='0').status_code, 400)
         self.assertEqual(m.StaffExamSessionReport.query.count(), 0)
         self.assertEqual(self.post().status_code, 200)
         report = m.StaffExamSessionReport.query.one()
-        self.assertTrue(report.speaking_records_checked)
+        self.assertFalse(report.speaking_records_checked)
         self.assertTrue(report.listening_speaking_components_checked)
         self.assertFalse(report.session_completed_checked)
 
