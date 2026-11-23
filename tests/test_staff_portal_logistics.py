@@ -53,7 +53,10 @@ class StaffPortalLogisticsTest(unittest.TestCase):
         self.assertEqual(added.status_code, 200)
         url = added.json['url']
         html = self.client.get(url).get_data(as_text=True)
-        self.assertIn('Speaking record file not uploaded yet', html)
+        speaking_section = html.split('data-staff-speaking-record>', 1)[1].split('</div>', 1)[0]
+        self.assertIn('aria-disabled="true">Open resource ↗</span>', speaking_section)
+        self.assertIn('class="staff-detail-resource-soon">Available soon</span>', speaking_section)
+        self.assertNotIn('<a ', speaking_section)
         document = ExaminerSpeakingRecord(exam_session_id=self.record.id, person_ref=f'staff:{self.person.id}',
             file_id='currentSpeaking123', folder_id='folder123', filename='Speaking.xlsx', mime_type='application/octet-stream')
         db.session.add(document); db.session.commit()
