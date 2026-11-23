@@ -150,7 +150,7 @@
               <button type="button" class="staff-detail-close" data-session-report-close aria-label="Close report">&times;</button>
             </div>
             <p class="staff-session-report-subtitle">Complete this report to formally close your exam session</p>
-            <p class="staff-session-report-warning"><strong>Important: once submitted, this report cannot be reopened or edited. Please ensure that you complete it in full before submitting.</strong></p>
+            <p class="staff-session-report-warning">{% if detail.format == 'Online' %}<strong>Important:</strong> This report must be completed only after <strong>all modules of the exam session have concluded</strong>. Only one report should be submitted per exam session, not one per module. Once submitted, the report cannot be reopened or edited. Please ensure that all information is complete and accurate before submitting.{% else %}<strong>Important: once submitted, this report cannot be reopened or edited. Please ensure that you complete it in full before submitting.</strong>{% endif %}</p>
             <ol class="staff-session-report-questions">
               <li>
                 <label><b>Did the exam session run according to the approved schedule?</b>
