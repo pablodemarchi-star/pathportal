@@ -20,6 +20,7 @@ COMMENT_RULES = {
     'overall': ('Comment on Overall performance', ['Unsatisfactory']),
 }
 for criterion in CRITERIA:
+    criterion['best'] = criterion['options'][0]
     if criterion['key'] in COMMENT_RULES:
         criterion['comment_title'], criterion['comment_when'] = COMMENT_RULES[criterion['key']]
 
@@ -29,8 +30,10 @@ def assessment_criteria(record):
         return CRITERIA
     replacements = {
         'staff_id': dict(key='exam_environment', label='Exam environment', options=['Appropriate', 'Inappropriate'],
+                         best='Appropriate',
                          comment_title='Comment on Exam environment', comment_when=['Inappropriate']),
         'language': dict(key='it_skills', label='IT skills', options=['Limited', 'Adequate', 'Proficient'],
+                         best='Proficient',
                          comment_title='Comment on IT skills', comment_when=['Limited']),
     }
     return [replacements.get(criterion['key'], criterion) for criterion in CRITERIA]
@@ -61,6 +64,9 @@ def validate_assessments(record, form):
             if value not in criterion['options']:
                 raise ValueError(f"Please complete all seven assessment criteria for {row['name']} ({row['role']}). If the session team changed, reload the page to see the current staff list.")
             values[criterion['key']] = value
+        perfect = all(values[c['key']] == c['best'] for c in assessment_criteria(record) if c['key'] != 'overall')
+        if (values['overall'] == 'Remarkable' and not perfect) or (values['overall'] == 'Unsatisfactory' and perfect):
+            raise ValueError(f"Please select an Overall rating consistent with the other assessment criteria for {row['name']} ({row['role']}).")
         notes = form.get(f"review.{row['key']}.notes", '').strip()
         if len(notes) > 10000:
             raise ValueError(f"Notes for {row['name']} must not exceed 10,000 characters.")

@@ -36,7 +36,7 @@ class StaffReportITIssuesTest(unittest.TestCase):
         self.assertEqual(it_module_options(self.record)['B2 Competency'], ['Reading and writing'])
         self.assertNotIn('Ready', it_module_options(self.record))
 
-    def test_visible_for_all_online_sessions_and_optional(self):
+    def test_visible_for_all_online_sessions_and_requires_explicit_choice(self):
         for format_name, modules, visible in [('Online','Speaking',True),('Online','Reading and writing',True),
                                               ('Online','Listening and speaking',True),('Onsite','Speaking',False)]:
             self.record.format = format_name; self.record.modules = modules; db.session.commit()
@@ -45,7 +45,10 @@ class StaffReportITIssuesTest(unittest.TestCase):
             if 'Listening and speaking' in modules and visible:
                 self.assertLess(html.index('<b>Listening and Speaking module completion</b>'),html.index('<b>Candidate IT issues</b>'))
         self.online('Reading and writing')
-        response = self.post(it_issues='', it_absences=json.dumps([self.entry()]))
+        for choice in ('', 'invalid'):
+            response = self.post(it_issues=choice)
+            self.assertEqual(response.status_code, 400)
+        response = self.post(it_issues='0', it_absences=json.dumps([self.entry()]))
         self.assertEqual(response.status_code,200,response.json)
         saved = m.StaffExamSessionReport.query.one()
         self.assertFalse(saved.it_issues)

@@ -51,6 +51,7 @@ class StaffSessionReportTest(unittest.TestCase):
                 data[field] = '1'
         if self.record.format == 'Online':
             data['recordings_reminder_confirmed'] = '1'
+            data['it_issues'] = '0'
         from app.staff_report_components import applicable
         if applicable(self.record):
             data['component_completion'] = 'complete'
@@ -140,7 +141,7 @@ class StaffSessionReportTest(unittest.TestCase):
 
     def review_answers(self):
         from app.staff_report_review import assessment_roster, assessment_criteria
-        return {f"review.{row['key']}.{criterion['key']}": ('Proficient' if criterion['key'] == 'it_skills' else criterion['options'][0])
+        return {f"review.{row['key']}.{criterion['key']}": ('Satisfactory' if criterion['key'] == 'overall' else 'Proficient' if criterion['key'] == 'it_skills' else criterion['options'][0])
                 for row in assessment_roster(self.record) for criterion in assessment_criteria(self.record)}
 
     def test_staff_review_roster_filters_roles_and_deduplicates(self):
@@ -348,6 +349,21 @@ class StaffSessionReportTest(unittest.TestCase):
         self.assertNotIn('data-staff-end-checks ', html)
         self.assertIn('data-staff-exam-day-report', html)
 
+    def test_guided_layout_is_online_only_and_keeps_all_report_controls(self):
+        url=f'/my-exam-sessions/{self.share.token}?session_year=2026'
+        onsite=self.client.get(url).get_data(as_text=True)
+        self.assertNotIn(' data-online-report-flow',onsite)
+        self.record.format='Online';self.record.modules='Speaking,Listening and speaking,Reading and writing';db.session.commit()
+        online=self.client.get(url).get_data(as_text=True)
+        self.assertIn(' data-online-report-flow',online)
+        for key in ('session','modules','candidates','team','finish'):
+            self.assertIn('data-report-stage="'+key+'"',online)
+        for key in ('schedule_outcome','absent_candidates_checked','submitted_candidates_checked','rw_files_uploaded_checked','listening_files_uploaded_checked','examiner_marks_checked','component_completion','it_issues','optional_comments','comments_speaking','comments_listening','comments_reading_writing'):
+            self.assertIn('name="'+key+'"',online)
+        self.assertIn('all modules of the exam session have concluded',online)
+        self.assertIn('js/staff_report_flow.js',online)
+        self.assertLess(online.index('js/staff_session_report.js'),online.index('js/staff_report_flow.js'))
+
     def test_online_comment_columns_follow_session_modules(self):
         for modules, expected in [('Speaking', {'speaking'}), ('Listening and speaking', {'speaking','listening'}),
                                   ('Reading and writing', {'reading_writing'}), ('Speaking,Listening and speaking,Reading and writing', {'speaking','listening','reading_writing'}), ('', set())]:
@@ -472,10 +488,13 @@ class StaffSessionReportTest(unittest.TestCase):
         prefix=f'review.examiner:{examiner.id}.'
         for key,(title,options) in COMMENT_RULES.items():
             for option in options:
-                response=self.post(**{**answers,prefix+key:option})
+                case_answers = {**answers, prefix + key: option}
+                if key == 'overall':
+                    case_answers[prefix + 'attitude'] = 'Satisfactory'
+                response=self.post(**case_answers)
                 self.assertEqual(response.status_code,400)
                 self.assertIn(title,response.json['error'])
-                self.assertEqual(self.post(**{**answers,prefix+key:option,prefix+'comments.'+key:'  '}).status_code,400)
+                self.assertEqual(self.post(**{**case_answers,prefix+'comments.'+key:'  '}).status_code,400)
         self.assertEqual(m.StaffExamSessionReport.query.count(),0)
         for key,(title,options) in COMMENT_RULES.items():
             answers[prefix+key]=options[0]

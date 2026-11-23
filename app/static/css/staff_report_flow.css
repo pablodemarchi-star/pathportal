@@ -1,0 +1,90 @@
+/* Online-only guided report. The original form remains the no-JavaScript fallback. */
+.is-guided-online-report{width:min(1180px,calc(100vw - 40px));height:min(850px,calc(100dvh - 40px));max-height:calc(100dvh - 40px);padding:0;overflow:hidden;border:1px solid #d7e3e8;border-radius:18px;background:#f5f8fa;box-shadow:0 24px 90px #102f4140}
+.is-guided-online-report>form{height:100%;min-height:0;display:grid;grid-template-rows:auto minmax(0,1fr) auto}
+.is-guided-online-report [hidden]{display:none!important}
+.report-flow-header{padding:20px 28px 18px;background:#fff;border-bottom:1px solid #dce6eb;min-width:0}
+.report-flow-header .staff-session-report-heading{align-items:center}
+.report-flow-header .staff-session-report-heading h2{font-size:23px;letter-spacing:-.025em;color:#004b65}
+.report-flow-header .staff-detail-close{flex:0 0 auto}
+.report-flow-header .staff-report-session-context{margin:6px 40px 0 0;font-size:12px;color:#607a89;overflow-wrap:anywhere}
+.report-flow-workspace{display:grid;grid-template-columns:205px minmax(0,1fr);min-height:0}
+.report-flow-sidebar{padding:24px 16px;background:#edf3f6;border-right:1px solid #dce6eb;min-width:0;overflow-y:auto}
+.report-flow-progress-label{font-size:12px;font-weight:600;margin:0 8px 9px;color:#335d70}
+.report-flow-sidebar progress{display:block;appearance:none;width:calc(100% - 16px);height:5px;border:0;border-radius:99px;margin:0 8px 24px;background:#d7e4ea;overflow:hidden}
+.report-flow-sidebar progress::-webkit-progress-bar{background:#d7e4ea}
+.report-flow-sidebar progress::-webkit-progress-value{background:#318c77;border-radius:99px}
+.report-flow-sidebar progress::-moz-progress-bar{background:#318c77;border-radius:99px}
+.report-flow-nav{display:grid;gap:8px}
+.report-flow-step{display:grid;grid-template-columns:28px minmax(0,1fr);column-gap:9px;row-gap:3px;align-items:center;width:100%;padding:12px 10px;border:1px solid transparent;border-radius:10px;background:transparent;text-align:left;cursor:pointer;color:#526c7b;font:inherit;min-width:0}
+.report-flow-step-number{display:grid;place-items:center;grid-row:span 2;width:26px;height:26px;border:1px solid #c4d6df;border-radius:50%;font-size:10px;font-weight:700;background:#f7fafb}
+.report-flow-step-name{font-size:12px;font-weight:600;line-height:1.3;overflow-wrap:anywhere}
+.report-flow-step-state{font-size:10px;color:#708895}
+.report-flow-step.is-ready .report-flow-step-number{color:#26755f;background:#dcefe7;border-color:#c2dfd3}
+.report-flow-step[aria-current=step]{background:#fff;border-color:#c3d7e1;color:#00506b;box-shadow:0 2px 6px #184f6710}
+.report-flow-step[aria-current=step] .report-flow-step-number{background:#00506b;border-color:#00506b;color:#fff}
+.report-flow-tip{padding:0 9px;margin-top:24px;font-size:11px;line-height:1.6;color:#69818f}
+.report-flow-content{padding:24px 28px 32px;min-width:0;min-height:0;overflow-y:auto;overscroll-behavior:contain;scrollbar-gutter:stable}
+.report-flow-stage-heading{margin-bottom:18px}
+.report-flow-position{font-size:10px;font-weight:700;letter-spacing:.1em;color:#748c99}
+.report-flow-stage-heading h3{margin:6px 0;font-size:23px;letter-spacing:-.02em;color:#004b65;outline:none}
+.report-flow-stage-heading>p{margin:0;font-size:13px;line-height:1.55;color:#69808d}
+.is-guided-online-report .staff-session-report-warning{font-size:12px;line-height:1.65;padding:12px 16px;border-left:3px solid #d8ab43;border-radius:9px;margin:0 0 18px;background:#fff6df;color:#765c23}
+.is-guided-online-report .staff-session-report-questions{list-style:none;padding:0;margin:0;display:grid;gap:16px}
+.is-guided-online-report .staff-session-report-questions>li{min-width:0;margin:0;padding:20px;border:1px solid #dce6eb;border-radius:12px;background:#fff;box-shadow:0 2px 5px #123b4a04}
+.is-guided-online-report .staff-session-report-questions>li>b{display:block;color:#174f65;font-size:15px;line-height:1.4;margin-bottom:12px}
+.is-guided-online-report .staff-session-report-questions>li>label:first-child{margin-top:0}
+.is-guided-online-report .staff-session-report-checkbox{padding:9px 0;font-size:12px;line-height:1.65;margin:0!important}
+.is-guided-online-report .staff-session-report-checkbox+.staff-session-report-checkbox{border-top:1px solid #edf2f5}
+.is-guided-online-report .staff-session-report-questions select,.is-guided-online-report .staff-session-report-questions textarea{border:1px solid #cbdbe3;border-radius:8px;padding:9px;font-size:12px;background:#fff;color:#244f62;min-width:0}
+.is-guided-online-report .staff-session-report-questions input:not([type=checkbox]):not([type=radio]):not([type=hidden]){min-width:0;max-width:100%;box-sizing:border-box}
+.is-guided-online-report .staff-session-report-questions p{font-size:12px;line-height:1.6;color:#657c89}
+.is-guided-online-report .staff-session-report-questions li>ul{font-size:12px;line-height:1.7;padding-left:22px}
+.is-guided-online-report .staff-report-component-options>.staff-session-report-checkbox{padding:12px 14px!important;border:1px solid #dbe6eb;border-radius:9px}
+.is-guided-online-report .staff-report-component-candidate{padding:14px;background:#f7fafb}
+.is-guided-online-report .staff-report-consideration-chips{gap:6px}
+.report-flow-footer{display:flex;align-items:center;justify-content:space-between;gap:16px;background:#fff;border-top:1px solid #dce6eb;padding:14px 24px;min-width:0}
+.report-flow-footer-status{min-width:0;max-width:48%;overflow-wrap:anywhere;font-size:11px;color:#728995}
+.report-flow-footer-status p{margin:0;color:#9d3e36;font-size:12px;line-height:1.4}
+.report-flow-footer-status p:empty{display:none}
+.report-flow-footer .staff-session-report-actions{margin:0;gap:8px;flex:0 0 auto}
+.report-flow-footer button{font-size:12px;border-radius:8px;padding:9px 14px}
+.report-flow-footer button:disabled{opacity:.5;cursor:default}
+.report-flow-summary{padding:18px 20px;margin-bottom:16px;border:1px solid #d5e4eb;background:#fff;border-radius:12px}
+.report-flow-summary h4{margin:0 0 7px;color:#174f65;font-size:15px}
+.report-flow-summary>p{font-size:12px;color:#68818e;line-height:1.5;margin:0 0 10px}
+.report-flow-summary-rows{display:grid}
+.report-flow-summary-row{display:flex;justify-content:space-between;gap:12px;width:100%;padding:10px 0;border:0;border-top:1px solid #edf2f5;background:transparent;font:inherit;font-size:12px;color:#345b6e;text-align:left;cursor:pointer}
+.report-flow-summary-row>.is-ready{color:#26755f}.report-flow-summary-row>.is-pending{color:#a4751b}
+.report-flow-step:focus-visible,.report-flow-summary-row:focus-visible{outline:2px solid #0096ce;outline-offset:2px}
+/* Preserve the assessment controls while presenting one compact card per person. */
+.is-guided-online-report .staff-report-review-scroll{border:0;border-radius:0;overflow:visible;margin:0}
+.is-guided-online-report .staff-report-review-table{display:block;width:100%;min-width:0;border:0}
+.is-guided-online-report .staff-report-review-table thead{display:none}
+.is-guided-online-report .staff-report-review-table tbody{display:grid;gap:16px}
+.is-guided-online-report .staff-report-review-table tr{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px;padding:16px;border:1px solid #dce6eb;border-radius:10px;background:#fafcfd;min-width:0}
+.is-guided-online-report .staff-report-review-table th:first-child{position:static;grid-column:1/-1;min-width:0;max-width:none;box-shadow:none;padding:0 0 12px;border:0;border-bottom:1px solid #e2ebf0;background:transparent}
+.is-guided-online-report .staff-report-review-table th small{display:inline;margin-right:10px}
+.is-guided-online-report .staff-report-review-table td{display:block;min-width:0;padding:0;border:0;background:transparent}
+.is-guided-online-report [data-review-label]::before{content:attr(data-review-label);display:block;min-height:28px;margin-bottom:5px;color:#68808d;font-size:10px;font-weight:600;line-height:1.35}
+.is-guided-online-report .staff-report-review-table .staff-report-notes-cell{grid-column:1/-1}
+.is-guided-online-report .staff-report-notes-cell::before{display:none}
+.is-guided-online-report .staff-report-review-notes summary{width:fit-content;padding:7px 10px;font-size:12px;background:#f0f6f8;border-radius:7px}
+.is-guided-online-report .staff-report-review-notes summary::before{content:'Comments & notes';margin-right:7px}
+.is-guided-online-report .staff-report-review-notes [data-review-comment-field],.is-guided-online-report .staff-report-review-notes textarea{min-width:0;width:100%;box-sizing:border-box}
+@media(max-width:800px){
+ .is-guided-online-report{width:calc(100vw - 20px);height:calc(100dvh - 20px);max-height:calc(100dvh - 20px);border-radius:13px}
+ .report-flow-header{padding:16px 18px}.report-flow-header .staff-session-report-heading h2{font-size:20px}
+ .report-flow-workspace{grid-template-columns:minmax(0,1fr);grid-template-rows:auto minmax(0,1fr)}
+ .report-flow-sidebar{padding:12px 14px 10px;border-right:0;border-bottom:1px solid #dce6eb;overflow:visible}
+ .report-flow-progress-label{margin:0 0 6px;font-size:11px}.report-flow-sidebar progress{width:100%;margin:0 0 10px;height:4px}
+ .report-flow-nav{grid-template-columns:repeat(var(--report-step-count),minmax(0,1fr));gap:4px}
+ .report-flow-step{grid-template-columns:minmax(0,1fr);justify-items:center;gap:5px;text-align:center;padding:7px 3px}
+ .report-flow-step-number{grid-row:auto;width:22px;height:22px}.report-flow-step-name{font-size:10px}.report-flow-step-state,.report-flow-tip{display:none}
+ .report-flow-content{padding:18px 16px 24px}.report-flow-stage-heading h3{font-size:21px}
+ .report-flow-footer{padding:12px 14px;flex-wrap:wrap;gap:8px}.report-flow-footer-status{max-width:100%;width:100%}.report-flow-footer .staff-session-report-actions{width:100%;justify-content:flex-end}
+ .is-guided-online-report .staff-session-report-questions>li{padding:16px}
+ .is-guided-online-report .staff-report-review-table tr{grid-template-columns:repeat(2,minmax(0,1fr));padding:12px}
+}
+@media(prefers-reduced-motion:no-preference){.report-flow-step,.report-flow-summary-row{transition:background .15s,border-color .15s}}
+.is-guided-online-report .staff-report-review-table tr.is-complete{border-color:#bcdccd;background:#f5fbf7}
+.is-guided-online-report .staff-report-review-table tr.has-required-comments{border-color:#e2bfc0}

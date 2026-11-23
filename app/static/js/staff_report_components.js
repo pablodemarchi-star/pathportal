@@ -10,7 +10,7 @@
     const choices = Array.from(section.querySelectorAll(isIT ? '[name="it_issues"]' : '[name="component_completion"]'));
     const error = section.querySelector('[data-component-absence-error]');
     const fields = row => Array.from(row.querySelectorAll('[data-component-field]'));
-    const selected = () => choices.some(input => input.checked && (isIT || input.value === 'component_absences'));
+    const selected = () => choices.some(input => input.checked && (isIT ? input.value === '1' : input.value === 'component_absences'));
     function syncModules(row, active) {
       const exam = fields(row).find(input => input.dataset.componentField === 'exam').value;
       const allowed = moduleOptions[exam] || [];

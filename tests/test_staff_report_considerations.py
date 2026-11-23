@@ -14,12 +14,21 @@ class StaffReportConsiderationsTest(unittest.TestCase):
         self.record.format='Online';self.record.modules=modules;db.session.commit()
 
     def test_widgets_only_appear_in_applicable_verification_sections(self):
-        for format_name,modules,expected in [('Online','Reading and writing',{'reading_writing'}),('Online','Listening and speaking',{'listening'}),('Online','Speaking',set()),('Onsite','Reading and writing',set())]:
+        for format_name,modules,expected in [('Online','Reading and writing',{'reading_writing'}),('Online','Listening and speaking',{'listening','speaking'}),('Online','Speaking',{'speaking'}),('Onsite','Reading and writing',set())]:
             self.record.format=format_name;self.record.modules=modules;db.session.commit()
             html=self.client.get(f'/my-exam-sessions/{self.share.token}?session_year=2026').get_data(as_text=True)
-            for section in ('reading_writing','listening'):
+            for section in ('reading_writing','listening','speaking'):
                 self.assertEqual('name="important_considerations_'+section+'"' in html,section in expected)
             self.assertEqual(html.count('data-add-consideration>'),len(expected))
+
+    def test_speaking_considerations_are_validated_saved_and_read_only(self):
+        self.online('Speaking')
+        self.assertEqual(self.post(important_considerations_speaking=json.dumps([dict(title='',text='Detail')])).status_code,400)
+        entries=[dict(title='Speaking issue',text='Speaking explanation')]
+        response=self.post(important_considerations_speaking=json.dumps(entries))
+        self.assertEqual(response.status_code,200,response.json)
+        self.assertEqual(json.loads(m.StaffExamSessionReport.query.one().important_considerations),{'speaking':entries})
+        self.assertEqual(self.post(important_considerations_speaking='[]').status_code,409)
 
     def test_multiple_titled_considerations_save_and_report_is_immutable(self):
         self.online()
@@ -28,7 +37,7 @@ class StaffReportConsiderationsTest(unittest.TestCase):
         response=self.post(important_considerations_reading_writing=json.dumps(reading),important_considerations_listening=json.dumps(listening))
         self.assertEqual(response.status_code,200,response.json)
         saved=m.StaffExamSessionReport.query.one()
-        self.assertEqual(json.loads(saved.important_considerations),dict(reading_writing=reading,listening=listening))
+        self.assertEqual(json.loads(saved.important_considerations),dict(reading_writing=reading,listening=listening,speaking=[]))
         self.assertEqual(self.post(important_considerations_listening='[]').status_code,409)
         self.assertEqual(json.loads(saved.important_considerations)['listening'],listening)
 
@@ -38,7 +47,7 @@ class StaffReportConsiderationsTest(unittest.TestCase):
             self.assertEqual(self.post(important_considerations_listening=value).status_code,400,value[:50])
         self.assertEqual(m.StaffExamSessionReport.query.count(),0)
         self.assertEqual(self.post().status_code,200)
-        self.assertEqual(json.loads(m.StaffExamSessionReport.query.one().important_considerations),dict(reading_writing=[],listening=[]))
+        self.assertEqual(json.loads(m.StaffExamSessionReport.query.one().important_considerations),dict(reading_writing=[],listening=[],speaking=[]))
 
     def test_migration_preserves_historical_report_and_defaults_to_no_considerations(self):
         from sqlalchemy import text
@@ -56,7 +65,7 @@ class StaffReportConsiderationsTest(unittest.TestCase):
     def test_irrelevant_sections_and_onsite_forged_payload_are_ignored(self):
         self.online('Speaking')
         self.assertEqual(self.post(important_considerations_listening='invalid',important_considerations_reading_writing='invalid').status_code,200)
-        self.assertEqual(m.StaffExamSessionReport.query.one().important_considerations,'{}')
+        self.assertEqual(json.loads(m.StaffExamSessionReport.query.one().important_considerations),{'speaking':[]})
 
     def test_read_only_report_displays_title_and_escaped_text_under_correct_section(self):
         self.online()

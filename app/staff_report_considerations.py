@@ -6,8 +6,9 @@ def sections(record):
     if record.format != 'Online':
         return ()
     modules = {module.lower() for module in record.modules_list()}
-    return tuple(key for key, module in [('reading_writing', 'reading and writing'), ('listening', 'listening and speaking')]
+    enabled = tuple(key for key, module in [('reading_writing', 'reading and writing'), ('listening', 'listening and speaking')]
                  if module in modules)
+    return enabled + (('speaking',) if modules & {'speaking', 'listening and speaking'} else ())
 
 
 def validate(record, form):

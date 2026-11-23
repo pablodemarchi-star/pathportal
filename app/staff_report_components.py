@@ -54,6 +54,8 @@ def it_module_options(record):
 def validate_it(record, form, component_rows=()):
     if record.format != 'Online':
         return None, []
+    if form.get('it_issues') not in ('0', '1'):
+        raise ValueError('Please select whether candidate IT issues were reported during the exam session.')
     checked = form.get('it_issues') == '1'
     if not checked:
         return False, []

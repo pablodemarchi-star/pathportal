@@ -1,7 +1,8 @@
 {% if detail.format == 'Online' %}
-<li class="staff-report-components" data-report-components data-absence-kind="it" data-module-options='{{ detail.end_checks.it_module_options|tojson }}'>
+<li data-report-stage="candidates" class="staff-report-components" data-report-components data-absence-kind="it" data-module-options='{{ detail.end_checks.it_module_options|tojson }}'>
   <b>Candidate IT issues</b>
-  <label class="staff-session-report-checkbox"><input type="checkbox" name="it_issues" value="1"><span>One or more candidates were unable to complete one or more exam modules due to technical difficulties or power outages.</span></label>
+  <label class="staff-session-report-checkbox"><input type="radio" name="it_issues" value="0" required><span>No candidate IT issues were reported during the exam session.</span></label>
+  <label class="staff-session-report-checkbox"><input type="radio" name="it_issues" value="1" required><span>One or more candidates were unable to complete one or more exam modules due to technical difficulties or power outages.</span></label>
   <div data-component-absence-panel hidden>
     <p class="staff-detail-muted">Enter the original candidate number and select the absent exam modules allowed for the session and exam level.</p>
     <div data-component-absence-rows></div>

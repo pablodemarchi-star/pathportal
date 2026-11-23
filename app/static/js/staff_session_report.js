@@ -146,6 +146,16 @@
     const updateReview = () => {
       let completed = 0;
       reviewRows.forEach((row) => {
+        const selects = Array.from(row.querySelectorAll('[data-review-select]'));
+        const overall = selects.find(select => select.dataset.criterion === 'overall');
+        if (overall) {
+          const others = selects.filter(select => select !== overall);
+          const perfect = others.every(select => select.value === select.dataset.bestRating);
+          Array.from(overall.options).forEach(option => {
+            option.disabled = (option.value === 'Remarkable' && !perfect) || (option.value === 'Unsatisfactory' && perfect);
+          });
+          if (Array.from(overall.options).some(option => option.value === overall.value && option.disabled)) overall.value = '';
+        }
         const complete = Array.from(row.querySelectorAll('[data-review-select]')).every((select) => Boolean(select.value));
         row.classList.toggle('is-complete', complete);
         row.querySelector('[data-review-row-status]').textContent = complete ? 'Completed' : 'Incomplete';
@@ -259,6 +269,7 @@
       reviewRows.forEach(row => {
         if (Array.from(row.querySelectorAll('[data-review-comment]')).some(input => input.required && !input.value.trim())) row.querySelector('[data-review-notes]').open = true;
       });
+      if (typeof Event !== 'undefined' && form.dispatchEvent) form.dispatchEvent(new Event('report:before-validate'));
       if (!form.reportValidity()) return;
       if (mediaBox && (mediaBox.dataset.folderConfigured !== 'true' || !uploadedCount || !marketingCheckbox.checked)) {
         feedback.textContent = 'Upload at least one file and confirm Marketing material before submitting.';

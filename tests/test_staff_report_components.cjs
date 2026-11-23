@@ -40,7 +40,7 @@ console.log('Component absences: conditional fields, required candidate, origina
 
 // The IT variant shares row/draft handling, with exam-specific multi-select rules.
 const itForm=control(), itPanel=control(), itJson=control(), itError=control(), itAdd=control();
-const itChoice={...control(),value:'1'};
+const itChoice={...control(),value:'1'}, noITChoice={...control(),value:'0'};
 itJson.dispatchEvent=()=>{};
 const itRows={...control(),children:[],appendChild(row){this.children.push(row);},replaceChildren(){this.children=[];}};
 function itCandidateRow(){
@@ -52,9 +52,11 @@ function itCandidateRow(){
 }
 const itNodes={'[data-component-absence-panel]':itPanel,'[data-component-absence-rows]':itRows,'[data-component-absence-json]':itJson,
  'template':{content:{firstElementChild:{cloneNode:itCandidateRow}}},'[data-component-absence-error]':itError,'[data-add-component-absence]':itAdd};
-const itSection={dataset:{absenceKind:'it',moduleOptions:JSON.stringify({'Ready':['Speaking'],'B2 Competency':['Listening and speaking','Reading and writing'],'Mixed':['Speaking','Listening and speaking','Reading and writing']})},closest:()=>itForm,querySelector:key=>itNodes[key],querySelectorAll:()=>[itChoice]};
+const itSection={dataset:{absenceKind:'it',moduleOptions:JSON.stringify({'Ready':['Speaking'],'B2 Competency':['Listening and speaking','Reading and writing'],'Mixed':['Speaking','Listening and speaking','Reading and writing']})},closest:()=>itForm,querySelector:key=>itNodes[key],querySelectorAll:()=>[noITChoice,itChoice]};
 vm.runInNewContext(fs.readFileSync('app/static/js/staff_report_components.js','utf8'),{document:{querySelectorAll:()=>[itSection]},Event:class{}});
 assert.equal(itPanel.hidden,true);
+noITChoice.checked=true;noITChoice.handlers.change();assert.equal(itPanel.hidden,true);
+noITChoice.checked=false;
 itChoice.checked=true;itChoice.handlers.change();assert.match(itChoice.validationMessage,/at least one/);
 itAdd.handlers.click();
 const itRow=itRows.children[0],exam=itRow.inputs[3];

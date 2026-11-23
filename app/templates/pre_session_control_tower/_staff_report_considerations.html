@@ -1,4 +1,4 @@
-{% set consideration_section = 'reading_writing' if verification.component == 'Reading and Writing' else 'listening' %}
+{% set consideration_section = 'reading_writing' if verification.component == 'Reading and Writing' else 'speaking' if verification.component == 'Speaking' else 'listening' %}
 <div class="staff-report-considerations" data-report-considerations>
   <div class="staff-report-consideration-chips" data-consideration-chips aria-label="Important considerations"></div>
   <button type="button" class="staff-detail-link staff-report-add-component" data-add-consideration>+ Add important consideration</button>

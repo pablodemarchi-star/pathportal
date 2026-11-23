@@ -19,7 +19,7 @@ fields['[data-review-count]'] = {classList: classes()};
 const criterionKeys=['arrival','attitude','responsibilities','staff_id','dress_code','language','overall'];
 const commentRules={arrival:['Too risky'],attitude:['Too doubtful','Not helpful'],responsibilities:['Needed guidance','Made mistakes'],dress_code:['Could improve','Inappropriate'],overall:['Unsatisfactory']};
 const reviewRows = Array.from({length: 2}, () => {
-  const selects = criterionKeys.map(key => ({key,value: '', addEventListener(name, callback) {this[name] = callback;}}));
+  const selects = criterionKeys.map(key => ({key,dataset:{criterion:key,bestRating:'Selected'},options:['','Selected','Remarkable','Satisfactory','Unsatisfactory'].map(value=>({value,disabled:false})),value: '', addEventListener(name, callback) {this[name] = callback;}}));
   const note = {value: '', addEventListener(name, callback) {this[name] = callback;}};
   const indicator = {}, requiredIndicator = {};
   const summary = {dataset:{},getAttribute:()=> 'Notes for Staff',setAttribute(name,value){this[name]=value;}};
@@ -108,4 +108,18 @@ assert.ok(first.notes.classList.values.has('has-required-missing'));
  assert.equal(first.comments[0].input.value,'Late arrival');
  assert.equal(first.comments[0].input.required,true);
  console.log('Required review comments: multiple criteria, per-person pending indicator, preserved text and opening Notes before validation passed.');
+
+
+// Overall options follow the other ratings and clear incompatible selections.
+first.selects.slice(0,6).forEach(select=>{select.value='Selected';});
+first.selects[6].value='Unsatisfactory';first.selects[0].change();
+assert.equal(first.selects[6].value,'');
+assert.equal(first.selects[6].options.find(option=>option.value==='Unsatisfactory').disabled,true);
+first.selects[6].value='Remarkable';first.selects[0].change();
+assert.equal(first.selects[6].value,'Remarkable');
+first.selects[0].value='Too risky';first.selects[0].change();
+assert.equal(first.selects[6].value,'');
+assert.equal(first.selects[6].options.find(option=>option.value==='Remarkable').disabled,true);
+assert.equal(first.selects[6].options.find(option=>option.value==='Unsatisfactory').disabled,false);
+console.log('Overall ratings: restricted choices and automatic clearing passed.');
 })().catch(error=>{console.error(error);process.exitCode=1;});
