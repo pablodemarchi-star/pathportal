@@ -51,6 +51,9 @@ class StaffSessionReportTest(unittest.TestCase):
                 data[field] = '1'
         if self.record.format == 'Online':
             data['recordings_reminder_confirmed'] = '1'
+        from app.staff_report_components import applicable
+        if applicable(self.record):
+            data['component_completion'] = 'complete'
         feedback_submitted = values.pop('_feedback_submitted', True)
         data.update(values)
         with patch('app.routes.staff_report_available', return_value=True), patch('app.routes.staff_report_feedback_submitted', return_value=feedback_submitted):
@@ -661,24 +664,26 @@ class StaffSessionReportTest(unittest.TestCase):
                 self.record.format = format_name; self.record.modules = modules; db.session.commit()
                 html = self.client.get(f'/my-exam-sessions/{self.share.token}?session_year=2026').get_data(as_text=True)
                 self.assertNotIn('name="speaking_records_checked"', html)
-                self.assertEqual('name="listening_speaking_components_checked"' in html, components)
+                self.assertNotIn('name="listening_speaking_components_checked"', html)
+                self.assertEqual('name="component_completion"' in html, components)
                 self.assertEqual('in Sinapsis and on the printed candidate list.' in html, format_name == 'Onsite')
                 if speaking:
                     self.assertIn('name="examiner_marks_checked" value="1" required', html)
                     self.assertIn('with all statuses matching those recorded in Sinapsis.', html)
                 if components:
-                    self.assertIn('name="listening_speaking_components_checked" value="1" required', html)
-                    self.assertGreater(html.index('name="listening_speaking_components_checked"'), html.index('name="examiner_marks_checked"'))
+                    self.assertIn('name="component_completion" value="complete" required', html)
+                    self.assertGreater(html.index('name="component_completion"'), html.index('name="examiner_marks_checked"'))
 
     def test_online_attendance_requires_and_persists_applicable_checks(self):
         self.record.format = 'Online'; self.record.modules = 'Listening and speaking'; db.session.commit()
         self.assertEqual(self.post(examiner_marks_checked='0').status_code, 400)
-        self.assertEqual(self.post(listening_speaking_components_checked='0').status_code, 400)
+        self.assertEqual(self.post(component_completion='').status_code, 400)
         self.assertEqual(m.StaffExamSessionReport.query.count(), 0)
         self.assertEqual(self.post().status_code, 200)
         report = m.StaffExamSessionReport.query.one()
         self.assertFalse(report.speaking_records_checked)
-        self.assertTrue(report.listening_speaking_components_checked)
+        self.assertFalse(report.listening_speaking_components_checked)
+        self.assertEqual(report.component_completion, 'complete')
         self.assertFalse(report.session_completed_checked)
 
     def test_inapplicable_online_attendance_checks_are_not_required_or_saved(self):

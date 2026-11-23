@@ -133,7 +133,7 @@ class AttendanceTrackingTest(unittest.TestCase):
         self.assertEqual(cell['attendance']['controls_completed'],state['tracking']['controls_completed'])
         self.assertEqual(cell['attendance']['deadlines'],state['tracking']['deadlines'])
         online=self.new_session('Online',self.record.session_date,'Online');db.session.commit()
-        self.assertFalse(next(item for item in load_rows([online])[0]['cells'] if item['key']=='attendance')['applicable'])
+        self.assertTrue(next(item for item in load_rows([online])[0]['cells'] if item['key']=='attendance')['applicable'])
         candidate=m.AbsenceCandidate.query.one()
         self.raw_action('candidate',candidate_id=candidate.id,field='review',value='Declined',previous_file_id=candidate.document_id,reason='Reason')
         self.assertEqual(self.get()['tracking']['action'],'Notify institutions of absence documentation review results')

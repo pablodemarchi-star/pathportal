@@ -18,12 +18,14 @@
     let saving = false;
     let mediaPending = false;
     const draftFields = Array.from(form.querySelectorAll('input[name]:not([type="file"]):not([type="hidden"]), select[name], textarea[name]'));
+    const componentJson = form.querySelector('[data-component-absence-json]');
+    if (componentJson) draftFields.push(componentJson);
     const clearDraft = () => { try { sessionStorage.removeItem(section.dataset.reportDraftKey); } catch {} };
     const saveDraft = () => {
       if (!section.dataset.reportDraftKey || !opener.dataset.folderUrl) return;
       const values = {};
       draftFields.forEach(input => {
-        if (input.type === 'checkbox') {
+        if ((input.type === 'checkbox' || input.type === 'radio')) {
           values[input.name] ||= [];
           if (input.checked) values[input.name].push(input.value);
         } else values[input.name] = input.value;
@@ -297,13 +299,14 @@
       try {
         const values = JSON.parse(sessionStorage.getItem(section.dataset.reportDraftKey) || '{}');
         draftFields.forEach(input => {
-          if (input.type === 'checkbox' && Array.isArray(values[input.name])) input.checked = values[input.name].includes(input.value);
-          else if (input.type !== 'checkbox' && typeof values[input.name] === 'string') input.value = values[input.name];
+          if ((input.type === 'checkbox' || input.type === 'radio') && Array.isArray(values[input.name])) input.checked = values[input.name].includes(input.value);
+          else if (input.type !== 'checkbox' && input.type !== 'radio' && typeof values[input.name] === 'string') input.value = values[input.name];
         });
         if (institutionalFeedback && !institutionSubmitted) institutionalFeedback.checked = false;
         if (marketingCheckbox && !uploadedCount) marketingCheckbox.checked = false;
       } catch {}
     }
+    if (typeof Event !== 'undefined' && form.dispatchEvent) form.dispatchEvent(new Event('report:draft-restored'));
     updateReasons();
     updateComments();
     updateEmergencyReasons();

@@ -20539,13 +20539,8 @@ def staff_end_checks_available(record, now=None):
 
 
 def staff_report_online_attendance_fields(record):
-    if record.format != "Online":
-        return ()
-    modules = {module.lower() for module in record.modules_list()}
-    fields = []
-    if "listening and speaking" in modules:
-        fields.append("listening_speaking_components_checked")
-    return tuple(fields)
+    # Historical columns remain readable; the new component section replaces these checks.
+    return ()
 
 
 MODULE_VERIFICATION_FIELDS = ('rw_files_uploaded_checked', 'rw_files_matched_checked', 'listening_files_uploaded_checked', 'listening_files_matched_checked', 'examiner_marks_checked')
@@ -20640,8 +20635,11 @@ def submit_staff_session_report(token, submission_id):
     required_online_checks = staff_report_online_attendance_fields(record)
     online_attendance = {key: key in required_online_checks and request.form.get(key) == "1"
                          for key in ("speaking_records_checked", "listening_speaking_components_checked")}
-    if "listening_speaking_components_checked" in required_online_checks and not online_attendance["listening_speaking_components_checked"]:
-        return jsonify(ok=False, error="Please confirm that all Submitted candidates completed both the Listening and Speaking components."), 400
+    from app.staff_report_components import validate as validate_components, merge as merge_components
+    try:
+        component_completion, component_absences = validate_components(record, request.form)
+    except ValueError as error:
+        return jsonify(ok=False, error=str(error)), 400
     module_sections = staff_report_module_sections(record)
     required_module_fields = {field for section in module_sections for field in section["fields"]}
     module_verifications = {field: field in required_module_fields and request.form.get(field) == "1"
@@ -20699,9 +20697,10 @@ def submit_staff_session_report(token, submission_id):
     if len(optional_comments) > 10000:
         return jsonify(ok=False, error="Optional comments must not exceed 10,000 characters."), 400
     person = assignment.team_member or assignment.potential_entry
-    db.session.add(StaffExamSessionReport(submission_id=submission.id, exam_session_id=record.id,
+    try:
+        db.session.add(StaffExamSessionReport(submission_id=submission.id, exam_session_id=record.id,
                                         author_name=person.full_name if person else "", author_person_ref=person_ref, schedule_outcome=outcome,
-                                        optional_comments=optional_comments,
+                                        optional_comments=optional_comments, component_completion=component_completion, component_absences=json.dumps(component_absences),
                                         centre_feedback_confirmed=feedback_required,
                                         recordings_reminder_confirmed=recordings_required and recordings_confirmed,
                                         marketing_confirmed=not online, marketing_media=json.dumps([item.file_id for item in media]),
@@ -20712,7 +20711,7 @@ def submit_staff_session_report(token, submission_id):
                                         facilities_outcome=facilities_outcome,
                                         facilities_comments=facilities_comments if facilities_outcome != "Satisfactory" else "",
                                         reasons=reasons if outcome != "There were no delays" else "", **attendance, **online_attendance, **module_verifications))
-    try:
+        merge_components(record, component_absences)
         db.session.commit()
     except IntegrityError:
         db.session.rollback()
@@ -20746,6 +20745,7 @@ def staff_report_feedback_status(token, submission_id):
 
 def staff_end_checks_view(record, role, status, submission, share):
     from app.staff_report_review import assessment_roster, assessment_criteria
+    from app.post_attendance import EXAMS
     from app.staff_report_media import media_view, report_for_session
     if status != "Confirmed":
         return {}
@@ -20765,6 +20765,8 @@ def staff_end_checks_view(record, role, status, submission, share):
         "report_url": "" if role == "examiner" else current_app.config.get("STAFF_END_OF_SESSION_REPORT_URL", ""),
         "online_attendance_fields": staff_report_online_attendance_fields(record),
         "module_sections": staff_report_module_sections(record),
+        "component_completion_applicable": record.format == "Online" and "listening and speaking" in {module.lower() for module in record.modules_list()},
+        "component_exams": EXAMS,
         "speaking_documents": staff_report_speaking_documents(record) if record.format == "Online" and report_eligible else [],
         "session_report_available": report_eligible and staff_report_available(record),
         "session_report_submitted": bool(report_for_session(record)) if report_eligible else False,

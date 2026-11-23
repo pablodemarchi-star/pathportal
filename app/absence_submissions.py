@@ -38,7 +38,7 @@ def folder_id(record):
 
 
 def conflict(candidate,text):
-    return jsonify(ok=False,duplicate=True,error=text['duplicate'],previous_file_id=candidate.document_id),409
+    return jsonify(ok=False,duplicate=True,error=text['duplicate'],previous_file_id=candidate.document_id or ''),409
 
 
 def store_candidate(record,text,trashed,internal=False):
@@ -75,7 +75,7 @@ def store_candidate(record,text,trashed,internal=False):
     destination=folder_id(record)
     if not destination:raise ValueError(text['folder'])
     candidate=m.AbsenceCandidate.query.filter_by(exam_session_id=record.id,number_key=number.casefold()).first()
-    if candidate and (request.form.get('replace')!='1' or request.form.get('confirmed')!='1' or request.form.get('previous_file_id')!=candidate.document_id):
+    if candidate and (request.form.get('replace')!='1' or request.form.get('confirmed')!='1' or request.form.get('previous_file_id', '')!=(candidate.document_id or '')):
         return conflict(candidate,text)
     institution=institution_for(record,request.form.get('institution_id','main')) if internal and not candidate else main_institution(record,True) if not candidate else db.session.get(m.AttendanceInstitution,candidate.institution_id)
     if internal:institution=institution_for(record,choices['institution_id'])

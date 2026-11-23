@@ -91,10 +91,10 @@ def batch_presentations(records,today=None):
     for item in institutions:by_session[item.exam_session_id].append(item)
     if institutions:
         for item in m.AttendanceModule.query.filter(m.AttendanceModule.institution_id.in_([i.id for i in institutions]),m.AttendanceModule.document_id.isnot(None)).all():by_institution[item.institution_id].add(item.module)
-    for item in m.AbsenceCandidate.query.options(load_only(m.AbsenceCandidate.id,m.AbsenceCandidate.exam_session_id,m.AbsenceCandidate.document_id,m.AbsenceCandidate.review_status)).filter(m.AbsenceCandidate.exam_session_id.in_(ids)).all():candidates[item.exam_session_id].append(item)
+    for item in m.AbsenceCandidate.query.options(load_only(m.AbsenceCandidate.id,m.AbsenceCandidate.exam_session_id,m.AbsenceCandidate.document_id,m.AbsenceCandidate.review_status,m.AbsenceCandidate.component_reason,m.AbsenceCandidate.institution_id)).filter(m.AbsenceCandidate.exam_session_id.in_(ids)).all():candidates[item.exam_session_id].append(item)
     result={}
     for record in records:
-        cards=[dict(main=i.is_main,sent=json.loads(i.notifications or '{}'),modules={'present':bool(by_institution[i.id]&set(record.modules_list()))}) for i in by_session[record.id]]
+        cards=[dict(id=str(i.id),main=i.is_main,sent=json.loads(i.notifications or '{}'),modules={'present':bool(by_institution[i.id]&set(record.modules_list()))}) for i in by_session[record.id]]
         window=journey_absence_upload_window(record,now=now)
         value=controls.get(record.id)
         flow=workflow_state(record,cards,candidates[record.id],window,attendance_control=value,today=now.date())

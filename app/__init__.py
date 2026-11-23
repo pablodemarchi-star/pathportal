@@ -314,6 +314,8 @@ def create_app():
         migrate_attendance_tracking()
         from app.schema_migrations import migrate_staff_session_report_attendance
         migrate_staff_session_report_attendance()
+        from app.schema_migrations import migrate_staff_report_components
+        migrate_staff_report_components()
         from app.schema_migrations import migrate_session_scoped_staff_reports
         migrate_session_scoped_staff_reports()
         from app.schema_migrations import migrate_process_timing

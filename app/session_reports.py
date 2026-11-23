@@ -121,7 +121,7 @@ def render_detail(session_id):
         files=m.StaffSessionReportMedia.query.filter(m.StaffSessionReportMedia.file_id.in_(file_ids)).all() if file_ids else []
         reviews = decoded(report.staff_assessments)
         criteria = assessment_criteria(record) if any('exam_environment' in row.get('criteria', {}) for row in reviews) else CRITERIA
-        report_views.append(dict(criteria=criteria, record=report,author=author(report),reviews=reviews,return_steps=decoded(report.return_verification),files=files,historical=report.exam_session_id is None))
+        report_views.append(dict(component_absences=decoded(report.component_absences), criteria=criteria, record=report,author=author(report),reviews=reviews,return_steps=decoded(report.return_verification),files=files,historical=report.exam_session_id is None))
     feedback=m.ExamCentreFeedback.query.filter_by(exam_session_id=record.id).first()
     response=current_app.make_response(render_template('_session_reports_detail.html',session_record=record,reports=report_views,feedback=feedback,criteria=CRITERIA,questions=QUESTIONS,open_questions=OPEN_QUESTIONS))
     response.headers['Cache-Control']='private, no-store'

@@ -1,0 +1,12 @@
+.staff-report-component-options{display:grid;gap:10px;margin-top:12px}
+.staff-report-component-options>label{padding:12px 14px;border:1px solid #dce5e9;border-radius:10px;background:#f7fafb;align-items:flex-start}
+.staff-report-components input[type=radio]{width:16px;height:16px;min-width:16px;min-height:16px;padding:0;flex:0 0 auto;margin-top:4px;accent-color:#00506b}
+.staff-report-component-candidate{min-width:0;margin:14px 0;padding:16px;border:1px solid #d3e1e7;border-radius:12px;background:#f8fbfc}
+.staff-report-component-candidate legend{padding:0 7px;font-weight:600;font-size:13px;color:#00506b}
+.staff-report-component-fields{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px}
+.staff-report-component-fields label{display:grid;gap:6px;min-width:0;margin:0;font-size:12px;font-weight:600}
+.staff-report-component-fields input,.staff-report-component-fields select,.staff-report-component-fields textarea{width:100%;min-width:0;box-sizing:border-box;border:1px solid #c5d7df;border-radius:8px;background:#fff;padding:9px;font:inherit;font-weight:400}
+.staff-report-component-reason{grid-column:1/-1}
+.staff-report-add-component{font-size:12px;border-radius:999px;padding:7px 12px}
+.staff-report-remove-component{margin-top:12px;border:0;background:transparent;color:#9a3636;font:inherit;font-size:12px;cursor:pointer}
+@media(max-width:600px){.staff-report-component-fields{grid-template-columns:minmax(0,1fr)}}

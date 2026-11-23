@@ -182,12 +182,10 @@
                 {% else %}
                 <label class="staff-session-report-checkbox"><input type="checkbox" name="examiner_marks_checked" value="1" required><span>It has been verified that <b>all examiners have completed their Speaking record Excel files</b>, entering the appropriate Speaking <b>marks</b> for candidates who attended and <b>Absent</b> for those who did not, with all statuses matching those recorded in Sinapsis.</span></label>
                 <ul>{% for document in detail.end_checks.speaking_documents %}<li><b>{{ document.name }}</b> · {% if document.url %}<a href="{{ document.url }}" target="_blank" rel="noopener noreferrer">Speaking record ↗</a>{% else %}Record not uploaded{% endif %}</li>{% else %}<li>No examiners assigned.</li>{% endfor %}</ul>
-                {% if 'listening_speaking_components_checked' in detail.end_checks.online_attendance_fields %}
-                <label class="staff-session-report-checkbox"><input type="checkbox" name="listening_speaking_components_checked" value="1" required><span>For the <b>Listening and Speaking module</b>, it has been verified that <b>all candidates marked as Submitted have completed both the Listening and Speaking components</b>, with neither component missing.</span></label>
-                {% endif %}
                 {% endif %}
               </li>
               {% endfor %}
+              {% include 'pre_session_control_tower/_staff_report_components.html' %}
               {% if detail.format != 'Online' %}
               <li>
                 <b>Exam return package verification</b>

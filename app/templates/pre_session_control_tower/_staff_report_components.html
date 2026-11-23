@@ -1,0 +1,30 @@
+{% if detail.end_checks.component_completion_applicable %}
+<li class="staff-report-components" data-report-components>
+  <b>Listening and Speaking module completion</b>
+  <div class="staff-report-component-options">
+    <label class="staff-session-report-checkbox"><input type="radio" name="component_completion" value="complete" required><span>It has been verified that <b>all candidates marked as Submitted have completed both the Listening and Speaking components</b>, with neither component missing.</span></label>
+    <label class="staff-session-report-checkbox"><input type="radio" name="component_completion" value="component_absences" required><span>One or more candidates marked as <b>Absent have completed only one of the two components (Listening or Speaking)</b>, leaving the other incomplete.</span></label>
+  </div>
+  <div data-component-absence-panel hidden>
+    <p class="staff-detail-muted">Add each candidate who missed one component. Enter the original candidate number, including any initial zeroes.</p>
+    <div data-component-absence-rows></div>
+    <button type="button" class="staff-detail-link staff-report-add-component" data-add-component-absence>＋ Add candidate component absence</button>
+    <p class="staff-detail-muted" data-component-absence-error role="status"></p>
+  </div>
+  <input type="hidden" name="component_absences" value="[]" data-component-absence-json>
+  <template data-component-absence-template>
+    <fieldset class="staff-report-component-candidate">
+      <legend>Candidate component absence</legend>
+      <div class="staff-report-component-fields">
+        <label>Candidate number (excluding the appended digit)<input type="text" inputmode="numeric" pattern="[0-9]+" maxlength="80" data-component-field="number" required></label>
+        <label>Candidate name<input type="text" maxlength="250" data-component-field="name" required></label>
+        <label>Institution<input type="text" maxlength="250" data-component-field="institution" required></label>
+        <label>Exam<select data-component-field="exam" required><option value="">Select exam</option>{% for exam in detail.end_checks.component_exams %}<option>{{ exam }}</option>{% endfor %}</select></label>
+        <label>Absent component<select data-component-field="component" required><option value="">Select component</option><option>Listening</option><option>Speaking</option></select></label>
+        <label class="staff-report-component-reason">Reason<textarea rows="3" maxlength="10000" data-component-field="reason" required></textarea></label>
+      </div>
+      <button type="button" class="staff-report-remove-component" data-remove-component-absence>Remove candidate</button>
+    </fieldset>
+  </template>
+</li>
+{% endif %}

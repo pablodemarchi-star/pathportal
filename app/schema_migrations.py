@@ -217,3 +217,49 @@ def migrate_attendance_tracking():
         db.session.execute(text("ALTER TABLE post_attendance ADD COLUMN submission_status VARCHAR(30) NOT NULL DEFAULT ''"))
         db.session.execute(text("UPDATE post_attendance SET submission_status='completed' WHERE internal_activity=TRUE"))
     db.session.commit()
+
+
+def migrate_staff_report_components():
+    """Preserve existing files/reviews while allowing text-only absence evidence."""
+    from sqlalchemy import inspect
+    definitions = {
+        'staff_exam_session_report': {'component_completion': "VARCHAR(30) NOT NULL DEFAULT ''", 'component_absences': "TEXT NOT NULL DEFAULT '[]'"},
+        'absence_candidate': {'component_reason': "TEXT NOT NULL DEFAULT ''"},
+    }
+    for table, fields in definitions.items():
+        columns = {item['name'] for item in inspect(db.engine).get_columns(table)}
+        for name, definition in fields.items():
+            if name not in columns:
+                db.session.execute(text(f'ALTER TABLE {table} ADD COLUMN {name} {definition}'))
+    db.session.commit()
+    document = next(item for item in inspect(db.engine).get_columns('absence_candidate') if item['name'] == 'document_id')
+    if document['nullable']:
+        return
+    if db.engine.dialect.name != 'sqlite':
+        db.session.execute(text('ALTER TABLE absence_candidate ALTER COLUMN document_id DROP NOT NULL'))
+        db.session.commit()
+        return
+    # Rebuild only this table, retaining its original constraints, indexes and triggers.
+    with db.engine.connect() as connection:
+        foreign_keys = connection.exec_driver_sql('PRAGMA foreign_keys').scalar()
+        connection.commit()
+        connection.exec_driver_sql('PRAGMA foreign_keys=OFF')
+        connection.commit()
+        try:
+            with connection.begin():
+                ddl = connection.execute(text("SELECT sql FROM sqlite_master WHERE type='table' AND name='absence_candidate'")).scalar_one()
+                ddl, count = re.subn(r'(\bdocument_id\s+[^,\n]+?)\s+NOT NULL', r'\1', ddl, count=1, flags=re.I)
+                if count != 1:
+                    raise RuntimeError('Could not migrate absence document nullability safely.')
+                ddl = re.sub(r'CREATE TABLE\s+absence_candidate\b', 'CREATE TABLE absence_candidate_components_migration', ddl, count=1, flags=re.I)
+                extra = connection.execute(text("SELECT sql FROM sqlite_master WHERE tbl_name='absence_candidate' AND type IN ('index','trigger') AND sql IS NOT NULL")).scalars().all()
+                connection.exec_driver_sql(ddl)
+                columns = ', '.join('"' + item['name'] + '"' for item in inspect(connection).get_columns('absence_candidate'))
+                connection.exec_driver_sql(f'INSERT INTO absence_candidate_components_migration ({columns}) SELECT {columns} FROM absence_candidate')
+                connection.exec_driver_sql('DROP TABLE absence_candidate')
+                connection.exec_driver_sql('ALTER TABLE absence_candidate_components_migration RENAME TO absence_candidate')
+                for statement in extra:
+                    connection.exec_driver_sql(statement)
+        finally:
+            connection.exec_driver_sql('PRAGMA foreign_keys=' + ('ON' if foreign_keys else 'OFF'))
+            connection.commit()

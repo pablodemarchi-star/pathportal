@@ -53,13 +53,29 @@ def absence_choices(record,name,cards=None):
         reason='' if allowed else 'No absent modules with an uploaded list are recorded for this institution.')
 
 
+def candidate_exam_modules(candidate):
+    values = exam_modules(candidate.exam)
+    if candidate.component_reason:
+        values = list(dict.fromkeys(values + ['Listening', 'Speaking']))
+    return values
+
+
+def candidate_choices(record, candidate, cards=None):
+    choices = absence_choices(record, candidate.institution_name, cards)
+    if candidate.component_reason and record.format == 'Online' and 'listening and speaking' in {value.lower() for value in record.modules_list()}:
+        choices = dict(institution_id=str(candidate.institution_id), modules=list(dict.fromkeys(choices['modules'] +
+            [module for module in json.loads(candidate.absent_modules or '[]') if module in modules(record)] + ['Listening', 'Speaking'])),
+            exams=EXAMS, reason='')
+    return choices
+
+
 def reconcile_absence_candidates(record):
     cards=absence_cards(record)
     changed=False
     for candidate in m.AbsenceCandidate.query.filter_by(exam_session_id=record.id).all():
-        choices=absence_choices(record,candidate.institution_name,cards)
+        choices=candidate_choices(record,candidate,cards)
         if choices['institution_id']:candidate.institution_id=int(choices['institution_id'])
-        allowed=set(choices['modules'])&set(exam_modules(candidate.exam))
+        allowed=set(choices['modules'])&set(candidate_exam_modules(candidate))
         selected=json.loads(candidate.absent_modules or '[]')
         remaining=[module for module in selected if module in allowed]
         invalid=bool(candidate.exam and candidate.exam not in choices['exams'])
@@ -102,8 +118,8 @@ def candidate_credit_applicable(candidate):
 def candidate_ready(candidate,credit_enabled=None,choices=None):
     if credit_enabled is None:credit_enabled=candidate_credit_applicable(candidate)
     absent=json.loads(candidate.absent_modules or '[]')
-    choices=choices if choices is not None else absence_choices(db.session.get(m.ExamSession,candidate.exam_session_id),candidate.institution_name)
-    return bool(candidate.exam in choices['exams'] and absent and all(module in exam_modules(candidate.exam) and module in choices['modules'] for module in absent) and (not credit_enabled or (candidate.currency in CURRENCIES and candidate.credit_balance is not None)))
+    choices=choices if choices is not None else candidate_choices(db.session.get(m.ExamSession,candidate.exam_session_id),candidate)
+    return bool(candidate.exam in choices['exams'] and absent and all(module in candidate_exam_modules(candidate) and module in choices['modules'] for module in absent) and (not credit_enabled or (candidate.currency in CURRENCIES and candidate.credit_balance is not None)))
 
 
 def reset_review(candidate):
@@ -206,7 +222,7 @@ def grouped_whatsapp_message(record,candidates,language='en'):
     last_id=credit_exempt_session_id(record)
     credits={candidate.id:str(candidate.rescheduled_for or candidate.requested_rescheduled_for)!=str(last_id) for candidate in candidates}
     cards=absence_cards(record)
-    if status=='Confirmed' and any(not candidate_ready(candidate,credits[candidate.id],absence_choices(record,candidate.institution_name,cards)) for candidate in candidates):raise ValueError('Complete all required candidate and Credit balance fields before copying.')
+    if status=='Confirmed' and any(not candidate_ready(candidate,credits[candidate.id],candidate_choices(record,candidate,cards)) for candidate in candidates):raise ValueError('Complete all required candidate and Credit balance fields before copying.')
     if status=='Confirmed':return approved_group_message(record,candidates,credits,last_id,language)
     blocks=[]
     for index,candidate in enumerate(candidates,1):
@@ -322,10 +338,11 @@ def workflow_state(record,cards=None,candidates=None,window=None,attendance_cont
         institutions=m.AttendanceInstitution.query.filter_by(exam_session_id=record.id).all()
         rows=m.AttendanceModule.query.filter(m.AttendanceModule.institution_id.in_([item.id for item in institutions]),m.AttendanceModule.module.in_(modules(record)),m.AttendanceModule.document_id.isnot(None)).all() if institutions else []
         absent_ids={row.institution_id for row in rows}
-        cards=[dict(main=item.is_main,sent=json.loads(item.notifications or '{}'),modules={'present':item.id in absent_ids}) for item in institutions]
+        cards=[dict(id=str(item.id),main=item.is_main,sent=json.loads(item.notifications or '{}'),modules={'present':item.id in absent_ids}) for item in institutions]
     if candidates is None:candidates=m.AbsenceCandidate.query.filter_by(exam_session_id=record.id).all()
     window=window or journey_absence_upload_window(record)
-    absent_cards=[card for card in cards if any(card['modules'].values())]
+    reported_institutions = {str(candidate.institution_id) for candidate in candidates if candidate.component_reason}
+    absent_cards=[card for card in cards if any(card['modules'].values()) or str(card.get('id')) in reported_institutions]
     has_absences=bool(absent_cards)
     unblocked=(today or local_today())>record.session_date
     records_enabled=bool(unblocked and value and value.submission_status=='completed')
@@ -340,7 +357,7 @@ def workflow_state(record,cards=None,candidates=None,window=None,attendance_cont
         if not keys or not all(card['sent'].get(key) is True for key in keys):all_sent=False
     documentation_enabled=bool(notifications_enabled and all_sent)
     review_allowed=bool(documentation_enabled and window['state']=='expired')
-    results_enabled=bool(review_allowed and candidates and all(candidate.document_id and candidate.review_status in {'Confirmed','Declined'} for candidate in candidates))
+    results_enabled=bool(review_allowed and candidates and all((candidate.document_id or candidate.component_reason) and candidate.review_status in {'Confirmed','Declined'} for candidate in candidates))
     records_completed=bool(records_enabled and value and value.verified)
     notifications_completed=bool(notifications_enabled and all_sent)
     no_documents_enabled=bool(review_allowed and not candidates)
@@ -378,19 +395,22 @@ def state(record):
             'modules':{module:document_data(documents.get((item.id,module)),record) for module in modules(record)},'sent':json.loads(item.notifications or '{}')} for item in institutions]
     if not any(card['main'] for card in cards):cards.insert(0,{'id':'main','name':record.exam_session_name,'main':True,'modules':{module:None for module in modules(record)},'sent':{}})
     candidates=m.AbsenceCandidate.query.options(joinedload(m.AbsenceCandidate.document)).filter_by(exam_session_id=record.id).order_by(m.AbsenceCandidate.id).all()
+    reported_institutions = {str(candidate.institution_id) for candidate in candidates if candidate.component_reason}
+    for card in cards:
+        card['reported_absence'] = card['id'] in reported_institutions
     options,default=reschedule_options(record)
     from app.absence_submissions import institutional_reschedule_options
     internal_options=institutional_reschedule_options(record)
     last_id=credit_exempt_session_id(record)
     candidate_rows=[]
     for candidate in candidates:
-        choices=absence_choices(record,candidate.institution_name,cards)
+        choices=candidate_choices(record,candidate,cards)
         absent=json.loads(candidate.absent_modules or '[]')
         credit_enabled=str(candidate.rescheduled_for or candidate.requested_rescheduled_for)!=str(last_id)
         candidate_rows.append(dict(id=candidate.id,number=candidate.number,name=candidate.name,exam=candidate.exam,institution_id=str(candidate.institution_id),
-            modules=absent,approved=candidate.review_status=='Confirmed',review_status=candidate.review_status,decline_reason=candidate.decline_reason,institution_name=candidate.institution_name,institution_key=institution_key(candidate.institution_name),allowed_modules=[module for module in exam_modules(candidate.exam) if module in choices['modules']],allowed_exams=choices['exams'],selection_hint=choices['reason'],rescheduled_label=requested_date_label(candidate),notes=candidate.notes,rescheduled_for=candidate.rescheduled_for or default,
+            modules=absent,approved=candidate.review_status=='Confirmed',review_status=candidate.review_status,decline_reason=candidate.decline_reason,institution_name=candidate.institution_name,institution_key=institution_key(candidate.institution_name),allowed_modules=[module for module in candidate_exam_modules(candidate) if module in choices['modules']],allowed_exams=choices['exams'],selection_hint=choices['reason'],rescheduled_label=requested_date_label(candidate),notes=candidate.notes,rescheduled_for=candidate.rescheduled_for or default,
             whatsapp_message=candidate_whatsapp_message(candidate,credit_enabled,choices=choices),whatsapp_message_es=candidate_whatsapp_message(candidate,credit_enabled,language='es',choices=choices),currency=candidate.currency if credit_enabled else '',credit_balance=str(candidate.credit_balance) if credit_enabled and candidate.credit_balance is not None else '',credit_applicable=credit_enabled,
-            document=document_data(candidate.document,record),actionable=bool(candidate.review_status=='Confirmed' and candidate_ready(candidate,credit_enabled,choices))))
+            component_reason=candidate.component_reason,document=document_data(candidate.document,record),actionable=bool(candidate.review_status=='Confirmed' and candidate_ready(candidate,credit_enabled,choices))))
     window=journey_absence_upload_window(record)
     flow=workflow_state(record,cards,candidates,window)
     from app.attendance_notifications import decorate_notifications
@@ -419,12 +439,12 @@ def render_index(online=False):
     by_institution={}
     for item in module_rows:by_institution.setdefault(item.institution_id,set()).add(item.module)
     by_session={}
-    for candidate in m.AbsenceCandidate.query.options(load_only(m.AbsenceCandidate.id,m.AbsenceCandidate.exam_session_id,m.AbsenceCandidate.document_id,m.AbsenceCandidate.review_status)).filter(m.AbsenceCandidate.exam_session_id.in_(ids)).all() if ids else []:by_session.setdefault(candidate.exam_session_id,[]).append(candidate)
+    for candidate in m.AbsenceCandidate.query.options(load_only(m.AbsenceCandidate.id,m.AbsenceCandidate.exam_session_id,m.AbsenceCandidate.document_id,m.AbsenceCandidate.review_status,m.AbsenceCandidate.component_reason,m.AbsenceCandidate.institution_id)).filter(m.AbsenceCandidate.exam_session_id.in_(ids)).all() if ids else []:by_session.setdefault(candidate.exam_session_id,[]).append(candidate)
     cards_by_session={}
     for item in institutions:cards_by_session.setdefault(item.exam_session_id,[]).append(item)
     progress={}
     for record in records:
-        cards=[dict(main=item.is_main,sent=json.loads(item.notifications or '{}'),modules={'present':bool(by_institution.get(item.id,set())&set(modules(record)))}) for item in cards_by_session.get(record.id,[])]
+        cards=[dict(id=str(item.id),main=item.is_main,sent=json.loads(item.notifications or '{}'),modules={'present':bool(by_institution.get(item.id,set())&set(modules(record)))}) for item in cards_by_session.get(record.id,[])]
         flow=workflow_state(record,cards,by_session.get(record.id,[]),attendance_control=values.get(record.id))
         from app.routes import journey_absence_upload_window
         progress[record.id]=dict(progress=flow['attendance_progress'],**attendance_presentation(record,flow,values.get(record.id),journey_absence_upload_window(record)))
@@ -570,24 +590,24 @@ def mutate(record,trashed):
             if not reviewed:raise ValueError('This candidate is already Pending. Refresh the review.')
             if not flow['review_allowed']:raise ValueError('Wait until the documentation review is available.')
             if request.form.get('confirmed')!='1':raise ValueError('Please confirm reopening this review.')
-            if request.form.get('previous_file_id')!=candidate.document_id or request.form.get('previous_status')!=candidate.review_status:
+            if request.form.get('previous_file_id', '')!=(candidate.document_id or '') or request.form.get('previous_status')!=candidate.review_status:
                 raise ValueError('This review changed. Refresh and try again.')
             reset_review(candidate)
             value=touch(record);value.review_results_notified=False
             return
         if reviewed and field!='notes':
             raise ValueError('This review is read-only. Use Review to return it to Pending before editing.')
-        choices=absence_choices(record,candidate.institution_name)
+        choices=candidate_choices(record,candidate)
         if field=='exam':
             if value not in choices['exams']+['']:raise ValueError('Select a valid exam level.')
             if candidate.exam!=value:
                 candidate.exam=value
-                candidate.absent_modules=json.dumps([module for module in json.loads(candidate.absent_modules or '[]') if module in exam_modules(value) and module in choices['modules']])
+                candidate.absent_modules=json.dumps([module for module in json.loads(candidate.absent_modules or '[]') if module in candidate_exam_modules(candidate) and module in choices['modules']])
                 reset_review(candidate)
         elif field=='modules':
             selected=request.form.getlist('modules')
             if not candidate.exam:raise ValueError('Select Exam before choosing absent modules.')
-            if any(module not in exam_modules(candidate.exam) or module not in choices['modules'] for module in selected):raise ValueError('Select the modules allowed for this exam.')
+            if any(module not in candidate_exam_modules(candidate) or module not in choices['modules'] for module in selected):raise ValueError('Select the modules allowed for this exam.')
             value_json=json.dumps(list(dict.fromkeys(selected)))
             if value_json!=candidate.absent_modules:reset_review(candidate)
             candidate.absent_modules=value_json
@@ -606,7 +626,7 @@ def mutate(record,trashed):
             reconcile_absence_candidates(record)
         elif field=='review':
             if not flow['review_allowed']:raise ValueError('Reviews can only be confirmed or declined after the institutional submission window closes.')
-            if request.form.get('previous_file_id')!=candidate.document_id:raise ValueError('This document was replaced. Review the current file before continuing.')
+            if request.form.get('previous_file_id', '')!=(candidate.document_id or ''):raise ValueError('This document was replaced. Review the current file before continuing.')
             if value not in {'Confirmed','Declined'}:raise ValueError('Choose Confirm or Decline.')
             reason=request.form.get('reason','').strip()
             if value=='Confirmed':

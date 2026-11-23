@@ -23,7 +23,11 @@
 <p role="status" aria-live="polite" data-group-feedback></p>
 <div class="pa-actions"><button type="button" class="secondary-button" data-group-close>Close</button><button type="button" class="primary-button" data-group-copy disabled>Copy message</button></div>
 </dialog>
+<dialog class="pa-dialog" data-component-reason-dialog aria-labelledby="component-reason-heading">
+<header><h2 id="component-reason-heading">Candidate component absence</h2><button type="button" class="icon-button" data-component-reason-close aria-label="Close explanation">×</button></header>
+<h3 data-component-reason-title></h3><p data-component-reason-text style="white-space:pre-wrap;overflow-wrap:anywhere"></p>
+</dialog>
 <div data-post-config data-open-session="{{ request.args.get('open_attendance','') }}" data-csrf="{{ csrf_token }}"></div>
 <script src="{{ url_for('static',filename='js/attendance_group_messages.js',v='20261119-2') }}" defer></script>
-<script src="{{ url_for('static',filename='js/post_attendance.js',v='20261119-27') }}" defer></script>
+<script src="{{ url_for('static',filename='js/post_attendance.js',v='20261123-component-reasons-1') }}" defer></script>
 {% endblock %}
