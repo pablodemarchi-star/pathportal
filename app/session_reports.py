@@ -43,11 +43,14 @@ def author_names(reports):
     return names
 
 
-def load_report_rows(year):
+def load_report_rows(year, format_name=None):
     from app.routes import LOCAL_TZ
     today = datetime.now(LOCAL_TZ).date()
-    records = m.ExamSession.query.options(load_only(m.ExamSession.id,m.ExamSession.exam_session_name,m.ExamSession.session_date,m.ExamSession.format)).filter(
-        extract('year',m.ExamSession.session_date)==year).order_by(m.ExamSession.session_date,m.ExamSession.exam_session_name,m.ExamSession.id).all()
+    query = m.ExamSession.query.options(load_only(m.ExamSession.id,m.ExamSession.exam_session_name,m.ExamSession.session_date,m.ExamSession.format)).filter(
+        extract('year',m.ExamSession.session_date)==year)
+    if format_name:
+        query = query.filter(m.ExamSession.format == format_name)
+    records = query.order_by(m.ExamSession.session_date,m.ExamSession.exam_session_name,m.ExamSession.id).all()
     ids = [record.id for record in records]
     reports = m.StaffExamSessionReport.query.options(load_only(
         m.StaffExamSessionReport.id,m.StaffExamSessionReport.exam_session_id,m.StaffExamSessionReport.submission_id,
@@ -69,39 +72,40 @@ def load_report_rows(year):
     for record in records:
         report,feedback = report_by_id.get(record.id),feedback_by_id.get(record.id)
         assignments=by_session.get(record.id,[])
-        applicable = bool(report) or record.format=='Onsite' and (not assignments or any(not a.is_remote for a in assignments))
+        applicable = bool(report) or record.format == 'Online' or record.format=='Onsite' and (not assignments or any(not a.is_remote for a in assignments))
+        feedback_applicable = record.format != 'Online'
         past = record.session_date < today
         status = lambda saved, applies=True: 'Submitted' if saved else 'Not applicable' if not applies else 'Not submitted — exam date passed' if past else 'Pending'
         alerts=[]
         if not report and applicable and past: alerts.append('Supervisor report not submitted')
-        if not feedback and past: alerts.append('Institution feedback not submitted')
+        if feedback_applicable and not feedback and past: alerts.append('Institution feedback not submitted')
         reviews=decoded(report.staff_assessments) if report else []
         if report:
             if report.schedule_outcome != 'There were no delays': alerts.append(report.schedule_outcome)
-            if report.facilities_outcome != 'Satisfactory': alerts.append('Facilities: '+report.facilities_outcome)
-            if report.emergency_pack_outcome != 'No, it was not needed': alerts.append('Emergency pack opened')
+            if record.format != 'Online' and report.facilities_outcome != 'Satisfactory': alerts.append('Facilities: '+report.facilities_outcome)
+            if record.format != 'Online' and report.emergency_pack_outcome != 'No, it was not needed': alerts.append('Emergency pack opened')
             concerning={'Too risky','Too doubtful','Not helpful','Needed guidance','Made mistakes','Not worn','Could improve','Inappropriate','Mother tongue','Unsatisfactory','Limited'}
             flagged=sum(any(value in concerning for value in row.get('criteria',{}).values()) for row in reviews)
             if flagged: alerts.append(f'{flagged} staff assessment(s) need attention')
-        scores=[dict(key=key,label=title,value=getattr(feedback,key+'_score')) for key,title,*_ in QUESTIONS] if feedback else []
+        scores=[dict(key=key,label=title,value=getattr(feedback,key+'_score')) for key,title,*_ in QUESTIONS] if feedback and feedback_applicable else []
         low=[score['label'] for score in scores if score['value']<=7]
         alerts += [label+': score ≤ 7' for label in low]
         people=[]
         for assignment in assignments:
             person=assignment.team_member or assignment.potential_entry
             if not assignment.is_remote and person and person.full_name not in people: people.append(person.full_name)
-        rows.append(dict(session=record,report=report,feedback=feedback,report_status=status(report,applicable),feedback_status=status(feedback),
-            report_applicable=applicable,report_author=names[report.id] if report else '',supervisors=people,reviews_count=len(reviews),
+        rows.append(dict(session=record,report=report,feedback=feedback,report_status=status(report,applicable),feedback_status=status(feedback, feedback_applicable),
+            report_applicable=applicable,feedback_applicable=feedback_applicable,report_author=names[report.id] if report else '',supervisors=people,reviews_count=len(reviews),
             scores=scores,average=round(sum(score['value'] for score in scores)/4,1) if scores else None,
-            alerts=alerts,complete=bool(feedback and (report or not applicable))))
+            alerts=alerts,complete=bool((feedback or not feedback_applicable) and (report or not applicable))))
     return rows
 
 
-def render_index(year, years):
-    from app.quality_control import FORMATS
-    rows=load_report_rows(year)
-    urls={key:url_for('quality_control.index',session_year=year,tab=key) for key in ('readiness','timing','reports')}
-    response=current_app.make_response(render_template('session_reports.html',rows=rows,years=years,selected_year=year,formats=FORMATS,urls=urls))
+def render_index(year, years, selected_format='Onsite'):
+    from app.quality_control import FORMATS, format_navigation
+    rows=load_report_rows(year, selected_format)
+    urls={key:url_for('quality_control.index',session_year=year,tab=key,format=selected_format) for key in ('readiness','timing','reports')}
+    response=current_app.make_response(render_template('session_reports.html',rows=rows,years=years,selected_year=year,formats=FORMATS,urls=urls,selected_format=selected_format,show_feedback=selected_format != 'Online', format_tabs=format_navigation(selected_format, year, 'reports')))
     response.headers['Cache-Control']='private, no-store'
     return response
 
@@ -117,7 +121,7 @@ def render_detail(session_id):
         files=m.StaffSessionReportMedia.query.filter(m.StaffSessionReportMedia.file_id.in_(file_ids)).all() if file_ids else []
         reviews = decoded(report.staff_assessments)
         criteria = assessment_criteria(record) if any('exam_environment' in row.get('criteria', {}) for row in reviews) else CRITERIA
-        report_views.append(dict(criteria=criteria, record=report,author=author(report),reviews=decoded(report.staff_assessments),return_steps=decoded(report.return_verification),files=files,historical=report.exam_session_id is None))
+        report_views.append(dict(criteria=criteria, record=report,author=author(report),reviews=reviews,return_steps=decoded(report.return_verification),files=files,historical=report.exam_session_id is None))
     feedback=m.ExamCentreFeedback.query.filter_by(exam_session_id=record.id).first()
     response=current_app.make_response(render_template('_session_reports_detail.html',session_record=record,reports=report_views,feedback=feedback,criteria=CRITERIA,questions=QUESTIONS,open_questions=OPEN_QUESTIONS))
     response.headers['Cache-Control']='private, no-store'

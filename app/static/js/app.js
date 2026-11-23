@@ -1395,6 +1395,10 @@ const openRequestedScheduleModal = () => {
   const params = new URLSearchParams(window.location.search);
   const sessionId = params.get("open_schedule_modal");
   if (!sessionId) return;
+  if (params.get('open_modal_target') === 'exam-records') {
+    openModal(`exam-records-${sessionId}`, { focus: false });
+    return;
+  }
   openModal(`schedule-workflow-${sessionId}`, { focus: false });
   const modalTarget = params.get("open_modal_target");
   const actionKey = params.get("open_schedule_action");

@@ -60,7 +60,7 @@
     [['q',query.value],['format',format.value],['attention',attention.checked ? '1' : ''],['sort',sort.value === 'date' ? '' : sort.value]].forEach(([key,value]) => value ? url.searchParams.set(key,value) : url.searchParams.delete(key));
     history.replaceState(null,'',url);
     root.querySelector('.qc-header-actions a').href = url.toString();
-    root.querySelectorAll('.qc-tabs a').forEach(anchor => {const next=new URL(anchor.href);url.searchParams.forEach((value,key)=>{if(key!=='tab')next.searchParams.set(key,value);});['q','format','attention','sort'].forEach(key=>{if(!url.searchParams.has(key))next.searchParams.delete(key);});anchor.href=next.toString();});
+    root.querySelectorAll('.qc-tabs:not(.qc-format-tabs) a').forEach(anchor => {const next=new URL(anchor.href);url.searchParams.forEach((value,key)=>{if(key!=='tab')next.searchParams.set(key,value);});['q','format','attention','sort'].forEach(key=>{if(!url.searchParams.has(key))next.searchParams.delete(key);});anchor.href=next.toString();});
     root.dispatchEvent(new CustomEvent('quality:filtered'));
   }
   root.addEventListener('quality:timing-updated',()=>{if(sort.value.startsWith('block_'))filter();});

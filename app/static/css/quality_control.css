@@ -20,3 +20,16 @@
 
 .qc-attendance-deadline{display:block;margin-top:4px;border-radius:6px;padding:4px 6px;font-size:10px;line-height:1.35;background:var(--badge-grey-bg);color:var(--badge-grey-text);white-space:normal;overflow-wrap:anywhere}
 .qc-attendance-deadline.is-met{background:var(--badge-green-bg);color:var(--badge-green-text)}.qc-attendance-deadline.is-missed,.qc-attendance-deadline.is-overdue{background:var(--badge-red-bg);color:var(--badge-red-text)}
+
+.qc-format-tabs{padding:5px;background:#edf3f5;border:1px solid #dce5e9;border-radius:12px;align-self:flex-start;gap:4px}.qc-format-tabs a{padding:10px 18px}.qc-format-tabs a[aria-current=page]{background:#00506b;color:#fff;box-shadow:0 2px 5px #00384a1a}.qc-format-tabs a:focus-visible{outline:2px solid #00506b;outline-offset:2px}
+
+.qr-page .qc-stats{grid-template-columns:repeat(auto-fit,minmax(150px,1fr))}
+
+/* Keep long statuses, deadlines and timing values inside their cards. */
+.qc-table .qc-cell{box-sizing:border-box;min-width:0;max-width:100%;white-space:normal;overflow-wrap:anywhere;word-break:normal}
+.qc-cell>*,.qc-stats>div,.qc-stats>div>*{box-sizing:border-box;min-width:0;max-width:100%;white-space:normal;overflow-wrap:anywhere}
+.qc-cell-time-breakdown>span{min-width:0;max-width:100%;flex-wrap:wrap}
+.qc-cell-time-breakdown>span>*{min-width:0;max-width:100%;white-space:normal;overflow-wrap:anywhere}
+.qc-page .qc-state,.qc-page .qc-recipient-status{box-sizing:border-box;max-width:100%;white-space:normal;overflow-wrap:anywhere}
+.qr-page .qr-chip{box-sizing:border-box;max-width:100%;white-space:normal;overflow-wrap:anywhere}
+.qr-summary,.qr-summary>span,.qr-alerts li{min-width:0;overflow-wrap:anywhere;white-space:normal}

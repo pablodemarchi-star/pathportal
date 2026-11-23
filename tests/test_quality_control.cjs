@@ -25,7 +25,7 @@ const makeRow=(name,format,attention,ready,days)=>{
 const rows=[makeRow('north school','Onsite','1','0',10),makeRow('universidad del sur','Online','0','1',20)];
 const indicator=new Element(),header=new Element(),sortButton=new Element();
 header.dataset.qcSortHeader='block_package';header.querySelector=()=>indicator;sortButton.dataset.qcSort='block_package';
-const root={addEventListener(){},querySelector:s=>selectors[s],querySelectorAll:s=>s==='[data-qc-row]'?rows:s==='.qc-tabs a'?[]:s==='[data-qc-sort]'?[sortButton]:s==='[data-qc-sort-header]'?[header]:buttons,dispatchEvent(){}};
+const root={addEventListener(){},querySelector:s=>selectors[s],querySelectorAll:s=>s==='[data-qc-row]'?rows:(s==='.qc-tabs a'||s==='.qc-tabs:not(.qc-format-tabs) a')?[]:s==='[data-qc-sort]'?[sortButton]:s==='[data-qc-sort-header]'?[header]:buttons,dispatchEvent(){}};
 let lastUrl;
 const context=vm.createContext({document:{querySelector:()=>root,createElement:()=>new Element()},URL,location:{href:'http://localhost/quality-control?session_year=2026'},CustomEvent:class{constructor(name){this.type=name;}},history:{replaceState:(_,__,url)=>{lastUrl=String(url);}},Intl});
 vm.runInContext(fs.readFileSync('app/static/js/quality_control.js','utf8'),context);

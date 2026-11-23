@@ -38,10 +38,76 @@ class QualityControlTest(unittest.TestCase):
         rows = load_rows([self.session_record, online], today=date(2026,11,6))
         self.assertEqual(len(rows), 2)
         cells = {c['key']: c for c in rows[1]['cells']}
-        for key in ['package', 'shipment', 'logistics', 'finance', 'final_checks']:
+        for key in ['package', 'shipment', 'logistics']:
             self.assertEqual(cells[key]['state'], 'na')
         self.assertFalse(rows[0]['recipient'])
         self.assertEqual(rows[1]['days'], 44)
+
+    def test_format_views_have_distinct_columns_and_keep_navigation(self):
+        from app.quality_control import processes_for_format
+        for format_name in ('Online', 'Online at exam centre'):
+            db.session.add(m.ExamSession(exam_session_name=format_name + ' QC row', category='Path School', status='Pending',
+                session_date=date(2026, 12, 20), format=format_name, shifts='Morning', modules='Speaking'))
+        db.session.commit()
+        client = self.login_client_for_user(self.admin())
+        default = client.get('/quality-control?session_year=2026').get_data(as_text=True)
+        self.assertIn('value="Onsite"', default)
+        self.assertNotIn('data-qc-sort="block_exam_records"', default)
+        for format_name in ('Online', 'Online at exam centre', 'Onsite'):
+            for tab in ('readiness', 'timing'):
+                response = client.get('/quality-control', query_string=dict(session_year=2026, format=format_name, tab=tab))
+                self.assertEqual(response.status_code, 200)
+                html = response.get_data(as_text=True)
+                self.assertLess(html.index('aria-label="Exam session format"'), html.index('aria-label="Quality control views"'))
+                for key, _ in processes_for_format(format_name):
+                    self.assertIn(f'data-qc-sort="block_{key}"', html)
+                if format_name != 'Onsite':
+                    for key in ('package', 'shipment', 'logistics'):
+                        self.assertNotIn(f'data-qc-sort="block_{key}"', html)
+                    self.assertNotIn('June exam session', html)
+                    self.assertIn('data-qc-sort-cell="exam_records"', html)
+                self.assertIn('name="format" value="' + format_name + '"', html)
+        self.assertEqual(client.get('/quality-control?format=Unknown').status_code, 400)
+
+    def test_online_tower_completion_and_reopening_update_quality_and_clock(self):
+        from app.exam_records import state, revision
+        from app.routes import SINAPSIS_CHECKLIST_ITEMS
+        self.session_record.format = 'Online'
+        self.session_record.session_date = date(2026, 11, 12)
+        self.session_record.monthly_registrations_closed = True
+        self.session_record.date_confirmation_status = 'Confirmed'
+        person = m.AcademicStaff(full_name='QC Examiner', status='Active', roles='Examiner')
+        db.session.add(person); db.session.flush()
+        db.session.add_all([
+            m.ExamSessionExaminerAssignment(exam_session_id=self.session_record.id, team_member_id=person.id, participation_status='Confirmed'),
+            m.ExamSessionScheduleWorkflow(exam_session_id=self.session_record.id, status='Approved'),
+            m.ExamSessionStaffingControl(exam_session_id=self.session_record.id, schedule_notification_confirmed=True),
+            m.ExamSessionFinanceControl(exam_session_id=self.session_record.id, status='Effective clearance', institutions_confirmed_with_admin=True),
+        ])
+        control = m.ExamSessionSinapsisControl(exam_session_id=self.session_record.id)
+        db.session.add(control); db.session.flush()
+        for item in SINAPSIS_CHECKLIST_ITEMS:
+            db.session.add(m.ExamSessionSinapsisChecklistItem(sinapsis_control_id=control.id, item_key=item['key'], label=item['label'], is_checked=True))
+        db.session.commit()
+        setup = m.SpeakingRecordsSetup(exam_session_id=self.session_record.id, completed_steps=3, revision=revision(self.session_record))
+        db.session.add_all([setup, m.ExamRecordsControl(exam_session_id=self.session_record.id, started=True),
+            m.ExaminerSpeakingRecord(exam_session_id=self.session_record.id, person_ref=f'staff:{person.id}', file_id='qcFile', folder_id='qcFolder', filename='Speaking.xlsx', mime_type='application/octet-stream')])
+        db.session.commit()
+        tower = state(self.session_record)
+        self.assertEqual(tower['status'], 'completed')
+        row = load_rows([self.session_record], today=date(2026, 11, 6))[0]
+        cells = {item['key']: item for item in row['cells']}
+        self.assertTrue(cells['exam_records']['complete'])
+        self.assertTrue(cells['finance']['applicable'])
+        self.assertTrue(cells['attendance']['applicable'])
+        self.assertNotIn('Return ', cells['final_checks']['detail'])
+        self.assertEqual(cells['exam_records']['deadline'], date(2026, 11, 5))
+        self.assertTrue(row['ready'])
+        clock = m.ProcessClock.query.join(m.ProcessClockSession).filter(m.ProcessClockSession.exam_session_id == self.session_record.id, m.ProcessClockSession.block == 'exam_records', m.ProcessClockSession.is_current.is_(True)).one()
+        self.assertEqual(clock.category, 'Completed')
+        setup.completed_steps = 2; db.session.commit()
+        self.assertNotEqual(clock.category, 'Completed')
+        self.assertFalse(load_rows([self.session_record], today=date(2026, 11, 6))[0]['ready'])
 
     def test_palette_precedence_and_near_complete_rule(self):
         today = date(2026,11,6)
@@ -252,14 +318,14 @@ class QualityControlTest(unittest.TestCase):
         self.assertFalse(staff['complete'])
 
     def test_all_columns_offer_header_and_dropdown_sorting_in_both_tabs(self):
-        from app.quality_control import PROCESSES
+        from app.quality_control import processes_for_format
         client=self.login_client_for_user(self.admin())
         for tab in ['readiness','timing']:
             response=client.get('/quality-control?tab='+tab+'&sort=block_final_checks_desc')
             self.assertEqual(response.status_code,200)
             html=response.get_data(as_text=True)
             self.assertIn('data-qc-sort="name"',html)
-            for key,label in PROCESSES:
+            for key,label in processes_for_format('Onsite'):
                 self.assertIn(f'data-qc-sort="block_{key}"',html)
                 self.assertIn(f'value="block_{key}_desc"',html)
                 self.assertIn(f'data-qc-sort-cell="{key}"',html)

@@ -54,8 +54,8 @@ def revision(record):
     return hashlib.sha256(json.dumps(value, default=str).encode()).hexdigest()
 
 
-def speaking_state(record):
-    setup = db.session.get(SpeakingRecordsSetup, record.id)
+def speaking_state(record, cache=None):
+    setup = cache[SpeakingRecordsSetup].get(record.id) if cache is not None else db.session.get(SpeakingRecordsSetup, record.id)
     current_revision = revision(record)
     count = setup.completed_steps if setup and setup.revision == current_revision else 0
     return dict(count=count, revision=current_revision)
@@ -81,12 +81,12 @@ def beyond_revision(record):
     return hashlib.sha256(json.dumps(value).encode()).hexdigest()
 
 
-def beyond_state(record, kind='beyond'):
+def beyond_state(record, kind='beyond', cache=None):
     setup_model, document_model, prefix = (ListeningRecordsSetup, ListeningMarkingRecord, 'L - ') if kind == 'listening' else (BeyondSetupControl, RWMarkingRecord, 'RW - ')
-    control = db.session.get(setup_model, record.id)
+    control = cache[setup_model].get(record.id) if cache is not None else db.session.get(setup_model, record.id)
     current_revision = beyond_revision(record)
     count = control.completed_steps if control and control.revision == current_revision else 0
-    return dict(count=count, revision=current_revision, name=prefix + record.exam_session_name, document=db.session.get(document_model, record.id))
+    return dict(count=count, revision=current_revision, name=prefix + record.exam_session_name, document=cache[document_model].get(record.id) if cache is not None else db.session.get(document_model, record.id))
 
 
 @exam_records_bp.route('/pre-online-session-control-tower/sessions/<int:session_id>/beyond-template')
@@ -105,18 +105,18 @@ def beyond_template(session_id):
                      as_attachment=True, download_name=filename, max_age=0)
 
 
-def state(record):
+def state(record, cache=None):
     from app.routes import staffing_readiness_contract, schedule_gate_status, deadline_badge_contract
     staffing = staffing_readiness_contract(record.supervisor_assignments, record.examiner_assignments,
                                           record.intern_assignments, session_record=record)
     people = examiners(record)
-    documents = {d.person_ref: d for d in ExaminerSpeakingRecord.query.filter_by(exam_session_id=record.id)}
-    control = db.session.get(ExamRecordsControl, record.id)
+    documents = cache[ExaminerSpeakingRecord].get(record.id, {}) if cache is not None else {d.person_ref: d for d in ExaminerSpeakingRecord.query.filter_by(exam_session_id=record.id)}
+    control = cache[ExamRecordsControl].get(record.id) if cache is not None else db.session.get(ExamRecordsControl, record.id)
     confirmed = [p for p in people if p['confirmed']]
     unlocked = bool(confirmed and staffing['ready'] and schedule_gate_status(record.schedule_workflow)['is_ready'])
     for person in people:
         person['document'] = documents.get(person['ref'])
-    sections = dict(listening=beyond_state(record, 'listening'), speaking=speaking_state(record), beyond=beyond_state(record))
+    sections = dict(listening=beyond_state(record, 'listening', cache), speaking=speaking_state(record, cache), beyond=beyond_state(record, cache=cache))
     modules = {module.lower() for module in record.modules_list()}
     required = []
     if modules & {'speaking', 'listening and speaking'}:
@@ -137,6 +137,22 @@ def state(record):
                 total=len(confirmed), started=started, status=status, label=label, action=action,
                 status_class={'completed': 'confirmed', 'in_progress': 'awaiting-confirmations', 'not_started': 'not-configured'}[status],
                 deadline=deadline_badge_contract(record.session_date - timedelta(days=7) if record.session_date else None))
+
+
+def batch_states(records):
+    """Read tower states with a fixed number of queries for Quality control."""
+    from collections import defaultdict
+    ids = [record.id for record in records]
+    if not ids:
+        return {}
+    cache = {}
+    for model in (ExamRecordsControl, SpeakingRecordsSetup, BeyondSetupControl, RWMarkingRecord, ListeningRecordsSetup, ListeningMarkingRecord):
+        cache[model] = {item.exam_session_id: item for item in model.query.filter(model.exam_session_id.in_(ids)).all()}
+    documents = defaultdict(dict)
+    for item in ExaminerSpeakingRecord.query.filter(ExaminerSpeakingRecord.exam_session_id.in_(ids)).all():
+        documents[item.exam_session_id][item.person_ref] = item
+    cache[ExaminerSpeakingRecord] = documents
+    return {record.id: state(record, cache=cache) for record in records}
 
 
 def online_session_readiness(record, schedule, staffing, finance, final_checks):

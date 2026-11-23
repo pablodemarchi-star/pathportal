@@ -24,7 +24,7 @@
 {% if report.historical %}</details>{% endif %}
 {% else %}<p>No Supervisor report submitted for this session.</p>{% endfor %}
 </section>
-<section class="qr-detail-section"><h3>Institution feedback</h3>{% if feedback %}<p><span class="qr-chip qr-green">Submitted</span> {{ feedback.submitted_at|localdt }} · {{ feedback.language|upper }}</p>
+{% if session_record.format != 'Online' %}<section class="qr-detail-section"><h3>Exam centre feedback</h3>{% if feedback %}<p><span class="qr-chip qr-green">Submitted</span> {{ feedback.submitted_at|localdt }} · {{ feedback.language|upper }}</p>
 <div class="qr-detail-grid">{% for key,title,es_title,question,es_question in questions %}{% set score=feedback|attr(key ~ '_score') %}<section><h4>{{ loop.index }}. {{ title }} <span class="qr-chip {{ 'qr-red' if score<=7 else 'qr-green' }}">{{ score }}/10</span></h4><p>{{ es_question if feedback.language=='es' else question }}</p><p class="qr-answer">{{ feedback|attr(key ~ '_comment') or 'No additional comment' }}</p></section>{% endfor %}</div>
 {% for key,title,es_title,description,es_description,placeholder,es_placeholder in open_questions %}<section><h4>{{ loop.index+4 }}. {{ title }}</h4><p class="qr-answer">{{ feedback|attr(key) or 'No response provided' }}</p></section>{% endfor %}
-{% else %}<p>No institution feedback submitted for this session.</p>{% endif %}</section>
+{% else %}<p>No institution feedback submitted for this session.</p>{% endif %}</section>{% endif %}

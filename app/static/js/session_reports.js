@@ -27,7 +27,7 @@
       return x.date.localeCompare(y.date)*(sort.value==='date_desc'?-1:1) || x.name.localeCompare(y.name);
     };
     rows.sort(compare).forEach(row=>body.appendChild(row));
-    const set=(key,value)=>document.querySelector(`[data-reports-${key}]`).textContent=value;
+    const set=(key,value)=>{ const target=document.querySelector(`[data-reports-${key}]`); if(target)target.textContent=value; };
     set('total',visible.length);
     set('supervisor',visible.filter(row=>row.dataset.report==='1').length);
     set('feedback',visible.filter(row=>row.dataset.feedback==='1').length);
@@ -40,6 +40,7 @@
     }
     url.searchParams.set('tab','reports');
     window.history.replaceState(null,'',url);
+    document.querySelectorAll('.qc-tabs:not(.qc-format-tabs) a').forEach(anchor => { const next=new URL(anchor.href); for(const [key,value] of url.searchParams)if(key!=='tab')next.searchParams.set(key,value); anchor.href=next.toString(); });
   };
   form.addEventListener('submit',event=>event.preventDefault());
   query.addEventListener('input',apply);

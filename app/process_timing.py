@@ -196,6 +196,9 @@ def reconcile_rows(rows, unit=None, fresh_ids=(), fresh_owners=(), now=None, cre
                 clock.coverage_complete = is_new
             if not aggregate['applicable']:
                 clock.coverage_complete = True
+        elif initialization and clock.category == 'N/A' and aggregate['applicable'] and (aggregate['active'] or aggregate['complete'] or source_info.get('begun')):
+            # A newly supported format has no reliable prior process intervals.
+            clock.coverage_complete = False
         category,reason,origin = choose_category(aggregate,source_info,clock.manual_reason,active_ids)
         note = (clock.manual_note or '') if origin == 'manual' else (f'Manual waiting request: {clock.manual_reason}. {clock.manual_note or ""}'.strip() if clock.manual_reason else '')
         if category == 'Incident time':
@@ -236,7 +239,12 @@ def reconcile_rows(rows, unit=None, fresh_ids=(), fresh_owners=(), now=None, cre
             record = row['session']
             from app.routes import LOCAL_TZ
             from datetime import timedelta,time
-            opens = datetime.combine(record.session_date-timedelta(days=29),time.min,tzinfo=LOCAL_TZ).astimezone(timezone.utc)
+            if record.format in {'Online', 'Online at exam centre'}:
+                from app.routes import argentina_subtract_business_days
+                opening_date = argentina_subtract_business_days(record.session_date, 8)
+            else:
+                opening_date = record.session_date - timedelta(days=29)
+            opens = datetime.combine(opening_date,time.min,tzinfo=LOCAL_TZ).astimezone(timezone.utc)
             clock.next_check_at = opens if opens > now else None
         elif block=='attendance':
             check=source_info.get('next_check_at');clock.next_check_at=utc(check).astimezone(timezone.utc) if check and utc(check)>now else None

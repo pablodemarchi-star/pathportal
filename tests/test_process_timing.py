@@ -208,31 +208,69 @@ class ProcessTimingTest(unittest.TestCase):
         self.assertEqual(clock.category,'Completed')
 
     def test_calendar_job_opens_at_midnight_even_without_any_page_view(self):
-        self.session_record.session_date=date(2026,12,20)
+        from app.routes import LOCAL_TZ
+        opening = datetime.now(LOCAL_TZ).date() + timedelta(days=11)
+        self.session_record.session_date = opening + timedelta(days=29)
         self.setup_staffing('Confirmed')
-        clock=self.block_clock('final_checks')
-        self.assertEqual(clock.category,'Blocked')
-        now=datetime(2026,11,21,9,30,tzinfo=timezone.utc)
-        self.assertGreater(reconcile_due(now=now),0)
-        self.assertEqual(clock.category,'Path time')
-        self.assertEqual(clock.started_at.replace(tzinfo=timezone.utc),datetime(2026,11,21,3,tzinfo=timezone.utc))
-        opened=m.ProcessInterval.query.filter_by(clock_id=clock.id,ended_at=None).one()
-        self.assertEqual(totals(clock,opened,now)['path'],6.5*3600)
+        clock = self.block_clock('final_checks')
+        self.assertEqual(clock.category, 'Blocked')
+        starts = datetime.combine(opening, datetime.min.time(), tzinfo=LOCAL_TZ).astimezone(timezone.utc)
+        now = starts + timedelta(hours=6.5)
+        self.assertGreater(reconcile_due(now=now), 0)
+        self.assertEqual(clock.category, 'Path time')
+        self.assertEqual(clock.started_at.replace(tzinfo=timezone.utc), starts)
+        opened = m.ProcessInterval.query.filter_by(clock_id=clock.id, ended_at=None).one()
+        self.assertEqual(totals(clock, opened, now)['path'], 6.5 * 3600)
 
     def test_incident_after_calendar_opening_is_not_backdated(self):
-        self.session_record.session_date=date(2026,12,20)
+        from app.routes import LOCAL_TZ
+        opening = datetime.now(LOCAL_TZ).date() + timedelta(days=11)
+        self.session_record.session_date = opening + timedelta(days=29)
         self.setup_staffing('Confirmed')
-        clock=self.block_clock('final_checks')
-        self.app.config['QUALITY_CONTROL_TRACKING_READY']=False
-        incident=m.ExamSessionIncident(exam_session_id=self.session_record.id,incident_type='Other',title='New morning issue',severity='Low',status='Open',responsible_department='ADMIN',affected_block='final_checks',created_at=datetime(2026,11,21,7,tzinfo=timezone.utc))
-        db.session.add(incident);db.session.commit()
-        now=datetime(2026,11,21,7,tzinfo=timezone.utc)
-        reconcile_rows(load_rows([self.session_record],today=now.date()),now=now);db.session.commit()
-        self.assertEqual(clock.category,'Incident time')
-        opened=m.ProcessInterval.query.filter_by(clock_id=clock.id,ended_at=None).one()
-        result=totals(clock,opened,now+timedelta(hours=2))
-        self.assertEqual(result['path'],4*3600)
-        self.assertEqual(result['incident'],2*3600)
+        clock = self.block_clock('final_checks')
+        self.app.config['QUALITY_CONTROL_TRACKING_READY'] = False
+        starts = datetime.combine(opening, datetime.min.time(), tzinfo=LOCAL_TZ).astimezone(timezone.utc)
+        now = starts + timedelta(hours=4)
+        incident = m.ExamSessionIncident(exam_session_id=self.session_record.id, incident_type='Other', title='New morning issue', severity='Low', status='Open', responsible_department='ADMIN', affected_block='final_checks', created_at=now)
+        db.session.add(incident); db.session.commit()
+        reconcile_rows(load_rows([self.session_record], today=opening), now=now); db.session.commit()
+        self.assertEqual(clock.category, 'Incident time')
+        opened = m.ProcessInterval.query.filter_by(clock_id=clock.id, ended_at=None).one()
+        result = totals(clock, opened, now + timedelta(hours=2))
+        self.assertEqual(result['path'], 4 * 3600)
+        self.assertEqual(result['incident'], 2 * 3600)
+
+    def test_online_calendar_gate_uses_eight_business_days(self):
+        from app.routes import LOCAL_TZ, argentina_subtract_business_days
+        self.session_record.format = 'Online'
+        self.session_record.session_date = datetime.now(LOCAL_TZ).date() + timedelta(days=45)
+        db.session.commit()
+        clock = self.block_clock('final_checks')
+        self.assertEqual(clock.category, 'Blocked')
+        opening = argentina_subtract_business_days(self.session_record.session_date, 8)
+        starts = datetime.combine(opening, datetime.min.time(), tzinfo=LOCAL_TZ).astimezone(timezone.utc)
+        self.assertEqual(clock.next_check_at.replace(tzinfo=timezone.utc), starts)
+        now = starts + timedelta(hours=3)
+        reconcile_due(now=now)
+        self.assertEqual(clock.category, 'Path time')
+        opened = m.ProcessInterval.query.filter_by(clock_id=clock.id, ended_at=None).one()
+        self.assertEqual(totals(clock, opened, now)['path'], 3 * 3600)
+
+    def test_newly_supported_process_keeps_missing_history_partial(self):
+        self.app.config['QUALITY_CONTROL_TRACKING_READY'] = False
+        now = datetime.now(timezone.utc)
+        row = dict(session=self.session_record,
+                   cells=[cell('exam_records', 'Not applicable', applicable=False, today=now.date())],
+                   timing_sources={'exam_records': {'begun': False}})
+        reconcile_rows([row], now=now, initialization=True); db.session.commit()
+        clock = self.block_clock('exam_records')
+        self.assertTrue(clock.coverage_complete)
+        row['cells'] = [cell('exam_records', 'Completed', complete=True, active=True, today=now.date())]
+        row['timing_sources']['exam_records']['begun'] = True
+        reconcile_rows([row], now=now + timedelta(hours=1), initialization=True); db.session.commit()
+        self.assertEqual(clock.category, 'Completed')
+        self.assertFalse(clock.coverage_complete)
+        self.assertEqual(totals(clock)['total'], 0)
 
     def test_detail_is_private_and_history_is_loaded_on_demand(self):
         client=self.admin();clock=self.date_clock()

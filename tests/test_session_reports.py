@@ -50,13 +50,43 @@ class SessionReportsTest(unittest.TestCase):
         rows=load_report_rows(2026)
         self.assertEqual(len(rows),2)
         online=next(row for row in rows if row['session'].id==other.id)
-        self.assertEqual(online['report_status'],'Not applicable')
-        self.assertEqual(online['feedback_status'],'Pending')
+        self.assertEqual(online['report_status'],'Pending')
+        self.assertEqual(online['feedback_status'],'Not applicable')
         client,_=self.admin_client()
         with patch('app.quality_control.dashboard_rows',side_effect=AssertionError('Reports must not load timing/readiness')):
             html=client.get('/quality-control?tab=reports&session_year=2026').get_data(as_text=True)
-        self.assertIn('Online peer',html)
-        self.assertEqual(html.count('data-report-row '),2)
+        self.assertNotIn('Online peer',html)
+        self.assertEqual(html.count('data-report-row '),1)
+
+    def test_online_reports_exclude_feedback_from_columns_alerts_and_completion(self):
+        self.record.format = 'Online'; db.session.commit()
+        self.assertEqual(self.post(_feedback_submitted=False).status_code, 200)
+        row = load_report_rows(2026, 'Online')[0]
+        self.assertTrue(row['complete'])
+        self.assertTrue(row['report_applicable'])
+        self.assertFalse(row['feedback_applicable'])
+        self.assertEqual(row['alerts'], [])
+        client, _ = self.admin_client()
+        html = client.get('/quality-control?tab=reports&session_year=2026&format=Online').get_data(as_text=True)
+        self.assertNotIn('<th>Exam centre feedback</th>', html)
+        self.assertNotIn('Facilities:', html)
+        self.assertNotIn('Emergency pack:', html)
+        self.assertNotIn('data-reports-feedback', html)
+        detail = client.get(f'/quality-control/session-reports/{self.record.id}').get_data(as_text=True)
+        self.assertNotIn('<h3>Exam centre feedback</h3>', detail)
+
+    def test_centre_keeps_feedback_and_does_not_require_future_supervisor_form(self):
+        self.record.format = 'Online at exam centre'; db.session.commit()
+        self.feedback()
+        row = load_report_rows(2026, 'Online at exam centre')[0]
+        self.assertFalse(row['report_applicable'])
+        self.assertTrue(row['feedback_applicable'])
+        self.assertTrue(row['complete'])
+        client, _ = self.admin_client()
+        html = client.get('/quality-control?tab=reports&session_year=2026&format=Online+at+exam+centre').get_data(as_text=True)
+        self.assertIn('<th>Exam centre feedback</th>', html)
+        self.assertIn('data-reports-feedback', html)
+        self.assertIn('Exam centre feedback for sessions held online at the exam centre.', html)
 
     def test_scores_alerts_author_and_lazy_full_answers(self):
         self.feedback()

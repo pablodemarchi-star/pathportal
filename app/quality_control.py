@@ -12,9 +12,23 @@ from app import models as m
 quality_bp = Blueprint('quality_control', __name__)
 PROCESSES = [('date', 'Date'), ('registrations', 'Registrations'), ('schedule', 'Schedule'),
              ('staffing', 'Staffing'), ('package', 'Package'), ('shipment', 'Shipment'),
-             ('logistics', 'Logistics'), ('finance', 'Finance'), ('final_checks', 'Final checks'),('attendance','Attendance')]
+             ('logistics', 'Logistics'), ('finance', 'Finance'), ('final_checks', 'Final checks'),('attendance','Attendance'), ('exam_records', 'Exam records')]
 FORMATS = ['Onsite', 'Online', 'Online at exam centre']
 ASSIGNMENTS = [m.ExamSessionSupervisorAssignment, m.ExamSessionExaminerAssignment, m.ExamSessionInternAssignment]
+
+
+
+def processes_for_format(format_name):
+    keys = ['date', 'registrations', 'schedule', 'staffing']
+    keys += ['package', 'shipment', 'logistics', 'finance', 'final_checks', 'attendance'] if format_name == 'Onsite' else ['finance', 'exam_records', 'final_checks', 'attendance']
+    labels = dict(PROCESSES)
+    return [(key, labels[key]) for key in keys]
+
+
+def format_navigation(selected_format, year, tab):
+    return [dict(label=label, selected=label == selected_format,
+                 url=url_for('quality_control.index', session_year=year, tab=tab, format=label))
+            for label in ['Online', 'Online at exam centre', 'Onsite']]
 
 
 def utc(value):
@@ -67,6 +81,15 @@ def load_rows(records, today=None):
     from app.attendance_tracking import batch_presentations
     attendance=batch_presentations(records,today=today)
     staffing_controls = by_session(m.ExamSessionStaffingControl)
+    from sqlalchemy.orm.attributes import set_committed_value
+    for record in records:
+        for relationship, group in zip(('supervisor_assignments', 'examiner_assignments', 'intern_assignments'), groups):
+            set_committed_value(record, relationship, group.get(record.id, []))
+        set_committed_value(record, 'schedule_workflow', next(iter(workflows.get(record.id, [])), None))
+        set_committed_value(record, 'staffing_control', next(iter(staffing_controls.get(record.id, [])), None))
+    from app.exam_records import batch_states
+    online_records = batch_states([record for record in records if record.format in {'Online', 'Online at exam centre'}])
+
     finance = by_session(m.ExamSessionFinanceControl)
     logistics = by_session(m.ExamSessionLogistics)
     # Provider details are unnecessary for readiness; pass only the status and provider label.
@@ -169,7 +192,7 @@ def load_rows(records, today=None):
             done_stages = sum(status == 'completed' for _, status in package_stages)
             onsite = record.format == 'Onsite'
             fin = r.finance_readiness_contract(first(finance, sid), today=today, session_date=record.session_date)
-            gate = final_checks_state(record, control=control, today=today) if onsite else None
+            gate = final_checks_state(record, control=control, today=today)
             total_checks = len(r.SINAPSIS_CHECKLIST_ITEMS)
             checked = sum(item.is_checked and item.item_key in {c['key'] for c in r.SINAPSIS_CHECKLIST_ITEMS} for item in (control.checklist_items if control else []))
             link = first(links, sid)
@@ -204,20 +227,20 @@ def load_rows(records, today=None):
                 cell('logistics', 'Configuration required' if log_state == 'configuration_required' else
                      'Not applicable' if not log['applies'] else f"{log['confirmed_concepts']}/{log['total_concepts']} confirmed",
                      complete=log_state == 'completed', active=bool(active_concepts), enabled=staffing_ready,
-                     applicable=log['applies'] and record.format != 'Online', near=bool(log['total_concepts'] > 1 and log['confirmed_concepts'] == log['total_concepts']-1),
+                     applicable=log['applies'] and onsite, near=bool(log['total_concepts'] > 1 and log['confirmed_concepts'] == log['total_concepts']-1),
                      issue=log_state == 'needs_review', deadline=r.logistics_session_deadline(record), today=today,
                      detail='; '.join(b['message'] for b in log['blockers']) or 'All Logistics concepts confirmed'),
-                cell('finance', fin['readiness_label'], complete=fin['can_proceed'], active=fin['standing_selected'] or bool(fin['additional_institutions']),
-                     enabled=finance_enabled, applicable=onsite, near=fin['readiness_label'] == 'Verification missing',
+                cell('finance', fin['readiness_label'], complete=fin['can_proceed'] and (onsite or fin['block_label'] == 'Cleared'), active=fin['standing_selected'] or bool(fin['additional_institutions']),
+                     enabled=finance_enabled, applicable=True, near=fin['readiness_label'] == 'Verification missing',
                      issue=fin['readiness_label'] == 'Close monitoring required', deadline=fin['deadline'], today=today, detail=fin['action_label'], action_at=None, completed_at=fin['cleared_at'] if fin['can_proceed'] else None),
                 cell('final_checks', gate['progress'].replace('_', ' ').title() if gate else 'Not applicable',
                      complete=bool(gate and gate['progress'] == 'completed'), active=bool(gate and gate['progress'] != 'not_started'),
-                     enabled=bool(gate and gate['return_enabled']), applicable=onsite,
+                     enabled=bool(gate and (gate['return_enabled'] if onsite else gate['checks_enabled'])), applicable=True,
                      near=bool(gate and gate['return_complete'] and checked == total_checks-1),
                      issue=bool(gate and gate['review_required']),
                      deadline=min([b['date'] for b in [gate['return_deadline_badge'] if not gate['return_complete'] else None,
                          gate['checks_deadline_badge'] if gate['checks_enabled'] and not gate['checks_complete'] else None] if b and b.get('date')], default=None) if gate else None,
-                     today=today, detail=f"{checked}/{total_checks} Sinapsis checks · Return {'complete' if gate and gate['return_complete'] else 'pending'}" +
+                     today=today, detail=f"{checked}/{total_checks} Sinapsis checks" + (f" · Return {'complete' if gate and gate['return_complete'] else 'pending'}" if onsite else '') +
                          (f" · {gate['message']}" if gate and gate['message'] else '')),
             ]
             att=attendance.get(sid)
@@ -225,7 +248,7 @@ def load_rows(records, today=None):
             att_tracking=att['tracking'] if att else None
             att_control=att['control'] if att else None
             att_cell=cell('attendance',att_flow['attendance_progress'] if att else 'Not applicable',complete=bool(att and att_flow['attendance_progress']=='Completed'),
-                active=bool(att_control and att_control.internal_activity),enabled=bool(att and not att_tracking['blocked']),applicable=onsite,
+                active=bool(att_control and att_control.internal_activity),enabled=bool(att and not att_tracking['blocked']),applicable=bool(att),
                 near=bool(att and att_tracking['controls_completed']==att_tracking['controls_total']-1),
                 deadline=att_tracking['deadline_date'] if att else None,today=today,
                 detail=(f"{att_tracking['controls_completed']}/{att_tracking['controls_total']} attendance controls completed · {att_tracking['action']}" if att else 'Not applicable'),
@@ -237,8 +260,16 @@ def load_rows(records, today=None):
             for process_cell in cells:
                 process_cell['operational_status'] = process_cell['label']
                 process_cell['availability'] = ('Not applicable' if not process_cell['applicable'] else
-                    'SEMI-UNBLOCKED' if process_cell['key'] == 'final_checks' and gate['return_enabled'] and not gate['checks_enabled'] else
+                    'SEMI-UNBLOCKED' if onsite and process_cell['key'] == 'final_checks' and gate['return_enabled'] and not gate['checks_enabled'] else
                     'UNBLOCKED' if process_cell['enabled'] else 'BLOCKED')
+            if not onsite:
+                records_state = online_records[sid]
+                record_cell = cell('exam_records', records_state['label'], complete=records_state['unlocked'] and records_state['status'] == 'completed',
+                    active=records_state['started'], enabled=records_state['unlocked'], deadline=record.session_date - timedelta(days=7), today=today,
+                    detail=f"{records_state['count']}/{records_state['total']} records for examiners")
+                record_cell['operational_status'] = records_state['label']
+                record_cell['availability'] = 'UNBLOCKED' if records_state['unlocked'] else 'BLOCKED'
+                cells.append(record_cell)
             if onsite:
                 cells[4]['availability'] = r.package_gate_contract(schedule_status == 'Approved', staffing_ready)['status']
             if staff['status'] == 'awaiting_schedule_notification':
@@ -246,7 +277,9 @@ def load_rows(records, today=None):
                 cells[3]['operational_note'] = 'Institution notification pending'
             if log_state == 'not_started':
                 cells[6]['operational_status'] = 'Not started'
-            if gate and gate['return_enabled'] and control and control.return_recipient_confirmed_on:
+            if not onsite and gate['checks_enabled'] and gate['checks_opens_on']:
+                cells[8]['available_at'] = datetime.combine(gate['checks_opens_on'], time.min, tzinfo=r.LOCAL_TZ).astimezone(timezone.utc)
+            if onsite and gate and gate['return_enabled'] and control and control.return_recipient_confirmed_on:
                 opening = record.session_date - timedelta(days=29)
                 if control.return_recipient_confirmed_on < opening:
                     cells[8]['available_at'] = datetime.combine(opening, time.min, tzinfo=r.LOCAL_TZ).astimezone(timezone.utc)
@@ -267,7 +300,9 @@ def load_rows(records, today=None):
                              'reason': 'Courier'},
                 'logistics': {'begun': bool(log['applies'])},
                 'finance': {'begun': bool(first(finance, sid) and (fin['standing_selected'] or fin['additional_institutions']))},
-                'final_checks': {'begun': bool(gate and gate['return_enabled'])},
+                'final_checks': {'begun': bool(gate and (gate['return_enabled'] if onsite else gate['checks_enabled'])),
+                                 'next_check_at': datetime.combine(gate['checks_opens_on'], time.min, tzinfo=r.LOCAL_TZ) if gate and not gate['checks_enabled'] and gate['checks_opens_on'] else None},
+                'exam_records': {'begun': bool(not onsite and online_records[sid]['started'])},
                 'attendance':{'begun':bool(att_control and att_control.internal_activity),
                     'waiting':bool(att and att_tracking['waiting_external']),'reason':'Institution',
                     'next_check_at':datetime.fromisoformat(att_tracking['opens_at']) if att and att_tracking['blocked'] else datetime.fromisoformat(att['window']['expires_at']) if att and att_tracking['waiting_external'] else None},
@@ -280,7 +315,7 @@ def load_rows(records, today=None):
                              recipient_status=recipient.participation_status if recipient else None,
                              incident_count=incidents.get(sid, 0),
                              attention=bool(incidents.get(sid)) or any(c['overdue'] or c['issue'] for c in cells if c['applicable']),
-                             ready=all(c['complete'] for c in cells if c['applicable'] and c['key']!='attendance'),
+                             ready=all(c['complete'] for c in cells if c['applicable'] and c['key'] != 'attendance') if onsite else all(c['complete'] for c in cells if c['key'] in {'schedule', 'staffing', 'finance', 'exam_records', 'final_checks'}),
                              concatenated=bool(record.concat_session_ids_list() if hasattr(record, 'concat_session_ids_list') else record.concat_session_ids not in ('', '[]'))))
     finally:
         if has_app_context():
@@ -392,8 +427,11 @@ def timing_view(metric, now=None):
                 reopenings=metric.reopenings, history=json.loads(metric.history_json))
 
 
-def dashboard_rows(year):
-    records = m.ExamSession.query.filter(extract('year', m.ExamSession.session_date) == year).order_by(
+def dashboard_rows(year, format_name=None):
+    query = m.ExamSession.query.filter(extract('year', m.ExamSession.session_date) == year)
+    if format_name:
+        query = query.filter(m.ExamSession.format == format_name)
+    records = query.order_by(
         m.ExamSession.session_date, m.ExamSession.exam_session_name, m.ExamSession.id).all()
     return load_rows(records)
 
@@ -411,10 +449,17 @@ def index():
     tab = request.args.get('tab', 'readiness')
     if tab not in {'readiness','timing','reports'}:
         abort(400)
+    selected_format = request.args.get('format') or 'Onsite'
+    if selected_format not in FORMATS:
+        abort(400)
     if tab == 'reports':
         from app.session_reports import render_index
-        return render_index(year,years)
-    rows = dashboard_rows(year)
+        return render_index(year, years, selected_format)
+    rows = dashboard_rows(year, selected_format)
+    processes = processes_for_format(selected_format)
+    for row in rows:
+        by_key = {c["key"]: c for c in row["cells"]}
+        row["cells"] = [by_key[key] for key, _ in processes]
     if tab == 'timing':
         from app.process_timing import attach_clocks, reconcile_due
         reconcile_due()
@@ -428,19 +473,20 @@ def index():
             elif c['key'] == 'registrations':
                 c['url'] = url_for('staff.monthly_exam_session_registrations', session_year=year, q=record.exam_session_name)
             elif c['key']=='attendance':
-                c['url']=url_for('staff.pre_session_control_tower',session_year=year,view='post',open_attendance=record.id) if record.format=='Onsite' and record.session_date<=datetime.now(LOCAL_TZ).date() else None
+                c['url']=url_for('staff.pre_session_control_tower' if record.format=='Onsite' else 'staff.pre_online_session_control_tower',session_year=year,view='post',open_attendance=record.id) if record.format in FORMATS and record.session_date<=datetime.now(LOCAL_TZ).date() else None
             elif record.format != 'Onsite':
-                c['url'] = url_for('staff.pre_online_session_control_tower', session_year=year,
-                                   open_schedule_modal=record.id, open_modal_target='staffing' if c['key'] == 'staffing' else 'schedule-actions') if c['key'] in {'schedule', 'staffing'} else None
+                target = {'schedule': 'schedule-actions', 'staffing': 'staffing', 'finance': 'finance', 'exam_records': 'exam-records', 'final_checks': 'sinapsis'}[c['key']]
+                c['url'] = url_for('staff.pre_online_session_control_tower', session_year=year, view='online',
+                                   open_schedule_modal=record.id, open_modal_target=target)
             else:
                 target = {'schedule':'schedule-actions', 'staffing':'staffing', 'package':'packages',
                           'shipment':'shipments', 'logistics':'logistics', 'finance':'finance', 'final_checks':'sinapsis'}[c['key']]
                 c['url'] = url_for('staff.pre_session_control_tower', session_year=year, view='sessions' if c['key'] in {'logistics','finance','final_checks'} else 'bundles',
                                    open_schedule_modal=record.id, open_modal_target=target)
-    response = current_app.make_response(render_template('quality_control.html', rows=rows, processes=PROCESSES,
+    response = current_app.make_response(render_template('quality_control.html', rows=rows, processes=processes, selected_format=selected_format, format_tabs=format_navigation(selected_format, year, tab),
         formats=FORMATS, years=years, selected_year=year, tab=tab,
-        readiness_url=url_for('quality_control.index', **{**request.args.to_dict(), 'tab':'readiness'}),
-        timing_url=url_for('quality_control.index', **{**request.args.to_dict(), 'tab':'timing'}), measured_at=datetime.now(LOCAL_TZ)))
+        readiness_url=url_for('quality_control.index', **{**request.args.to_dict(), 'tab':'readiness', 'format':selected_format}),
+        timing_url=url_for('quality_control.index', **{**request.args.to_dict(), 'tab':'timing', 'format':selected_format}), measured_at=datetime.now(LOCAL_TZ)))
     response.headers['Cache-Control'] = 'no-store'
     return response
 
@@ -457,7 +503,7 @@ def session_reports_detail(session_id):
 TRACKED_MODELS = {m.PostAttendance,m.AbsenceCandidate,m.AttendanceInstitution,m.AttendanceEvent,m.ExamSession, *ASSIGNMENTS, m.ExamSessionScheduleWorkflow,
                  m.ExamSessionStaffingControl, m.ExamSessionFinanceControl, m.ExamSessionSinapsisControl,
                  m.ExamSessionLogistics, m.ExamSessionLogisticsConcept, m.ExamSessionMonthlyCandidateTotal,
-                 m.ExamSessionMonthlyRegistration, m.ExamSessionShipmentBundleSession, m.ExamSessionStaffingEvent, m.ExamSessionIncident}
+                 m.ExamSessionMonthlyRegistration, m.ExamRecordsControl, m.ExaminerSpeakingRecord, m.SpeakingRecordsSetup, m.BeyondSetupControl, m.ListeningRecordsSetup, m.RWMarkingRecord, m.ListeningMarkingRecord, m.ExamSessionShipmentBundleSession, m.ExamSessionStaffingEvent, m.ExamSessionIncident}
 
 
 @event.listens_for(Session, 'before_flush')
@@ -477,7 +523,7 @@ def collect_quality_changes(unit, *_):
             watched = None
             if isinstance(obj, m.ExamSession):
                 watched = {'date_confirmation_status','monthly_registrations_closed','monthly_registrations_closed_at',
-                           'session_date','format','concat_session_ids','emergency_contact_required','emergency_contact_not_required',
+                           'session_date','format','modules','exam_session_name','schedule_folder_url','details_url','concat_session_ids','emergency_contact_required','emergency_contact_not_required',
                            'emergency_contact_member_id','emergency_contact_participation_status','emergency_contact_additional_contacts',
                            'emergency_contact_status_due_at','staff_member_ids_snapshot'} | {field for field in changed if field.endswith('_status')}
             elif type(obj) in ASSIGNMENTS:

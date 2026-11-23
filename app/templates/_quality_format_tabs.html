@@ -1,0 +1,3 @@
+<nav class="qc-tabs qc-format-tabs" aria-label="Exam session format">
+  {% for item in format_tabs %}<a href="{{ item.url }}"{% if item.selected %} aria-current="page"{% endif %}>{{ item.label }}</a>{% endfor %}
+</nav>
