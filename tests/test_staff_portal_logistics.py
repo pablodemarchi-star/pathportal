@@ -126,7 +126,7 @@ class StaffPortalLogisticsTest(unittest.TestCase):
                 self.assertIn('data-staff-travel-section',html)
                 self.assertNotIn('Path&amp;23646',html)
 
-    def test_online_supervisor_end_checks_have_five_items_and_exam_day_digitalised_link(self):
+    def test_online_supervisor_report_replaces_end_checks_without_date_restriction(self):
         db.session.add(ExamSessionMonthlyRegistration(exam_session_id=self.record.id, month=11, module='Speaking', registration_number=1))
         self.record.format = 'Online'
         self.record.digitalised_exams_url = 'https://example.com/digitalised'
@@ -147,17 +147,13 @@ class StaffPortalLogisticsTest(unittest.TestCase):
             with self.subTest(instant=instant), patch('app.routes.datetime',wraps=datetime) as clock:
                 clock.now.side_effect=lambda tz=None: instant.astimezone(tz) if tz else instant.replace(tzinfo=None)
                 html=self.app.test_client().get(added.json['url']).get_data(as_text=True)
-                self.assertIn('End-of-session checks (0/5)',html)
-                self.assertIn('registered candidate attendance in Sinapsis',html)
-                self.assertIn('all submitted exam modules have been successfully uploaded',html)
-                self.assertIn('upload their Speaking recordings within one business day',html)
-                self.assertIn('Audiovisual material ↗',html)
-                self.assertIn('End-of-session report ↗',html)
-                self.assertNotIn('data-end-check="centre_feedback"',html)
-                self.assertNotIn('printed candidate lists attached',html)
-                link=re.search(r'<a[^>]*data-folder-exam-day-only[^>]*>',html).group(0)
-                self.assertEqual('href="https://example.com/digitalised"' in link,enabled)
-                self.assertEqual('aria-disabled="true"' in link,not enabled)
+                self.assertNotIn('data-staff-end-checks ', html)
+                self.assertIn('data-staff-exam-day-report', html)
+                self.assertIn('data-report-date-unrestricted="true"', html)
+                self.assertIn('End-of-session report ↗', html)
+                self.assertIn('name="absent_candidates_checked"', html)
+                self.assertIn('name="return_verification"', html)
+                self.assertIn('name="recordings_reminder_confirmed"', html)
         share=StaffExamSessionsShare.query.one()
         submission=StaffExamSessionSubmission.query.one()
         with patch('app.routes.datetime',wraps=datetime) as clock:
@@ -193,8 +189,8 @@ class StaffPortalLogisticsTest(unittest.TestCase):
                     fields=staff_assignment_end_check_fields(self.record,'supervisor',assignment)
                     self.assertEqual('recordings' in fields,expected)
                     html=self.app.test_client().get(added.json['url']).get_data(as_text=True)
-                    self.assertEqual('data-end-check="recordings"' in html,expected)
-                    self.assertIn(f'End-of-session checks (0/{len(fields)})',html)
+                    self.assertEqual('name="recordings_reminder_confirmed"' in html,expected)
+                    self.assertNotIn('data-staff-end-checks ', html)
         ExamSessionMonthlyRegistration.query.filter_by(exam_session_id=self.record.id).delete()
         db.session.commit()
         self.assertNotIn('recordings',staff_assignment_end_check_fields(self.record,'supervisor',assignment))

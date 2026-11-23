@@ -20538,7 +20538,16 @@ def staff_end_checks_available(record, now=None):
     return bool(record.session_date and now.astimezone(LOCAL_TZ).date() >= record.session_date)
 
 
+def staff_report_assignment_eligible(record, assignment, assignment_type):
+    return bool(assignment_type == "supervisor" and assignment
+                and assignment.participation_status == "Confirmed"
+                and (record.format == "Online" or (record.format == "Onsite" and not assignment.is_remote)))
+
+
 def staff_report_available(record, now=None):
+    # Temporary unrestricted access while the Online form is being reviewed.
+    if record.format == "Online":
+        return True
     now = now or datetime.now(timezone.utc)
     return bool(record.session_date and now.astimezone(LOCAL_TZ).date() == record.session_date)
 
@@ -20562,9 +20571,8 @@ def submit_staff_session_report(token, submission_id):
     assignment, person_ref = staff_submission_assignment(record, submission.assignment_type, submission.assignment_id)
     if not assignment or person_ref != share.person_ref:
         abort(404)
-    if (submission.assignment_type != "supervisor" or assignment.is_remote or record.format != "Onsite"
-            or assignment.participation_status != "Confirmed" or not staff_report_available(record)):
-        return jsonify(ok=False, error="This report is only available to confirmed onsite Supervisors on the exam day."), 403
+    if not staff_report_assignment_eligible(record, assignment, submission.assignment_type) or not staff_report_available(record):
+        return jsonify(ok=False, error="This report is only available to confirmed eligible Supervisors during its availability period."), 403
     if report_for_session(record):
         return jsonify(ok=False, error="This report has already been submitted and cannot be edited."), 409
     outcome = request.form.get("schedule_outcome", "").strip()
@@ -20655,8 +20663,7 @@ def staff_report_feedback_status(token, submission_id):
     assignment, person_ref = staff_submission_assignment(submission.exam_session, submission.assignment_type, submission.assignment_id)
     if not assignment or person_ref != share.person_ref:
         abort(404)
-    if (submission.assignment_type != "supervisor" or assignment.is_remote or submission.exam_session.format != "Onsite"
-            or assignment.participation_status != "Confirmed"):
+    if not staff_report_assignment_eligible(submission.exam_session, assignment, submission.assignment_type):
         abort(403)
     from app.staff_report_media import report_for_session, media_view
     report = report_for_session(submission.exam_session)
@@ -20677,7 +20684,7 @@ def staff_end_checks_view(record, role, status, submission, share):
     check_fields = staff_assignment_end_check_fields(record, role, assignment) if assignment else ()
     if not check_fields:
         return {}
-    report_eligible = role == "supervisor" and record.format == "Onsite" and not assignment.is_remote
+    report_eligible = staff_report_assignment_eligible(record, assignment, submission.assignment_type)
     return {"end_checks": {
         "available": staff_end_checks_available(record),
         "opens_at": datetime.combine(record.session_date, time.min, tzinfo=LOCAL_TZ).isoformat() if record.session_date else "",
@@ -20686,6 +20693,8 @@ def staff_end_checks_view(record, role, status, submission, share):
         "digitalised_url": (record.digitalised_exams_url or "").strip(),
         "digitalised_available": datetime.now(LOCAL_TZ).date() == record.session_date,
         "report_url": "" if role == "examiner" else current_app.config.get("STAFF_END_OF_SESSION_REPORT_URL", ""),
+        "session_report_available": report_eligible and staff_report_available(record),
+        "session_report_date_unrestricted": record.format == "Online",
         "session_report_submitted": bool(report_for_session(record)) if report_eligible else False,
         "session_report_draft_key": f"staff-report:{share.token}:{record.id}",
         "session_report_url": url_for("staff.submit_staff_session_report", token=share.token, submission_id=submission.id),
@@ -20694,7 +20703,7 @@ def staff_end_checks_view(record, role, status, submission, share):
         "institutional_feedback_submitted": staff_report_feedback_submitted(record),
         "feedback_status_url": url_for("staff.staff_report_feedback_status", token=share.token, submission_id=submission.id),
         "report_recordings_required": staff_session_has_recording_candidates(record),
-        "assessment_roster": assessment_roster(record) if role == "supervisor" and record.format == "Onsite" and assignment and not assignment.is_remote else [],
+        "assessment_roster": assessment_roster(record) if report_eligible else [],
         "assessment_criteria": CRITERIA,
         "url": url_for("staff.update_staff_end_checks", token=share.token, submission_id=submission.id),
     }}

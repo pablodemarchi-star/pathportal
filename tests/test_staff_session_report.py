@@ -314,8 +314,8 @@ class StaffSessionReportTest(unittest.TestCase):
         self.record.format = 'Online'
         db.session.commit()
         html = self.client.get(url).get_data(as_text=True)
-        self.assertIn('data-staff-end-checks ', html)
-        self.assertNotIn('data-staff-exam-day-report', html)
+        self.assertNotIn('data-staff-end-checks ', html)
+        self.assertIn('data-staff-exam-day-report', html)
 
     def test_optional_comments_saved_and_locked(self):
         self.assertEqual(self.post(optional_comments='  More preparation time would help.  ').status_code, 200)
@@ -477,7 +477,7 @@ class StaffSessionReportTest(unittest.TestCase):
         self.assignment.participation_status = 'Pending'; db.session.commit()
         self.assertEqual(self.post().status_code, 403)
         self.assignment.participation_status = 'Confirmed'
-        self.record.format = 'Online'; db.session.commit()
+        self.record.format = 'Online at exam centre'; db.session.commit()
         self.assertEqual(self.post().status_code, 403)
         self.record.format = 'Onsite'
         self.share.person_ref = '99999'; db.session.commit()
@@ -493,3 +493,51 @@ class StaffSessionReportTest(unittest.TestCase):
         self.post()
         response = self.client.get(f'/my-exam-sessions/{self.share.token}?session_year=2026')
         self.assertIn('Report submitted', response.get_data(as_text=True))
+
+
+    def test_online_supervisor_report_is_available_before_and_after_exam_day(self):
+        self.record.format = 'Online'; db.session.commit()
+        for instant in ('2026-10-01T12:00:00+00:00', '2026-11-13T03:00:00+00:00', '2026-12-01T12:00:00+00:00'):
+            self.assertTrue(staff_report_available(self.record, datetime.fromisoformat(instant)))
+        html = self.client.get(f'/my-exam-sessions/{self.share.token}?session_year=2026').get_data(as_text=True)
+        self.assertIn('data-report-date-unrestricted="true"', html)
+        self.assertNotIn('data-staff-end-checks ', html)
+        self.assertIn('data-staff-exam-day-report', html)
+        self.assertIn('Exam return package verification', html)
+        self.assertNotIn('on the exam day only', html)
+        self.assertNotRegex(html, r'data-exam-day-report-link[^>]*aria-disabled="true"')
+        feedback = self.client.get(self.url + '/feedback-status')
+        self.assertEqual(feedback.status_code, 200)
+        self.assertFalse(feedback.json['report_submitted'])
+        self.assertTrue(feedback.json['files'])
+
+    def test_online_report_keeps_validation_and_single_submission(self):
+        self.record.format = 'Online'; db.session.commit()
+        self.assertEqual(self.post(_feedback_submitted=False).status_code, 400)
+        self.assertEqual(self.post().status_code, 200)
+        self.assertEqual(m.StaffExamSessionReport.query.count(), 1)
+        self.assertEqual(self.post().status_code, 409)
+        html = self.client.get(f'/my-exam-sessions/{self.share.token}?session_year=2026').get_data(as_text=True)
+        self.assertIn('Report submitted', html)
+        self.assertRegex(html, r'data-exam-day-report-link[^>]*aria-disabled="true"')
+
+    def test_online_report_uploads_are_allowed_outside_exam_day(self):
+        from io import BytesIO
+        self.record.format = 'Online'; db.session.commit()
+        with patch('app.staff_report_media.folder_metadata'), patch('app.staff_report_media.upload_document') as sender:
+            response = self.client.post(self.url + '/media', data=dict(csrf_token='test', file=(BytesIO(b'picture'), 'photo.jpg')))
+        self.assertEqual(response.status_code, 200)
+        sender.assert_called_once()
+
+    def test_online_report_keeps_validation_feedback_and_submission_lock(self):
+        self.record.format = 'Online'
+        self.record.session_date = date(2099, 1, 1)
+        db.session.commit()
+        response = self.client.post(self.url, data={'csrf_token': 'test'})
+        self.assertEqual(response.status_code, 400)
+        self.assertIn('schedule', response.json['error'])
+        feedback = self.client.get(self.url + '/feedback-status')
+        self.assertEqual(feedback.status_code, 200)
+        self.assertEqual(self.post(_feedback_submitted=False).status_code, 400)
+        self.assertEqual(self.post().status_code, 200)
+        self.assertEqual(self.post().status_code, 409)

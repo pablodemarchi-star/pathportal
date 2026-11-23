@@ -91,7 +91,7 @@
     };
     const available = () => {
       const opensAt = Date.parse(section.dataset.opensAt);
-      return Boolean(opener.dataset.folderUrl) && Date.now() >= opensAt && Date.now() < opensAt + 86400000;
+      return Boolean(opener.dataset.folderUrl) && (section.dataset.reportDateUnrestricted === 'true' || (Date.now() >= opensAt && Date.now() < opensAt + 86400000));
     };
     opener.addEventListener('click', (event) => {
       event.preventDefault();

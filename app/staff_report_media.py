@@ -56,7 +56,7 @@ def media_view(record, submission):
 
 
 def upload_media(token, submission_id):
-    from app.routes import staff_submission_assignment, staff_report_available
+    from app.routes import staff_submission_assignment, staff_report_available, staff_report_assignment_eligible
     share = StaffExamSessionsShare.query.filter_by(token=token).first_or_404()
     if not validate_csrf():
         return jsonify(ok=False, error='Security token expired. Please reload and try again.'), 400
@@ -67,9 +67,8 @@ def upload_media(token, submission_id):
     assignment, person_ref = staff_submission_assignment(record, submission.assignment_type, submission.assignment_id)
     if not assignment or person_ref != share.person_ref:
         abort(404)
-    if (submission.assignment_type != 'supervisor' or assignment.is_remote or record.format != 'Onsite'
-            or assignment.participation_status != 'Confirmed' or not staff_report_available(record)):
-        return jsonify(ok=False, error='Uploads are only available to confirmed onsite Supervisors on the exam day.'), 403
+    if not staff_report_assignment_eligible(record, assignment, submission.assignment_type) or not staff_report_available(record):
+        return jsonify(ok=False, error='Uploads are only available to confirmed eligible Supervisors during report availability.'), 403
     if report_for_session(record):
         return jsonify(ok=False, error='This report has already been submitted. Uploads are locked.'), 409
     folder_id = session_pictures_folder(record)
