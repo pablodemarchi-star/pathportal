@@ -281,6 +281,9 @@ class StaffSessionReportTest(unittest.TestCase):
         for modules, visible in [('Reading and writing', False), ('Speaking', True), ('Listening and speaking', True)]:
             self.record.modules = modules; db.session.commit()
             html = self.client.get(f'/my-exam-sessions/{self.share.token}?session_year=2026').get_data(as_text=True)
+            self.assertNotIn('name="centre_feedback_confirmed"', html)
+            self.assertNotIn('Feedback form not submitted', html)
+            self.assertNotIn('I confirm that the exam centre has submitted its feedback form.', html)
             self.assertEqual('<b>Final checks</b>' in html, visible)
             self.assertEqual('name="recordings_reminder_confirmed"' in html, visible)
         self.assertEqual(self.post(recordings_reminder_confirmed='0').status_code, 400)
@@ -567,8 +570,8 @@ class StaffSessionReportTest(unittest.TestCase):
 
     def test_online_report_keeps_validation_and_single_submission(self):
         self.record.format = 'Online'; db.session.commit()
-        self.assertEqual(self.post(_feedback_submitted=False).status_code, 400)
-        self.assertEqual(self.post().status_code, 200)
+        self.assertEqual(self.post(recordings_reminder_confirmed='0').status_code, 400)
+        self.assertEqual(self.post(_feedback_submitted=False, centre_feedback_confirmed='').status_code, 200)
         self.assertEqual(m.StaffExamSessionReport.query.count(), 1)
         self.assertEqual(self.post().status_code, 409)
         html = self.client.get(f'/my-exam-sessions/{self.share.token}?session_year=2026').get_data(as_text=True)
@@ -592,8 +595,8 @@ class StaffSessionReportTest(unittest.TestCase):
         self.assertIn('schedule', response.json['error'])
         feedback = self.client.get(self.url + '/feedback-status')
         self.assertEqual(feedback.status_code, 200)
-        self.assertEqual(self.post(_feedback_submitted=False).status_code, 400)
-        self.assertEqual(self.post().status_code, 200)
+        self.assertEqual(self.post(recordings_reminder_confirmed='0').status_code, 400)
+        self.assertEqual(self.post(_feedback_submitted=False, centre_feedback_confirmed='').status_code, 200)
         self.assertEqual(self.post().status_code, 409)
 
     def test_online_module_sections_follow_modules(self):
@@ -707,7 +710,7 @@ class StaffSessionReportTest(unittest.TestCase):
         html = self.client.get(f'/my-exam-sessions/{self.share.token}?session_year=2026').get_data(as_text=True)
         for marker in ('name="return_verification"', 'name="facilities_outcome"', 'name="emergency_pack_outcome"', 'data-report-media ', 'name="marketing_confirmed"'):
             self.assertNotIn(marker, html)
-        for marker in ('name="schedule_outcome"', 'name="absent_candidates_checked"', 'Staff member performance review', 'name="centre_feedback_confirmed"', 'name="optional_comments"'):
+        for marker in ('name="schedule_outcome"', 'name="absent_candidates_checked"', 'Staff member performance review', 'name="optional_comments"'):
             self.assertIn(marker, html)
         response = self.post(return_verification=[], facilities_outcome='', emergency_pack_outcome='', marketing_confirmed='0')
         self.assertEqual(response.status_code, 200, response.json)
