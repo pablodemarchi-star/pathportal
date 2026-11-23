@@ -1117,6 +1117,7 @@ class StaffExamSessionReport(db.Model):
     centre_feedback_confirmed = db.Column(db.Boolean, nullable=False, default=False, server_default=db.false())
     recordings_reminder_confirmed = db.Column(db.Boolean, nullable=False, default=False, server_default=db.false())
     optional_comments = db.Column(db.Text, nullable=False, default="", server_default="")
+    module_comments = db.Column(db.Text, nullable=True)
     absent_candidates_checked = db.Column(db.Boolean, nullable=False, default=False, server_default=db.false())
     submitted_candidates_checked = db.Column(db.Boolean, nullable=False, default=False, server_default=db.false())
     rw_files_uploaded_checked = db.Column(db.Boolean, nullable=False, default=False, server_default=db.false())

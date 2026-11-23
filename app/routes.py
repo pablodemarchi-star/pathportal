@@ -20546,6 +20546,20 @@ def staff_report_online_attendance_fields(record):
 MODULE_VERIFICATION_FIELDS = ('rw_files_uploaded_checked', 'rw_files_matched_checked', 'listening_files_uploaded_checked', 'listening_files_matched_checked', 'examiner_marks_checked')
 
 
+def staff_report_comment_sections(record):
+    if record.format != "Online":
+        return []
+    modules = {module.lower() for module in record.modules_list()}
+    sections = []
+    if modules & {"speaking", "listening and speaking"}:
+        sections.append(("speaking", "Speaking"))
+    if "listening and speaking" in modules:
+        sections.append(("listening", "Listening"))
+    if "reading and writing" in modules:
+        sections.append(("reading_writing", "Reading and Writing"))
+    return sections + [("overall", "Overall")]
+
+
 def staff_report_module_sections(record):
     if record.format != "Online":
         return []
@@ -20697,11 +20711,18 @@ def submit_staff_session_report(token, submission_id):
     optional_comments = request.form.get("optional_comments", "").strip()
     if len(optional_comments) > 10000:
         return jsonify(ok=False, error="Optional comments must not exceed 10,000 characters."), 400
+    module_comments = None
+    if online:
+        comments = {key: optional_comments if key == "overall" else request.form.get("comments_" + key, "").strip()
+                    for key, _ in staff_report_comment_sections(record)}
+        if any(len(value) > 10000 for value in comments.values()):
+            return jsonify(ok=False, error="Each Optional comments field must not exceed 10,000 characters."), 400
+        module_comments = json.dumps(comments)
     person = assignment.team_member or assignment.potential_entry
     try:
         db.session.add(StaffExamSessionReport(submission_id=submission.id, exam_session_id=record.id,
                                         author_name=person.full_name if person else "", author_person_ref=person_ref, schedule_outcome=outcome,
-                                        optional_comments=optional_comments, it_issues=it_issues, it_absences=json.dumps(it_absences), component_completion=component_completion, component_absences=json.dumps(component_absences),
+                                        optional_comments=optional_comments, module_comments=module_comments, it_issues=it_issues, it_absences=json.dumps(it_absences), component_completion=component_completion, component_absences=json.dumps(component_absences),
                                         centre_feedback_confirmed=feedback_required,
                                         recordings_reminder_confirmed=recordings_required and recordings_confirmed,
                                         marketing_confirmed=not online, marketing_media=json.dumps([item.file_id for item in media]),
@@ -20769,6 +20790,7 @@ def staff_end_checks_view(record, role, status, submission, share):
         "report_url": "" if role == "examiner" else current_app.config.get("STAFF_END_OF_SESSION_REPORT_URL", ""),
         "online_attendance_fields": staff_report_online_attendance_fields(record),
         "module_sections": staff_report_module_sections(record),
+        "comment_sections": staff_report_comment_sections(record),
         "component_completion_applicable": record.format == "Online" and "listening and speaking" in {module.lower() for module in record.modules_list()},
         "component_exams": EXAMS,
         "it_module_options": it_module_options(record) if record.format == "Online" else {},

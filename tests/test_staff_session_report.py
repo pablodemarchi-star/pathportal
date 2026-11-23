@@ -348,6 +348,38 @@ class StaffSessionReportTest(unittest.TestCase):
         self.assertNotIn('data-staff-end-checks ', html)
         self.assertIn('data-staff-exam-day-report', html)
 
+    def test_online_comment_columns_follow_session_modules(self):
+        for modules, expected in [('Speaking', {'speaking'}), ('Listening and speaking', {'speaking','listening'}),
+                                  ('Reading and writing', {'reading_writing'}), ('Speaking,Listening and speaking,Reading and writing', {'speaking','listening','reading_writing'}), ('', set())]:
+            self.record.format='Online';self.record.modules=modules;db.session.commit()
+            html=self.client.get(f'/my-exam-sessions/{self.share.token}?session_year=2026').get_data(as_text=True)
+            self.assertIn('aria-label="Overall comments"',html)
+            self.assertNotIn('name="optional_comments" rows="5" maxlength="10000" required',html)
+            for key in ('speaking','listening','reading_writing'):
+                self.assertEqual('name="comments_'+key+'"' in html,key in expected)
+        self.record.format='Onsite';self.record.modules='Speaking';db.session.commit()
+        html=self.client.get(f'/my-exam-sessions/{self.share.token}?session_year=2026').get_data(as_text=True)
+        self.assertNotIn('staff-report-comments-grid',html)
+        self.assertIn('name="optional_comments"',html)
+
+    def test_online_module_comments_are_saved_separately_and_locked(self):
+        import json
+        self.record.format='Online';self.record.modules='Listening and speaking,Reading and writing';db.session.commit()
+        response=self.post(comments_speaking=' Speaking notes ',comments_listening='Listening notes',comments_reading_writing='RW notes',optional_comments='Overall notes')
+        self.assertEqual(response.status_code,200,response.json)
+        report=m.StaffExamSessionReport.query.one()
+        self.assertEqual(json.loads(report.module_comments),dict(speaking='Speaking notes',listening='Listening notes',reading_writing='RW notes',overall='Overall notes'))
+        self.assertEqual(report.optional_comments,'Overall notes')
+        self.assertEqual(self.post(comments_speaking='Changed').status_code,409)
+        self.assertEqual(json.loads(report.module_comments)['speaking'],'Speaking notes')
+
+    def test_online_module_comments_are_optional_and_validate_only_visible_fields(self):
+        import json
+        self.record.format='Online';self.record.modules='Speaking';db.session.commit()
+        self.assertEqual(self.post(comments_speaking='x'*10001).status_code,400)
+        self.assertEqual(self.post(comments_listening='x'*10001,comments_reading_writing='forged hidden comment').status_code,200)
+        self.assertEqual(json.loads(m.StaffExamSessionReport.query.one().module_comments),dict(speaking='',overall=''))
+
     def test_optional_comments_saved_and_locked(self):
         self.assertEqual(self.post(optional_comments='  More preparation time would help.  ').status_code, 200)
         self.assertEqual(m.StaffExamSessionReport.query.one().optional_comments, 'More preparation time would help.')

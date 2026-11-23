@@ -298,10 +298,20 @@
               </li>
               {% endif %}
               <li>
+                {% if detail.format == 'Online' %}
+                <b>Optional comments</b>
+                <p>Please share any feedback or suggestions that could help us improve the Path experience.</p>
+                <div class="staff-report-comments-grid" style="--comment-columns:{{ detail.end_checks.comment_sections|length }}">
+                  {% for key, label in detail.end_checks.comment_sections %}
+                  <label><strong>{{ label }}</strong><textarea name="{{ 'optional_comments' if key == 'overall' else 'comments_' ~ key }}" rows="5" maxlength="10000" placeholder="Optional" aria-label="{{ label }} comments"></textarea></label>
+                  {% endfor %}
+                </div>
+                {% else %}
                 <label><b>Optional comments</b>
                   <span>Please share any feedback or suggestions that could help us improve the Path experience.</span>
                   <textarea name="optional_comments" rows="4" maxlength="10000" placeholder="Optional"></textarea>
                 </label>
+                {% endif %}
               </li>
             </ol>
             <p role="status" data-report-feedback></p>

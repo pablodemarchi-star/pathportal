@@ -108,6 +108,22 @@ class SessionReportsTest(unittest.TestCase):
         self.assertNotIn('<form',html)
         self.assertEqual(detail.headers['Cache-Control'],'private, no-store')
 
+    def test_online_module_comments_render_by_label_and_legacy_text_stays_unchanged(self):
+        import json
+        self.record.format='Online';self.record.modules='Listening and speaking';db.session.commit()
+        self.assertEqual(self.post(comments_speaking='Speaking feedback',comments_listening='Listening feedback',optional_comments='Overall feedback').status_code,200)
+        client,_=self.admin_client()
+        report=m.StaffExamSessionReport.query.one()
+        html=client.get(f'/quality-control/session-reports/{self.record.id}').get_data(as_text=True)
+        for text in ('<h5>Speaking</h5>','<h5>Listening</h5>','<h5>Overall</h5>','Speaking feedback','Listening feedback','Overall feedback'):
+            self.assertIn(text,html)
+        self.assertNotIn('<h5>Reading and Writing</h5>',html)
+        # A pre-existing flat report remains flat after the schema migration.
+        report.module_comments=None;report.optional_comments='Original historical comment';db.session.commit()
+        html=client.get(f'/quality-control/session-reports/{self.record.id}').get_data(as_text=True)
+        self.assertIn('Original historical comment',html)
+        self.assertNotIn('<h5>Overall</h5>',html)
+
     def test_legacy_author_name_is_resolved_without_losing_report(self):
         self.assertEqual(self.post().status_code,200)
         report=m.StaffExamSessionReport.query.one()
