@@ -37,3 +37,45 @@ form.handlers['report:draft-restored']();
 assert.equal(rows.children.length,2);assert.equal(rows.children[1].inputs[0].value,'0002');
 assert.equal(JSON.parse(json.value)[0].number,'0001');
 console.log('Component absences: conditional fields, required candidate, original numbers, add/remove, drafts and switching options passed.');
+
+// The IT variant shares row/draft handling, with exam-specific multi-select rules.
+const itForm=control(), itPanel=control(), itJson=control(), itError=control(), itAdd=control();
+const itChoice={...control(),value:'1'};
+itJson.dispatchEvent=()=>{};
+const itRows={...control(),children:[],appendChild(row){this.children.push(row);},replaceChildren(){this.children=[];}};
+function itCandidateRow(){
+ const inputs=['number','name','institution','exam','reason'].map(key=>({...control(),dataset:{componentField:key},focus(){},matches:()=>false}));
+ const modules=['Speaking','Listening and speaking','Reading and writing'].map(value=>({...control(),value,matches:()=>true,label:{hidden:false}}));
+ const row={inputs,modules,hint:{},querySelectorAll:selector=>selector==='[data-it-module]'?modules:inputs,querySelector:()=>row.hint,remove(){itRows.children=itRows.children.filter(item=>item!==row);}};
+ modules.forEach(input=>{input.closest=selector=>selector==='label'?input.label:row;});
+ return row;
+}
+const itNodes={'[data-component-absence-panel]':itPanel,'[data-component-absence-rows]':itRows,'[data-component-absence-json]':itJson,
+ 'template':{content:{firstElementChild:{cloneNode:itCandidateRow}}},'[data-component-absence-error]':itError,'[data-add-component-absence]':itAdd};
+const itSection={dataset:{absenceKind:'it',moduleOptions:JSON.stringify({'Ready':['Speaking'],'B2 Competency':['Listening and speaking','Reading and writing'],'Mixed':['Speaking','Listening and speaking','Reading and writing']})},closest:()=>itForm,querySelector:key=>itNodes[key],querySelectorAll:()=>[itChoice]};
+vm.runInNewContext(fs.readFileSync('app/static/js/staff_report_components.js','utf8'),{document:{querySelectorAll:()=>[itSection]},Event:class{}});
+assert.equal(itPanel.hidden,true);
+itChoice.checked=true;itChoice.handlers.change();assert.match(itChoice.validationMessage,/at least one/);
+itAdd.handlers.click();
+const itRow=itRows.children[0],exam=itRow.inputs[3];
+assert.ok(itRow.modules.every(input=>input.disabled));
+exam.value='B2 Competency';itRows.handlers.change({target:exam});
+assert.equal(itRow.modules[0].label.hidden,true);
+assert.equal(itRow.modules[1].disabled,false);
+assert.match(itRow.modules[1].validationMessage,/at least one/);
+itRow.modules[1].checked=true;itRows.handlers.change({target:itRow.modules[1]});
+itRow.modules[2].checked=true;itRows.handlers.change({target:itRow.modules[2]});
+assert.deepEqual(JSON.parse(itJson.value)[0].modules,['Listening and speaking','Reading and writing']);
+exam.value='Mixed';itRow.modules[1].checked=false;itRow.modules[2].checked=false;itRows.handlers.change({target:exam});
+itRow.modules[0].checked=true;itRows.handlers.change({target:itRow.modules[0]});
+assert.equal(itRow.modules[1].disabled,true);assert.equal(itRow.modules[2].disabled,true);
+assert.deepEqual(JSON.parse(itJson.value)[0].modules,['Speaking']);
+itRow.modules[0].checked=false;itRows.handlers.change({target:itRow.modules[0]});
+itRow.modules[1].checked=true;itRows.handlers.change({target:itRow.modules[1]});assert.equal(itRow.modules[0].disabled,true);
+exam.value='Ready';itRows.handlers.change({target:exam});assert.deepEqual(JSON.parse(itJson.value)[0].modules,[]);
+itRow.modules[0].checked=true;itRows.handlers.change({target:itRow.modules[0]});
+itChoice.checked=false;itChoice.handlers.change();assert.equal(itRow.disabled,true);assert.equal(itChoice.validationMessage,'');
+itChoice.checked=true;itChoice.handlers.change();assert.equal(itRow.modules[0].checked,true);
+itJson.value=JSON.stringify([{number:'0012',exam:'B2 Competency',modules:['Reading and writing']}]);itForm.handlers['report:draft-restored']();
+assert.equal(itRows.children[0].inputs[0].value,'0012');assert.deepEqual(JSON.parse(itJson.value)[0].modules,['Reading and writing']);
+console.log('IT issues: optional section, required candidate/modules, exam filtering, Speaking exclusivity, combined modules and draft restoration passed.');

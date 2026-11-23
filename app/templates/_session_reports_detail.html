@@ -15,6 +15,13 @@
 {% for candidate in report.component_absences|default([]) %}<article><h5>{{ candidate.number }} · {{ candidate.name }}</h5><p>{{ candidate.institution }} · {{ candidate.exam }} · Absent component: {{ candidate.component }}</p><p class="qr-answer">{{ candidate.reason }}</p></article>{% endfor %}
 </section>
 {% endif %}
+{% if saved.it_issues is not none %}
+{% set module_count.value = module_count.value + 1 %}
+<section><h4>{{ 2 + module_count.value }}. Candidate IT issues</h4>
+<p>{{ 'One or more candidates were unable to complete exam modules due to technical difficulties or power outages.' if saved.it_issues else 'No candidate IT issues reported.' }}</p>
+{% for candidate in report.it_absences|default([]) %}<article><h5>{{ candidate.number }} · {{ candidate.name }}</h5><p>{{ candidate.institution }} · {{ candidate.exam }} · Absent exam modules: {{ candidate.modules|join(', ') }}</p><p class="qr-answer">{{ candidate.reason }}</p></article>{% endfor %}
+</section>
+{% endif %}
 {% if session_record.format != 'Online' %}
 <section><h4>3. Exam return package verification</h4><ol>{% for key,label in [('submitted_papers','Submitted exam papers'),('submitted_packages','Submitted return packages'),('absent_packages','Absent return packages'),('sealing','Package sealing'),('labelling','Package labelling'),('institutional_verification','Institutional verification')] %}<li>{{ '✓' if key in report.return_steps else '—' }} {{ label }}</li>{% endfor %}</ol></section>
 <section><h4>4. Exam centre's facilities and organisation</h4><p>{{ saved.facilities_outcome }}</p>{% if saved.facilities_comments %}<p class="qr-answer">{{ saved.facilities_comments }}</p>{% endif %}</section>

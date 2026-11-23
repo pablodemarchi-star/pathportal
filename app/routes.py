@@ -20635,9 +20635,10 @@ def submit_staff_session_report(token, submission_id):
     required_online_checks = staff_report_online_attendance_fields(record)
     online_attendance = {key: key in required_online_checks and request.form.get(key) == "1"
                          for key in ("speaking_records_checked", "listening_speaking_components_checked")}
-    from app.staff_report_components import validate as validate_components, merge as merge_components
+    from app.staff_report_components import validate as validate_components, validate_it, merge as merge_components
     try:
         component_completion, component_absences = validate_components(record, request.form)
+        it_issues, it_absences = validate_it(record, request.form, component_absences)
     except ValueError as error:
         return jsonify(ok=False, error=str(error)), 400
     module_sections = staff_report_module_sections(record)
@@ -20700,7 +20701,7 @@ def submit_staff_session_report(token, submission_id):
     try:
         db.session.add(StaffExamSessionReport(submission_id=submission.id, exam_session_id=record.id,
                                         author_name=person.full_name if person else "", author_person_ref=person_ref, schedule_outcome=outcome,
-                                        optional_comments=optional_comments, component_completion=component_completion, component_absences=json.dumps(component_absences),
+                                        optional_comments=optional_comments, it_issues=it_issues, it_absences=json.dumps(it_absences), component_completion=component_completion, component_absences=json.dumps(component_absences),
                                         centre_feedback_confirmed=feedback_required,
                                         recordings_reminder_confirmed=recordings_required and recordings_confirmed,
                                         marketing_confirmed=not online, marketing_media=json.dumps([item.file_id for item in media]),
@@ -20712,6 +20713,8 @@ def submit_staff_session_report(token, submission_id):
                                         facilities_comments=facilities_comments if facilities_outcome != "Satisfactory" else "",
                                         reasons=reasons if outcome != "There were no delays" else "", **attendance, **online_attendance, **module_verifications))
         merge_components(record, component_absences)
+        if it_absences:
+            merge_components(record, it_absences, reason_field='it_reason')
         db.session.commit()
     except IntegrityError:
         db.session.rollback()
@@ -20746,6 +20749,7 @@ def staff_report_feedback_status(token, submission_id):
 def staff_end_checks_view(record, role, status, submission, share):
     from app.staff_report_review import assessment_roster, assessment_criteria
     from app.post_attendance import EXAMS
+    from app.staff_report_components import it_module_options
     from app.staff_report_media import media_view, report_for_session
     if status != "Confirmed":
         return {}
@@ -20767,6 +20771,7 @@ def staff_end_checks_view(record, role, status, submission, share):
         "module_sections": staff_report_module_sections(record),
         "component_completion_applicable": record.format == "Online" and "listening and speaking" in {module.lower() for module in record.modules_list()},
         "component_exams": EXAMS,
+        "it_module_options": it_module_options(record) if record.format == "Online" else {},
         "speaking_documents": staff_report_speaking_documents(record) if record.format == "Online" and report_eligible else [],
         "session_report_available": report_eligible and staff_report_available(record),
         "session_report_submitted": bool(report_for_session(record)) if report_eligible else False,

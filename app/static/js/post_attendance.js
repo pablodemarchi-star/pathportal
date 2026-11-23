@@ -34,7 +34,7 @@
  <td data-label="Institution"><input data-field="institution_name" list="pa-absence-institution-names" maxlength="250" value="${esc(candidate.institution_name)}" aria-label="Institution"></td>
  <td data-label="Exam" data-candidate-exam>${candidateExam(candidate)}</td>
  <td data-label="Absent modules" data-candidate-modules>${candidateModules(candidate)}</td>
- <td data-label="Document">${candidate.document?`<a class="badge pa-document-link" href="${esc(candidate.document.url)}" title="${esc(candidate.document.filename)}" target="_blank" rel="noopener noreferrer">Link</a>`:''}${candidate.component_reason?`<a href="#" class="badge pa-document-link" data-component-reason="${candidate.id}">Reason ↗</a>`:''}</td>
+ <td data-label="Document">${candidate.document?`<a class="badge pa-document-link" href="${esc(candidate.document.url)}" title="${esc(candidate.document.filename)}" target="_blank" rel="noopener noreferrer">Link</a>`:''}${candidate.component_reason?`<a href="#" class="badge pa-document-link" data-component-reason="${candidate.id}">Reason ↗</a>`:''}${candidate.it_reason?`<a href="#" class="badge pa-document-link" data-it-reason="${candidate.id}">IT issues reason ↗</a>`:''}</td>
  <td data-label="Rescheduled date" data-candidate-rescheduled>${candidateReschedule(candidate)}</td>
  <td data-label="Credit balance" data-candidate-credit-cell>${candidateCredit(candidate)}</td>
  <td data-label="Approval"><div data-review-status>${reviewChip(candidate)}</div><div class="pa-review-actions">${reviewActions(candidate)}</div></td>
@@ -106,11 +106,12 @@
  if(reasonDialog){
   reasonDialog.querySelector('[data-component-reason-close]').addEventListener('click',()=>reasonDialog.close());
   body.addEventListener('click',event=>{
-   const link=event.target.closest('[data-component-reason]');if(!link)return;
-   event.preventDefault();const candidate=current.candidates.find(item=>item.id===Number(link.dataset.componentReason));
-   if(!candidate?.component_reason)return;
+   const link=event.target.closest('[data-component-reason], [data-it-reason]');if(!link)return;
+   event.preventDefault();const candidate=current.candidates.find(item=>item.id===Number(link.dataset.componentReason || link.dataset.itReason));
+   const reason=link.dataset.itReason?candidate?.it_reason:candidate?.component_reason;
+   if(!reason)return;
    reasonDialog.querySelector('[data-component-reason-title]').textContent=`${candidate.number} · ${candidate.name}`;
-   reasonDialog.querySelector('[data-component-reason-text]').textContent=candidate.component_reason;
+   reasonDialog.querySelector('[data-component-reason-text]').textContent=reason;
    reasonDialog.showModal();
   });
  }

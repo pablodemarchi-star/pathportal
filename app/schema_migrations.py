@@ -223,8 +223,8 @@ def migrate_staff_report_components():
     """Preserve existing files/reviews while allowing text-only absence evidence."""
     from sqlalchemy import inspect
     definitions = {
-        'staff_exam_session_report': {'component_completion': "VARCHAR(30) NOT NULL DEFAULT ''", 'component_absences': "TEXT NOT NULL DEFAULT '[]'"},
-        'absence_candidate': {'component_reason': "TEXT NOT NULL DEFAULT ''"},
+        'staff_exam_session_report': {'it_issues': 'BOOLEAN', 'it_absences': "TEXT NOT NULL DEFAULT '[]'", 'component_completion': "VARCHAR(30) NOT NULL DEFAULT ''", 'component_absences': "TEXT NOT NULL DEFAULT '[]'"},
+        'absence_candidate': {'it_reason': "TEXT NOT NULL DEFAULT ''", 'component_reason': "TEXT NOT NULL DEFAULT ''"},
     }
     for table, fields in definitions.items():
         columns = {item['name'] for item in inspect(db.engine).get_columns(table)}

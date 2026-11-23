@@ -18,8 +18,7 @@
     let saving = false;
     let mediaPending = false;
     const draftFields = Array.from(form.querySelectorAll('input[name]:not([type="file"]):not([type="hidden"]), select[name], textarea[name]'));
-    const componentJson = form.querySelector('[data-component-absence-json]');
-    if (componentJson) draftFields.push(componentJson);
+    form.querySelectorAll('[data-component-absence-json]').forEach(input => draftFields.push(input));
     const clearDraft = () => { try { sessionStorage.removeItem(section.dataset.reportDraftKey); } catch {} };
     const saveDraft = () => {
       if (!section.dataset.reportDraftKey || !opener.dataset.folderUrl) return;

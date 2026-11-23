@@ -43,7 +43,55 @@ def validate(record, form):
     return choice, clean
 
 
-def merge(record, rows):
+def it_module_options(record):
+    from app.post_attendance import EXAMS, exam_modules
+    canonical = {'speaking': 'Speaking', 'listening and speaking': 'Listening and speaking', 'reading and writing': 'Reading and writing'}
+    session_modules = {canonical[value.lower()] for value in record.modules_list() if value.lower() in canonical}
+    return {exam: [module for module in exam_modules(exam) if module in session_modules] for exam in EXAMS
+            if session_modules.intersection(exam_modules(exam))}
+
+
+def validate_it(record, form, component_rows=()):
+    if record.format != 'Online':
+        return None, []
+    checked = form.get('it_issues') == '1'
+    if not checked:
+        return False, []
+    try:
+        rows = json.loads(form.get('it_absences', '[]'))
+    except (ValueError, TypeError):
+        raise ValueError('Enter valid candidate IT issues.')
+    if not isinstance(rows, list) or not 1 <= len(rows) <= 500:
+        raise ValueError('Add at least one candidate with IT issues (maximum 500).')
+    options, clean, numbers = it_module_options(record), [], set()
+    components = {row['number']: row for row in component_rows}
+    from app.post_attendance import institution_key
+    for row in rows:
+        if not isinstance(row, dict):
+            raise ValueError('Complete every candidate with IT issues.')
+        item = {key: row.get(key, '').strip() if isinstance(row.get(key, ''), str) else ''
+                for key in ('number', 'name', 'institution', 'exam', 'reason')}
+        if not re.fullmatch(r'[0-9]{1,80}', item['number']):
+            raise ValueError('Enter the original numeric candidate number, preserving initial zeroes.')
+        if item['number'] in numbers:
+            raise ValueError('Enter each candidate number only once in Candidate IT issues.')
+        numbers.add(item['number'])
+        if any(not item[key] or len(item[key]) > maximum for key, maximum in (('name', 250), ('institution', 250), ('reason', 10000))):
+            raise ValueError('Complete Candidate name, Institution and Reason for every candidate (Reason: maximum 10,000 characters).')
+        modules = row.get('modules')
+        if not isinstance(modules, list) or not modules or any(not isinstance(value, str) or value not in options.get(item['exam'], []) for value in modules):
+            raise ValueError('Choose an Exam and Absent exam modules allowed for this session and exam level.')
+        if 'Speaking' in modules and len(set(modules)) > 1:
+            raise ValueError('Speaking cannot be combined with another absent exam module.')
+        item['modules'] = list(dict.fromkeys(modules))
+        previous = components.get(item['number'])
+        if previous and (previous['name'].casefold() != item['name'].casefold() or institution_key(previous['institution']) != institution_key(item['institution']) or previous['exam'] != item['exam']):
+            raise ValueError('Candidate name, Institution and Exam must match in both report sections for candidate ' + item['number'] + '.')
+        clean.append(item)
+    return True, clean
+
+
+def merge(record, rows, reason_field='component_reason'):
     if not rows:
         return
     from app.post_attendance import institution_key, reset_review, reschedule_options, touch, workflow_state
@@ -54,9 +102,9 @@ def merge(record, rows):
     changed_ids = []
     for item in rows:
         candidate = existing.get(item['number'])
-        institution = next((value for value in institutions if institution_key(value.name) == institution_key(item['institution'])), None)
+        institution = next((value for value in institutions if institution_key(value.name) == institution_key(item['institution']) or (value.is_main and institution_key(record.exam_session_name) == institution_key(item['institution']))), None)
         if institution is None:
-            institution = m.AttendanceInstitution(exam_session_id=record.id, name=item['institution'], is_main=False)
+            institution = m.AttendanceInstitution(exam_session_id=record.id, name=item['institution'], is_main=institution_key(item['institution']) == institution_key(record.exam_session_name) and not any(value.is_main for value in institutions))
             db.session.add(institution); db.session.flush()
             institutions.append(institution)
         if candidate is None:
@@ -66,13 +114,15 @@ def merge(record, rows):
             db.session.add(candidate)
             existing[item['number']] = candidate
         modules = json.loads(candidate.absent_modules or '[]')
-        changed = (item['component'] not in modules or candidate.component_reason != item['reason'] or
+        incoming_modules = item.get('modules') or [item['component']]
+        changed = (any(value not in modules for value in incoming_modules) or getattr(candidate, reason_field) != item['reason'] or
                    candidate.name != item['name'] or candidate.exam != item['exam'] or
                    institution_key(candidate.institution_name or '') != institution_key(item['institution']))
-        if item['component'] not in modules:
-            modules.append(item['component'])
+        for value in incoming_modules:
+            if value not in modules:
+                modules.append(value)
         candidate.absent_modules = json.dumps(modules)
-        candidate.component_reason = item['reason']
+        setattr(candidate, reason_field, item['reason'])
         candidate.name, candidate.exam = item['name'], item['exam']
         candidate.institution_id, candidate.institution_name = institution.id, item['institution']
         if changed:
@@ -85,4 +135,4 @@ def merge(record, rows):
         value.no_documentation_received = False
         db.session.flush()
         from app.attendance_tracking import sync_milestones
-        sync_milestones(record, before, True, 'supervisor_component_absences')
+        sync_milestones(record, before, True, 'supervisor_it_absences' if reason_field == 'it_reason' else 'supervisor_component_absences')
