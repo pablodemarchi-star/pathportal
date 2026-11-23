@@ -11,7 +11,9 @@
         <div><span>Date</span><strong>{{ detail.session_date }}</strong></div>
         <div><span>Your time range · GMT-3</span><strong>{{ detail.time_ranges|join(' / ') or 'To be confirmed' }}</strong><small data-staff-arrival>{% if detail.role == 'Intern' and detail.format == 'Online' %}Join the Zoom session <em><u>at least</u></em> 15 minutes before the start.{% elif detail.format == 'Online at exam centre' and detail.role in ['Supervisor', 'Intern'] %}Arrive <em><u>at least</u></em> 50 minutes before the start.{% elif detail.format in ['Online', 'Online at exam centre'] and detail.role in ['Supervisor', 'Examiner'] %}{{ 'Start' if detail.role == 'Supervisor' else 'Join' }} the Zoom session <em><u>at least</u></em> {{ '15' if detail.role == 'Supervisor' else '10' }} minutes before the start.{% elif detail.role == 'Emergency contact' or (detail.role == 'Supervisor' and detail.is_remote) %}Remote assignment · no venue attendance required{% else %}Arrive <em><u>at least</u></em> {{ '50' if detail.role in ['Supervisor', 'Intern'] else '30' }} minutes before the start.{% endif %}</small></div>
         <div><span>Format</span><strong>{{ detail.format or 'To be confirmed' }}</strong></div>
+        {% if detail.format != 'Online' %}
         <div class="staff-detail-venue"><span>Venue address</span>{% if detail.address %}<a class="staff-detail-address" href="https://www.google.com/maps/search/?api=1&amp;query={{ detail.address|urlencode }}" target="_blank" rel="noopener noreferrer">{{ detail.address }} <span aria-hidden="true">↗</span></a>{% else %}<strong>To be confirmed</strong>{% endif %}</div>
+        {% endif %}
       </section>
       <div class="staff-detail-grid{% if detail.role == 'Intern' %} staff-detail-grid-intern{% endif %}">
         <div class="staff-detail-main">
@@ -23,6 +25,18 @@
               <p><strong>Zoom login details:</strong></p>
               <ul><li><strong>Username:</strong> admin@pathexaminations.com</li><li><strong>Password:</strong> Path&amp;23646</li></ul>
             </div>
+            {% set online_modules = exam_session.modules_list()|map('lower')|list %}
+            {% if 'reading and writing' in online_modules or 'listening and speaking' in online_modules %}
+            <div class="staff-detail-material" data-staff-beyond-access>
+              <h4>🖥️ Beyond access details</h4>
+              <p>Please ensure that you <strong>log in to Beyond well in advance of the exam session</strong> to verify that everything is correctly configured and ready, and to familiarise yourself with the tools needed to manage candidates’ exams on the day.</p>
+              <p><strong>Beyond login details:</strong></p>
+              <ul>
+                <li><strong>Username:</strong> <a href="mailto:info@pathexaminations.com">info@pathexaminations.com</a></li>
+                <li><strong>Password:</strong> Path$7284</li>
+              </ul>
+            </div>
+            {% endif %}
             {% elif detail.role == 'Examiner' and detail.format == 'Online' %}
             <div class="staff-detail-material" data-staff-zoom-access>
               <h4>💻 Zoom access details</h4>

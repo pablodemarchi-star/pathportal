@@ -18456,3 +18456,6 @@ body.staff-session-detail-open { overflow: hidden; }
   overflow-wrap: anywhere;
   word-break: normal;
 }
+
+.staff-detail-material[data-staff-beyond-access] ul { margin: 0; padding-left: 20px; }
+.staff-detail-material[data-staff-beyond-access] > :last-child { margin-bottom: 0; }

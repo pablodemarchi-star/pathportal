@@ -62,6 +62,8 @@ class StaffPortalLogisticsTest(unittest.TestCase):
                 self.assertEqual(self.add(role, assignment.id).status_code, 200)
 
     def test_online_supervisor_and_examiner_can_be_added_with_zoom_instructions(self):
+        self.record.modules = 'Reading and writing'
+        db.session.commit()
         for session_format in ("Online", "Online at exam centre"):
             for role, model, phrase in (
                 ("supervisor", ExamSessionSupervisorAssignment, "Start the Zoom session <em><u>at least</u></em> 15 minutes before the start."),
@@ -89,6 +91,7 @@ class StaffPortalLogisticsTest(unittest.TestCase):
                         from html import unescape
                         payload = json.loads(unescape(re.search(r"data-staff-session-payload='([^']*)'", article).group(1)))
                         is_supervisor = payload['role'] == 'Supervisor'
+                        self.assertEqual('data-staff-beyond-access' in article, session_format == 'Online' and is_supervisor)
                         has_zoom = session_format == 'Online' and payload['role'] in ('Supervisor', 'Examiner')
                         self.assertEqual('data-staff-zoom-access' in article, has_zoom)
                         self.assertEqual('data-staff-travel-section' in article, session_format == 'Online at exam centre')
@@ -459,6 +462,8 @@ class StaffPortalLogisticsTest(unittest.TestCase):
             articles=re.findall(r'<article class="staff-detail-assignment".*?</article>',html,re.S)
             self.assertEqual(len(articles),3 if session_format in ("Online at exam centre", "Onsite") else 4)
             for article in articles:
+                self.assertEqual('Venue address' in article, session_format != 'Online')
+                self.assertEqual('class="staff-detail-venue"' in article, session_format != 'Online')
                 if '"assignment_type": "intern"' in article:
                     self.assertNotIn('staff-detail-invoice', article)
                     continue
@@ -785,6 +790,28 @@ class StaffPortalLogisticsTest(unittest.TestCase):
             if blocked:
                 self.assertFalse(item.fuel)
                 self.assertFalse(item.vehicle_dep)
+
+
+
+    def test_beyond_access_is_only_shown_for_online_supervisors_with_relevant_modules(self):
+        assignment = ExamSessionSupervisorAssignment(exam_session_id=self.record.id, team_member_id=self.person.id,
+            staffing_role_check_verified=True, participation_status='Pre-confirmed', logistics_type='Does not apply')
+        db.session.add(assignment); db.session.commit()
+        response = self.add('supervisor', assignment.id)
+        self.assertEqual(response.status_code, 200)
+        for format_name in ('Online', 'Online at exam centre', 'Onsite'):
+            for modules in ('Speaking', 'Reading and writing', 'Listening and speaking', 'Speaking, Reading and Writing', ''):
+                with self.subTest(format=format_name, modules=modules):
+                    self.record.format = format_name
+                    self.record.modules = modules
+                    db.session.commit()
+                    html = self.app.test_client().get(response.json['url']).get_data(as_text=True)
+                    expected = format_name == 'Online' and modules not in ('Speaking', '')
+                    self.assertEqual('data-staff-beyond-access' in html, expected)
+                    if expected:
+                        self.assertLess(html.index('data-staff-zoom-access'), html.index('data-staff-beyond-access'))
+                        self.assertIn('mailto:info@pathexaminations.com', html)
+                        self.assertIn('log in to Beyond well in advance of the exam session', html)
 
 
 if __name__ == "__main__":
