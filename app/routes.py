@@ -20718,11 +20718,16 @@ def submit_staff_session_report(token, submission_id):
         if any(len(value) > 10000 for value in comments.values()):
             return jsonify(ok=False, error="Each Optional comments field must not exceed 10,000 characters."), 400
         module_comments = json.dumps(comments)
+    from app.staff_report_considerations import validate as validate_considerations
+    try:
+        considerations = validate_considerations(record, request.form)
+    except ValueError as error:
+        return jsonify(ok=False, error=str(error)), 400
     person = assignment.team_member or assignment.potential_entry
     try:
         db.session.add(StaffExamSessionReport(submission_id=submission.id, exam_session_id=record.id,
                                         author_name=person.full_name if person else "", author_person_ref=person_ref, schedule_outcome=outcome,
-                                        optional_comments=optional_comments, module_comments=module_comments, it_issues=it_issues, it_absences=json.dumps(it_absences), component_completion=component_completion, component_absences=json.dumps(component_absences),
+                                        optional_comments=optional_comments, important_considerations=json.dumps(considerations), module_comments=module_comments, it_issues=it_issues, it_absences=json.dumps(it_absences), component_completion=component_completion, component_absences=json.dumps(component_absences),
                                         centre_feedback_confirmed=feedback_required,
                                         recordings_reminder_confirmed=recordings_required and recordings_confirmed,
                                         marketing_confirmed=not online, marketing_media=json.dumps([item.file_id for item in media]),

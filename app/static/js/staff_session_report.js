@@ -18,7 +18,7 @@
     let saving = false;
     let mediaPending = false;
     const draftFields = Array.from(form.querySelectorAll('input[name]:not([type="file"]):not([type="hidden"]), select[name], textarea[name]'));
-    form.querySelectorAll('[data-component-absence-json]').forEach(input => draftFields.push(input));
+    form.querySelectorAll('[data-component-absence-json], [data-report-considerations-json]').forEach(input => draftFields.push(input));
     const clearDraft = () => { try { sessionStorage.removeItem(section.dataset.reportDraftKey); } catch {} };
     const saveDraft = () => {
       if (!section.dataset.reportDraftKey || !opener.dataset.folderUrl) return;
@@ -48,6 +48,7 @@
       submit.disabled = true;
       feedback.textContent = author ? `This session report has already been submitted by ${author}.` : 'This session report has already been submitted.';
       clearDraft();
+      if (typeof Event !== 'undefined' && form.dispatchEvent) form.dispatchEvent(new Event('report:locked'));
     };
     let checkingFeedback = false;
     const refreshFeedbackStatus = async () => {
