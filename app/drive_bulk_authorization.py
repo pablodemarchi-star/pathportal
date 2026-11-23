@@ -15,7 +15,9 @@ def bulk_session_pictures(action, purpose='Session pictures'):
         return jsonify(ok=False,error='Some selected sessions no longer exist. Refresh the planner and try again.'),400
     folders,issues={},[]
     from types import SimpleNamespace
-    field = 'absence_documentation_folder_url' if purpose == 'Absence documentation' else 'session_pictures_folder_url'
+    field = {'Session pictures': 'session_pictures_folder_url',
+             'Absence documentation': 'absence_documentation_folder_url',
+             'Digitalised exams': 'digitalised_exams_url'}[purpose]
     for record in records:
         link = getattr(record, field)
         folder_id=session_pictures_folder(SimpleNamespace(session_pictures_folder_url=link))

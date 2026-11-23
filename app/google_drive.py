@@ -172,6 +172,17 @@ def bulk_absence_documentation(action):
     return execute(action, purpose='Absence documentation')
 
 
+@drive_bp.post('/integrations/google/drive/digitalised-exams/bulk/<action>')
+@administrator
+def bulk_digitalised_exams(action):
+    if not validate_csrf():
+        abort(400)
+    if action not in {'prepare', 'verify'}:
+        abort(404)
+    from app.drive_bulk_authorization import bulk_session_pictures as execute
+    return execute(action, purpose='Digitalised exams')
+
+
 @drive_bp.post('/integrations/google/drive/folders/<key>')
 @administrator
 def save_folder(key):
