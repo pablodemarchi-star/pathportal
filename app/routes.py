@@ -20576,6 +20576,15 @@ def staff_report_speaking_documents(record):
             for person in examiners(record)]
 
 
+def staff_portal_speaking_record_url(record, role, person_ref):
+    if record.format != "Online" or role != "examiner":
+        return ""
+    from app.models import ExaminerSpeakingRecord
+    ref = person_ref if person_ref.startswith("potential:") else "staff:" + person_ref
+    document = ExaminerSpeakingRecord.query.filter_by(exam_session_id=record.id, person_ref=ref).first()
+    return "https://drive.google.com/file/d/" + document.file_id + "/view" if document and document.file_id else ""
+
+
 def staff_report_recordings_required(record):
     if record.format == "Online":
         return bool({module.lower() for module in record.modules_list()} & {"speaking", "listening and speaking"})
@@ -20892,6 +20901,7 @@ def staff_exam_sessions(token):
                 "decline_url": url_for("staff.decline_staff_exam_session", token=share.token,
                     session_id=record.id, assignment_type=role, assignment_id=assignment.id),
                 "assignment_type": role,
+                "speaking_record_url": staff_portal_speaking_record_url(record, role, share.person_ref),
                 "examiner_receives_shipment": (
                     role == "examiner" and bool(assignment.is_shipment_recipient)
                     and not is_session_supervisor),

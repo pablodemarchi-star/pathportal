@@ -49,6 +49,13 @@
               </ul>
             </div>
             {% endif %}
+            {% if detail.role == 'Examiner' and detail.format == 'Online' %}
+            <div class="staff-detail-material" data-staff-speaking-record>
+              <h4>📄 Speaking record file</h4>
+              <p>Access your <strong>Speaking record Excel file</strong> and enter each candidate’s total Speaking mark, calculated by adding together the marks awarded for all assessment criteria at the corresponding level. <strong>Please note that the total mark is not out of 100. Do not download the file.</strong> Complete it directly online. For online exam sessions, <strong>you do not need to access Sinapsis</strong>.</p>
+              {% if detail.speaking_record_url %}<a href="{{ detail.speaking_record_url }}" target="_blank" rel="noopener noreferrer" class="staff-detail-link">Open resource ↗</a>{% else %}<p class="staff-detail-muted">Speaking record file not uploaded yet</p>{% endif %}
+            </div>
+            {% endif %}
           </div></section>
           <section class="staff-detail-section" data-staff-responsibilities-section><h3 data-staff-responsibilities-title>Your responsibilities</h3><ul class="staff-detail-checklist" data-staff-responsibilities></ul></section>
         </div>

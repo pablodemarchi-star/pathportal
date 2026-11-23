@@ -43,6 +43,30 @@ class StaffPortalLogisticsTest(unittest.TestCase):
             f"/pre-session-control-tower/sessions/{self.record.id}/staffing-assignments/{role}/{assignment_id}/submit",
             data={"csrf_token": "test"}, headers={"Accept": "application/json"})
 
+    def test_online_examiner_speaking_record_current_file_and_missing(self):
+        from app.models import ExaminerSpeakingRecord
+        self.record.format = 'Online'
+        assignment = ExamSessionExaminerAssignment(exam_session_id=self.record.id, team_member_id=self.person.id,
+            staffing_role_check_verified=True, participation_status='Pre-confirmed')
+        db.session.add(assignment); db.session.commit()
+        added = self.add('examiner', assignment.id)
+        self.assertEqual(added.status_code, 200)
+        url = added.json['url']
+        html = self.client.get(url).get_data(as_text=True)
+        self.assertIn('Speaking record file not uploaded yet', html)
+        document = ExaminerSpeakingRecord(exam_session_id=self.record.id, person_ref=f'staff:{self.person.id}',
+            file_id='currentSpeaking123', folder_id='folder123', filename='Speaking.xlsx', mime_type='application/octet-stream')
+        db.session.add(document); db.session.commit()
+        html = self.client.get(url).get_data(as_text=True)
+        self.assertIn('href="https://drive.google.com/file/d/currentSpeaking123/view" target="_blank"', html)
+        self.assertNotIn('Speaking record file not uploaded yet', html)
+        document.file_id = 'replacementSpeaking123'; db.session.commit()
+        html = self.client.get(url).get_data(as_text=True)
+        self.assertIn('https://drive.google.com/file/d/replacementSpeaking123/view', html)
+        self.assertNotIn('currentSpeaking123', html)
+        self.record.format = 'Onsite'; db.session.commit()
+        self.assertNotIn('data-staff-speaking-record', self.client.get(url).get_data(as_text=True))
+
     def test_each_onsite_role_requires_a_logistics_selection(self):
         for role, model in [("supervisor", ExamSessionSupervisorAssignment),
                             ("examiner", ExamSessionExaminerAssignment)]:
@@ -181,6 +205,7 @@ class StaffPortalLogisticsTest(unittest.TestCase):
             self.record.format=session_format
             for module,count in (('Reading and writing',5),('Listening and speaking',0),('Speaking',0),('Listening and speaking',1),('Speaking',1)):
                 with self.subTest(session_format=session_format,module=module,count=count):
+                    self.record.modules = module
                     ExamSessionMonthlyRegistration.query.filter_by(exam_session_id=self.record.id).delete()
                     db.session.add(ExamSessionMonthlyRegistration(exam_session_id=self.record.id,month=10,module='Speaking',registration_number=10))
                     db.session.add(ExamSessionMonthlyRegistration(exam_session_id=self.record.id,month=11,module=module,registration_number=count))
@@ -189,7 +214,8 @@ class StaffPortalLogisticsTest(unittest.TestCase):
                     fields=staff_assignment_end_check_fields(self.record,'supervisor',assignment)
                     self.assertEqual('recordings' in fields,expected)
                     html=self.app.test_client().get(added.json['url']).get_data(as_text=True)
-                    self.assertEqual('name="recordings_reminder_confirmed"' in html,expected)
+                    report_expected = module in ('Listening and speaking', 'Speaking') if session_format == 'Online' else expected
+                    self.assertEqual('name="recordings_reminder_confirmed"' in html, report_expected)
                     self.assertNotIn('data-staff-end-checks ', html)
         ExamSessionMonthlyRegistration.query.filter_by(exam_session_id=self.record.id).delete()
         db.session.commit()

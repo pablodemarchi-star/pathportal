@@ -71,6 +71,10 @@
         item.append(make("h4", "", heading), paragraph);
         appendMaterialResource(item, heading, examinerMaterial ? data.material_for_examiners_url : url);
         materials.insertBefore(item, role === "Examiner" ? null : zoomAccess);
+        if (onlineMaterial) {
+          const speakingRecord = materials.querySelector("[data-staff-speaking-record]");
+          if (speakingRecord) item.after(speakingRecord);
+        }
         if (role === "Examiner" && title.includes("Examiner guidelines") && zoomAccess) {
           item.after(zoomAccess);
         }
