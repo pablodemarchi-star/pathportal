@@ -325,7 +325,7 @@
     const closesAt = opensAt + 24 * 60 * 60 * 1000;
     const refresh = () => {
       const now = Date.now();
-      const examDate = section.dataset.reportDateUnrestricted === 'true' || (Number.isFinite(opensAt) && now >= opensAt && now < closesAt);
+      const examDate = (Number.isFinite(opensAt) && now >= opensAt && now < closesAt);
       const available = examDate && Boolean(link.dataset.folderUrl);
       section.classList.toggle('is-unavailable', !examDate);
       const badge = section.querySelector('[data-report-availability]');

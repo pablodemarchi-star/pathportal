@@ -20598,9 +20598,6 @@ def staff_report_assignment_eligible(record, assignment, assignment_type):
 
 
 def staff_report_available(record, now=None):
-    # Temporary unrestricted access while the Online form is being reviewed.
-    if record.format == "Online":
-        return True
     now = now or datetime.now(timezone.utc)
     return bool(record.session_date and now.astimezone(LOCAL_TZ).date() == record.session_date)
 
@@ -20770,7 +20767,6 @@ def staff_end_checks_view(record, role, status, submission, share):
         "module_sections": staff_report_module_sections(record),
         "speaking_documents": staff_report_speaking_documents(record) if record.format == "Online" and report_eligible else [],
         "session_report_available": report_eligible and staff_report_available(record),
-        "session_report_date_unrestricted": record.format == "Online",
         "session_report_submitted": bool(report_for_session(record)) if report_eligible else False,
         "session_report_draft_key": f"staff-report:{share.token}:{record.id}",
         "session_report_url": url_for("staff.submit_staff_session_report", token=share.token, submission_id=submission.id),

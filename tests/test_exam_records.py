@@ -362,7 +362,7 @@ class ExamRecordsTest(unittest.TestCase):
         self.assertEqual(self.listening_upload(filename='invalid.pdf').status_code, 400)
         self.assertEqual(self.listening_upload().status_code, 200)
         document = ListeningMarkingRecord.query.one()
-        self.assertEqual(document.filename, 'Listening marking record - B2 Online - 15-12-2026.xlsx')
+        self.assertEqual(document.filename, 'L marking record - B2 Online - 15-12-2026.xlsx')
         self.assertEqual(document.folder_id, 'folder123456789')
         self.assertEqual(self.listening(6).status_code, 200)
         old_file = document.file_id

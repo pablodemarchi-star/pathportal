@@ -45,15 +45,15 @@ handlers.visibilitychange();
 assert.equal(attributes['aria-disabled'], 'true');
 console.log('Exam-day report: GMT-3 midnight boundaries, disabled clicks and missing URL passed.');
 
-section.dataset.reportDateUnrestricted = 'true';
+section.dataset.reportDateUnrestricted = 'false';
 link.dataset.folderUrl = 'https://example.com/report';
 for (const instant of [opening - 86400000, opening + 86400000 * 30]) {
   now = instant;
   handlers.focus();
-  assert.equal(link.href, 'https://example.com/report');
-  assert.equal(attributes['aria-disabled'], 'false');
+  assert.equal(link.href, '#');
+  assert.equal(attributes['aria-disabled'], 'true');
 }
 link.dataset.folderUrl = '';
 handlers.focus();
 assert.equal(attributes['aria-disabled'], 'true');
-console.log('Online review access remains available outside the exam day and respects submitted locks.');
+console.log('Online report stays locked outside the exam day and respects submitted locks.');

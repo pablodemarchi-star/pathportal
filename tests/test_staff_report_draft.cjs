@@ -24,11 +24,10 @@ function page(online=false){
  const dialog={open:true,querySelector:()=>form,querySelectorAll:()=>[],addEventListener(){},close(){this.open=false;}};
  const opener=make('opener');opener.dataset.folderUrl='/report';
  const section={dataset:{reportDraftKey:'shared-session-draft',feedbackStatusUrl:'/status',opensAt:'2026-11-13T00:00:00-03:00'},querySelector:key=>key==='[data-exam-day-report-link]'?opener:dialog,closest:()=>({open:true})};
- if(online)section.dataset.reportDateUnrestricted='true';
  const events={},documentEvents={};let result={ok:true,submitted:false,report_submitted:false};let poll;
  const window={addEventListener(name,fn){events[name]=fn;},setInterval(fn,ms){assert.equal(ms,5000);poll=fn;}};
  const document={hidden:false,querySelectorAll:()=>[section],addEventListener(name,fn){documentEvents[name]=fn;}};
- vm.runInNewContext(source,{window,document,FormData:class {},sessionStorage:{getItem:key=>storage.get(key),setItem:(key,value)=>storage.set(key,value),removeItem:key=>storage.delete(key)},fetch:async()=>({ok:true,json:async()=>result})});
+ vm.runInNewContext(source,{window,document,Date:{parse:Date.parse,now:()=>Date.parse('2026-11-13T12:00:00-03:00')},FormData:class {},sessionStorage:{getItem:key=>storage.get(key),setItem:(key,value)=>storage.set(key,value),removeItem:key=>storage.delete(key)},fetch:async()=>({ok:true,json:async()=>result})});
  return {outcome,reasons,notes,comment,assessment,steps,fields,form,feedbackCheckbox,badge,help,submit,feedback,opener,events,documentEvents,setResult(value){result=value;}};
 }
 (async()=>{

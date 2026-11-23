@@ -1,4 +1,5 @@
 import os
+import re
 import unittest
 from datetime import date, datetime, timezone
 from unittest.mock import patch
@@ -552,17 +553,20 @@ class StaffSessionReportTest(unittest.TestCase):
         self.assertIn('Report submitted', response.get_data(as_text=True))
 
 
-    def test_online_supervisor_report_is_available_before_and_after_exam_day(self):
+    def test_online_supervisor_report_only_available_on_exam_day(self):
         self.record.format = 'Online'; db.session.commit()
-        for instant in ('2026-10-01T12:00:00+00:00', '2026-11-13T03:00:00+00:00', '2026-12-01T12:00:00+00:00'):
-            self.assertTrue(staff_report_available(self.record, datetime.fromisoformat(instant)))
-        html = self.client.get(f'/my-exam-sessions/{self.share.token}?session_year=2026').get_data(as_text=True)
-        self.assertIn('data-report-date-unrestricted="true"', html)
-        self.assertNotIn('data-staff-end-checks ', html)
-        self.assertIn('data-staff-exam-day-report', html)
-        self.assertNotIn('Exam return package verification', html)
-        self.assertNotIn('on the exam day only', html)
-        self.assertNotRegex(html, r'data-exam-day-report-link[^>]*aria-disabled="true"')
+        for instant, expected in [('2026-11-13T02:59:59+00:00', False), ('2026-11-13T03:00:00+00:00', True),
+                                  ('2026-11-14T02:59:59+00:00', True), ('2026-11-14T03:00:00+00:00', False)]:
+            moment = datetime.fromisoformat(instant)
+            self.assertEqual(staff_report_available(self.record, moment), expected)
+            with patch('app.routes.datetime', wraps=datetime) as clock:
+                clock.now.side_effect = lambda tz=None: moment.astimezone(tz) if tz else moment.replace(tzinfo=None)
+                html = self.client.get(f'/my-exam-sessions/{self.share.token}?session_year=2026').get_data(as_text=True)
+                self.assertNotIn('data-report-date-unrestricted="true"', html)
+                self.assertIn('on the exam day only', html)
+                self.assertEqual(bool(re.search(r'data-exam-day-report-link[^>]*aria-disabled="true"', html)), not expected)
+                if not expected:
+                    self.assertEqual(self.client.post(self.url, data={'csrf_token': 'test'}).status_code, 403)
         feedback = self.client.get(self.url + '/feedback-status')
         self.assertEqual(feedback.status_code, 200)
         self.assertFalse(feedback.json['report_submitted'])
@@ -591,8 +595,7 @@ class StaffSessionReportTest(unittest.TestCase):
         self.record.session_date = date(2099, 1, 1)
         db.session.commit()
         response = self.client.post(self.url, data={'csrf_token': 'test'})
-        self.assertEqual(response.status_code, 400)
-        self.assertIn('schedule', response.json['error'])
+        self.assertEqual(response.status_code, 403)
         feedback = self.client.get(self.url + '/feedback-status')
         self.assertEqual(feedback.status_code, 200)
         self.assertEqual(self.post(recordings_reminder_confirmed='0').status_code, 400)

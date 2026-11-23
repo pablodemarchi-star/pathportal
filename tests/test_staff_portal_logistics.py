@@ -153,7 +153,7 @@ class StaffPortalLogisticsTest(unittest.TestCase):
                 self.assertIn('data-staff-travel-section',html)
                 self.assertNotIn('Path&amp;23646',html)
 
-    def test_online_supervisor_report_replaces_end_checks_without_date_restriction(self):
+    def test_online_supervisor_report_replaces_end_checks_with_exam_day_restriction(self):
         db.session.add(ExamSessionMonthlyRegistration(exam_session_id=self.record.id, month=11, module='Speaking', registration_number=1))
         self.record.format = 'Online'
         self.record.digitalised_exams_url = 'https://example.com/digitalised'
@@ -176,7 +176,8 @@ class StaffPortalLogisticsTest(unittest.TestCase):
                 html=self.app.test_client().get(added.json['url']).get_data(as_text=True)
                 self.assertNotIn('data-staff-end-checks ', html)
                 self.assertIn('data-staff-exam-day-report', html)
-                self.assertIn('data-report-date-unrestricted="true"', html)
+                self.assertNotIn('data-report-date-unrestricted="true"', html)
+                self.assertEqual(bool(re.search(r'data-exam-day-report-link[^>]*aria-disabled="true"', html)), not enabled)
                 self.assertIn('End-of-session report ↗', html)
                 self.assertIn('name="absent_candidates_checked"', html)
                 self.assertNotIn('name="return_verification"', html)

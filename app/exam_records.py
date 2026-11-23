@@ -221,7 +221,7 @@ def update(session_id):
         suffix = PurePosixPath(upload.filename.replace('\\', '/')).suffix
         if rw_upload and suffix.lower() not in {'.xlsx', '.xls'}:
             return jsonify(ok=False, error='Choose an Excel file (.xlsx or .xls).'), 400
-        prefix = ('Listening marking record' if kind == 'listening' else 'RW marking record') if rw_upload else person['name']
+        prefix = ('L marking record' if kind == 'listening' else 'RW marking record') if rw_upload else person['name']
         upload.filename = f"{prefix} - {record.exam_session_name} - {record.session_date:%d-%m-%Y}{suffix}"
         # Replace path separators in generated names without losing spaces or accents.
         upload.filename = upload.filename.replace('/', '-').replace('\\', '-')
