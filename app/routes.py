@@ -20617,7 +20617,7 @@ def staff_report_feedback_submitted(record):
 
 
 @staff_bp.route("/my-exam-sessions/<token>/submissions/<int:submission_id>/report", methods=["POST"])
-def submit_staff_session_report(token, submission_id):
+def submit_staff_session_report(token, submission_id, _editing=None):
     from sqlalchemy.exc import IntegrityError
     share = StaffExamSessionsShare.query.filter_by(token=token).first_or_404()
     if not validate_csrf():
@@ -20628,11 +20628,13 @@ def submit_staff_session_report(token, submission_id):
         abort(404)
     record = submission.exam_session
     assignment, person_ref = staff_submission_assignment(record, submission.assignment_type, submission.assignment_id)
-    if not assignment or person_ref != share.person_ref:
+    if _editing is not None and not getattr(getattr(g, "current_user", None), "is_superadmin", False):
+        abort(403)
+    if _editing is None and (not assignment or person_ref != share.person_ref):
         abort(404)
-    if not staff_report_assignment_eligible(record, assignment, submission.assignment_type) or not staff_report_available(record):
+    if _editing is None and (not staff_report_assignment_eligible(record, assignment, submission.assignment_type) or not staff_report_available(record)):
         return jsonify(ok=False, error="This report is only available to confirmed eligible Supervisors during its availability period."), 403
-    if report_for_session(record):
+    if _editing is None and report_for_session(record):
         return jsonify(ok=False, error="This report has already been submitted and cannot be edited."), 409
     outcome = request.form.get("schedule_outcome", "").strip()
     reasons = request.form.get("reasons", "").strip()
@@ -20689,7 +20691,7 @@ def submit_staff_session_report(token, submission_id):
             return jsonify(ok=False, error="Please complete all six Exam return package verification steps in order."), 400
     from app.staff_report_review import validate_assessments
     try:
-        assessments = validate_assessments(record, request.form)
+        assessments = validate_assessments(record, request.form, roster=json.loads(_editing.staff_assessments) if _editing is not None else None)
     except ValueError as error:
         return jsonify(ok=False, error=str(error)), 400
     media = []
@@ -20723,9 +20725,9 @@ def submit_staff_session_report(token, submission_id):
         considerations = validate_considerations(record, request.form)
     except ValueError as error:
         return jsonify(ok=False, error=str(error)), 400
-    person = assignment.team_member or assignment.potential_entry
+    person = (assignment.team_member or assignment.potential_entry) if assignment else None
     try:
-        db.session.add(StaffExamSessionReport(submission_id=submission.id, exam_session_id=record.id,
+        values = dict(submission_id=submission.id, exam_session_id=record.id,
                                         author_name=person.full_name if person else "", author_person_ref=person_ref, schedule_outcome=outcome,
                                         optional_comments=optional_comments, important_considerations=json.dumps(considerations), module_comments=module_comments, it_issues=it_issues, it_absences=json.dumps(it_absences), component_completion=component_completion, component_absences=json.dumps(component_absences),
                                         centre_feedback_confirmed=feedback_required,
@@ -20737,7 +20739,12 @@ def submit_staff_session_report(token, submission_id):
                                         emergency_pack_reasons=emergency_pack_reasons if emergency_pack_outcome != "No, it was not needed" else "",
                                         facilities_outcome=facilities_outcome,
                                         facilities_comments=facilities_comments if facilities_outcome != "Satisfactory" else "",
-                                        reasons=reasons if outcome != "There were no delays" else "", **attendance, **online_attendance, **module_verifications))
+                                        reasons=reasons if outcome != "There were no delays" else "", **attendance, **online_attendance, **module_verifications)
+        if _editing is None:
+            db.session.add(StaffExamSessionReport(**values))
+        else:
+            from app.session_report_edit import apply_edit
+            apply_edit(_editing, values, record, component_absences, it_absences)
         merge_components(record, component_absences)
         if it_absences:
             merge_components(record, it_absences, reason_field='it_reason')

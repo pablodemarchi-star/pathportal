@@ -498,6 +498,23 @@ def session_reports_detail(session_id):
     return render_detail(session_id)
 
 
+@quality_bp.route('/quality-control/session-reports/<int:session_id>/edit', methods=['GET', 'POST'])
+@login_required
+def edit_session_report(session_id):
+    from app.session_report_edit import edit_report
+    return edit_report(session_id)
+
+
+@quality_bp.post('/quality-control/session-reports/<int:session_id>/edit/media')
+@login_required
+def edit_session_report_media(session_id):
+    from app.session_report_edit import require_editor
+    from app.staff_report_media import upload_media
+    require_editor()
+    report = m.StaffExamSessionReport.query.filter_by(exam_session_id=session_id).first_or_404()
+    return upload_media(report.submission.share.token, report.submission_id, _editing=True)
+
+
 # Collect affected sessions during flush (including explicit flushes before commit).
 # Never recalculate all sessions or perform network calls while saving a session.
 TRACKED_MODELS = {m.PostAttendance,m.AbsenceCandidate,m.AttendanceInstitution,m.AttendanceEvent,m.ExamSession, *ASSIGNMENTS, m.ExamSessionScheduleWorkflow,

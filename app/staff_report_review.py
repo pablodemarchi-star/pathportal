@@ -54,10 +54,10 @@ def assessment_roster(record):
     return sorted(rows.values(), key=lambda row: (row['role'] != 'Examiner', row['name'].casefold(), row['key']))
 
 
-def validate_assessments(record, form):
+def validate_assessments(record, form, roster=None):
     """Re-read assignments on submit, so stale/missing rows cannot bypass validation."""
     assessments = []
-    for row in assessment_roster(record):
+    for row in assessment_roster(record) if roster is None else roster:
         values = {}
         for criterion in assessment_criteria(record):
             value = form.get(f"review.{row['key']}.{criterion['key']}", '').strip()
@@ -83,5 +83,5 @@ def validate_assessments(record, form):
             if len(comment) > 10000:
                 raise ValueError(f"{title} for {row['name']} must not exceed 10,000 characters.")
             comments[key] = comment
-        assessments.append(dict(exam_session_id=record.id, **row, criteria=values, notes=notes, comments=comments))
+        assessments.append(dict(exam_session_id=record.id, **{key: row[key] for key in ('key', 'person_ref', 'name', 'role')}, criteria=values, notes=notes, comments=comments))
     return assessments

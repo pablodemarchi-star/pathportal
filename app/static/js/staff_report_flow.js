@@ -1,5 +1,6 @@
 (() => {
   document.querySelectorAll('[data-online-report-flow]').forEach(dialog => {
+    const adminEdit = Boolean(dialog.closest?.('[data-admin-report-edit]'));
     const form = dialog.querySelector('[data-session-report-form]');
     const questions = form.querySelector('.staff-session-report-questions');
     const cards = Array.from(questions.children);
@@ -46,8 +47,8 @@
     const warning = form.querySelector('.staff-session-report-warning');
     const summary = make('section', undefined, 'report-flow-summary');
     summary.setAttribute('aria-label', 'Report progress summary');
-    const summaryTitle = make('h4', 'Before you submit');
-    const summaryText = make('p', 'Check the sections below and review your answers. Once submitted, this report cannot be reopened or edited.');
+    const summaryTitle = make('h4', adminEdit ? 'Before you save' : 'Before you submit');
+    const summaryText = make('p', adminEdit ? 'Review your changes before saving. Changes update the report and linked Attendance records and are recorded in the edit history.' : 'Check the sections below and review your answers. Once submitted, this report cannot be reopened or edited.');
     const summaryRows = make('div', undefined, 'report-flow-summary-rows');
     summary.append(summaryTitle, summaryText, summaryRows);
     content.append(stageHeading);

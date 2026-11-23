@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta name="robots" content="noindex, nofollow"><title>Edit end-of-session report</title>
+<link rel="stylesheet" href="{{ url_for('static',filename='css/styles.css') }}">
+<link rel="stylesheet" href="{{ url_for('static',filename='css/staff_report_components.css') }}">
+<link rel="stylesheet" href="{{ url_for('static',filename='css/staff_report_flow.css') }}">
+<style>body{margin:0;background:#f6f8fb}.staff-session-report-modal{width:calc(100% - 24px);max-height:calc(100dvh - 24px)}.staff-session-report-modal::backdrop{background:#f6f8fb}</style>
+</head><body>
+<section data-staff-exam-day-report data-admin-report-edit>
+<button hidden type="button" data-exam-day-report-link data-folder-url="{{ detail.end_checks.session_report_url }}">Edit</button>
+{% include 'pre_session_control_tower/_staff_report_form.html' %}
+</section>
+<script type="application/json" id="report-edit-values">{{ initial_values|tojson }}</script>
+<script>
+(() => {
+const form=document.querySelector('[data-session-report-form]');
+const revision=document.createElement('input');revision.type='hidden';revision.name='_report_revision';revision.value={{ revision|tojson }};form.append(revision);
+const values=JSON.parse(document.getElementById('report-edit-values').textContent);
+form.querySelectorAll('[name]').forEach(input=>{
+ if(!(input.name in values))return;
+ const value=values[input.name];
+ if(input.type==='checkbox')input.checked=Array.isArray(value)?value.includes(input.value):Boolean(value);
+ else if(input.type==='radio')input.checked=String(value)===input.value;
+ else input.value=Array.isArray(value)?JSON.stringify(value):value??'';
+});
+form.querySelector('[type="submit"]').textContent='Save changes';
+form.querySelector('.staff-session-report-warning').textContent='Changes saved here update the submitted report and its linked Attendance records. The original submission and edit history are retained.';
+})();
+</script>
+<script src="{{ url_for('static',filename='js/staff_report_components.js',v='20261123-it-radio-1') }}"></script>
+<script src="{{ url_for('static',filename='js/staff_report_considerations.js',v='20261123-considerations-1') }}"></script>
+<script src="{{ url_for('static',filename='js/staff_session_report.js',v='20261123-quality-edit-1') }}"></script>
+<script src="{{ url_for('static',filename='js/staff_report_flow.js',v='20261123-quality-edit-1') }}"></script>
+<script>
+const reportDialog=document.querySelector('[data-session-report-dialog]');
+reportDialog.addEventListener('close',()=>window.parent.postMessage({type:'quality-report-editor-closed'},window.location.origin));
+reportDialog.showModal();
+</script>
+</body></html>

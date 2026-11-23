@@ -204,7 +204,7 @@ def create_app():
             "SAMEORIGIN" if (request.endpoint == "staff.exam_session_planner"
             and request.args.get("session_fullscreen") == "1" and request.args.get("staff_card"))
             or (request.endpoint in {"staff.pre_session_control_tower", "staff.pre_online_session_control_tower", "staff.my_actions"} and request.args.get("session_modal"))
-            or request.endpoint in {"staff_invoices.preview", "staff_id_documents.preview"}
+            or request.endpoint in {"staff_invoices.preview", "staff_id_documents.preview", "quality_control.edit_session_report"}
             else "DENY"
         )
         response.headers["Referrer-Policy"] = "no-referrer" if request.endpoint in {"staff.staff_exam_sessions", "staff_invoices.upload", "staff_invoices.download", "staff_invoices.preview", "staff_invoices.remove"} else "strict-origin-when-cross-origin"

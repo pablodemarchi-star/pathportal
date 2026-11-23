@@ -178,6 +178,7 @@ class ComponentSchemaMigrationTest(unittest.TestCase):
         unit.commit()
         with patch('app.schema_migrations.db', SimpleNamespace(engine=engine, session=unit)):
             migrate_staff_report_components(); migrate_staff_report_components()
+        self.assertIn('edit_history', {column['name'] for column in inspect(engine).get_columns('staff_exam_session_report')})
         self.assertTrue(next(column for column in inspect(engine).get_columns('absence_candidate') if column['name']=='document_id')['nullable'])
         self.assertEqual(unit.execute(text('SELECT document_id FROM absence_candidate WHERE id=4')).scalar_one(), 'proof123')
         self.assertEqual(unit.execute(text('SELECT candidate_id FROM legacy_event')).scalar_one(), 4)

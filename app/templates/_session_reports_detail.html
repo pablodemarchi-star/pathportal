@@ -3,6 +3,8 @@
 {% for report in reports %}{% set saved=report.record %}{% set criteria=report.criteria|default(criteria) %}
 {% if report.historical %}<details><summary>Historical duplicate report retained · {{ report.author }}</summary>{% endif %}
 <p><span class="qr-chip qr-green">Submitted</span> <b>{{ report.author }}</b> · {{ saved.submitted_at|localdt }}</p>
+{% if not report.historical %}<p><button type="button" class="qc-button" data-report-edit-url="{{ url_for('quality_control.edit_session_report',session_id=session_record.id) }}">Edit</button></p>{% endif %}
+{% for edit in report.edits|default([]) %}<p class="qr-detail-date">Edited by {{ edit.editor }} · {{ edit.edited_at }}</p>{% endfor %}
 <div class="qr-detail-grid">
 <section><h4>1. Approved schedule</h4><p>{{ saved.schedule_outcome }}</p>{% if saved.reasons %}<p class="qr-answer">{{ saved.reasons }}</p>{% endif %}</section>
 <section><h4>2. Candidate attendance</h4><ul><li>{{ '✓' if saved.absent_candidates_checked else '—' }} Absent candidates recorded</li><li>{{ '✓' if saved.submitted_candidates_checked else '—' }} Submitted candidates recorded</li><li>{{ '✓' if saved.session_completed_checked else '—' }} Session marked Completed in Sinapsis (optional)</li></ul></section>

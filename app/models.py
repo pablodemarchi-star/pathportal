@@ -1100,6 +1100,7 @@ class StaffExamSessionSubmission(db.Model):
 
 
 class StaffExamSessionReport(db.Model):
+    edit_history = db.Column(db.Text, nullable=False, default="[]", server_default="[]")
     id = db.Column(db.Integer, primary_key=True)
     exam_session_id = db.Column(db.Integer, db.ForeignKey("exam_session.id"), nullable=False, unique=True)
     author_name = db.Column(db.String(300), nullable=False, default="", server_default="")

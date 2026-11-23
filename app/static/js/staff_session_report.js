@@ -1,5 +1,6 @@
 (() => {
   document.querySelectorAll('[data-staff-exam-day-report]').forEach((section) => {
+    const adminEdit = section.hasAttribute?.('data-admin-report-edit') || false;
     const opener = section.querySelector('[data-exam-day-report-link]');
     const dialog = section.querySelector('[data-session-report-dialog]');
     const form = dialog.querySelector('form');
@@ -96,6 +97,7 @@
       reasons.required = needed;
     };
     const available = () => {
+      if (adminEdit) return true;
       const opensAt = Date.parse(section.dataset.opensAt);
       return Boolean(opener.dataset.folderUrl) && ((Date.now() >= opensAt && Date.now() < opensAt + 86400000));
     };
@@ -287,7 +289,7 @@
       try {
         const response = await fetch(form.action, { method: 'POST', body: new FormData(form), headers: { Accept: 'application/json' } });
         const result = await response.json();
-        if (response.status === 409) { lockReport(); return; }
+        if (response.status === 409 && !adminEdit) { lockReport(); return; }
         if (!response.ok || !result.ok) throw new Error(result.error || 'The report could not be submitted. Please try again.');
         opener.dataset.folderUrl = '';
         opener.textContent = 'Report submitted';

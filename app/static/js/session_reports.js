@@ -50,8 +50,31 @@
   const dialog=document.querySelector('[data-reports-dialog]');
   const content=dialog.querySelector('[data-reports-content]');
   let requestId=0;
+  let lastDetailUrl='';
+  let editorFrame=null;
+  content.addEventListener('click', event=>{
+    const edit=event.target.closest('[data-report-edit-url]');
+    if(!edit)return;
+    editorFrame=document.createElement('iframe');
+    editorFrame.src=edit.dataset.reportEditUrl;
+    editorFrame.title='Edit end-of-session report';
+    editorFrame.style.cssText='width:100%;height:80dvh;border:0;display:block';
+    content.replaceChildren(editorFrame);
+  });
+  window.addEventListener('message', async event=>{
+    if(event.origin!==window.location.origin || event.source!==editorFrame?.contentWindow || event.data?.type!=='quality-report-editor-closed')return;
+    editorFrame=null;
+    content.textContent='Loading updated report…';
+    try {
+      const response=await fetch(lastDetailUrl,{cache:'no-store'});
+      if(!response.ok || response.redirected)throw new Error();
+      content.innerHTML=await response.text();
+    }catch{content.textContent='Could not reload the report. Close this window and open it again.';}
+  });
   document.querySelectorAll('[data-reports-open]').forEach(button=>button.addEventListener('click',async()=>{
     const current=++requestId;
+    lastDetailUrl=button.dataset.url;
+    editorFrame=null;
     dialog.querySelector('h2').textContent=button.dataset.name;
     content.textContent='Loading reports…';
     if(!dialog.open)dialog.showModal();
