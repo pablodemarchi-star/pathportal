@@ -1,7 +1,7 @@
 {% extends 'base.html' %}
 {% block title %}{{ tower_title }} · Post controls{% endblock %}
 {% block content %}
-<link rel="stylesheet" href="{{ url_for('static',filename='css/post_attendance.css',v='20261119-27') }}">
+<link rel="stylesheet" href="{{ url_for('static',filename='css/post_attendance.css',v='20261124-online-incidents-1') }}">
 <header class="page-header"><div><p class="eyebrow">{{ tower_title }}</p><h1>Post controls</h1><p>Attendance and absence follow-up for {{ 'online' if is_online_tower else 'onsite' }} exam sessions.</p></div></header>
 <nav class="control-tower-view-tabs" aria-label="{{ tower_title }} views">
 {% if not is_online_tower %}<a class="control-tower-view-tab" href="{{ url_for(tower_endpoint,session_year=selected_year,view='bundles') }}">Bundles</a>{% endif %}
@@ -29,5 +29,5 @@
 </dialog>
 <div data-post-config data-open-session="{{ request.args.get('open_attendance','') }}" data-csrf="{{ csrf_token }}"></div>
 <script src="{{ url_for('static',filename='js/attendance_group_messages.js',v='20261119-2') }}" defer></script>
-<script src="{{ url_for('static',filename='js/post_attendance.js',v='20261124-report-review-1') }}" defer></script>
+<script src="{{ url_for('static',filename='js/post_attendance.js',v='20261124-online-incidents-1') }}" defer></script>
 {% endblock %}

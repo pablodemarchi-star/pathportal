@@ -48,4 +48,28 @@ assert.equal(confirmButton.disabled, true); assert.equal(declineButton.disabled,
 field.value = 'Saved candidate'; draftContext.pending = 1; draftContext.sync();
 assert.equal(confirmButton.disabled, true, 'Wait until the candidate autosave completes');
 draftContext.pending = 0; draftContext.sync(); assert.equal(confirmButton.disabled, false);
+let heading = 'Verify the absence records first.';
+const incidentState = {format: 'Online', pending_supervisor_reviews: 1, notifications_enabled: false, can_edit: true,
+  steps: {notifications: {status: 'locked'}}, institutions: [{id: '1', name: 'School', main: false,
+    modules: {Speaking: true}, sent: {}, notification_actions: [{label: 'Copy absence notification', language: 'en', disabled_reason: 'Review incidents first'}]}]};
+const incidentContext = {current: incidentState, esc: x => String(x ?? ''), stepHeading: () => `<header><p>${heading}</p></header>`};
+vm.runInNewContext(source.slice(source.indexOf(' const onlineIncidentWarning='), source.indexOf(' const isReviewed='))
+  + '\nglobalThis.render = notifications;', incidentContext);
+let html = incidentContext.render();
+assert.ok(html.indexOf(heading) < html.indexOf('data-online-incidents-warning'));
+assert.ok(html.indexOf('data-online-incidents-warning') < html.indexOf('<fieldset data-notification-fields disabled>'),
+  'The yellow warning must remain outside the dimmed, disabled controls');
+for (const text of ['Important – Online examination incidents', '<strong>Absent in Sinapsis</strong>',
+  '<strong>Before notifying institutions of candidate absences, these cases must be reviewed individually in the Absence documentation review section</strong>',
+  '<strong>notified directly of the outcome</strong>', 'without requiring them to submit any additional absence justification or supporting documentation.']) assert.ok(html.includes(text));
+heading = 'Review all online examination incidents before notifying institutions of absences.';
+assert.ok(incidentContext.render().includes('data-online-incidents-warning'), 'Verification cannot hide unresolved incidents');
+incidentState.pending_supervisor_reviews = 0; incidentState.notifications_enabled = true;
+html = incidentContext.render();
+assert.ok(!html.includes('data-online-incidents-warning')); assert.ok(html.includes('<fieldset data-notification-fields>'));
+incidentState.pending_supervisor_reviews = 1; incidentState.notifications_enabled = false;
+assert.ok(incidentContext.render().includes('data-online-incidents-warning'), 'Reopened incidents restore the warning');
+for (const format of ['Onsite', 'Online at exam centre']) {
+  incidentState.format = format; assert.ok(!incidentContext.render().includes('data-online-incidents-warning'));
+}
 console.log('Attendance review: per-candidate editing/decisions, required-field controls, locked institutional actions and deadline isolation passed.');

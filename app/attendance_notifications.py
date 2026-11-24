@@ -42,7 +42,7 @@ def notification_message(record,lists,journey,language,name=''):
     return '\n\n'.join([greeting,intro,files,reminder,journey_line,closing,thanks,'*Path International Examinations*'])
 
 
-def decorate_notifications(record,cards,contacts,session_ids):
+def decorate_notifications(record,cards,contacts,session_ids,blocked_by_reports=False):
     shares=m.ExamSessionJourneyShare.query.filter(m.ExamSessionJourneyShare.exam_session_id.in_(session_ids),
         m.ExamSessionJourneyShare.audience.in_(['institution','external']),m.ExamSessionJourneyShare.is_enabled.is_(True),
         m.ExamSessionJourneyShare.revoked_at.is_(None)).order_by((m.ExamSessionJourneyShare.exam_session_id==record.id).desc(),m.ExamSessionJourneyShare.id.desc()).all()
@@ -56,7 +56,8 @@ def decorate_notifications(record,cards,contacts,session_ids):
             for language,label in [('en','English'),('es','Spanish')]:
                 reason=''
                 phone=international_phone(contact.get('phone')) if contact else ''
-                if not share:reason=f'Enable the {"institutional" if card["main"] else "external institution"} Session journey before notifying absences.'
+                if blocked_by_reports:reason='Confirm or decline all supervisor-reported online examination incidents before notifying institutions of absences.'
+                elif not share:reason=f'Enable the {"institutional" if card["main"] else "external institution"} Session journey before notifying absences.'
                 elif contact and not phone:reason='Configure a valid international phone number, including the country code, for this contact point.'
                 lists=[(module,url_for('attendance.notification_list',token=share.token,audience=audience,session_id=record.id,
                     institution_id=card['id'],module_key=MODULE_KEYS[module],_external=True)) for module,file in card['modules'].items() if file] if share else []

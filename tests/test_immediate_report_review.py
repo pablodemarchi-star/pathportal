@@ -114,3 +114,65 @@ class ImmediateReportReviewTest(unittest.TestCase):
         page = self.client.get(f'/my-exam-sessions/{self.share.token}').get_data(as_text=True)
         self.assertNotIn('data-component-field="institution"', page)
         self.assertEqual(m.AbsenceCandidate.query.count(), 1)
+
+    def test_pending_incidents_block_absence_notifications_until_all_are_reviewed(self):
+        component = self.create_case('component', '000012')
+        it_case = self.create_case('it', '000013')
+        initial = self.attendance_state().json['state']
+        self.assertEqual(initial['pending_supervisor_reviews'], 2)
+        self.assertEqual(initial['steps']['notifications']['detail'], 'Verify the absence records first.')
+        for candidate in [component, it_case]:
+            self.assertEqual(self.edit(candidate, 'institution_name', 'Assigned school').status_code, 200)
+        school = db.session.get(m.AttendanceInstitution, component.institution_id)
+        absence_list = m.AttendanceDocument(file_id='incident-list', folder_id='folder', filename='list.pdf', mime_type='application/pdf')
+        certificate = m.AttendanceDocument(file_id='institution-proof', folder_id='folder', filename='proof.pdf', mime_type='application/pdf')
+        db.session.add_all([absence_list, certificate])
+        db.session.flush()
+        db.session.add(m.AttendanceModule(institution_id=school.id, module='Reading and writing', document_id=absence_list.file_id))
+        institutional = m.AbsenceCandidate(exam_session_id=self.record.id, institution_id=school.id, institution_name=school.name,
+            number='000014', number_key='000014', name='Institutional candidate', document_id=certificate.file_id)
+        db.session.add_all([institutional, m.ExamSessionJourneyShare(exam_session_id=self.record.id,
+            audience='external', token='incident-notification-share', is_enabled=True)])
+        control = db.session.get(m.PostAttendance, self.record.id)
+        control.submission_status = 'completed'
+        control.verified = True
+        it_case.rescheduled_for = str(self.record.id)
+        db.session.commit()
+        endpoint = f'/pre-session-control-tower/post/sessions/{self.record.id}/attendance'
+        def sent(value='1'):
+            return self.client.post(endpoint, data=dict(csrf_token='test', action='sent', institution_id=school.id, key='external', value=value))
+        state = self.attendance_state().json['state']
+        self.assertFalse(state['notifications_enabled'])
+        self.assertTrue(state['documentation_accessible'])
+        self.assertIn('Review all online examination incidents', state['steps']['notifications']['detail'])
+        actions = next(card for card in state['institutions'] if card['id'] == str(school.id))['notification_actions']
+        self.assertTrue(all(action['disabled_reason'] and not action['message'] and not action['url'] for action in actions))
+        self.assertEqual(sent().status_code, 400, 'Direct POSTs cannot bypass the disabled controls')
+        self.assertEqual(self.edit(component, 'review', 'Declined', reason='Not accepted', previous_file_id='').status_code, 200)
+        self.assertEqual(self.attendance_state().json['state']['pending_supervisor_reviews'], 1)
+        self.assertEqual(sent().status_code, 400)
+        result = self.edit(it_case, 'review', 'Confirmed', previous_file_id='')
+        self.assertEqual(result.status_code, 200, result.json)
+        state = result.json['state']
+        self.assertEqual(state['pending_supervisor_reviews'], 0)
+        self.assertTrue(state['notifications_enabled'])
+        self.assertEqual(institutional.review_status, 'Pending', 'Institution-only cases do not keep the incident warning active')
+        actions = next(card for card in state['institutions'] if card['id'] == str(school.id))['notification_actions']
+        self.assertTrue(all(not action['disabled_reason'] and action['message'] for action in actions))
+        self.assertEqual(sent().status_code, 200)
+        result = self.edit(component, 'reopen', confirmed='1', previous_file_id='', previous_status='Declined')
+        self.assertEqual(result.status_code, 200, result.json)
+        state = result.json['state']
+        self.assertEqual(state['pending_supervisor_reviews'], 1)
+        self.assertFalse(state['notifications_enabled'])
+        self.assertTrue(state['documentation_accessible'])
+        self.assertTrue(next(row for row in state['candidates'] if row['id'] == component.id)['edit_allowed'])
+        self.assertEqual(sent().status_code, 400)
+        self.assertEqual(sent('0').status_code, 400)
+
+    def test_incident_notification_block_only_applies_to_online(self):
+        self.create_case()
+        for format_name, pending in [('Online', 1), ('Online at exam centre', 0), ('Onsite', 0)]:
+            self.record.format = format_name
+            db.session.commit()
+            self.assertEqual(self.attendance_state().json['state']['pending_supervisor_reviews'], pending, format_name)

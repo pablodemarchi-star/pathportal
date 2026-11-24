@@ -26,7 +26,7 @@ def presentation(record,flow,value,window,now=None):
     closed=datetime.fromisoformat(window['expires_at']).astimezone(LOCAL_TZ)
     first_due=datetime.combine(argentina_add_business_days(record.session_date,1),time.max,tzinfo=LOCAL_TZ)
     review_due=datetime.combine(argentina_add_business_days(closed.date(),2),time.max,tzinfo=LOCAL_TZ)
-    first_complete=bool(flow['records_enabled'] and value and value.verified and (not flow['has_absences'] or flow['all_absence_notifications_sent']))
+    first_complete=bool(flow['records_enabled'] and value and value.verified and not flow.get('pending_supervisor_reviews') and (not flow['has_absences'] or flow['all_absence_notifications_sent']))
     complete=flow['attendance_progress']=='Completed'
     badges=[dict(stage='Records & notifications',**badge(first_due,first_complete,value.notifications_completed_at if value else None,now))]
     if flow['has_absences'] and (first_complete or value and value.review_completed_at):
@@ -63,7 +63,7 @@ def sync_milestones(record,before,internal,action):
     value=control(record,True)
     after=workflow_state(record)
     flags=lambda flow:[flow['records_complete'],
-        flow['records_complete'] and (not flow['has_absences'] or flow['all_absence_notifications_sent']),
+        flow['records_complete'] and not flow.get('pending_supervisor_reviews') and (not flow['has_absences'] or flow['all_absence_notifications_sent']),
         flow['has_absences'] and flow['steps']['documentation']['status']=='completed']
     old,new=flags(before),flags(after)
     for field,previous,current in zip(['records_completed_at','notifications_completed_at','review_completed_at'],old,new):

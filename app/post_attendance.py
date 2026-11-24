@@ -365,7 +365,9 @@ def workflow_state(record,cards=None,candidates=None,window=None,attendance_cont
     has_absences=bool(absent_cards or any(immediate_report_review(record,candidate) for candidate in candidates))
     unblocked=(today or local_today())>record.session_date
     records_enabled=bool(unblocked and value and value.submission_status=='completed')
-    notifications_enabled=bool(records_enabled and has_absences and value and value.verified)
+    pending_supervisor_reviews=sum(immediate_report_review(record,candidate) and candidate.review_status not in {'Confirmed','Declined'} for candidate in candidates)
+    notifications_prerequisites_met=bool(records_enabled and has_absences and value and value.verified)
+    notifications_enabled=bool(notifications_prerequisites_met and not pending_supervisor_reviews)
     contact_keys=[contact['key'] for contact in contacts(record)]
     all_sent=bool(absent_cards)
     notification_total=0;notification_sent=0;missing_contacts=False
@@ -374,7 +376,7 @@ def workflow_state(record,cards=None,candidates=None,window=None,attendance_cont
         notification_total+=len(keys);notification_sent+=sum(card['sent'].get(key) is True for key in keys)
         if not keys:missing_contacts=True
         if not keys or not all(card['sent'].get(key) is True for key in keys):all_sent=False
-    documentation_enabled=bool(notifications_enabled and all_sent)
+    documentation_enabled=bool(notifications_prerequisites_met and all_sent)
     review_allowed=bool(documentation_enabled and window['state']=='expired')
     report_review_enabled=any(immediate_report_review(record,candidate) for candidate in candidates)
     documentation_accessible=documentation_enabled or report_review_enabled
@@ -390,6 +392,8 @@ def workflow_state(record,cards=None,candidates=None,window=None,attendance_cont
     documentation_status='not_applicable' if not_applicable else 'locked' if not documentation_accessible else 'completed' if documentation_completed else 'in_progress' if candidates else 'ready'
     labels={'completed':'Completed','in_progress':'In progress','ready':'Ready','locked':'Locked','not_applicable':'Not applicable'}
     notification_detail='No absences recorded.' if not_applicable else 'Verify the absence records first.' if not notifications_enabled else 'Configure contact points before completing notifications.' if missing_contacts else f'Notifications sent: {notification_sent}/{notification_total}'
+    if notifications_prerequisites_met and pending_supervisor_reviews:
+        notification_detail='Review all online examination incidents before notifying institutions of absences.'
     documentation_detail='No absences recorded.' if not_applicable else 'Verify the absence records first.' if not records_completed else 'Mark every applicable Sent checkbox to enable this step.' if not documentation_enabled else f'Reviews completed: {reviewed}/{len(candidates)}'
     if report_review_enabled and not review_allowed:
         documentation_detail='Supervisor report cases are available now. Institutional documentation follows its usual steps and deadline.'
@@ -400,6 +404,7 @@ def workflow_state(record,cards=None,candidates=None,window=None,attendance_cont
     progress='Completed' if unblocked and (not_applicable or records_completed and notifications_completed and documentation_completed) else 'In progress' if value and value.internal_activity else 'Not started'
     return dict(records_enabled=records_enabled,submission_status=value.submission_status if value else '',notifications_enabled=notifications_enabled,documentation_enabled=documentation_enabled,review_allowed=review_allowed,
         report_review_enabled=report_review_enabled,documentation_accessible=documentation_accessible,
+        pending_supervisor_reviews=pending_supervisor_reviews,
         records_complete=records_completed,no_documentation_confirmation_enabled=no_documents_enabled,results_notification_enabled=results_enabled,all_absence_notifications_sent=bool(all_sent),has_absences=has_absences,steps=steps,attendance_progress=progress,
         notifications_sent=notification_sent,notifications_total=notification_total,reviews_completed=reviewed,reviews_total=len(candidates))
 
@@ -445,7 +450,7 @@ def state(record):
             edit_allowed=editable,review_allowed=reviewable,fields_complete=complete,confirmation_complete=ready,can_confirm=reviewable and ready,can_decline=reviewable and complete))
     from app.attendance_notifications import decorate_notifications
     concat_ids=monthly_unified_total_session_ids(record)-{record.id}
-    decorate_notifications(record,cards,contacts(record),concat_ids|{record.id})
+    decorate_notifications(record,cards,contacts(record),concat_ids|{record.id},blocked_by_reports=bool(flow['pending_supervisor_reviews']))
     concatenated=[{'id':item.id,'name':item.exam_session_name,'date':item.session_date.strftime('%d/%m/%Y')} for item in m.ExamSession.query.filter(m.ExamSession.id.in_(concat_ids)).order_by(m.ExamSession.session_date).all()] if concat_ids else []
     return dict(id=record.id,name=record.exam_session_name,date=record.session_date.strftime('%d/%m/%Y'),format=record.format,
         enabled=local_today()>record.session_date,**flow,progress=flow['attendance_progress'],revision=value.revision if value else 0,
@@ -573,7 +578,9 @@ def mutate(record,trashed):
                 db.session.delete(candidate)
             db.session.delete(institution);touch(record,reset=True);return
         if action=='sent':
-            if not workflow_state(record)['notifications_enabled']:raise ValueError('Verify the absence records before marking notifications as Sent.')
+            flow=workflow_state(record)
+            if flow['pending_supervisor_reviews']:raise ValueError('Confirm or decline all supervisor-reported online examination incidents before notifying institutions of absences.')
+            if not flow['notifications_enabled']:raise ValueError('Verify the absence records before marking notifications as Sent.')
             has_absents=m.AttendanceModule.query.filter_by(institution_id=institution.id).filter(m.AttendanceModule.document_id.isnot(None)).first()
             has_reported_absents=record.format=='Online' and m.AbsenceCandidate.query.filter_by(exam_session_id=record.id,institution_id=institution.id).filter(
                 db.or_(m.AbsenceCandidate.component_reason!='',m.AbsenceCandidate.it_reason!=''),m.AbsenceCandidate.institution_name!='').first()
