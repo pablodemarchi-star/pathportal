@@ -1362,6 +1362,28 @@ class ExamSessionStaffingControl(db.Model):
     exam_session = db.relationship("ExamSession", backref=db.backref("staffing_control", uselist=False))
 
 
+class StaffLogisticsCard(db.Model):
+    instructions_html = db.Column(db.Text, nullable=False, default='', server_default='')
+    __table_args__ = (db.Index('uq_active_staff_logistics_card', 'person_ref', 'group_session_ids', unique=True,
+                             sqlite_where=db.text('active = 1'), postgresql_where=db.text('active = true')),)
+    id = db.Column(db.Integer, primary_key=True)
+    person_ref = db.Column(db.String(80), nullable=False, index=True)
+    staff_name = db.Column(db.String(300), nullable=False)
+    group_session_ids = db.Column(db.Text, nullable=False, default='[]')
+    session_ids = db.Column(db.Text, nullable=False, default='[]')
+    assignment_signature = db.Column(db.Text, nullable=False, default='{}')
+    description = db.Column(db.Text, nullable=False, default='')
+    links = db.Column(db.Text, nullable=False, default='[]')
+    status = db.Column(db.String(20), nullable=False, default='Pending')
+    active = db.Column(db.Boolean, nullable=False, default=True, index=True)
+    updated_by = db.Column(db.String(160), nullable=True)
+    updated_at = db.Column(db.DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
+
+
+class StaffLogisticsMigration(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+
+
 class ExamSessionLogisticsControl(db.Model):
     __table_args__ = (
         db.UniqueConstraint("exam_session_id", name="uq_exam_session_logistics_control"),
@@ -2706,6 +2728,8 @@ class PaymentRequest(db.Model):
         db.UniqueConstraint("request_number", name="uq_payment_request_number"),
     )
 
+    logistics_card_id = db.Column(db.Integer, db.ForeignKey("staff_logistics_card.id"), nullable=True, index=True)
+    logistics_alert = db.Column(db.Text, nullable=False, default="", server_default="")
     id = db.Column(db.Integer, primary_key=True)
     request_number = db.Column(db.String(40), nullable=False, unique=True, index=True)
     requester_user_id = db.Column(db.Integer, db.ForeignKey("app_user.id"), nullable=True, index=True)

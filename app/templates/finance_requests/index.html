@@ -248,7 +248,7 @@
           {% set whatsapp_copy = payment_whatsapp_copy_contract(payment) %}
           {% set whatsapp_copy_sp = payment_whatsapp_copy_contract(payment, 'sp') %}
           <tr data-archive-payment-row data-payment-search-text="{{ payment.request_number }} {{ payment.payee_name_snapshot or '' }}" data-archive-payment-search-text="{{ (payment.request_number ~ ' ' ~ (payment.payee_name_snapshot or '') ~ ' ' ~ (payment.description or ''))|lower|e }}">
-            <td><strong>{{ payment.request_number }}</strong></td>
+            <td><strong>{{ payment.request_number }}</strong>{% if payment.logistics_alert %}<p class="staffing-schedule-notice" role="alert">{{ payment.logistics_alert }}</p>{% endif %}</td>
             <td>{{ payment_finalized_at(payment)|display_date if payment_finalized_at(payment) else 'Not set' }}</td>
             <td>{{ status_chip(payment.status) }}</td>
             <td class="finance-archive-payment-payee">{{ payment.payee_name_snapshot or 'Not specified' }}</td>
@@ -398,7 +398,7 @@
       <div>
         <div class="finance-card-kicker">
           <span class="finance-payment-number-status">
-            <strong>{{ payment.request_number }}</strong>
+            <strong>{{ payment.request_number }}</strong>{% if payment.logistics_alert %}<p class="staffing-schedule-notice" role="alert">{{ payment.logistics_alert }}</p>{% endif %}
             {{ status_chip(payment.status) }}
           </span>
           {% if payment.is_archived %}<span class="finance-status-chip status-archived">Archived</span>{% endif %}

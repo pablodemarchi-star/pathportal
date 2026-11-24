@@ -492,6 +492,9 @@
         </section>
         {{ logistics_status_track_panel(session, view.logistics.concept_rows) }}
 
+        {% if session.format in ['Onsite', 'Online at exam centre'] %}
+          {% include 'pre_session_control_tower/_logistics_cards.html' %}
+        {% else %}
         <section class="logistics-detail-grid" aria-label="Logistics summary">
           <div>
             <span>Logistics files</span>
@@ -831,6 +834,7 @@
               {% endfor %}
             </ul>
           </div>
+        {% endif %}
         {% endif %}
       </section>
 

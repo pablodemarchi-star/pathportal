@@ -4,7 +4,7 @@ import hmac
 import json
 
 from flask import Blueprint, abort, current_app, g, has_request_context, jsonify, request, session
-from sqlalchemy import event, func, literal, select, union_all
+from sqlalchemy import event, func, literal, select, union_all, or_
 from sqlalchemy.orm import Session
 
 from app import db, login_required
@@ -55,6 +55,14 @@ def session_revision(session_id):
     staff_sources.append(select(records.c.emergency_contact_member_id).where(records.c.id.in_(ids)))
     staff_sources.append(select(bundles.c.supervisor_staff_id).where(conditions[bundles.name]))
     conditions[staff.name] = staff.c.id.in_(union_all(*staff_sources))
+    cards = tables['staff_logistics_card']
+    # Cards can cover a selectable subset of concatenated sessions.
+    card_groups = func.replace(func.replace(func.replace(cards.c.group_session_ids, ' ', ''), '[', ','), ']', ',')
+    conditions[cards.name] = or_(*(card_groups.like(f'%,{sid},%') for sid in sorted(ids)))
+    payments = tables['payment_request']
+    conditions[payments.name] = payments.c.logistics_card_id.in_(select(cards.c.id).where(conditions[cards.name]))
+    payment_events = tables['payment_request_event']
+    conditions[payment_events.name] = payment_events.c.payment_request_id.in_(select(payments.c.id).where(conditions[payments.name]))
     postgres = db.engine.dialect.name == 'postgresql'
     json_array = func.json_build_array if postgres else func.json_array
     queries = [select(literal(name).label('source'), json_array(*tables[name].c).label('payload')).where(condition)

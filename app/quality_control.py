@@ -21,6 +21,7 @@ ASSIGNMENTS = [m.ExamSessionSupervisorAssignment, m.ExamSessionExaminerAssignmen
 def processes_for_format(format_name):
     keys = ['date', 'registrations', 'schedule', 'staffing']
     keys += ['package', 'shipment', 'logistics', 'finance', 'final_checks', 'attendance'] if format_name == 'Onsite' else ['finance', 'exam_records', 'final_checks', 'attendance']
+    if format_name == 'Online at exam centre': keys.insert(4, 'logistics')
     labels = dict(PROCESSES)
     return [(key, labels[key]) for key in keys]
 
@@ -178,10 +179,10 @@ def load_rows(records, today=None):
             candidate_total = record.unified_candidate_total if record.unified_candidate_total is not None and record.concat_session_ids not in ('', '[]') else candidates.get(sid)
             candidate_detail = f'{candidate_total}/{record.minimum_candidates_required or 0} candidates · latest monthly total' if candidate_total is not None else 'Latest monthly candidate total not loaded'
             active_concepts = [SimpleNamespace(id=c.id, status=c.status, provider=c.provider) for c in concepts.get(sid, [])]
-            log = r.logistics_readiness_contract(assignments, active_concepts, first(logistics, sid))
+            log = r.logistics_readiness_contract(assignments, active_concepts, first(logistics, sid), session_record=record)
             log_state = r.logistics_presentation_state(log)
             # Intern assignments activate the section even without selecting Complex logistics.
-            if any(a.team_member_id or a.potential_entry_id for a in roles[2]) and not log['applies']:
+            if record.format not in {'Onsite', 'Online at exam centre'} and any(a.team_member_id or a.potential_entry_id for a in roles[2]) and not log['applies']:
                 log_state = 'configuration_required'
                 log['applies'] = True
             requirements = ([True] if any(owners.get(mid) == sid for mid in pending_ids) else [])
@@ -225,11 +226,11 @@ def load_rows(records, today=None):
                      today=today, detail=f'Shared bundle {bundle.bundle_number or bundle.id}' if bundle else 'No shipment bundle assigned',
                      action_at=bundle.dispatched_at if bundle else None, completed_at=(bundle.delivered_at or bundle.recipient_reviewed_at) if bundle else None),
                 cell('logistics', 'Configuration required' if log_state == 'configuration_required' else
-                     'Not applicable' if not log['applies'] else f"{log['confirmed_concepts']}/{log['total_concepts']} confirmed",
-                     complete=log_state == 'completed', active=bool(active_concepts), enabled=staffing_ready,
-                     applicable=log['applies'] and onsite, near=bool(log['total_concepts'] > 1 and log['confirmed_concepts'] == log['total_concepts']-1),
+                     'Not applicable' if not log['applies'] else f"{log['confirmed_concepts']}/{log['total_concepts']} {'completed' if log.get('staff_cards') else 'confirmed'}",
+                     complete=log_state == 'completed', active=bool(log.get('cards', active_concepts)), enabled=staffing_ready,
+                     applicable=log['applies'] and record.format in {'Onsite', 'Online at exam centre'}, near=bool(log['total_concepts'] > 1 and log['confirmed_concepts'] == log['total_concepts']-1),
                      issue=log_state == 'needs_review', deadline=r.logistics_session_deadline(record), today=today,
-                     detail='; '.join(b['message'] for b in log['blockers']) or 'All Logistics concepts confirmed'),
+                     detail='; '.join(b['message'] for b in log['blockers']) or ('All staff Logistics cards completed' if log.get('staff_cards') else 'All Logistics concepts confirmed')),
                 cell('finance', fin['readiness_label'], complete=fin['can_proceed'] and (onsite or fin['block_label'] == 'Cleared'), active=fin['standing_selected'] or bool(fin['additional_institutions']),
                      enabled=finance_enabled, applicable=True, near=fin['readiness_label'] == 'Verification missing',
                      issue=fin['readiness_label'] == 'Close monitoring required', deadline=fin['deadline'], today=today, detail=fin['action_label'], action_at=None, completed_at=fin['cleared_at'] if fin['can_proceed'] else None),
@@ -474,6 +475,8 @@ def index():
                 c['url'] = url_for('staff.monthly_exam_session_registrations', session_year=year, q=record.exam_session_name)
             elif c['key']=='attendance':
                 c['url']=url_for('staff.pre_session_control_tower' if record.format=='Onsite' else 'staff.pre_online_session_control_tower',session_year=year,view='post',open_attendance=record.id) if record.format in FORMATS and record.session_date<=datetime.now(LOCAL_TZ).date() else None
+            elif c['key'] == 'logistics':
+                c['url'] = url_for('staff.pre_session_control_tower', session_year=year, view='sessions', open_schedule_modal=record.id, open_modal_target='logistics')
             elif record.format != 'Onsite':
                 target = {'schedule': 'schedule-actions', 'staffing': 'staffing', 'finance': 'finance', 'exam_records': 'exam-records', 'final_checks': 'sinapsis'}[c['key']]
                 c['url'] = url_for('staff.pre_online_session_control_tower', session_year=year, view='online',

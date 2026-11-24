@@ -167,6 +167,10 @@ def create_app():
     app.register_blueprint(staff_invoices_bp)
     from app.staff_id_documents import staff_id_documents_bp
     app.register_blueprint(staff_id_documents_bp)
+    from app.staff_logistics import bp as staff_logistics_bp
+    app.register_blueprint(staff_logistics_bp)
+    from app.staff_logistics import card_views as logistics_card_views
+    app.jinja_env.globals['logistics_card_views'] = logistics_card_views
     from app.return_labels import return_labels_bp
     app.register_blueprint(return_labels_bp)
     from app.finance_completion import completion_bp
@@ -306,6 +310,8 @@ def create_app():
 
     with app.app_context():
         db.create_all()
+        from app.staff_logistics import ensure_schema as ensure_staff_logistics_schema
+        ensure_staff_logistics_schema()
         from app.schema_migrations import migrate_absence_reviews
         migrate_absence_reviews()
         from app.schema_migrations import migrate_attendance_review_notification
@@ -1326,6 +1332,8 @@ def create_app():
             if provider_columns and column_name not in provider_columns:
                 db.session.execute(text(f"ALTER TABLE provider ADD COLUMN {column_name} {column_type}"))
         db.session.commit()
+        from app.staff_logistics import migrate as migrate_staff_logistics
+        migrate_staff_logistics()
         if not ExaminerCertificationYear.query.filter_by(year=2026).first():
             db.session.add(ExaminerCertificationYear(year=2026, is_archived=False))
             db.session.commit()

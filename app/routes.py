@@ -1352,7 +1352,16 @@ def logistics_enabled_for_session(session_id):
     return False
 
 
-def logistics_readiness_contract(assignments, concepts, logistics_config=None):
+def logistics_readiness_contract(assignments, concepts, logistics_config=None, session_record=None):
+    if session_record is None:
+        session_record = next((getattr(row, 'exam_session', None) for row in assignments if isinstance(row, (ExamSessionSupervisorAssignment, ExamSessionExaminerAssignment, ExamSessionInternAssignment))), None)
+        if session_record is None and isinstance(logistics_config, ExamSessionLogistics):
+            session_record = logistics_config.exam_session
+    if session_record is not None:
+        from app.staff_logistics import state
+        cards = state(session_record, assignments)
+        if cards is not None:
+            return cards
     required_member_ids = sorted({
         assignment.team_member_id
         for assignment in assignments
@@ -4694,6 +4703,10 @@ def session_manager_providers_available():
 
 
 def sync_path_exam_session_logistics(session_record):
+    if session_record.format in {'Onsite', 'Online at exam centre'}:
+        return True
+    if session_record.format in {'Onsite', 'Online at exam centre'}:
+        return True
     if session_record.exam_session_organised_by != PATH_EXAM_SESSION_ORGANISER:
         return True
 
@@ -9183,6 +9196,10 @@ def logistics_contract_blocker_messages(contract, concepts=None):
 
 
 def logistics_presentation_state(contract):
+    if contract.get('staff_cards'):
+        if not contract['applies']: return 'not_applicable'
+        if contract['ready']: return 'completed'
+        return 'not_started' if all(card.status == 'Pending' for card in contract['cards']) else 'in_progress'
     status = contract.get("status")
     total = contract.get("total_concepts", 0)
     confirmed = contract.get("confirmed_concepts", 0)
@@ -9269,6 +9286,19 @@ def logistics_presentation_from_contract(
     payment_requests_by_concept=None,
     session_record=None,
 ):
+    if contract.get('staff_cards'):
+        legacy = dict(contract)
+        legacy.pop('staff_cards')
+        result = logistics_presentation_from_contract(legacy, session_record=session_record)
+        state = logistics_presentation_state(contract)
+        total, done = contract['total_concepts'], contract['confirmed_concepts']
+        labels = {'not_applicable': 'Not applicable', 'not_started': 'Not started', 'in_progress': 'In progress', 'completed': 'Completed'}
+        summary = 'Logistics not required' if state == 'not_applicable' else f'{done}/{total} staff Logistics cards completed'
+        if contract['open_roles']: summary += ' · Roles to cover — Logistics pending confirmation'
+        if contract['pending_definition']: summary += ' · Staff Logistics pending definition'
+        result.update(status=state, label=labels[state], status_label=labels[state], required_members=total, description=summary, table_summary=summary, secondary_lines=[], tooltip=summary,
+                      staff_cards=True, open_roles=contract['open_roles'], pending_definition=contract['pending_definition'], concept_rows=[dict(label=card.staff_name, status=card.status) for card in contract['cards']])
+        return result
     assignments_by_role = assignments_by_role or {}
     concepts = concepts or []
     payment_requests_by_concept = payment_requests_by_concept or {}
@@ -14705,7 +14735,7 @@ def path_session_journey_sources(session_record, today=None):
     communications_items = communications_control.checklist_items if communications_control else []
 
     staffing = staffing_readiness_contract(supervisor_assignments, examiner_assignments, intern_assignments, session_record=session_record)
-    logistics = logistics_readiness_contract(session_assignments, logistics_concepts, logistics_config)
+    logistics = logistics_readiness_contract(session_assignments, logistics_concepts, logistics_config, session_record=session_record)
     schedule_gate = schedule_gate_status(workflow)
     packages = packages_readiness_contract(
         session_record,
@@ -18903,6 +18933,7 @@ def pre_session_control_tower(_count_only=False):
             session_assignments,
             logistics_concepts_by_session.get(session_record.id, []),
             logistics_by_session.get(session_record.id),
+            session_record=session_record,
         )
         logistics_control_presentation = logistics_control_contract(
             logistics_controls_by_session.get(session_record.id),
@@ -24376,6 +24407,7 @@ def exam_session_planner():
             session_assignments,
             logistics_concepts.get(session_id, []),
             logistics_by_session.get(session_id),
+            session_record=sessions_by_id.get(session_id),
         )
         logistics_contract["email_blocker_message"] = logistics_email_blocker_message(logistics_contract)
         logistics_readiness_by_session[session_id] = logistics_contract
@@ -25753,6 +25785,8 @@ def complex_logistics_staff_members_for_session(session_id, logistics_types=None
 
 
 def save_exam_session_logistics(session_record, saved_fields=None):
+    if session_record.format in {'Onsite', 'Online at exam centre'}:
+        return True
     config = ExamSessionLogistics.query.filter_by(exam_session_id=session_record.id).first()
     if config is None:
         config = ExamSessionLogistics(exam_session_id=session_record.id)
@@ -26007,6 +26041,7 @@ def exam_session_overall_statuses_by_session_ids(session_ids):
             all_assignments,
             logistics_concepts_by_session.get(session_id, []),
             logistics_by_session.get(session_id),
+            session_record=session_record,
         )
         emergency_contact_ready = exam_session_emergency_contact_decision_ready(session_record)
         date_confirmation_ready = bool(session_record and session_record.date_confirmation_status == "Confirmed")
@@ -26303,6 +26338,7 @@ def update_exam_session_members(session_id):
             supervisor_assignments + examiner_assignments + intern_assignments,
             logistics_concepts,
             logistics_config,
+            session_record=session_record,
         )
         saved_values = {}
         for name, record in saved_fields.items():
@@ -27184,6 +27220,7 @@ def pre_session_dashboard_sessions_department_action_count(department, selected_
             assignments,
             logistics_concepts,
             logistics_by_session.get(session_record.id),
+            session_record=session_record,
         )
         logistics_presentation = logistics_presentation_from_contract(
             logistics_contract,
@@ -28870,6 +28907,16 @@ def create_payment_request():
         management_approved_at=datetime.now(timezone.utc) if initial_status == "Management approved" else None,
     )
     errors = apply_payment_form(payment, request.form, save_payee_contact=True, allow_empty_amount=is_finance_action_request)
+    from app import models as logistics_models
+    card_id = request.form.get('logistics_card_id')
+    if card_id:
+        if not validate_csrf(): abort(400)
+        card = db.session.get(logistics_models.StaffLogisticsCard, int(card_id)) if str(card_id).isdigit() else None
+        if not card or not card.active: abort(400)
+        require_menu_edit('pre_session_control_tower')
+        if any(logistics_actions_are_blocked(db.session.get(ExamSession, sid)) for sid in json.loads(card.session_ids)):
+            abort(403)
+        payment.logistics_card_id = card.id
     logistics_concept = ExamSessionLogisticsConcept.query.get(request.form.get("logistics_concept_id") or 0)
     if logistics_concept:
         if logistics_actions_are_blocked(logistics_concept.exam_session):

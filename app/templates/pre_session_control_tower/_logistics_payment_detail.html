@@ -1,0 +1,7 @@
+<h2>{{ payment.request_number }}</h2>
+<p>{{ finance_status_chip(payment.status) if finance_status_chip is defined else payment.status }}</p>
+{% if payment.logistics_alert %}<p class="staffing-schedule-notice" role="alert">{{ payment.logistics_alert }}</p>{% endif %}
+<dl class="staff-logistics-payment-details">{% for label,value in [('Description',payment.description),('Concept',payment.concept_name_snapshot),('Payee',payment.payee_name_snapshot),('Amount',payment.amount|string ~ ' ' ~ payment.currency),('Payment method',payment.payment_method),('Bank details',payment.bank_details_snapshot),('Requested payment date',payment.requested_payment_date),('Scheduled payment date',payment.scheduled_payment_date),('Requester comments',payment.requester_comments),('Management comments',payment.management_comments),('Finance comments',payment.finance_comments)] %}<div><dt>{{ label }}</dt><dd>{{ value or '—' }}</dd></div>{% endfor %}</dl>
+{% if payment.supporting_documentation_url %}<p><a href="{{ payment.supporting_documentation_url }}" target="_blank" rel="noopener noreferrer">Supporting documentation ↗</a></p>{% endif %}
+{% if payment.payment_proof_url %}<p><a href="{{ payment.payment_proof_url }}" target="_blank" rel="noopener noreferrer">Payment receipt ↗</a></p>{% endif %}
+<h3>History</h3>{% for entry in payment.events %}<article><b>{{ entry.event_type }}</b> · {{ entry.created_on|localdt }}{% if entry.comment %}<p>{{ entry.comment }}</p>{% endif %}</article>{% endfor %}

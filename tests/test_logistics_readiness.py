@@ -102,8 +102,8 @@ class LogisticsReadinessContractTest(unittest.TestCase):
             assignment(member_id=2, participation_status="Confirmed"),
         ]))
 
-    def test_all_members_confirmed_allows_final_email_stage(self):
-        self.assertTrue(persisted_staff_confirmed([
+    def test_members_confirmed_still_require_schedule_notification(self):
+        self.assertFalse(persisted_staff_confirmed([
             assignment(participation_status="Confirmed"),
             assignment(member_id=2, participation_status="Confirmed"),
         ]))

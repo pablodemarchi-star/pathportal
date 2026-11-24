@@ -1973,6 +1973,18 @@ document.addEventListener("click", (event) => {
         returnUrl.hash = `logistics-${opener.dataset.paymentRequestReturnSessionId}`;
         returnInput.value = `${returnUrl.pathname}${returnUrl.search}${returnUrl.hash}`;
       }
+      const logisticsCardInput = modal.querySelector('[data-payment-request-logistics-card-input]');
+      if (logisticsCardInput) {
+        if (opener.dataset.paymentRequestLogisticsCardId) modal.querySelector('form')?.reset();
+        logisticsCardInput.value = opener.dataset.paymentRequestLogisticsCardId || '';
+        if (returnInput && opener.dataset.paymentRequestReturnSessionId) {
+          const next = new URL(window.location.href);
+          next.searchParams.set('open_schedule_modal', opener.dataset.paymentRequestReturnSessionId);
+          next.searchParams.set('open_modal_target', 'logistics');
+          next.searchParams.set('logistics_only', '1');
+          returnInput.value = next.pathname + next.search + '#logistics-' + opener.dataset.paymentRequestReturnSessionId;
+        }
+      }
       const logisticsConceptInput = modal.querySelector("[data-payment-request-logistics-concept-input]");
       if (logisticsConceptInput) {
         logisticsConceptInput.value = opener.dataset.paymentRequestLogisticsConceptId || "";
@@ -11208,7 +11220,7 @@ document.querySelectorAll("[data-session-members-form]").forEach((form) => {
       if (field) field.hidden = false;
       logisticsSection.querySelector("[data-logistics-files-url]")?.focus();
     }
-    const coverageError = complexLogisticsCoverageError(form);
+    const coverageError = logisticsSection ? complexLogisticsCoverageError(form) : "";
     if (coverageError) {
       event.preventDefault();
       if (logisticsSection) logisticsSection.hidden = false;

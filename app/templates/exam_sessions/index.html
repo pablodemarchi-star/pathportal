@@ -1518,6 +1518,7 @@
         </div>
         {% set session_logistics_config = logistics_by_session.get(session.id) %}
         {% set session_logistics_concepts = logistics_concepts.get(session.id, []) %}
+        {% if session.format not in ['Onsite', 'Online at exam centre'] %}
         <section class="session-member-section logistics-section" data-logistics-section {% if not logistics_activity_by_session.get(session.id, false) %}hidden{% endif %}>
           <div class="session-member-section-header">
             <div>
@@ -1582,6 +1583,7 @@
             {{ logistics_concept_row(none, '__KEY__', logistics_status_options, logistics_provider_type_options, logistics_provider_options, complex_logistics_staff_members.get(session.id, []), false) }}
           </template>
         </section>
+        {% endif %}
       </form>
       <div class="session-modal-bottom-bar">
         <div class="session-modal-module-summary" aria-label="Configured modules with latest registration numbers">

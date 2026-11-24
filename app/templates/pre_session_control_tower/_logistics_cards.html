@@ -1,0 +1,55 @@
+{% set card_views = logistics_card_views(session) %}
+{% if view.logistics.open_roles %}<p class="staffing-schedule-notice">Roles to cover — Logistics must be confirmed again after assigning a replacement.</p>{% endif %}
+{% if view.logistics.pending_definition %}<p class="staffing-schedule-notice">Define Logistics for every assigned staff member in Exam session planner.</p>{% endif %}
+<div class="staff-logistics-cards">
+{% for item in card_views %}{% set card = item.record %}
+<article class="staff-logistics-card" data-logistics-state="{{ card.status|lower|replace(' ','-') }}">
+  <header class="staff-logistics-card-header">
+    <div class="staff-logistics-person">
+      <div class="staff-logistics-person-copy">
+        <div class="staff-logistics-name-line"><a href="#logistics-id-{{ session.id }}-{{ card.id }}" data-open-modal="logistics-id-{{ session.id }}-{{ card.id }}" title="View Govt. ID">{{ card.staff_name }}</a><span class="staff-logistics-chip participation-{{ item.participation|lower|replace(' ','-') }}">{{ item.participation }}</span></div>
+        <span class="staff-logistics-person-hint">Select the name to view Govt. ID</span>
+        <div class="staff-logistics-type-tags">{% for logistics_type in item.logistics_types %}<span class="staff-logistics-chip staff-logistics-type">{{ logistics_type }}</span>{% endfor %}</div>
+      </div>
+    </div>
+    <span class="staff-logistics-chip staff-logistics-state is-{{ card.status|lower|replace(' ','-') }}"><span aria-hidden="true">{{ '✓' if card.status == 'Completed' else '◷' if card.status == 'In process' else '○' }}</span>{{ card.status }}</span>
+  </header>
+  <form method="post" action="{{ url_for('staff_logistics.save',card_id=card.id) }}" data-logistics-card-form data-session-id="{{ session.id }}">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <fieldset class="staff-logistics-editor"{% if logistics_actions_disabled or not user_can_edit('pre_session_control_tower') %} disabled{% endif %}>
+      <div class="staff-logistics-planning-grid">
+        {% if item.sessions|length > 1 %}
+        <fieldset class="staff-logistics-scope"><legend>Applies to sessions</legend><p>Choose where these arrangements apply.</p>{% for linked in item.sessions %}<label><input type="checkbox" name="session_ids" value="{{ linked.id }}"{% if linked.selected %} checked{% endif %}><span>{{ linked.name }}</span></label>{% endfor %}</fieldset>
+        {% else %}{% for linked in item.sessions %}<input type="checkbox" name="session_ids" value="{{ linked.id }}" checked hidden>{% endfor %}{% endif %}
+        <div class="staff-logistics-description" data-logistics-rich-text>
+          <span class="staff-logistics-field-title" id="logistics-instructions-label-{{ session.id }}-{{ card.id }}">Instructions <small>Optional</small></span>
+          <div class="staff-logistics-rich-box">
+            <div class="staff-logistics-rich-toolbar" role="toolbar" aria-label="Instructions formatting">
+              {% for command,label,symbol in [('bold','Bold','B'),('italic','Italic','I'),('underline','Underline','U'),('insertUnorderedList','Bullet list','• List'),('insertOrderedList','Numbered list','1. List')] %}<button type="button" data-logistics-text-command="{{ command }}" aria-label="{{ label }}" title="{{ label }}">{{ symbol }}</button>{% endfor %}
+              <button type="button" data-logistics-text-link aria-label="Add link" title="Add a link to selected text">↗</button>
+              <button type="button" data-logistics-text-command="removeFormat" aria-label="Clear formatting" title="Clear formatting">Tx</button>
+            </div>
+            <div class="staff-logistics-rich-link" data-logistics-rich-link-panel hidden><input type="url" data-logistics-rich-link-url aria-label="Link address" placeholder="https://…"><button type="button" data-logistics-rich-link-apply>Apply</button><button type="button" data-logistics-rich-link-cancel aria-label="Cancel link">×</button><span data-logistics-rich-link-error role="status"></span></div>
+            <div class="staff-logistics-rich-content" data-logistics-instructions-editor contenteditable="{{ 'false' if logistics_actions_disabled or not user_can_edit('pre_session_control_tower') else 'true' }}" role="textbox" aria-multiline="true" aria-labelledby="logistics-instructions-label-{{ session.id }}-{{ card.id }}" data-placeholder="Add travel instructions, booking details or arrangements…">{{ item.instructions_html }}</div>
+            <input type="hidden" name="instructions_html" value="{{ item.instructions_html|forceescape }}">
+          </div>
+        </div>
+
+      </div>
+      <section class="staff-logistics-resources" aria-label="Travel resources">
+        <div class="staff-logistics-section-heading"><div><h4>Links <small>Optional</small></h4><p>Keep bookings, routes and useful resources together.</p></div><button class="secondary-button compact-action" type="button" data-add-logistics-link>+ Add link</button></div>
+        <div class="staff-logistics-links" data-logistics-links>{% for link in item.links %}<div data-logistics-link><input aria-label="Link name" data-link-name value="{{ link.name }}" required maxlength="200" placeholder="Link name"><input aria-label="Link URL" type="url" data-link-url value="{{ link.url }}" required placeholder="https://…"><a href="{{ link.url }}" target="_blank" rel="noopener noreferrer" title="Open {{ link.name }}">Open ↗</a><button type="button" data-remove-logistics-link aria-label="Remove {{ link.name }}">×</button></div>{% endfor %}</div>
+      </section>
+      <footer class="staff-logistics-save-bar"><label><span class="staff-logistics-field-title">Logistics status</span><select name="status">{% for status in ['Pending','In process','Completed'] %}<option{% if card.status == status %} selected{% endif %}>{{ status }}</option>{% endfor %}</select></label><button class="primary-button compact-action" type="submit">Save changes</button></footer>
+      <p role="status" data-logistics-save-status></p>
+    </fieldset>
+  </form>
+  <section class="staff-logistics-payments">
+    <div class="staff-logistics-section-heading"><div><h4>Schedule payment <span class="staff-logistics-count">{{ item.payments|length }}</span></h4><p>Manage hotel, flight and other travel payment requests.</p></div><button class="secondary-button compact-action" type="button" data-open-modal="new-payment-request-modal" data-payment-request-return-session-id="{{ session.id }}" data-payment-request-logistics-card-id="{{ card.id }}"{% if logistics_actions_disabled or not user_can_edit('finance_requests') or not user_can_edit('pre_session_control_tower') %} disabled{% endif %}>+ Schedule payment</button></div>
+    {% for payment in item.payments %}<div class="staff-logistics-payment"><a href="{{ url_for('staff_logistics.payment_detail',payment_id=payment.id) }}" data-logistics-payment-url="{{ url_for('staff_logistics.payment_detail',payment_id=payment.id) }}">{{ payment.request_number }} <span aria-hidden="true">↗</span></a>{{ finance_status_chip(payment.status) }}{% if payment.logistics_alert %}<p role="alert">{{ payment.logistics_alert }}</p>{% endif %}</div>{% else %}<p class="staff-logistics-empty-payments">No payment requests yet.</p>{% endfor %}
+  </section>
+</article>
+<div class="modal nested-modal" id="logistics-id-{{ session.id }}-{{ card.id }}" aria-hidden="true"><div class="modal-panel large"><div class="modal-header"><h2>{{ card.staff_name }} · Govt. ID</h2><button type="button" class="icon-button" data-close-modal aria-label="Close">×</button></div>{% if item.document %}<iframe class="staff-logistics-id-preview" src="{{ item.document }}" title="Govt. ID — {{ card.staff_name }}" referrerpolicy="no-referrer"></iframe>{% else %}<p>Not configured</p>{% endif %}</div></div>
+{% else %}<p class="empty-history">{{ 'Logistics pending confirmation — fill all roles first.' if view.logistics.open_roles or view.logistics.pending_definition else 'Not applicable — Logistics not required' }}</p>{% endfor %}
+</div>
+<dialog class="staff-logistics-payment-dialog" data-logistics-payment-dialog><button type="button" class="icon-button" data-close-logistics-payment aria-label="Close payment request">×</button><div data-logistics-payment-content></div></dialog>

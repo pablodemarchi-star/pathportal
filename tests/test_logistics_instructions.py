@@ -21,7 +21,7 @@ class LogisticsInstructionsTest(unittest.TestCase):
         db.create_all()
         self.record = ExamSession(exam_session_name="Instructions test", category="Path School",
                                   status="Pending", session_date=date(2026, 11, 10),
-                                  shifts="Morning", modules="Speaking", format="Onsite")
+                                  shifts="Morning", modules="Speaking", format="Online")
         db.session.add(self.record)
         db.session.flush()
         self.concept = ExamSessionLogisticsConcept(exam_session_id=self.record.id)

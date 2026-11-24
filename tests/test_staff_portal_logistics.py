@@ -725,37 +725,16 @@ class StaffPortalLogisticsTest(unittest.TestCase):
         self.assertIn("Return instructions", items[1])
         self.assertNotIn("Outbound instructions", items[1])
 
-    def test_planner_logistics_requires_folder_and_lists_all_active_staff(self):
-        members = []
-        for index, value in enumerate(["Uber ride", "Complex Uber ride", "Complex logistics", "Does not apply", ""]):
-            person = AcademicStaff(full_name=f"Logistics person {index}", status="Active", roles="Examiner")
-            db.session.add(person)
-            db.session.flush()
-            db.session.add(ExamSessionExaminerAssignment(exam_session_id=self.record.id,
-                team_member_id=person.id, participation_status="Pending", logistics_type=value))
-            members.append(person)
-        provider_type = ProviderType(name="Transport")
-        concept = ExamSessionLogisticsConcept(exam_session_id=self.record.id, status="Pending")
-        db.session.add_all([provider_type, concept])
-        db.session.commit()
-        self.assertEqual({item.id for item in complex_logistics_staff_members_for_session(self.record.id)},
-                         {item.id for item in members[:3]})
-        for value in ["", "not-a-url"]:
-            with self.app.test_request_context(method="POST", data={"logistics_files_url": value}):
-                self.assertFalse(save_exam_session_logistics(self.record))
-        key = f"existing-{concept.id}"
-        with self.app.test_request_context(method="POST", data={
-            "logistics_files_url": "https://example.com/logistics",
-            "logistics_concept_row_keys": key, f"logistics_concept_id_{key}": str(concept.id),
-            f"logistics_provider_type_id_{key}": str(provider_type.id),
-            f"logistics_staff_member_ids_{key}": [str(item.id) for item in members[:3]],
-        }):
+    def test_planner_logistics_uses_cards_without_legacy_folder_requirement(self):
+        from app.models import StaffLogisticsCard
+        assignment = ExamSessionExaminerAssignment(exam_session_id=self.record.id, team_member_id=self.person.id,
+                                                  logistics_type="Uber ride", logistics_enabled=True)
+        db.session.add(assignment); db.session.commit()
+        with self.app.test_request_context(method="POST", data={}):
             self.assertTrue(save_exam_session_logistics(self.record))
-            db.session.commit()
-        self.assertEqual({item.id for item in concept.staff_members}, {item.id for item in members[:3]})
+        self.assertEqual(StaffLogisticsCard.query.filter_by(active=True).count(), 1)
         page = self.client.get('/exam-session-planner?session_year=2026').get_data(as_text=True)
-        for person in members[:3]:
-            self.assertIn(f'<span>{person.full_name}</span>', page)
+        self.assertNotIn('data-logistics-section', page)
 
     def test_planner_without_active_logistics_does_not_require_folder(self):
         assignment = ExamSessionExaminerAssignment(exam_session_id=self.record.id, team_member_id=self.person.id,
@@ -765,7 +744,7 @@ class StaffPortalLogisticsTest(unittest.TestCase):
         with self.app.test_request_context(method="POST", data={"logistics_files_url": ""}):
             self.assertTrue(save_exam_session_logistics(self.record))
 
-    def test_planner_save_rejects_missing_link_without_persisting_changes(self):
+    def test_planner_saves_staff_logistics_without_legacy_link(self):
         assignment = ExamSessionExaminerAssignment(exam_session_id=self.record.id, team_member_id=self.person.id,
                                                   logistics_type="Does not apply", participation_status="Pending")
         db.session.add(assignment)
@@ -779,9 +758,8 @@ class StaffPortalLogisticsTest(unittest.TestCase):
                 f"examiner_participation_status_{key}": "Pending",
                 f"examiner_logistics_type_{key}": "Uber ride", "logistics_files_url": "",
             })
-        self.assertEqual(response.status_code, 400)
-        self.assertIn("Configure the Logistics folder link", response.json["error"])
-        self.assertEqual(db.session.get(ExamSessionExaminerAssignment, assignment.id).logistics_type, "Does not apply")
+        self.assertEqual(response.status_code, 200, response.json)
+        self.assertEqual(db.session.get(ExamSessionExaminerAssignment, assignment.id).logistics_type, "Uber ride")
 
     def test_uber_options_disable_fuel_even_if_submitted(self):
         self.person.has_car = "Yes"

@@ -62,7 +62,7 @@ class QualityControlTest(unittest.TestCase):
                 for key, _ in processes_for_format(format_name):
                     self.assertIn(f'data-qc-sort="block_{key}"', html)
                 if format_name != 'Onsite':
-                    for key in ('package', 'shipment', 'logistics'):
+                    for key in (('package', 'shipment', 'logistics') if format_name == 'Online' else ('package', 'shipment')):
                         self.assertNotIn(f'data-qc-sort="block_{key}"', html)
                     self.assertNotIn('June exam session', html)
                     self.assertIn('data-qc-sort-cell="exam_records"', html)
