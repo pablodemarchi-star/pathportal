@@ -20737,6 +20737,16 @@ def submit_staff_session_report(token, submission_id, _editing=None):
         return jsonify(ok=False, error="The exam centre must submit its Exam session feedback form before this report can be submitted."), 400
     if feedback_required and request.form.get("centre_feedback_confirmed") != "1":
         return jsonify(ok=False, error="Please confirm that the exam centre has completed its feedback form."), 400
+    return_acknowledgement = None
+    if record.format == "Onsite":
+        from app.staff_return_materials import report_return_view
+        return_acknowledgement = report_return_view(record, assignment, share)
+        if not return_acknowledgement['complete']:
+            return jsonify(ok=False, error=return_acknowledgement['error']), 400
+        if request.form.get('return_instructions_version') != return_acknowledgement['version']:
+            return jsonify(ok=False, error="The return instructions or responsible staff member have changed. Please reload the report, review the current instructions and confirm them again."), 400
+        if request.form.get('return_instructions_confirmed') != '1':
+            return jsonify(ok=False, error="Please confirm that the return instructions have been read and understood by the staff member responsible for returning the exam materials."), 400
     recordings_required = staff_report_recordings_required(record)
     recordings_confirmed = request.form.get("recordings_reminder_confirmed") == "1"
     if recordings_required and not recordings_confirmed:
@@ -20766,6 +20776,8 @@ def submit_staff_session_report(token, submission_id, _editing=None):
                                         marketing_confirmed=not online, marketing_media=json.dumps([item.file_id for item in media]),
                                         staff_assessments=json.dumps(assessments),
                                         return_verification=json.dumps(return_steps),
+                                        return_instructions_confirmed=bool(return_acknowledgement),
+                                        return_instructions_context=json.dumps(return_acknowledgement['context']) if return_acknowledgement else '{}',
                                         emergency_pack_outcome=emergency_pack_outcome,
                                         emergency_pack_reasons=emergency_pack_reasons if emergency_pack_outcome != "No, it was not needed" else "",
                                         facilities_outcome=facilities_outcome,
@@ -20815,6 +20827,7 @@ def staff_end_checks_view(record, role, status, submission, share):
     from app.post_attendance import EXAMS
     from app.staff_report_components import it_module_options
     from app.staff_report_media import media_view, report_for_session
+    from app.staff_return_materials import report_return_view
     if status != "Confirmed":
         return {}
     saved = submission.end_checks
@@ -20839,6 +20852,9 @@ def staff_end_checks_view(record, role, status, submission, share):
         "it_module_options": it_module_options(record) if record.format == "Online" else {},
         "speaking_documents": staff_report_speaking_documents(record) if record.format == "Online" and report_eligible else [],
         "session_report_available": report_eligible and staff_report_available(record),
+        "report_shortcut_kind": 'native' if report_eligible else 'external' if (
+            role == 'supervisor' and not assignment.is_remote and record.format == 'Online at exam centre'
+            and current_app.config.get('STAFF_END_OF_SESSION_REPORT_URL')) else '',
         "session_report_submitted": bool(report_for_session(record)) if report_eligible else False,
         "session_report_draft_key": f"staff-report:{share.token}:{record.id}",
         "session_report_url": url_for("staff.submit_staff_session_report", token=share.token, submission_id=submission.id),
@@ -20846,6 +20862,7 @@ def staff_end_checks_view(record, role, status, submission, share):
         "session_report_media": media_view(record, submission) if report_eligible else {"folder_configured": False, "files": []},
         "institutional_feedback_submitted": record.format == "Online" or staff_report_feedback_submitted(record),
         "feedback_status_url": url_for("staff.staff_report_feedback_status", token=share.token, submission_id=submission.id),
+        "return_materials": report_return_view(record, assignment, share) if report_eligible else None,
         "report_recordings_required": staff_report_recordings_required(record),
         "assessment_roster": assessment_roster(record) if report_eligible else [],
         "assessment_criteria": assessment_criteria(record),
@@ -20937,6 +20954,7 @@ def staff_portal_logistics_details(record, assignment):
 
 @staff_bp.route("/my-exam-sessions/<token>")
 def staff_exam_sessions(token):
+    from app.staff_return_materials import return_view
     share = StaffExamSessionsShare.query.filter_by(token=token).first_or_404()
     if share.person_ref.startswith("potential:"):
         person = db.session.get(PotentialEntry, int(share.person_ref.split(":", 1)[1]))
@@ -20992,6 +21010,8 @@ def staff_exam_sessions(token):
                 "decline_url": url_for("staff.decline_staff_exam_session", token=share.token,
                     session_id=record.id, assignment_type=role, assignment_id=assignment.id),
                 "assignment_type": role,
+                "receives_shipment": bool(getattr(assignment, "is_shipment_recipient", False)),
+                "return_materials": return_view(record, assignment, share),
                 "speaking_record_url": staff_portal_speaking_record_url(record, role, share.person_ref),
                 "examiner_receives_shipment": (
                     role == "examiner" and bool(assignment.is_shipment_recipient)
@@ -21037,6 +21057,36 @@ def staff_exam_sessions(token):
     response.headers["Referrer-Policy"] = "no-referrer"
     response.headers["X-Robots-Tag"] = "noindex, nofollow"
     return response
+
+
+@staff_bp.route('/my-exam-sessions/<token>/sessions/<int:session_id>/return-label')
+def staff_return_shipping_label(token, session_id):
+    from app.final_checks import return_configuration_complete
+    from app.google_drive import stream_document
+    share = StaffExamSessionsShare.query.filter_by(token=token).first_or_404()
+    record = db.session.get(ExamSession, session_id)
+    if not record:
+        abort(404)
+    authorized = False
+    for submission in share.submissions:
+        if submission.exam_session_id != session_id:
+            continue
+        assignment, person_ref = staff_submission_assignment(record, submission.assignment_type, submission.assignment_id)
+        if (assignment and person_ref == share.person_ref and assignment.participation_status == 'Confirmed'
+                and (getattr(assignment, 'is_shipment_recipient', False) or (record.format == 'Onsite'
+                     and staff_report_assignment_eligible(record, assignment, submission.assignment_type)))):
+            authorized = True
+            break
+    if not authorized:
+        abort(404)
+    control = ExamSessionSinapsisControl.query.filter_by(exam_session_id=session_id).first()
+    if not return_configuration_complete(record, control):
+        abort(404)
+    document = (control.return_shipping_label if control.return_materials_method == 'immediate_dispatch' else
+                control.combined_return_shipping_label if control.return_materials_method == 'combined_dispatch' else None)
+    if document is None:
+        abort(404)
+    return stream_document(document)
 
 
 @staff_bp.route("/my-exam-sessions/<token>/sessions/<int:session_id>/assignments/<assignment_type>/<int:assignment_id>/confirm", methods=["POST"])

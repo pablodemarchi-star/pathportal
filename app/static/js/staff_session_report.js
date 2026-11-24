@@ -12,8 +12,11 @@
     const emergencyReasons = form.querySelector('[data-report-emergency-reasons]');
     const feedback = form.querySelector('[data-report-feedback]');
     const submit = form.querySelector('[type="submit"]');
+    const returnConfirmation = form.querySelector('[data-report-return-confirmed]');
+    const returnVersion = form.querySelector('[data-report-return-version]');
+    const returnBlocked = Boolean(returnConfirmation?.disabled);
     const recordsFolderMissing = Boolean(form.querySelector('[data-report-records-folder-missing]'));
-    if (recordsFolderMissing) submit.disabled = true;
+    if (recordsFolderMissing || returnBlocked) submit.disabled = true;
     const institutionalFeedback = form.querySelector('[data-report-feedback-checkbox]');
     let institutionSubmitted = !institutionalFeedback || institutionalFeedback.dataset.submitted === 'true';
     let saving = false;
@@ -30,6 +33,7 @@
           if (input.checked) values[input.name].push(input.value);
         } else values[input.name] = input.value;
       });
+      if (returnVersion) values._return_instructions_version = returnVersion.value;
       const status = form.querySelector('[data-report-draft-status]');
       try {
         sessionStorage.setItem(section.dataset.reportDraftKey, JSON.stringify(values));
@@ -80,7 +84,7 @@
           badge.classList.toggle('is-available', institutionSubmitted);
           form.querySelector('[data-report-feedback-help]').hidden = institutionSubmitted;
         }
-        submit.disabled = recordsFolderMissing || !institutionSubmitted || mediaPending;
+        submit.disabled = returnBlocked || recordsFolderMissing || !institutionSubmitted || mediaPending;
       } catch {} finally { checkingFeedback = false; }
     };
     opener.addEventListener('click', refreshFeedbackStatus);
@@ -109,6 +113,11 @@
       button.addEventListener('click', () => { if (!saving) dialog.close(); });
     });
     dialog.addEventListener('cancel', (event) => { if (saving) event.preventDefault(); });
+    dialog.addEventListener('click', event => {
+      if (saving || event.target !== dialog) return;
+      const bounds = dialog.getBoundingClientRect();
+      if (event.clientX < bounds.left || event.clientX > bounds.right || event.clientY < bounds.top || event.clientY > bounds.bottom) dialog.close();
+    });
     outcome.addEventListener('change', updateReasons);
     const updateComments = () => {
       if (!facilities || !comments) return;
@@ -244,7 +253,7 @@
         } finally {
           mediaPending = false;
           input.disabled = false;
-          submit.disabled = recordsFolderMissing || !institutionSubmitted;
+          submit.disabled = returnBlocked || recordsFolderMissing || !institutionSubmitted;
           marketingCheckbox.disabled = uploadedCount === 0;
           input.value = '';
           saveDraft();
@@ -266,6 +275,11 @@
         return;
       }
       if (saving || mediaPending) return;
+      if (returnBlocked) {
+        if (typeof Event !== 'undefined' && form.dispatchEvent) form.dispatchEvent(new Event('report:before-validate'));
+        feedback.textContent = form.querySelector('[data-report-return-blocked]')?.textContent || 'Return instructions are pending. Please contact Logistics.';
+        return;
+      }
       if (recordsFolderMissing) { feedback.textContent = 'Digitalised exams folder is not configured. Please contact Logistics.'; return; }
       updateReview();
       reviewRows.forEach(row => {
@@ -305,7 +319,7 @@
         feedback.textContent = error.message || 'The report could not be submitted. Please try again.';
       } finally {
         saving = false;
-        submit.disabled = recordsFolderMissing || !institutionSubmitted || !opener.dataset.folderUrl;
+        submit.disabled = returnBlocked || recordsFolderMissing || !institutionSubmitted || !opener.dataset.folderUrl;
       }
     });
     if (opener.dataset?.folderUrl && section.dataset.reportDraftKey) {
@@ -315,6 +329,7 @@
           if ((input.type === 'checkbox' || input.type === 'radio') && Array.isArray(values[input.name])) input.checked = values[input.name].includes(input.value);
           else if (input.type !== 'checkbox' && input.type !== 'radio' && typeof values[input.name] === 'string') input.value = values[input.name];
         });
+        if (returnConfirmation && (returnBlocked || values._return_instructions_version !== returnVersion?.value)) returnConfirmation.checked = false;
         if (institutionalFeedback && !institutionSubmitted) institutionalFeedback.checked = false;
         if (marketingCheckbox && !uploadedCount) marketingCheckbox.checked = false;
       } catch {}

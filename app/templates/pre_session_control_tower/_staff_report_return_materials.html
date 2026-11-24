@@ -1,0 +1,17 @@
+{% set report_return = detail.end_checks.return_materials %}
+<li data-report-stage="checks" data-report-return-materials>
+  <b>Return of exam session materials</b>
+  {% if report_return.recipient_name and not report_return.is_recipient %}
+  <div class="staff-report-return-warning" role="note"><strong>Important:</strong> the following instructions apply to <strong>{{ report_return.recipient_name }}</strong>.</div>
+  {% endif %}
+  {% if report_return.error %}
+  <p class="staff-report-return-warning" role="alert" data-report-return-blocked>{{ report_return.error }}</p>
+  {% endif %}
+  {% set return_info = report_return.info %}
+  {% set return_dialog_id = 'report-return-instructions-' ~ detail.end_checks.session_report_url|replace('/', '-') %}
+  {% with show_package_dimensions=false %}
+    {% include 'pre_session_control_tower/_staff_return_configuration.html' %}
+  {% endwith %}
+  <input type="hidden" name="return_instructions_version" value="{{ report_return.version }}" data-report-return-version>
+  <label class="staff-session-report-checkbox staff-report-return-confirmation"><input type="checkbox" name="return_instructions_confirmed" value="1" required data-report-return-confirmed{% if not report_return.complete %} disabled{% endif %}><span>{{ report_return.confirmation }}</span></label>
+</li>

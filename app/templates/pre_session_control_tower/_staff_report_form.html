@@ -1,4 +1,4 @@
-        <dialog class="staff-session-report-modal"{% if detail.format == 'Online' %} data-online-report-flow{% endif %} data-session-report-dialog aria-labelledby="session-report-title-{{ detail.end_checks.session_report_url|replace('/', '-') }}">
+        <dialog class="staff-session-report-modal"{% if detail.format == 'Online' %} data-online-report-flow{% elif detail.format == 'Onsite' %} data-onsite-report-flow{% endif %} data-session-report-dialog aria-labelledby="session-report-title-{{ detail.end_checks.session_report_url|replace('/', '-') }}">
           <form action="{{ detail.end_checks.session_report_url }}" method="post" data-session-report-form novalidate>
             <input type="hidden" name="csrf_token" value="{{ detail.confirmation_csrf }}">
             <div class="staff-session-report-heading">
@@ -6,7 +6,7 @@
               <button type="button" class="staff-detail-close" data-session-report-close aria-label="Close report">&times;</button>
             </div>
             <p class="staff-session-report-subtitle">Complete this report to formally close your exam session</p>
-            {% if detail.format == 'Online' %}<p class="staff-report-session-context" data-report-session-context>{{ exam_session.exam_session_name }} · {{ detail.session_date }}</p>{% endif %}
+            <p class="staff-report-session-context" data-report-session-context>{{ exam_session.exam_session_name }} · {{ detail.session_date }}</p>
             <p class="staff-session-report-warning">{% if detail.format == 'Online' %}<strong>Important:</strong> This report must be completed only after <strong>all modules of the exam session have concluded</strong>. Only one report should be submitted per exam session, not one per module. Once submitted, the report cannot be reopened or edited. Please ensure that all information is complete and accurate before submitting.{% else %}<strong>Important: once submitted, this report cannot be reopened or edited. Please ensure that you complete it in full before submitting.</strong>{% endif %}</p>
             <ol class="staff-session-report-questions">
               <li data-report-stage="session">
@@ -46,7 +46,7 @@
               {% include 'pre_session_control_tower/_staff_report_components.html' %}
               {% include 'pre_session_control_tower/_staff_report_it_issues.html' %}
               {% if detail.format != 'Online' %}
-              <li>
+              <li data-report-stage="materials">
                 <b>Exam return package verification</b>
                 <div class="staff-report-return-timeline" data-report-return-timeline role="group" aria-label="Exam return package verification">
                   <label class="staff-session-report-checkbox"><input type="checkbox" name="return_verification" value="submitted_papers" required data-return-step><span><b>Submitted exam papers:</b> all and only submitted papers are placed inside their respective <b>Exam room packs</b>, in the exact order shown on the candidate list attached to the front.</span></label>
@@ -58,7 +58,7 @@
                 </div>
                 <small data-return-progress role="status">0 of 6 steps completed</small>
               </li>
-              <li>
+              <li data-report-stage="centre">
                 <label><b>Exam centre's facilities and organisation</b>
                   <select name="facilities_outcome" required data-report-facilities>
                     <option value="">Select an option</option>
@@ -71,7 +71,7 @@
                   <textarea name="facilities_comments" rows="4" maxlength="10000" disabled data-report-comments></textarea>
                 </label>
               </li>
-              <li>
+              <li data-report-stage="materials">
                 <label><b>Was the Emergency exam pack used?</b>
                   <select name="emergency_pack_outcome" required data-report-emergency-pack>
                     <option value="">Select an option</option>
@@ -124,7 +124,7 @@
                 {% endif %}
               </li>
               {% if detail.format != 'Online' %}
-              <li>
+              <li data-report-stage="media">
                 <b>Marketing material</b>
                 {% set marketing = detail.end_checks.session_report_media %}
                 <div data-report-media data-upload-url="{{ detail.end_checks.session_report_media_url }}" data-folder-configured="{{ 'true' if marketing.folder_configured else 'false' }}">
@@ -141,8 +141,8 @@
               </li>
               {% endif %}
               {% if detail.format != 'Online' or detail.end_checks.report_recordings_required %}
-              <li data-report-stage="team">
-                <b>Final checks</b>
+              <li data-report-stage="{{ 'checks' if detail.format == 'Onsite' else 'team' }}">
+                <b>{{ 'Exam centre feedback' if detail.format == 'Onsite' else 'Final checks' }}</b>
                 {% if detail.format != 'Online' %}
                 {% set feedback_submitted = detail.end_checks.institutional_feedback_submitted %}
                 <label class="staff-session-report-checkbox"><input type="checkbox" name="centre_feedback_confirmed" value="1" required data-report-feedback-checkbox data-submitted="{{ 'true' if feedback_submitted else 'false' }}"{% if not feedback_submitted %} disabled{% endif %}><span>I confirm that the exam centre has submitted its feedback form. <span class="staff-end-checks-status{% if feedback_submitted %} is-available{% endif %}" data-report-feedback-status>{{ 'Feedback form submitted' if feedback_submitted else 'Feedback form not submitted' }}</span></span></label>
@@ -154,6 +154,9 @@
                 <p class="staff-detail-muted" data-report-feedback-help{% if feedback_submitted %} hidden{% endif %}>The report cannot be submitted until the exam centre has submitted its feedback form.</p>
                 {% endif %}
               </li>
+              {% endif %}
+              {% if detail.format == 'Onsite' %}
+              {% include 'pre_session_control_tower/_staff_report_return_materials.html' %}
               {% endif %}
               <li data-report-stage="finish">
                 {% if detail.format == 'Online' %}
@@ -176,7 +179,7 @@
             <small data-report-draft-status role="status"></small>
             <div class="staff-session-report-actions">
               <button type="button" class="secondary-button" data-session-report-close>Cancel</button>
-              <button type="submit" class="primary-button"{% if not detail.end_checks.institutional_feedback_submitted %} disabled{% endif %}>Submit report</button>
+              <button type="submit" class="primary-button"{% if not detail.end_checks.institutional_feedback_submitted or (detail.format == 'Onsite' and not detail.end_checks.return_materials.complete) %} disabled{% endif %}>Submit report</button>
             </div>
           </form>
         </dialog>

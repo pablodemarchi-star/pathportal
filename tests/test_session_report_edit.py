@@ -33,6 +33,10 @@ class SessionReportEditTest(unittest.TestCase):
                 values[key] = '1' if value else '0'
             elif isinstance(value, list) and key != 'return_verification':
                 values[key] = json.dumps(value)
+        if self.record.format == 'Onsite':
+            from app.staff_return_materials import report_return_view
+            with self.app.test_request_context():
+                values['return_instructions_version'] = report_return_view(self.record, self.assignment, self.share)['version']
         values.update(csrf_token='test', _report_revision=str(len(json.loads(self.report.edit_history))))
         return values
 
@@ -63,6 +67,27 @@ class SessionReportEditTest(unittest.TestCase):
             self.assertEqual(history[-1]['editor'], 'Review Admin')
             self.assertEqual(history[-1]['after']['optional_comments'], 'Correction ' + format_name)
         self.assertEqual(self.post().status_code, 409)
+
+    def test_return_instruction_changes_require_a_new_acknowledgement_in_editor(self):
+        import re
+        self.saved()
+        def initial_values():
+            html = self.admin.get(self.edit_url).get_data(as_text=True)
+            return json.loads(re.search(r'<script type="application/json" id="report-edit-values">(.*?)</script>', html, re.S).group(1))
+        self.assertTrue(initial_values()['return_instructions_confirmed'])
+        control = m.ExamSessionSinapsisControl.query.filter_by(exam_session_id=self.record.id).one()
+        control.return_instructions_html = '<p>Updated return deadline.</p>'
+        db.session.commit()
+        self.assertFalse(initial_values()['return_instructions_confirmed'])
+        values = self.payload(); values['return_instructions_confirmed'] = '0'
+        with patch('app.routes.staff_report_feedback_submitted', return_value=True):
+            self.assertEqual(self.admin.post(self.edit_url, data=values).status_code, 400)
+            values['return_instructions_confirmed'] = '1'
+            response = self.admin.post(self.edit_url, data=values)
+        self.assertEqual(response.status_code, 200, response.json)
+        db.session.refresh(self.report)
+        self.assertEqual(json.loads(self.report.return_instructions_context)['instructions_html'], '<p>Updated return deadline.</p>')
+        self.assertEqual(len(json.loads(self.report.edit_history)), 1)
 
     def test_permissions_csrf_and_concurrent_edit(self):
         self.saved(online=True)

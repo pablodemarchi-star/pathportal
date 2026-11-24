@@ -36,6 +36,9 @@
 {% endif %}
 {% set final_checks_visible = session_record.format != 'Online' or 'speaking' in session_record.modules|lower %}
 {% if final_checks_visible %}<section><h4>{{ 4 + module_count.value if session_record.format == 'Online' else '8' }}. Final checks</h4><ul>{% if session_record.format != 'Online' %}<li>{{ '✓' if saved.centre_feedback_confirmed else '—' }} Institution feedback confirmed</li>{% endif %}<li>{{ '✓' if saved.recordings_reminder_confirmed else '—' }} Recordings reminder confirmed (when applicable)</li></ul></section>{% endif %}
+{% if session_record.format == 'Onsite' and saved.return_instructions_confirmed %}
+<section><h4>Return of exam session materials</h4><p>✓ Return instructions acknowledged</p><p><b>Responsible staff member:</b> {{ report.return_context.recipient_name }}</p><p>{{ 'The supervisor confirmed reading and understanding the instructions.' if report.return_context.acknowledged_by_recipient else 'The supervisor confirmed that the responsible staff member was notified and acknowledged the procedures and deadlines.' }}</p><p>{{ report.return_context.label }}</p></section>
+{% endif %}
 <section><h4>{{ 4 + module_count.value + (1 if final_checks_visible else 0) if session_record.format == 'Online' else '9' }}. Optional comments</h4>{% if saved.module_comments is not none %}<div class="qr-detail-grid">{% for key,label in [('speaking','Speaking'),('listening','Listening'),('reading_writing','Reading and Writing'),('overall','Overall')] if key in report.module_comments %}<div><h5>{{ label }}</h5><p class="qr-answer">{{ report.module_comments[key] or 'No comments provided' }}</p></div>{% endfor %}</div>{% else %}<p class="qr-answer">{{ saved.optional_comments or 'No comments provided' }}</p>{% endif %}</section>
 {% if report.historical %}</details>{% endif %}
 {% else %}<p>No Supervisor report submitted for this session.</p>{% endfor %}

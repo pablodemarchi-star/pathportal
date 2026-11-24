@@ -17967,7 +17967,7 @@ body.staff-session-detail-open { overflow: hidden; }
 .staff-logistics-quick-link:hover { text-decoration-thickness: 2px; }
 .staff-logistics-dialog { box-sizing: border-box; width: min(760px, calc(100vw - 32px)); max-height: calc(100dvh - 40px); padding: 0; border: 1px solid var(--color-border); border-radius: 18px; color: var(--color-text); background: #f6f8f7; box-shadow: 0 24px 90px #003a4e44; overflow: auto; }
 .staff-logistics-dialog::backdrop { background: #003a4e99; backdrop-filter: blur(4px); }
-body.staff-logistics-dialog-open { overflow: hidden; }
+body.staff-logistics-dialog-open, body.staff-return-dialog-open, body.staff-report-popup-open { overflow: hidden; }
 .staff-logistics-dialog :focus-visible, .staff-logistics-quick-link:focus-visible { outline: 3px solid var(--path-cyan); outline-offset: 3px; }
 @media (max-width: 700px) { .staff-logistics-dialog { width: calc(100vw - 16px); max-height: calc(100dvh - 16px); border-radius: 12px; } }
 .staff-confirmed-details-button { display: inline-flex; align-items: center; justify-content: center; gap: 6px; width: auto; box-sizing: border-box; padding: 8px 10px; border: 1px solid var(--path-blue-303up); border-radius: 8px; background: var(--path-blue-303up); color: white; font-size: 11px; font-weight: 600; text-align: left; text-decoration: none; }
@@ -18158,6 +18158,15 @@ body.staff-logistics-dialog-open { overflow: hidden; }
 .staff-detail-logistics-instruction ol { list-style: decimal; padding-left: 24px; }
 .staff-detail-logistics-instruction a { text-decoration: underline; color: var(--path-blue-303up); }
 .staff-travel-overview { margin-top: 18px; margin-bottom: 18px; line-height: 1.65; }
+.staff-return-heading { display: flex; align-items: center; flex-wrap: wrap; gap: 8px 12px; margin-bottom: 12px; }
+.staff-return-heading h4 { margin: 0; }
+.staff-return-heading .staff-detail-logistics-progress { margin: 0; }
+.staff-return-configuration { margin-top: 16px; padding: 18px 20px; border: 1px solid #c5e3ee; border-radius: 12px; background: #eef8fc; color: var(--path-blue-303up); line-height: 1.65; }
+.staff-return-configuration h5 { margin: 0 0 10px; font-size: 14px; }
+.staff-return-configuration p:first-child { margin-top: 0; }
+.staff-return-configuration p:last-child { margin-bottom: 0; }
+.staff-return-configuration ul { padding-left: 22px; }
+.staff-return-instructions-button { cursor: pointer; font-family: inherit; margin-top: 12px; }
 .staff-travel-instructions { margin: 18px 0; padding: 22px; border: 1px solid var(--color-border); border-radius: 14px; background: #f4f8fa; overflow-wrap: anywhere; }
 .staff-detail-travel .staff-travel-instructions h4,
 .staff-detail-travel .staff-travel-reimbursements h4 { margin: 0 0 12px; color: var(--path-blue-303up); font-size: 16px; font-weight: 800; }
@@ -18483,3 +18492,10 @@ body.staff-logistics-dialog-open { overflow: hidden; }
 
 .staff-detail-material[data-staff-beyond-access] ul { margin: 0; padding-left: 20px; }
 .staff-detail-material[data-staff-beyond-access] > :last-child { margin-bottom: 0; }
+
+.staff-session-actions{display:flex;flex-direction:column;align-items:flex-start;gap:9px;min-width:0}
+.staff-session-action-link{display:block;max-width:100%;color:var(--path-blue-303up);font-size:12px;line-height:1.5;text-decoration:underline;text-underline-offset:3px;overflow-wrap:anywhere}
+.staff-session-action-link[hidden]{display:none}
+.staff-session-action-link:focus-visible{outline:3px solid var(--path-cyan);outline-offset:3px}
+.staff-session-actions .staff-confirmed-details-button{max-width:100%}
+.staff-session-actions .staff-confirmed-details-button span{white-space:normal}

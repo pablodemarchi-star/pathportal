@@ -42,14 +42,20 @@
       const rows = role === "Emergency contact"
         ? [["Emergency contact manual", "Read and fully understand the manual before the session. Raise any questions with Path Examinations in advance.", EMERGENCY_CONTACT_MANUAL_URL]]
         : officialMaterialRows(role, data).filter(([title]) =>
-          (!title.includes("Back-up material for examiners")
+          (!title.includes("Exam box shipment") || data.receives_shipment)
+          && (!title.includes("Back-up material for examiners")
             || (role === "Supervisor" && data.participation_confirmed && !zoomAccess))
           && !(role === "Supervisor" && ["Online", "Online at exam centre"].includes(data.format)
             && title.includes("Exam box shipment"))
           && !(role === "Supervisor" && data.is_remote
             && (title.includes("Supervisor guidelines") || title.includes("Exam box shipment"))));
-      if (role === "Examiner" && data.examiner_receives_shipment) {
-        rows.push(["📦🚚 Exam box shipment", "Once you confirm your participation as a Examiner, our Logistics team will contact you in due course to arrange the delivery of the materials for your assigned exam session(s). You will also receive instructions on how to handle the materials after the exam session has ended.", ""]);
+      if (data.receives_shipment) {
+        const description = data.participation_confirmed
+          ? "Our Logistics team will contact you to arrange delivery of the examination materials for this session."
+          : "Once you confirm your participation, our Logistics team will contact you in due course to arrange the delivery of the materials for your assigned exam session(s).";
+        const shipment = rows.find(([title]) => title.includes("Exam box shipment"));
+        if (shipment) shipment[1] = description;
+        else rows.push(["📬🚚 Exam box shipment", description, ""]);
       }
       rows.forEach(([title, description, url]) => {
         const item = make("div", "staff-detail-material");
@@ -71,6 +77,10 @@
         item.append(make("h4", "", heading), paragraph);
         appendMaterialResource(item, heading, examinerMaterial ? data.material_for_examiners_url : url);
         materials.insertBefore(item, role === "Examiner" ? null : zoomAccess);
+        if (title.includes("Exam box shipment")) {
+          const returnSection = materials.querySelector('[data-staff-return-materials]');
+          if (returnSection) item.after(returnSection);
+        }
         if (onlineMaterial) {
           const speakingRecord = materials.querySelector("[data-staff-speaking-record]");
           if (speakingRecord) item.after(speakingRecord);

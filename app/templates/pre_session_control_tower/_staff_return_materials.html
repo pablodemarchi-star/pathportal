@@ -1,0 +1,8 @@
+{% set return_info = detail.return_materials %}
+{% if return_info %}
+<section class="staff-detail-material staff-return-materials" data-staff-return-materials>
+  <div class="staff-return-heading"><h4>📦 Return of exam materials</h4><span class="staff-detail-logistics-progress{% if return_info.complete %} is-confirmed{% endif %}">{{ return_info.status }}</span></div>
+  <p>At the end of the exam session, please follow the instructions below to <strong>ensure that all examination materials are securely returned to Path Examinations</strong>.</p>
+  {% include 'pre_session_control_tower/_staff_return_configuration.html' %}
+</section>
+{% endif %}

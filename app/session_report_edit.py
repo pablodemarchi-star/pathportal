@@ -52,6 +52,7 @@ def edit_report(session_id):
     from app.staff_report_components import it_module_options
     from app.staff_report_review import assessment_criteria
     from app.staff_report_media import media_view
+    from app.staff_return_materials import report_return_view
     checks = dict(
         session_report_url=url_for('quality_control.edit_session_report', session_id=record.id),
         session_report_media_url=url_for('quality_control.edit_session_report_media', session_id=record.id),
@@ -63,12 +64,17 @@ def edit_report(session_id):
         component_completion_applicable=record.format == 'Online' and 'listening and speaking' in {v.lower() for v in record.modules_list()},
         component_exams=EXAMS, it_module_options=it_module_options(record) if record.format == 'Online' else {},
         speaking_documents=r.staff_report_speaking_documents(record) if record.format == 'Online' else [],
+        return_materials=report_return_view(
+            record, r.staff_submission_assignment(record, submission.assignment_type, submission.assignment_id)[0], submission.share),
         report_recordings_required=r.staff_report_recordings_required(record),
         assessment_roster=json.loads(report.staff_assessments or '[]'), assessment_criteria=assessment_criteria(record))
     detail = dict(format=record.format, session_date=record.session_date.strftime('%d/%m/%Y') if record.session_date else '',
                   confirmation_csrf=session.get('csrf_token', ''), end_checks=checks)
+    initial_values = report_values(report)
+    if checks['return_materials'] and json.loads(report.return_instructions_context or '{}') != checks['return_materials']['context']:
+        initial_values['return_instructions_confirmed'] = False
     response = render_template('session_report_edit.html', detail=detail, exam_session=record,
-                               initial_values=report_values(report), revision=len(json.loads(report.edit_history or '[]')))
+                               initial_values=initial_values, revision=len(json.loads(report.edit_history or '[]')))
     return response, 200, {'Cache-Control': 'private, no-store'}
 
 

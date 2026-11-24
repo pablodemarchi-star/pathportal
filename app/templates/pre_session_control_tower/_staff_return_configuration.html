@@ -1,0 +1,21 @@
+  <div class="staff-return-configuration">
+    {% if return_info.complete %}
+      <h5>{{ return_info.label }}</h5>
+      <p>{{ return_info.description }}</p>
+      {% if return_info.sessions %}<p><strong>Return together with the materials from:</strong></p><ul>{% for peer in return_info.sessions %}<li>{{ peer.name }}{% if peer.date %} · {{ peer.date }}{% endif %}</li>{% endfor %}</ul>{% endif %}
+      {% if return_info.shipping and (show_package_dimensions|default(true)) %}<p><strong>Package dimensions and weight</strong></p><ul><li>Length: 26 cm · Width: 30 cm · Height: {{ return_info.shipping.height }} cm</li><li>Weight: {{ return_info.shipping.weight }} kg</li></ul>{% endif %}
+      {% if return_info.label_url %}<a class="staff-travel-document-chip" href="{{ return_info.label_url }}" target="_blank" rel="noopener noreferrer">Open shipping label</a>{% endif %}
+      {% if return_info.address_url %}<a class="staff-travel-document-chip" href="{{ return_info.address_url }}" target="_blank" rel="noopener noreferrer">View drop-off address</a>{% endif %}
+      {% if return_info.handover %}<p><strong>Hand over the materials to:</strong> {{ return_info.handover.name }}</p>{% if return_info.handover.phone %}<p>Contact: <span data-staff-phone="{{ return_info.handover.phone }}">{{ return_info.handover.phone }}</span></p>{% endif %}{% endif %}
+    {% else %}
+      <p>Return instructions are being prepared and will be available here soon.</p>
+    {% endif %}
+    {% if return_info.instructions_html %}
+      <button type="button" class="staff-travel-document-chip staff-return-instructions-button" data-staff-return-instructions-open aria-haspopup="dialog" aria-controls="{{ return_dialog_id }}">Read important instructions</button>
+      <dialog id="{{ return_dialog_id }}" class="staff-detail-logistics-instructions-dialog" data-staff-return-instructions-dialog aria-labelledby="{{ return_dialog_id }}-title">
+        <header class="staff-detail-logistics-instructions-header"><div class="staff-detail-logistics-instructions-heading"><h3 id="{{ return_dialog_id }}-title">{{ return_info.instructions_title or 'Important return instructions' }}</h3></div><button type="button" class="staff-detail-close" data-staff-return-instructions-close aria-label="Close return instructions">&times;</button></header>
+        <div class="staff-detail-logistics-instructions-content staff-detail-logistics-instruction">{{ return_info.instructions_html|safe }}</div>
+        <button type="button" class="secondary-button" data-staff-return-instructions-close>Close</button>
+      </dialog>
+    {% endif %}
+  </div>

@@ -4,7 +4,7 @@ const vm=require('node:vm');
 const storage=new Map();
 const classes=()=>({values:new Set(),toggle(key,value){if(value)this.values.add(key);else this.values.delete(key);},add(key){this.values.add(key);}});
 const source=fs.readFileSync('app/static/js/staff_session_report.js','utf8');
-function page(online=false,adminEdit=false){
+function page(online=false,adminEdit=false,returnOptions=null){
  const make=(name,type='text',value='')=>({name,type,value,checked:false,disabled:false,dataset:{},handlers:{},classList:classes(),addEventListener(event,fn){(this.handlers[event]||=[]).push(fn);},setAttribute(key,value){this[key]=value;}});
  const outcome=make('schedule_outcome','select');const reasons=make('reasons','textarea');
  const facilities=make('facilities_outcome','select');const comments=make('facilities_comments','textarea');
@@ -13,11 +13,16 @@ function page(online=false,adminEdit=false){
  const notes=make('review.examiner:3.notes','textarea');const comment=make('review.examiner:3.comments.arrival','textarea');const assessment=make('review.examiner:3.overall','select');
  const steps=Array.from({length:6},(_,i)=>{const step=make('return_verification','checkbox',String(i));const label={classList:classes()};step.closest=()=>label;return step;});
  const fields=[outcome,reasons,facilities,comments,emergency,emergencyReasons,feedbackCheckbox,notes,comment,assessment,...steps];
+ const returnConfirmation=make('return_instructions_confirmed','checkbox','1');
+ const returnVersion=make('return_instructions_version','hidden',returnOptions?.version||'version-a');
+ returnConfirmation.disabled=Boolean(returnOptions?.blocked);
+ if(returnOptions)fields.push(returnConfirmation);
  const badge={classList:classes()};const feedback={};const submit={};const help={hidden:false};
  const nodes={'[data-report-outcome]':outcome,'[data-report-reasons]':reasons,'[data-report-facilities]':facilities,'[data-report-comments]':comments,
  '[data-report-emergency-pack]':emergency,'[data-report-emergency-reasons]':emergencyReasons,'[data-report-feedback]':feedback,'[type="submit"]':submit,
  '[data-report-feedback-checkbox]':feedbackCheckbox,'[data-report-feedback-status]':badge,'[data-report-feedback-help]':help,
  '[data-report-return-timeline]':{classList:classes(),querySelectorAll:()=>steps},'[data-return-progress]':{},'[data-review-count]':{classList:classes()}};
+ if(returnOptions){nodes['[data-report-return-confirmed]']=returnConfirmation;nodes['[data-report-return-version]']=returnVersion;nodes['[data-report-return-blocked]']={textContent:'Return instructions are pending.'};}
  for(const name of ['reasons-field','comments-field','emergency-reasons-field'])nodes[`[data-report-${name}]`]={};
  if(online) for(const key of ['[data-report-feedback-checkbox]','[data-report-facilities]','[data-report-comments]','[data-report-emergency-pack]','[data-report-emergency-reasons]','[data-report-return-timeline]','[data-return-progress]'])delete nodes[key];
  const form={reportValidity:()=>true,reset(){},handlers:{},querySelector:key=>nodes[key],querySelectorAll:key=>key==='[data-review-row]'?[]:fields,addEventListener(event,fn){(this.handlers[event]||=[]).push(fn);}};
@@ -28,7 +33,7 @@ function page(online=false,adminEdit=false){
  const window={addEventListener(name,fn){events[name]=fn;},setInterval(fn,ms){assert.equal(ms,5000);poll=fn;}};
  const document={hidden:false,querySelectorAll:()=>[section],addEventListener(name,fn){documentEvents[name]=fn;}};
  vm.runInNewContext(source,{window,document,Date:{parse:Date.parse,now:()=>Date.parse(adminEdit?'2026-12-01T12:00:00-03:00':'2026-11-13T12:00:00-03:00')},FormData:class {},sessionStorage:{getItem:key=>storage.get(key),setItem:(key,value)=>storage.set(key,value),removeItem:key=>storage.delete(key)},fetch:async()=>({ok:true,json:async()=>result})});
- return {outcome,reasons,notes,comment,assessment,steps,fields,form,feedbackCheckbox,badge,help,submit,feedback,opener,events,documentEvents,setResult(value){result=value;}};
+ return {returnConfirmation,returnVersion,outcome,reasons,notes,comment,assessment,steps,fields,form,feedbackCheckbox,badge,help,submit,feedback,opener,events,documentEvents,setResult(value){result=value;}};
 }
 (async()=>{
  const first=page();
@@ -57,6 +62,23 @@ function page(online=false,adminEdit=false){
  const editor=page(true,true);
  await editor.form.handlers.submit[0]({preventDefault(){}});
  assert.equal(editor.opener.disabled,true);
+ storage.clear();
+ const acknowledged=page(false,false,{version:'version-a'});
+ acknowledged.returnConfirmation.checked=true;acknowledged.notes.value='Keep my notes';
+ acknowledged.form.handlers.input.forEach(fn=>fn());
+ const same=page(false,false,{version:'version-a'});
+ assert.equal(same.returnConfirmation.checked,true);
+ const changed=page(false,false,{version:'version-b'});
+ assert.equal(changed.returnConfirmation.checked,false);assert.equal(changed.notes.value,'Keep my notes');
+ assert.equal(changed.returnVersion.value,'version-b');
+ const blocked=page(false,false,{version:'version-a',blocked:true});
+ assert.equal(blocked.returnConfirmation.checked,false);assert.equal(blocked.submit.disabled,true);
+ blocked.setResult({ok:true,submitted:true,report_submitted:false});await blocked.events.focus();
+ assert.equal(blocked.submit.disabled,true);assert.equal(blocked.returnConfirmation.disabled,true);
+ await blocked.form.handlers.submit[0]({preventDefault(){}});
+ assert.equal(blocked.feedback.textContent,'Return instructions are pending.');
+ assert.equal(blocked.opener.textContent,undefined);
+ console.log('Return acknowledgement: matching-version draft restored, changed instructions clear only confirmation, pending return blocks submission and feedback refresh cannot unlock it.');
  console.log('Quality control editor can save outside the exam day.');
  console.log('Online report submits without return, facilities, emergency pack or marketing sections.');
  console.log('Supervisor report: drafts survive reload, feedback refresh preserves answers, and another Supervisor submission locks the session.');

@@ -5,9 +5,9 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="robots" content="noindex, nofollow">
   <title>Your exam sessions | Path Examinations</title>
-  <link rel="stylesheet" href="{{ url_for('static', filename='css/styles.css', v='20261124-logistics-popup-1') }}">
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/styles.css', v='20261124-staff-actions-1') }}">
   <link rel="stylesheet" href="{{ url_for('static', filename='css/staff_report_components.css', v='20261123-candidate-chips-1') }}">
-  <link rel="stylesheet" href="{{ url_for('static', filename='css/staff_report_flow.css', v='20261123-report-flow-1') }}">
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/staff_report_flow.css', v='20261124-report-return-1') }}">
 </head>
 <body>
 <main class="staff-exam-sessions-shell">
@@ -49,7 +49,7 @@
       {% if table_sessions %}
       <div class="staff-confirmed-table-frame">
       <table class="staff-confirmed-sessions-table" aria-label="{{ table_title }}">
-        <thead><tr><th>Exam session</th><th>Format</th><th>Date</th><th>Role</th>{% if table_kind == 'regular' %}<th>Logistics</th>{% endif %}<th class="staff-confirmed-details-heading">Details</th></tr></thead>
+        <thead><tr><th>Exam session</th><th>Format</th><th>Date</th><th>Role</th>{% if table_kind == 'regular' %}<th>Logistics</th>{% endif %}<th class="staff-confirmed-details-heading">Actions</th></tr></thead>
         <tbody>
           {% for exam_session in table_sessions %}
           {% if table_kind == 'emergency' %}
@@ -67,7 +67,12 @@
             {% if table_kind == 'regular' %}
             <td data-label="Logistics">{% for detail in table_details|unique(attribute='logistics_status') %}{% set status = detail.logistics_status %}<div class="staff-confirmed-logistics{% if not status or status == 'Does not apply' %} is-not-applicable{% endif %}">{% if status and status != 'Does not apply' %}<a class="staff-logistics-quick-link" href="#staff-logistics-dialog" data-staff-logistics-open data-staff-logistics-session="{{ exam_session.id }}" data-staff-logistics-role="{{ detail.assignment_type }}" data-staff-logistics-kind="{{ status }}" data-staff-logistics-name="{{ exam_session.exam_session_name }}" data-staff-logistics-date="{{ exam_session.session_date.strftime('%d/%m/%Y') if exam_session.session_date else 'Date to be confirmed' }}" aria-haspopup="dialog" aria-controls="staff-logistics-dialog">{{ status }}</a>{% else %}{{ status or 'Does not apply' }}{% endif %}</div>{% endfor %}</td>
             {% endif %}
-            <td><button type="button" class="staff-detail-link staff-confirmed-details-button" data-staff-session-open="staff-session-detail-{{ exam_session.id }}" aria-haspopup="dialog" aria-controls="staff-session-detail-{{ exam_session.id }}" aria-label="Access session details for {{ exam_session.exam_session_name }}"><span>Access session details</span><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M5 12h14m-6-6 6 6-6 6"/></svg></button></td>
+            <td data-label="Actions"><div class="staff-session-actions"><button type="button" class="staff-detail-link staff-confirmed-details-button" data-staff-session-open="staff-session-detail-{{ exam_session.id }}" aria-haspopup="dialog" aria-controls="staff-session-detail-{{ exam_session.id }}" aria-label="Access session details for {{ exam_session.exam_session_name }}"><span>Access session details</span><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M5 12h14m-6-6 6 6-6 6"/></svg></button>
+              {% set report_detail = namespace(value=none) %}
+              {% for candidate_detail in table_details %}{% if candidate_detail.end_checks is defined and candidate_detail.end_checks.report_shortcut_kind|default('') and report_detail.value is none %}{% set report_detail.value = candidate_detail %}{% endif %}{% endfor %}
+              {% if report_detail.value %}{% set report = report_detail.value %}<a class="staff-session-action-link" href="#staff-report-dialog" data-staff-report-quick data-staff-report-session="{{ exam_session.id }}" data-staff-report-role="{{ report.assignment_type }}" data-staff-report-kind="{{ report.end_checks.report_shortcut_kind }}" data-staff-report-opens-at="{{ report.end_checks.opens_at }}" data-staff-report-name="{{ exam_session.exam_session_name }}" data-staff-report-date="{{ exam_session.session_date.strftime('%d/%m/%Y') }}" aria-haspopup="dialog" aria-controls="staff-report-dialog">📋 End-of-session report</a>{% endif %}
+              {% set return_detail = table_details|selectattr('return_materials')|first %}{% if return_detail %}<a href="#staff-return-dialog" class="staff-session-action-link" data-staff-return-open data-staff-return-session="{{ exam_session.id }}" data-staff-return-role="{{ return_detail.assignment_type }}" data-staff-return-name="{{ exam_session.exam_session_name }}" data-staff-return-date="{{ exam_session.session_date.strftime('%d/%m/%Y') if exam_session.session_date else 'Date to be confirmed' }}" title="Return of exam materials · {{ return_detail.return_materials.status }}" aria-label="Return exam materials for {{ exam_session.exam_session_name }} · {{ return_detail.return_materials.status }}" aria-haspopup="dialog" aria-controls="staff-return-dialog">📦 Return of exam materials</a>{% endif %}
+            </div></td>
           </tr>
           {% endfor %}
         </tbody>
@@ -150,13 +155,26 @@
   </header>
   <div class="staff-detail-content" data-staff-logistics-content></div>
 </dialog>
+<dialog class="staff-logistics-dialog" id="staff-return-dialog" data-staff-return-dialog aria-labelledby="staff-return-dialog-title">
+  <header class="staff-detail-header">
+    <div><span class="staff-detail-eyebrow">RETURN OF EXAM MATERIALS</span><h2 id="staff-return-dialog-title" data-staff-return-title></h2><p data-staff-return-date-label></p></div>
+    <button class="staff-detail-close" type="button" data-staff-return-close aria-label="Close return of exam materials">&times;</button>
+  </header>
+  <div class="staff-detail-content" data-staff-return-content></div>
+</dialog>
+<dialog class="staff-logistics-dialog" id="staff-report-dialog" data-staff-report-popup aria-labelledby="staff-report-popup-title">
+  <header class="staff-detail-header"><div><span class="staff-detail-eyebrow">END-OF-SESSION REPORT</span><h2 id="staff-report-popup-title" data-staff-report-popup-title></h2><p data-staff-report-popup-date></p></div><button class="staff-detail-close" type="button" data-staff-report-popup-close aria-label="Close end-of-session report">&times;</button></header>
+  <div class="staff-detail-content" data-staff-report-popup-content></div>
+</dialog>
 <script src="{{ url_for('static', filename='js/app.js', v='20261107-shipment-modal-title-25') }}"></script>
-<script src="{{ url_for('static', filename='js/staff_exam_sessions.js', v='20261123-considerations-1') }}"></script>
+<script src="{{ url_for('static', filename='js/staff_exam_sessions.js', v='20261124-shipment-confirmation-1') }}"></script>
+<script src="{{ url_for('static', filename='js/staff_return_materials.js', v='20261124-report-return-1') }}"></script>
 <script src="{{ url_for('static', filename='js/staff_logistics_portal.js', v='20261124-logistics-popup-1') }}"></script>
 <script src="{{ url_for('static', filename='js/staff_report_components.js', v='20261123-candidate-chips-1') }}"></script>
 <script src="{{ url_for('static', filename='js/staff_report_considerations.js', v='20261123-considerations-1') }}"></script>
-<script src="{{ url_for('static', filename='js/staff_session_report.js', v='20261123-quality-edit-1') }}"></script>
-<script src="{{ url_for('static', filename='js/staff_report_flow.js', v='20261123-report-flow-1') }}"></script>
+<script src="{{ url_for('static', filename='js/staff_session_report.js', v='20261124-report-return-1') }}"></script>
+<script src="{{ url_for('static', filename='js/staff_session_actions.js', v='20261124-staff-actions-locked-1') }}"></script>
+<script src="{{ url_for('static', filename='js/staff_report_flow.js', v='20261124-report-return-1') }}"></script>
 <script src="{{ url_for('static', filename='js/staff_invoice_upload.js', v='20261103-staff-invoice-upload-1') }}"></script>
 </body>
 </html>

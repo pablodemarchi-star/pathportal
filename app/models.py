@@ -1112,6 +1112,8 @@ class StaffExamSessionReport(db.Model):
     emergency_pack_outcome = db.Column(db.String(40), nullable=False, default="")
     emergency_pack_reasons = db.Column(db.Text, nullable=False, default="")
     return_verification = db.Column(db.Text, nullable=False, default="[]", server_default="[]")
+    return_instructions_confirmed = db.Column(db.Boolean, nullable=False, default=False, server_default=db.false())
+    return_instructions_context = db.Column(db.Text, nullable=False, default="{}", server_default="{}")
     staff_assessments = db.Column(db.Text, nullable=False, default="[]", server_default="[]")
     marketing_confirmed = db.Column(db.Boolean, nullable=False, default=False, server_default=db.false())
     marketing_media = db.Column(db.Text, nullable=False, default="[]", server_default="[]")

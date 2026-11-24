@@ -24,13 +24,19 @@ class StaffSessionReportTest(unittest.TestCase):
         self.person = m.AcademicStaff(full_name='Report Supervisor', status='Active', roles='Supervisor')
         db.session.add_all([self.record, self.person]); db.session.flush()
         self.assignment = m.ExamSessionSupervisorAssignment(exam_session_id=self.record.id, team_member_id=self.person.id,
-            participation_status='Confirmed', is_remote=False)
+            participation_status='Confirmed', is_remote=False, is_shipment_recipient=True)
         self.share = m.StaffExamSessionsShare(person_ref=str(self.person.id), token='report-test')
         db.session.add_all([self.assignment, self.share]); db.session.flush()
         self.submission = m.StaffExamSessionSubmission(exam_session_id=self.record.id, assignment_type='supervisor',
             assignment_id=self.assignment.id, share_id=self.share.id)
         db.session.add(self.submission); db.session.flush()
         db.session.add(m.StaffSessionReportMedia(submission_id=self.submission.id, file_id='initialMedia123', folder_id='testPicturesFolder123', filename='photo.jpg', mime_type='image/jpeg'))
+        control = m.ExamSessionSinapsisControl.query.filter_by(exam_session_id=self.record.id).first()
+        if control is None:
+            control = m.ExamSessionSinapsisControl(exam_session_id=self.record.id)
+            db.session.add(control)
+        control.return_materials_method = 'location_drop_off'
+        control.return_drop_off_address_url = 'https://maps.example.com/materials-return'
         db.session.commit()
         self.client = self.app.test_client()
         with self.client.session_transaction() as state:
@@ -55,6 +61,14 @@ class StaffSessionReportTest(unittest.TestCase):
         from app.staff_report_components import applicable
         if applicable(self.record):
             data['component_completion'] = 'complete'
+        if self.record.format == 'Onsite':
+            from app.staff_return_materials import report_return_view
+            from app.routes import staff_submission_assignment
+            target = db.session.get(m.StaffExamSessionSubmission, int(self.url.split('/')[-2]))
+            target_assignment, _ = staff_submission_assignment(self.record, target.assignment_type, target.assignment_id)
+            with self.app.test_request_context():
+                info = report_return_view(self.record, target_assignment, target.share)
+            data.update(return_instructions_confirmed='1', return_instructions_version=info['version'])
         feedback_submitted = values.pop('_feedback_submitted', True)
         data.update(values)
         with patch('app.routes.staff_report_available', return_value=True), patch('app.routes.staff_report_feedback_submitted', return_value=feedback_submitted):
@@ -349,10 +363,21 @@ class StaffSessionReportTest(unittest.TestCase):
         self.assertNotIn('data-staff-end-checks ', html)
         self.assertIn('data-staff-exam-day-report', html)
 
-    def test_guided_layout_is_online_only_and_keeps_all_report_controls(self):
+    def test_guided_layout_supports_each_format_and_keeps_all_report_controls(self):
         url=f'/my-exam-sessions/{self.share.token}?session_year=2026'
         onsite=self.client.get(url).get_data(as_text=True)
         self.assertNotIn(' data-online-report-flow',onsite)
+        self.assertIn(' data-onsite-report-flow',onsite)
+        for key in ('session', 'centre', 'materials', 'team', 'media', 'checks', 'finish'):
+            self.assertIn('data-report-stage="'+key+'"', onsite)
+        for key in ('schedule_outcome', 'absent_candidates_checked', 'submitted_candidates_checked',
+                    'facilities_outcome', 'facilities_comments', 'emergency_pack_outcome',
+                    'emergency_pack_reasons', 'return_verification', 'marketing_confirmed',
+                    'centre_feedback_confirmed', 'optional_comments'):
+            self.assertIn('name="'+key+'"', onsite)
+        self.assertNotIn('data-add-consideration', onsite)
+        self.assertNotIn('data-report-stage="candidates"', onsite)
+        self.assertNotIn('data-report-stage="modules"', onsite)
         self.record.format='Online';self.record.modules='Speaking,Listening and speaking,Reading and writing';db.session.commit()
         online=self.client.get(url).get_data(as_text=True)
         self.assertIn(' data-online-report-flow',online)

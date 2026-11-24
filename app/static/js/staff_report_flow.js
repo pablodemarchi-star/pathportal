@@ -1,10 +1,19 @@
 (() => {
-  document.querySelectorAll('[data-online-report-flow]').forEach(dialog => {
+  document.querySelectorAll('[data-online-report-flow], [data-onsite-report-flow]').forEach(dialog => {
     const adminEdit = Boolean(dialog.closest?.('[data-admin-report-edit]'));
     const form = dialog.querySelector('[data-session-report-form]');
     const questions = form.querySelector('.staff-session-report-questions');
     const cards = Array.from(questions.children);
-    const definitions = [
+    const onsite = dialog.hasAttribute?.('data-onsite-report-flow');
+    const definitions = onsite ? [
+      ['session', 'Session', 'Confirm the session outcome and candidate attendance.'],
+      ['centre', 'Exam centre', 'Review the facilities and organisation of the exam centre.'],
+      ['materials', 'Exam materials', 'Verify the return packages and record whether the Emergency exam pack was used.'],
+      ['team', 'Staff review', 'Evaluate each staff member and add comments where needed.'],
+      ['media', 'Photos & videos', 'Upload the session photos and videos, then confirm that the upload is complete.'],
+      ['checks', 'Final checks', 'Confirm the exam centre feedback and any required reminders for examiners.'],
+      ['finish', 'Finish', 'Review your progress and add optional comments before submitting.'],
+    ] : [
       ['session', 'Session', 'Confirm the session outcome and candidate attendance.'],
       ['modules', 'Exam modules', 'Verify the files for each module in this session.'],
       ['candidates', 'Candidate IT issues', 'Record any technical difficulties affecting candidates.'],
@@ -75,13 +84,16 @@
     form.prepend(header);
     form.append(workspace, footer);
     dialog.classList.add('is-guided-online-report');
+    // These required confirmations stay disabled until their external prerequisite is ready.
+    const blockedConfirmation = input => input.disabled && !input.checked &&
+      input.matches?.('[data-report-feedback-checkbox], [data-report-marketing-confirmed], [data-report-return-confirmed]');
     const controls = key => cards.filter(card => !key || card.dataset.reportStage === key)
       .flatMap(card => Array.from(card.querySelectorAll('input, select, textarea')))
-      .filter(input => !input.disabled && input.willValidate !== false);
+      .filter(input => blockedConfirmation(input) || (!input.disabled && input.willValidate !== false));
     const invalid = key => {
       const radioGroups = new Set();
       return controls(key).filter(input => {
-        if (input.checkValidity()) return false;
+        if (!blockedConfirmation(input) && input.checkValidity()) return false;
         if (input.type === 'radio') {
           if (radioGroups.has(input.name)) return false;
           radioGroups.add(input.name);
@@ -153,6 +165,9 @@
       const first = invalid(steps[current][0])[0];
       if (first) { reveal(first); first.reportValidity(); update(); return; }
       show(current + 1);
+    }
+    if (typeof MutationObserver !== 'undefined') {
+      new MutationObserver(update).observe(questions, {subtree:true, attributes:true, attributeFilter:['disabled', 'required']});
     }
     form.addEventListener('input', update);
     form.addEventListener('change', update);
