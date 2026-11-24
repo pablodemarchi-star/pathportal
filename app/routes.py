@@ -20896,6 +20896,29 @@ def staff_exam_centre_contacts(record, role, assignment, status, now=None):
 
 
 def staff_portal_logistics_details(record, assignment):
+    if normalize_assignment_logistics_type(
+        getattr(assignment, "logistics_type", None), getattr(assignment, "logistics_enabled", False)
+    ) == "Complex logistics":
+        from app.models import StaffLogisticsCard
+        from markupsafe import escape
+        person_ref = staffing_assignment_person_ref(assignment)
+        cards_by_person = getattr(g, "portal_logistics_cards", None)
+        if cards_by_person is None:
+            cards_by_person = g.portal_logistics_cards = {}
+        if person_ref not in cards_by_person:
+            cards_by_person[person_ref] = StaffLogisticsCard.query.filter_by(
+                person_ref=person_ref, active=True).all()
+        card = next((item for item in cards_by_person[person_ref]
+                     if record.id in json.loads(item.session_ids or "[]")), None)
+        instructions = sanitize_instructions(card.instructions_html) if card else ""
+        if card and not instructions and card.description:
+            instructions = str(escape(card.description)).replace("\n", "<br>")
+        return {
+            "logistics_instructions": [{"html": instructions, "title": ""}] if instructions else [],
+            "logistics_card_instructions": instructions,
+            "logistics_card_links": json.loads(card.links or "[]") if card else [],
+            "logistics_progress": "Confirmed" if card and card.status == "Completed" else "In progress",
+        }
     member_id = getattr(assignment, "team_member_id", None)
     concepts = (ExamSessionLogisticsConcept.query
                 .filter(ExamSessionLogisticsConcept.exam_session_id == record.id,

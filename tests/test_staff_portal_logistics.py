@@ -9,7 +9,7 @@ from app import create_app, db
 from app.models import (AcademicStaff, ExamSession, ExamSessionScheduleWorkflow, ExamSessionMonthlyRegistration,
                         ExamSessionExaminerAssignment, ExamSessionSupervisorAssignment,
                         ExamSessionInternAssignment, StaffExamSessionSubmission, StaffExamSessionsShare,
-                        ExamSessionLogistics, ExamSessionLogisticsConcept, ProviderType)
+                        ExamSessionLogistics, ExamSessionLogisticsConcept, ProviderType, StaffLogisticsCard)
 from app.routes import complex_logistics_staff_members_for_session, save_exam_session_logistics
 
 
@@ -630,12 +630,13 @@ class StaffPortalLogisticsTest(unittest.TestCase):
             page = self.portal_page()
             self.assertIn(f'<span class="staff-detail-role">{value}</span>', page)
             self.assertIn(f'>{value}</div>', page)
-            self.assertEqual('data-staff-logistics-instructions-open' in page, value.startswith("Complex"))
+            self.assertEqual('data-staff-logistics-instructions-open' in page, value == "Complex Uber ride")
             if value == "Does not apply":
                 self.assertIn('arrive 30 minutes before the start of the exam session.', page)
                 self.assertNotIn('Open logistics folder ↗', page)
             else:
-                self.assertIn('href="https://example.com/travel"', page)
+                if value != "Complex logistics":
+                    self.assertIn('href="https://example.com/travel"', page)
                 self.assertIn('<strong>Reimbursements</strong>', page)
                 self.assertIn('<strong>Do not include these expenses in your final invoice.</strong>', page)
             if value in {"Uber ride", "Complex Uber ride"}:
@@ -703,9 +704,51 @@ class StaffPortalLogisticsTest(unittest.TestCase):
         assignment.logistics_type = "Complex logistics"
         db.session.commit()
         self.assertIn('staff-detail-logistics-progress">In progress</span>', self.portal_page())
-        own.status = "Confirmed"
+        card = StaffLogisticsCard.query.filter_by(person_ref=str(self.person.id), active=True).one()
+        card.status = "Completed"
         db.session.commit()
         self.assertIn('staff-detail-logistics-progress is-confirmed">Confirmed</span>', self.portal_page())
+
+    def test_complex_travel_uses_personal_card_instructions_and_named_links(self):
+        import json
+        assignment = self.portal_assignment()
+        assignment.logistics_type = "Complex logistics"
+        db.session.commit()
+        card = StaffLogisticsCard.query.filter_by(person_ref=str(self.person.id), active=True).one()
+        card.instructions_html = '<p><strong>Take the morning flight.</strong></p>'
+        card.links = json.dumps([
+            {"name": "Flight tickets", "url": "https://example.com/tickets"},
+            {"name": "Reimbursements", "url": "https://example.com/receipts"}])
+        db.session.add(StaffLogisticsCard(person_ref="potential:999", staff_name="Private",
+            group_session_ids=json.dumps([self.record.id]), session_ids=json.dumps([self.record.id]),
+            instructions_html="PRIVATE OTHER CARD", active=False))
+        db.session.commit()
+        page = self.portal_page()
+        self.assertIn('<h4>Instructions</h4>', page)
+        self.assertIn('<strong>Take the morning flight.</strong>', page)
+        for name, path in [("Flight tickets", "tickets"), ("Reimbursements", "receipts")]:
+            self.assertIn(f'href="https://example.com/{path}" target="_blank" rel="noopener noreferrer">{name}</a>', page)
+        self.assertNotIn('PRIVATE OTHER CARD', page)
+        self.assertNotIn('Open logistics folder', page)
+        self.assertNotIn('data-staff-logistics-instructions-open', page)
+        self.assertIn("You will find all relevant instructions and documents relating to your", page)
+        self.assertIn("expenses not approved in advance, or those without a valid receipt", page)
+
+    def test_complex_travel_empty_card_and_missing_card_show_preparation_notice(self):
+        assignment = self.portal_assignment()
+        assignment.logistics_type = "Complex logistics"
+        db.session.commit()
+        for has_card in [True, False]:
+            if not has_card:
+                # A missing or unselected card must never expose another session's instructions.
+                card = StaffLogisticsCard.query.filter_by(person_ref=str(self.person.id), active=True).one()
+                card.session_ids = "[]"
+                card.instructions_html = "PRIVATE UNSELECTED SESSION"
+                db.session.flush()
+            page = self.portal_page()
+            self.assertIn("Your travel instructions are being prepared and will appear here.", page)
+            self.assertIn('staff-detail-logistics-progress">In progress</span>', page)
+            self.assertNotIn("PRIVATE UNSELECTED SESSION", page)
 
     def test_multiple_concepts_have_separate_titled_buttons_and_dialogs(self):
         assignment = self.portal_assignment()

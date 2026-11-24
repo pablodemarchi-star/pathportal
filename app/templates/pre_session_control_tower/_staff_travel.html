@@ -20,10 +20,33 @@ Once the exam session is over, please access the folder below and upload your <s
     {% elif logistics_type == 'Carpooling' %}
       <p>Your journey to the exam centre will involve sharing a vehicle with other staff members. Please read and follow the important instructions below, as specific procedures and requirements must be observed.</p>
     {% elif logistics_type == 'Complex logistics' %}
-      <p>All relevant information and documents related to your <strong>travel or commute</strong> are available in the folder below. If the <strong>Travel and logistics</strong> section is marked <span class="staff-detail-logistics-progress is-inline">In progress</span>, some documents or travel arrangements are still being finalised. Once the status changes to <span class="staff-detail-logistics-progress is-confirmed is-inline">Confirmed</span>, all required documents and arrangements are ready. If you have any questions or need further clarification, please feel free to contact us.</p>
-      <p>Please read and follow the important instructions below, as specific procedures and requirements must be observed.</p>
+      <div class="staff-travel-overview">
+        <p>You will find all relevant instructions and documents relating to your <strong>travel or commute</strong> in this section.</p>
+        <p>If the <strong>Travel and Logistics</strong> section is marked <span class="staff-detail-logistics-progress is-inline">In progress</span>, some documents or arrangements are still being finalised. Once the status changes to <span class="staff-detail-logistics-progress is-confirmed is-inline">Confirmed</span>, all necessary documents and arrangements are ready.</p>
+      </div>
+      <div class="staff-travel-reimbursements">
+        <h4>Reimbursements</h4>
+        <p>After the exam session, if you have incurred any <strong>additional expenses previously approved by Path Examinations</strong>, please upload the corresponding receipts to the <strong>Reimbursements</strong> folder. <strong>Do not include these expenses in your final invoice.</strong></p>
+        <p>Please note that <strong>expenses not approved in advance, or those without a valid receipt issued in the company's name, cannot be reimbursed.</strong></p>
+      </div>
+      <section class="staff-travel-instructions" aria-label="Travel instructions">
+        <h4>Instructions</h4>
+        {% if detail.logistics_card_instructions %}
+          <div class="staff-detail-logistics-instruction">{{ detail.logistics_card_instructions|safe }}</div>
+        {% endif %}
+        {% if detail.logistics_card_links %}
+          <div class="staff-travel-document-links" aria-label="Travel documents and links">
+            {% for link in detail.logistics_card_links %}
+              <a class="staff-travel-document-chip" href="{{ link.url }}" target="_blank" rel="noopener noreferrer">{{ link.name }}</a>
+            {% endfor %}
+          </div>
+        {% endif %}
+        {% if not detail.logistics_card_instructions and not detail.logistics_card_links %}
+          <p class="staff-travel-empty">Your travel instructions are being prepared and will appear here.</p>
+        {% endif %}
+      </section>
     {% endif %}
-    {% if complex_travel %}
+    {% if complex_travel and logistics_type != 'Complex logistics' %}
       {% for instruction in detail.logistics_instructions %}
       <div data-staff-logistics-instructions-item>
         <button type="button" class="staff-detail-link staff-detail-logistics-instructions-button" data-staff-logistics-instructions-open>View instructions{% if instruction.title %} | {{ instruction.title }}{% endif %}</button>
@@ -55,7 +78,7 @@ Once the exam session is over, please access the folder below and upload your <s
     {% endif %}
   </div>
   <div data-staff-logistics-link>
-    {% if detail.logistics_url and logistics_type != 'Does not apply' %}
+    {% if detail.logistics_url and logistics_type not in ['Does not apply', 'Complex logistics'] %}
       <a class="staff-detail-link" href="{{ detail.logistics_url }}" target="_blank" rel="noopener noreferrer">Open logistics folder ↗</a>
     {% endif %}
   </div>
