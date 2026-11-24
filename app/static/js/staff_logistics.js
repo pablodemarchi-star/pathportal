@@ -67,6 +67,41 @@
     const content=dialog.querySelector('[data-logistics-payment-content]');content.textContent='Loading payment request…';dialog.showModal();
     try{const response=await fetch(link.dataset.logisticsPaymentUrl,{cache:'no-store'});if(!response.ok||response.redirected)throw new Error('Payment request could not be loaded.');content.innerHTML=await response.text();}catch(error){content.textContent=error.message;}
   });
+  document.addEventListener('change', event => {
+    const picker = event.target.closest('[data-logistics-session-picker]');
+    if (picker) picker.querySelector('[data-logistics-session-count]').textContent = `${picker.querySelectorAll('[name=session_ids]:checked').length} selected`;
+  });
+  function chooseCard(result) {
+    return new Promise(resolve => {
+      const make = (tag, text, className) => {
+        const node=document.createElement(tag);if(text!==undefined)node.textContent=text;if(className)node.className=className;return node;
+      };
+      const dialog=make('dialog',undefined,'staff-logistics-conflict-dialog');
+      dialog.setAttribute('aria-label','Choose the Logistics card to keep');
+      const title=make('h2','Choose the card to keep');
+      const intro=make('p','These sessions already have separate Logistics cards. Keep one card to share its instructions, links and payment requests. The shared card will return to Pending.');
+      const warning=make('p','Pending payment requests on discarded cards will be cancelled. Completed payments will be retained with an alert.','staffing-schedule-notice');
+      const sessions=make('p','Applies to: '+result.sessions.join(' · '),'staff-logistics-conflict-sessions');
+      const options=make('div',undefined,'staff-logistics-conflict-options');
+      const footer=make('div',undefined,'staff-session-report-actions');
+      const cancel=make('button','Cancel','secondary-button');cancel.type='button';
+      const confirm=make('button','Keep selected card','primary-button');confirm.type='button';confirm.disabled=true;
+      let chosen=null;
+      result.cards.forEach(card=>{
+        const label=make('label');const radio=make('input');radio.type='radio';radio.name='logistics_keep_card';radio.value=String(card.id);
+        const detail=make('div');detail.append(make('strong',card.name+' · Card #'+card.id+(card.current?' · Current card':'')),make('p',card.sessions.join(' · ')),make('small',card.status+' · '+card.link_count+' link(s)'));
+        detail.append(make('p',card.description||'No instructions added.','staff-logistics-conflict-preview'));
+        radio.addEventListener('change',()=>{chosen=card.id;confirm.disabled=false;});
+        label.append(radio,detail);options.append(label);
+      });
+      footer.append(cancel,confirm);dialog.append(title,intro,warning,sessions,options,footer);document.body.append(dialog);
+      const dismiss=()=>{dialog.close();};
+      cancel.addEventListener('click',dismiss);
+      confirm.addEventListener('click',()=>{if(chosen!==null){dialog.returnValue=String(chosen);dialog.close();}});
+      dialog.addEventListener('close',()=>{const value=dialog.returnValue;dialog.remove();resolve(value&&chosen!==null?chosen:null);},{once:true});
+      dialog.showModal();
+    });
+  }
   document.addEventListener('submit',async event=>{
     const form=event.target.closest('[data-logistics-card-form]');if(!form)return;event.preventDefault();
     const output=form.querySelector('[data-logistics-save-status]');
@@ -76,6 +111,18 @@
     if(editor) data.set('instructions_html',editor.innerHTML);
     data.set('links',JSON.stringify(Array.from(form.querySelectorAll('[data-logistics-link]')).map(row=>({name:row.querySelector('[data-link-name]').value,url:row.querySelector('[data-link-url]').value}))));
     const submit=form.querySelector('[type=submit]');submit.disabled=true;output.textContent='Saving…';
-    try{const response=await fetch(form.action,{method:'POST',body:data,headers:{Accept:'application/json'}});if(!response.ok||response.redirected)throw new Error('Changes could not be saved. Check the fields and reload if the session team changed.');const result=await response.json();if(!result.ok)throw new Error('Changes could not be saved.');const next=new URL(window.location.href);next.searchParams.set('open_schedule_modal',form.dataset.sessionId);next.searchParams.set('open_modal_target','logistics');next.searchParams.set('logistics_only','1');window.location.assign(next);}catch(error){output.textContent=error.message;submit.disabled=false;}
+    try {
+      let response,result;
+      while(true) {
+        response=await fetch(form.action,{method:'POST',body:data,headers:{Accept:'application/json'}});
+        result=await response.json().catch(()=>({}));
+        if(response.status!==409||result.code!=='logistics_card_conflict')break;
+        const keep=await chooseCard(result);
+        if(keep===null){output.textContent='Changes not saved.';submit.disabled=false;return;}
+        data.set('keep_card_id',String(keep));data.set('conflict_token',result.conflict_token);
+      }
+      if(!response.ok||response.redirected||!result.ok)throw new Error(result.error||'Changes could not be saved. Check the fields and reload if the session team changed.');
+      const next=new URL(window.location.href);next.searchParams.set('open_schedule_modal',form.dataset.sessionId);next.searchParams.set('open_modal_target','logistics');next.searchParams.set('logistics_only','1');window.location.assign(next);
+    }catch(error){output.textContent=error.message;submit.disabled=false;}
   });
 })();

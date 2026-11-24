@@ -1,4 +1,4 @@
-"""Per-person Logistics cards shared across selected concatenated sessions."""
+"""Per-person Logistics cards shared across selected eligible exam sessions."""
 import json
 from flask import Blueprint, abort, g, jsonify, request, url_for
 from sqlalchemy import event, inspect
@@ -92,35 +92,68 @@ def assignment_groups():
     return records, groups
 
 
+def person_info(records, groups, ref, year=None):
+    info = dict(assignments={}, participation={})
+    for (_, person_ref), group in groups.items():
+        if person_ref != ref:
+            continue
+        info['name'] = group['name']
+        for key, value in group['assignments'].items():
+            record = records[value['session']]
+            if year is None or record.session_date and record.session_date.year == year:
+                info['assignments'][key] = value
+                info['participation'][record.id] = group['participation'][record.id]
+    return info
+
+
+def signature_for(info, pool):
+    return json.dumps({key: value for key, value in info['assignments'].items() if value['session'] in pool}, sort_keys=True)
+
+
+def retire_card(card, reason):
+    card.active = False
+    card.status = 'Pending'
+    cancel_payments(m.PaymentRequest.query.filter_by(logistics_card_id=card.id).all(), reason)
+
+
 def sync_cards():
     records, groups = assignment_groups()
     existing = m.StaffLogisticsCard.query.filter_by(active=True).all()
-    used = set()
-    for (group, ref), info in groups.items():
-        card = next((row for row in existing if row.id not in used and row.person_ref == ref and set(json.loads(row.group_session_ids)) & set(group)), None)
-        eligible = sorted(info['participation'])
-        signature = json.dumps(info['assignments'], sort_keys=True)
-        if card is not None and not (set(json.loads(card.session_ids)) & set(eligible)):
-            card = None
-        if card is None:
-            card = m.StaffLogisticsCard(person_ref=ref, staff_name=info['name'], group_session_ids=json.dumps(group), session_ids=json.dumps(eligible), assignment_signature=signature, status='Pending', active=True)
-            db.session.add(card)
-        else:
-            used.add(card.id)
-            selected = sorted(set(json.loads(card.session_ids)) & set(eligible))
-            if not selected:
-                selected = eligible
-            if card.assignment_signature != signature or json.loads(card.session_ids) != selected or json.loads(card.group_session_ids) != list(group):
-                card.status = 'Pending'
-            card.session_ids = json.dumps(selected)
-            card.group_session_ids = json.dumps(group)
-            card.assignment_signature = signature
-            card.staff_name = info['name']
+    by_person = {ref: person_info(records, groups, ref) for _, ref in groups}
+    live = []
     for card in existing:
-        if card.id not in used:
-            card.active = False
+        info = by_person.get(card.person_ref, dict(assignments={}, participation={}))
+        eligible = set(info['participation'])
+        pool = sorted(set(json.loads(card.group_session_ids)) & eligible)
+        selected = sorted(set(json.loads(card.session_ids)) & set(pool))
+        if not selected:
+            retire_card(card, 'Logistics card removed: ' + card.staff_name)
+            continue
+        signature = signature_for(info, pool)
+        if card.assignment_signature != signature or json.loads(card.session_ids) != selected or json.loads(card.group_session_ids) != pool:
             card.status = 'Pending'
-            cancel_payments(m.PaymentRequest.query.filter_by(logistics_card_id=card.id).all(), 'Logistics card removed: ' + card.staff_name)
+        card.session_ids, card.group_session_ids = json.dumps(selected), json.dumps(pool)
+        card.assignment_signature, card.staff_name = signature, info['name']
+        live.append(card)
+    # Retain existing sharing decisions, including sessions explicitly excluded
+    # from a card. New unclaimed sessions keep the previous concatenated default.
+    for (group, ref), info in groups.items():
+        matching = [card for card in live if card.person_ref == ref]
+        claimed = {sid for card in matching for sid in json.loads(card.group_session_ids)}
+        unclaimed = sorted(set(info['participation']) - claimed)
+        if not unclaimed:
+            continue
+        intersecting = [card for card in matching if set(json.loads(card.group_session_ids)) & set(group)]
+        if len(intersecting) == 1:
+            card = intersecting[0]
+            pool = sorted(set(json.loads(card.group_session_ids)) | set(unclaimed))
+            card.group_session_ids = json.dumps(pool)
+            card.assignment_signature = signature_for(by_person[ref], pool)
+            card.status = 'Pending'
+        else:
+            card = m.StaffLogisticsCard(person_ref=ref, staff_name=info['name'], group_session_ids=json.dumps(unclaimed), session_ids=json.dumps(unclaimed), assignment_signature=signature_for(info, unclaimed), status='Pending', active=True)
+            db.session.add(card)
+            live.append(card)
 
 
 def state(record, assignments=None):
@@ -146,15 +179,16 @@ def state(record, assignments=None):
                 blockers=[] if ready else [dict(code='LOGISTICS_CONCEPTS_PENDING', message='Complete all Logistics cards and fill all roles.')])
 
 
-def card_views(record):
+def card_views(record, year=None):
     from app.routes import can_view_payment_request
     records, groups = assignment_groups()
+    year = year or (record.session_date.year if record.session_date else None)
     result = []
     for card in m.StaffLogisticsCard.query.filter_by(active=True).order_by(m.StaffLogisticsCard.staff_name):
         if record.id not in json.loads(card.session_ids):
             continue
-        info = next((info for (group, ref), info in groups.items() if ref == card.person_ref and set(group) & set(json.loads(card.group_session_ids))), None)
-        if info is None:
+        info = person_info(records, groups, card.person_ref, year)
+        if not info['participation']:
             continue
         sessions = [dict(id=sid, name=records[sid].exam_session_name, url=url_for('staff.exam_session_planner', session_year=records[sid].session_date.year if records[sid].session_date else None, open_session_modal=sid, session_fullscreen=1), selected=sid in json.loads(card.session_ids)) for sid in sorted(info['participation'])]
         member_id = int(card.person_ref) if card.person_ref.isdigit() else None
@@ -171,7 +205,7 @@ def card_views(record):
         from app.rich_text import sanitize_instructions
         instructions = Markup(sanitize_instructions(card.instructions_html)) if card.instructions_html else escape(card.description).replace('\n', Markup('<br>'))
         logistics_types = sorted({assignment['type'] for assignment in info['assignments'].values() if assignment['session'] == record.id})
-        result.append(dict(record=card, logistics_types=logistics_types, instructions_html=instructions, sessions=sessions, participation=info['participation'].get(record.id, 'Pending'), links=json.loads(card.links), document=document, payments=visible))
+        result.append(dict(record=card, year=year, logistics_types=logistics_types, instructions_html=instructions, sessions=sessions, participation=info['participation'].get(record.id, 'Pending'), links=json.loads(card.links), document=document, payments=visible))
     return result
 
 
@@ -182,11 +216,34 @@ def authorize(edit=False):
         abort(400, description='Security token expired. Reload and try again.')
 
 
+def conflict_token(cards, selected, source_id):
+    import hashlib
+    import hmac
+    from flask import current_app
+    payload = []
+    for row in sorted(cards, key=lambda value: value.id):
+        fields = {column.name: str(getattr(row, column.name)) for column in row.__table__.columns}
+        fields['payments'] = [(payment.id, payment.status, str(payment.payment_completed_at)) for payment in m.PaymentRequest.query.filter_by(logistics_card_id=row.id).order_by(m.PaymentRequest.id)]
+        payload.append(fields)
+    key = current_app.config['SECRET_KEY']
+    data = json.dumps([source_id, selected, payload], sort_keys=True).encode()
+    return hmac.new(key.encode() if isinstance(key, str) else key, data, hashlib.sha256).hexdigest()
+
+
+def conflict_view(card, records, proposed_description=None, proposed_links=None):
+    return dict(id=card.id, name=card.staff_name, current=proposed_description is not None, status=card.status, description=card.description if proposed_description is None else proposed_description,
+                sessions=[records[sid].exam_session_name for sid in json.loads(card.session_ids) if sid in records],
+                link_count=len(json.loads(card.links or '[]') if proposed_links is None else proposed_links))
+
+
 @bp.post('/pre-session-control-tower/logistics/cards/<int:card_id>')
 @login_required
 def save(card_id):
     authorize(True)
     card = db.get_or_404(m.StaffLogisticsCard, card_id)
+    person_model = m.PotentialEntry if card.person_ref.startswith('potential:') else m.AcademicStaff
+    db.session.query(person_model.id).filter_by(id=int(card.person_ref.split(':')[-1])).with_for_update().first()
+    db.session.refresh(card)
     if not card.active:
         abort(409, description='This Logistics card is no longer active.')
     from app.routes import logistics_actions_are_blocked, is_valid_url
@@ -196,7 +253,12 @@ def save(card_id):
         links = json.loads(request.form.get('links', '[]'))
     except (ValueError, TypeError):
         abort(400)
-    allowed = {value['session'] for value in json.loads(card.assignment_signature).values()}
+    records, groups = assignment_groups()
+    old_selected = json.loads(card.session_ids)
+    default_record = records.get(old_selected[0]) if old_selected else None
+    year = request.form.get('session_year', type=int) or (default_record.session_date.year if default_record and default_record.session_date else None)
+    info = person_info(records, groups, card.person_ref, year)
+    allowed = set(info['participation'])
     if not selected or not set(selected) <= allowed:
         abort(400, description='Choose at least one applicable session.')
     if any(logistics_actions_are_blocked(db.session.get(m.ExamSession, sid)) for sid in set(selected) | set(json.loads(card.session_ids))):
@@ -222,14 +284,58 @@ def save(card_id):
         if not name.strip() or len(name)>200 or len(url)>2000 or not is_valid_url(url.strip()) or urlsplit(url.strip()).scheme not in {'http','https'}:
             abort(400, description='Every link requires a name and a valid http(s) URL.')
         clean.append(dict(name=name.strip(), url=url.strip()))
-    changed_scope = json.loads(card.session_ids) != selected
-    card.session_ids = json.dumps(selected)
-    card.description, card.links = description, json.dumps(clean)
-    card.instructions_html = instructions_html
-    card.status = 'Pending' if changed_scope else status
-    card.updated_by = getattr(getattr(g, 'current_user', None), 'email', '')
+    # Preserve any legacy sharing outside the menu year; the selector only edits
+    # this year's sessions and must not silently erase other-year arrangements.
+    outside_year = {sid for sid in old_selected if sid in records and records[sid].session_date and records[sid].session_date.year != year}
+    desired = set(selected) | outside_year
+    peers = m.StaffLogisticsCard.query.filter_by(person_ref=card.person_ref, active=True).populate_existing().all()
+    conflicts = [other for other in peers if other.id != card.id and set(json.loads(other.session_ids)) & desired]
+    candidates = [card] + conflicts
+    keeper = card
+    if conflicts:
+        token = conflict_token(candidates, selected, card.id)
+        keep_id = request.form.get('keep_card_id', type=int)
+        if request.form.get('conflict_token') != token or keep_id not in {row.id for row in candidates}:
+            return jsonify(ok=False, code='logistics_card_conflict', error='These sessions already have separate Logistics cards. Choose which card to keep.',
+                           conflict_token=token, cards=[conflict_view(row, records, description if row.id == card.id else None, clean if row.id == card.id else None) for row in candidates],
+                           sessions=[records[sid].exam_session_name for sid in sorted(desired | {sid for row in conflicts for sid in json.loads(row.session_ids)}) if sid in records]), 409
+        keeper = next(row for row in candidates if row.id == keep_id)
+        desired.update(sid for row in conflicts for sid in json.loads(row.session_ids))
+    affected = desired | set(old_selected)
+    if any(logistics_actions_are_blocked(records[sid]) for sid in affected if sid in records):
+        abort(403, description='Staffing must be confirmed for all affected sessions.')
+    pool = set(json.loads(card.group_session_ids)) | desired
+    for other in conflicts:
+        pool.update(json.loads(other.group_session_ids))
+    for discarded in candidates:
+        if discarded.id != keeper.id:
+            retire_card(discarded, 'Logistics cards combined; retained card #' + str(keeper.id))
+    # Flush retired cards before expanding the surviving unique pool.
+    if conflicts:
+        db.session.flush()
+    for other in peers:
+        if other.id in {row.id for row in candidates}:
+            continue
+        # A session excluded from another card may be explicitly reassigned here.
+        other_pool = set(json.loads(other.group_session_ids))
+        if other_pool & pool:
+            other_pool -= pool
+            other.group_session_ids = json.dumps(sorted(other_pool))
+            other.assignment_signature = signature_for(person_info(records, groups, other.person_ref), other_pool)
+    changed_scope = set(json.loads(keeper.session_ids)) != desired or bool(conflicts)
+    keeper.session_ids = json.dumps(sorted(desired))
+    keeper.group_session_ids = json.dumps(sorted(pool))
+    keeper.assignment_signature = signature_for(person_info(records, groups, keeper.person_ref), pool)
+    if keeper.id == card.id:
+        keeper.description, keeper.links = description, json.dumps(clean)
+        keeper.instructions_html = instructions_html
+        keeper.status = 'Pending' if changed_scope else status
+    elif changed_scope:
+        keeper.status = 'Pending'
+    keeper.updated_by = getattr(getattr(g, 'current_user', None), 'email', '')
     db.session.commit()
-    return jsonify(ok=True, status=card.status, scope_changed=changed_scope)
+    return jsonify(ok=True, card_id=keeper.id, status=keeper.status, scope_changed=changed_scope)
+
 
 
 @bp.get('/pre-session-control-tower/logistics/payments/<int:payment_id>')

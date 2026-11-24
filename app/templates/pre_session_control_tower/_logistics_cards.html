@@ -1,4 +1,4 @@
-{% set card_views = logistics_card_views(session) %}
+{% set card_views = logistics_card_views(session, selected_session_year) %}
 {% if view.logistics.open_roles %}<p class="staffing-schedule-notice">Roles to cover — Logistics must be confirmed again after assigning a replacement.</p>{% endif %}
 {% if view.logistics.pending_definition %}<p class="staffing-schedule-notice">Define Logistics for every assigned staff member in Exam session planner.</p>{% endif %}
 <div class="staff-logistics-cards">
@@ -16,10 +16,16 @@
   </header>
   <form method="post" action="{{ url_for('staff_logistics.save',card_id=card.id) }}" data-logistics-card-form data-session-id="{{ session.id }}">
     <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <input type="hidden" name="session_year" value="{{ item.year }}">
     <fieldset class="staff-logistics-editor"{% if logistics_actions_disabled or not user_can_edit('pre_session_control_tower') %} disabled{% endif %}>
       <div class="staff-logistics-planning-grid">
         {% if item.sessions|length > 1 %}
-        <fieldset class="staff-logistics-scope"><legend>Applies to sessions</legend><p>Choose where these arrangements apply.</p>{% for linked in item.sessions %}<label><input type="checkbox" name="session_ids" value="{{ linked.id }}"{% if linked.selected %} checked{% endif %}><span>{{ linked.name }}</span></label>{% endfor %}</fieldset>
+        <fieldset class="staff-logistics-scope"><legend>Applies to sessions</legend><p>Choose one or more sessions from {{ item.year }}.</p>
+          <details class="staff-logistics-session-picker" data-logistics-session-picker>
+            <summary><span data-logistics-session-count>{{ item.sessions|selectattr('selected')|list|length }} selected</span><span aria-hidden="true">⌄</span></summary>
+            <div class="staff-logistics-session-options">{% for linked in item.sessions %}<label><input type="checkbox" name="session_ids" value="{{ linked.id }}"{% if linked.selected %} checked{% endif %}><span>{{ linked.name }}</span></label>{% endfor %}</div>
+          </details>
+        </fieldset>
         {% else %}{% for linked in item.sessions %}<input type="checkbox" name="session_ids" value="{{ linked.id }}" checked hidden>{% endfor %}{% endif %}
         <div class="staff-logistics-description" data-logistics-rich-text>
           <span class="staff-logistics-field-title" id="logistics-instructions-label-{{ session.id }}-{{ card.id }}">Instructions <small>Optional</small></span>

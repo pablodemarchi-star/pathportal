@@ -31,6 +31,7 @@ vm.runInNewContext(fs.readFileSync('app/static/js/staff_logistics.js','utf8'),{d
  assert.equal(prevented,true);assert.deepEqual(JSON.parse(posted.body.values.links),[{name:'Hotel',url:'https://example.com/hotel'}]);
  assert.match(redirected,/open_schedule_modal=10/);assert.match(redirected,/open_modal_target=logistics/);
  const remove={closest:()=>rows[0]};await handlers.click({target:{closest:key=>key==='[data-remove-logistics-link]'?remove:null}});assert.equal(rows.length,0);
+ const count={};handlers.change({target:{closest:()=>({querySelector:()=>count,querySelectorAll:()=>[{},{}]})}});assert.equal(count.textContent,'2 selected');
  handlers.selectionchange();
  const act=async attribute=>{
    const button={dataset:{logisticsTextCommand:attribute==='bold'?'bold':undefined},closest:()=>wrapper,hasAttribute:key=>key===attribute};
