@@ -19,7 +19,7 @@ function page(isIT=false){
  const choices=[new Element('input'),new Element('input')];choices[0].value=isIT?'0':'complete';choices[1].value=isIT?'1':'component_absences';
  let drafts=0;json.value='[]';json.dispatchEvent=()=>drafts++;form.closest=()=>host;
  const fieldset=new Element('fieldset');
- const keys=['number','name','institution','exam',...(isIT?[]:['component']),'reason'];
+ const keys=['number','name','exam',...(isIT?[]:['component']),'reason'];
  const fields=keys.map(key=>{const node=new Element('input');node.dataset.componentField=key;node.required=true;return node;});
  const moduleInputs=isIT?['Speaking','Listening and speaking','Reading and writing'].map(value=>{const node=new Element('input');node.value=value;node.isModule=true;const label={};node.closest=()=>label;return node;}):[];
  const hint={};fieldset.append(...fields,...moduleInputs);
@@ -34,7 +34,7 @@ function page(isIT=false){
  const change=input=>editor.handlers.change?.({target:input});
  return{host,form,json,chips,add,panel,error,choices,dialog,editor,fields,moduleInputs,set,save,change,drafts:()=>drafts,cancel:editor.children[2].children[0]};
 }
-const candidate={number:'00120',name:'Josefina Ramirez',institution:'School',exam:'B2 Competency',component:'Listening',reason:'Connection lost'};
+const candidate={number:'00120',name:'Josefina Ramirez',exam:'B2 Competency',component:'Listening',reason:'Connection lost'};
 const p=page();assert.equal(p.panel.hidden,true);
 p.choices[1].checked=true;p.choices[1].handlers.change();assert.match(p.choices[1].validationMessage,/at least one/);
 p.add.handlers.click();assert.equal(p.dialog.open,true);assert.equal(p.host.children.length,1);assert.equal(p.form.children.length,0);
@@ -55,12 +55,12 @@ p.json.value=JSON.stringify([candidate]);p.form.handlers['report:draft-restored'
 p.json.disabled=true;p.form.handlers['report:locked']();assert.equal(p.add.disabled,true);assert.equal(p.chips.children[0].children[0].disabled,true);p.chips.children[0].children[1].handlers.click();assert.equal(p.chips.children.length,1);
 console.log('Candidate chips: add, validate, edit, cancel, remove, required cases, restored records and submitted locks passed.');
 const it=page(true);it.choices[1].checked=true;it.choices[1].handlers.change();it.add.handlers.click();it.set(candidate);
-it.editor.handlers.change({target:it.fields[3]});it.save();assert.equal(it.chips.children.length,0);
+it.editor.handlers.change({target:it.fields[2]});it.save();assert.equal(it.chips.children.length,0);
 it.moduleInputs[1].checked=true;it.editor.handlers.change({target:it.moduleInputs[1]});it.moduleInputs[2].checked=true;it.editor.handlers.change({target:it.moduleInputs[2]});it.save();
 assert.equal(it.chips.children.length,1);assert.deepEqual(JSON.parse(it.json.value)[0].modules,['Listening and speaking','Reading and writing']);
 it.chips.children[0].children[0].handlers.click();assert.equal(it.moduleInputs[1].checked,true);assert.equal(it.moduleInputs[2].checked,true);
-it.fields[3].value='Mixed';it.moduleInputs[1].checked=false;it.moduleInputs[2].checked=false;it.editor.handlers.change({target:it.fields[3]});
+it.fields[2].value='Mixed';it.moduleInputs[1].checked=false;it.moduleInputs[2].checked=false;it.editor.handlers.change({target:it.fields[2]});
 it.moduleInputs[0].checked=true;it.editor.handlers.change({target:it.moduleInputs[0]});assert.equal(it.moduleInputs[1].disabled,true);it.save();assert.deepEqual(JSON.parse(it.json.value)[0].modules,['Speaking']);
-it.chips.children[0].children[0].handlers.click();it.fields[3].value='B2 Competency';it.editor.handlers.change({target:it.fields[3]});assert.equal(it.moduleInputs[0].checked,false);assert.equal(it.moduleInputs[0].disabled,true);
+it.chips.children[0].children[0].handlers.click();it.fields[2].value='B2 Competency';it.editor.handlers.change({target:it.fields[2]});assert.equal(it.moduleInputs[0].checked,false);assert.equal(it.moduleInputs[0].disabled,true);
 it.cancel.handlers.click();assert.deepEqual(JSON.parse(it.json.value)[0].modules,['Speaking']);assert.ok(it.drafts()>0);
 console.log('IT candidate editor: exam filtering, required modules, combined modules, Speaking exclusivity, restored choices and cancellation passed.');

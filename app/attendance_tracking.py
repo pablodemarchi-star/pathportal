@@ -91,7 +91,7 @@ def batch_presentations(records,today=None):
     for item in institutions:by_session[item.exam_session_id].append(item)
     if institutions:
         for item in m.AttendanceModule.query.filter(m.AttendanceModule.institution_id.in_([i.id for i in institutions]),m.AttendanceModule.document_id.isnot(None)).all():by_institution[item.institution_id].add(item.module)
-    for item in m.AbsenceCandidate.query.options(load_only(m.AbsenceCandidate.id,m.AbsenceCandidate.exam_session_id,m.AbsenceCandidate.document_id,m.AbsenceCandidate.review_status,m.AbsenceCandidate.component_reason,m.AbsenceCandidate.it_reason,m.AbsenceCandidate.institution_id)).filter(m.AbsenceCandidate.exam_session_id.in_(ids)).all():candidates[item.exam_session_id].append(item)
+    for item in m.AbsenceCandidate.query.options(load_only(m.AbsenceCandidate.id,m.AbsenceCandidate.exam_session_id,m.AbsenceCandidate.document_id,m.AbsenceCandidate.review_status,m.AbsenceCandidate.component_reason,m.AbsenceCandidate.it_reason,m.AbsenceCandidate.institution_id,m.AbsenceCandidate.institution_name)).filter(m.AbsenceCandidate.exam_session_id.in_(ids)).all():candidates[item.exam_session_id].append(item)
     result={}
     for record in records:
         cards=[dict(id=str(i.id),main=i.is_main,sent=json.loads(i.notifications or '{}'),modules={'present':bool(by_institution[i.id]&set(record.modules_list()))}) for i in by_session[record.id]]

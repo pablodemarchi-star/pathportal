@@ -35,8 +35,8 @@ def validate(record, form):
         if item['number'] in numbers:
             raise ValueError('Enter each candidate number only once in this report.')
         numbers.add(item['number'])
-        if any(not item[key] or len(item[key]) > maximum for key, maximum in (('name', 250), ('institution', 250), ('reason', 10000))):
-            raise ValueError('Complete Candidate name, Institution and Reason for every candidate (Reason: maximum 10,000 characters).')
+        if any(not item[key] or len(item[key]) > maximum for key, maximum in (('name', 250), ('reason', 10000))):
+            raise ValueError('Complete Candidate name and Reason for every candidate (Reason: maximum 10,000 characters).')
         if item['exam'] not in EXAMS or item['component'] not in {'Listening', 'Speaking'}:
             raise ValueError('Choose a valid Exam and one Absent component: Listening or Speaking.')
         clean.append(item)
@@ -67,7 +67,6 @@ def validate_it(record, form, component_rows=()):
         raise ValueError('Add at least one candidate with IT issues (maximum 500).')
     options, clean, numbers = it_module_options(record), [], set()
     components = {row['number']: row for row in component_rows}
-    from app.post_attendance import institution_key
     for row in rows:
         if not isinstance(row, dict):
             raise ValueError('Complete every candidate with IT issues.')
@@ -78,8 +77,8 @@ def validate_it(record, form, component_rows=()):
         if item['number'] in numbers:
             raise ValueError('Enter each candidate number only once in Candidate IT issues.')
         numbers.add(item['number'])
-        if any(not item[key] or len(item[key]) > maximum for key, maximum in (('name', 250), ('institution', 250), ('reason', 10000))):
-            raise ValueError('Complete Candidate name, Institution and Reason for every candidate (Reason: maximum 10,000 characters).')
+        if any(not item[key] or len(item[key]) > maximum for key, maximum in (('name', 250), ('reason', 10000))):
+            raise ValueError('Complete Candidate name and Reason for every candidate (Reason: maximum 10,000 characters).')
         modules = row.get('modules')
         if not isinstance(modules, list) or not modules or any(not isinstance(value, str) or value not in options.get(item['exam'], []) for value in modules):
             raise ValueError('Choose an Exam and Absent exam modules allowed for this session and exam level.')
@@ -87,8 +86,8 @@ def validate_it(record, form, component_rows=()):
             raise ValueError('Speaking cannot be combined with another absent exam module.')
         item['modules'] = list(dict.fromkeys(modules))
         previous = components.get(item['number'])
-        if previous and (previous['name'].casefold() != item['name'].casefold() or institution_key(previous['institution']) != institution_key(item['institution']) or previous['exam'] != item['exam']):
-            raise ValueError('Candidate name, Institution and Exam must match in both report sections for candidate ' + item['number'] + '.')
+        if previous and (previous['name'].casefold() != item['name'].casefold() or previous['exam'] != item['exam']):
+            raise ValueError('Candidate name and Exam must match in both report sections for candidate ' + item['number'] + '.')
         clean.append(item)
     return True, clean
 
@@ -96,37 +95,32 @@ def validate_it(record, form, component_rows=()):
 def merge(record, rows, reason_field='component_reason'):
     if not rows:
         return
-    from app.post_attendance import institution_key, reset_review, reschedule_options, touch, workflow_state
+    from app.post_attendance import main_institution, reset_review, reschedule_options, touch, workflow_state
     before = workflow_state(record)
-    institutions = m.AttendanceInstitution.query.filter_by(exam_session_id=record.id).all()
     existing = {candidate.number_key: candidate for candidate in m.AbsenceCandidate.query.filter_by(exam_session_id=record.id).all()}
     default = reschedule_options(record)[1]
     changed_ids = []
     for item in rows:
         candidate = existing.get(item['number'])
-        institution = next((value for value in institutions if institution_key(value.name) == institution_key(item['institution']) or (value.is_main and institution_key(record.exam_session_name) == institution_key(item['institution']))), None)
-        if institution is None:
-            institution = m.AttendanceInstitution(exam_session_id=record.id, name=item['institution'], is_main=institution_key(item['institution']) == institution_key(record.exam_session_name) and not any(value.is_main for value in institutions))
-            db.session.add(institution); db.session.flush()
-            institutions.append(institution)
         if candidate is None:
+            # Keep the required session-owned FK, but leave the actual institution
+            # unassigned until an internal user completes it in Attendance.
+            institution = main_institution(record, True)
             candidate = m.AbsenceCandidate(exam_session_id=record.id, institution_id=institution.id,
-                number=item['number'], number_key=item['number'], name=item['name'], absent_modules='[]',
+                number=item['number'], number_key=item['number'], name=item['name'], institution_name='', absent_modules='[]',
                 rescheduled_for=default, requested_rescheduled_for=default)
             db.session.add(candidate)
             existing[item['number']] = candidate
         modules = json.loads(candidate.absent_modules or '[]')
         incoming_modules = item.get('modules') or [item['component']]
         changed = (any(value not in modules for value in incoming_modules) or getattr(candidate, reason_field) != item['reason'] or
-                   candidate.name != item['name'] or candidate.exam != item['exam'] or
-                   institution_key(candidate.institution_name or '') != institution_key(item['institution']))
+                   candidate.name != item['name'] or candidate.exam != item['exam'])
         for value in incoming_modules:
             if value not in modules:
                 modules.append(value)
         candidate.absent_modules = json.dumps(modules)
         setattr(candidate, reason_field, item['reason'])
         candidate.name, candidate.exam = item['name'], item['exam']
-        candidate.institution_id, candidate.institution_name = institution.id, item['institution']
         if changed:
             reset_review(candidate)
             changed_ids.append(item['number'])

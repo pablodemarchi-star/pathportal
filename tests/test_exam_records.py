@@ -4,7 +4,7 @@ from datetime import date
 import unittest
 from unittest.mock import patch
 from app import db
-from app.models import (AcademicStaff, ExamSession, ExamSessionExaminerAssignment,
+from app.models import (AcademicStaff, ExamSession, ExamSessionExaminerAssignment, ExamSessionSupervisorAssignment,
     ExamSessionStaffingControl, ExamSessionScheduleWorkflow, ExamRecordsControl, ExaminerSpeakingRecord, BeyondSetupControl, SpeakingRecordsSetup)
 from app.exam_records import state
 from tests import test_google_drive as drive
@@ -65,6 +65,54 @@ class ExamRecordsTest(unittest.TestCase):
         self.assertFalse(state(self.record)['unlocked'])
         self.assertEqual(self.upload().status_code, 409)
         self.assertEqual(self.speaking(1).status_code, 409)
+
+    def test_reading_writing_only_does_not_require_examiner_but_keeps_schedule_and_staffing_gates(self):
+        db.session.delete(self.assignment)
+        supervisor = ExamSessionSupervisorAssignment(exam_session_id=self.record.id,
+            team_member_id=self.person.id, participation_status='Confirmed')
+        db.session.add(supervisor)
+        for format_name in ['Online', 'Online at exam centre']:
+            self.record.format = format_name
+            self.record.modules = 'Reading and writing'
+            db.session.commit()
+            current = state(self.record)
+            self.assertTrue(current['unlocked'], format_name)
+            self.assertFalse(current['requires_examiner'])
+            self.assertEqual(current['total'], 0)
+            self.assertNotIn('Examiner', current['blocking_message'])
+            self.assertEqual(self.beyond(1).status_code, 200)
+            self.assertEqual(self.beyond(1, checked=False).status_code, 200)
+            self.workflow.status = 'Pending'
+            db.session.commit()
+            self.assertFalse(state(self.record)['unlocked'])
+            self.assertEqual(self.beyond(1).status_code, 409)
+            self.workflow.status = 'Approved'
+            supervisor.participation_status = 'Pending'
+            db.session.commit()
+            self.assertFalse(state(self.record)['unlocked'])
+            supervisor.participation_status = 'Confirmed'
+            self.record.staffing_control.schedule_notification_confirmed = False
+            db.session.commit()
+            self.assertFalse(state(self.record)['unlocked'])
+            self.record.staffing_control.schedule_notification_confirmed = True
+            for modules in ['Reading and writing,Speaking', 'Reading and writing,Listening and speaking', 'Speaking', '']:
+                self.record.modules = modules
+                db.session.commit()
+                self.assertTrue(state(self.record)['requires_examiner'])
+                self.assertFalse(state(self.record)['unlocked'], modules)
+
+    def test_optional_examiner_position_still_has_to_be_filled_and_confirmed(self):
+        # Online at exam centre removes Examiner positions by its existing staffing rules.
+        self.record.modules = 'Reading and writing'
+        self.assignment.participation_status = 'Pending'
+        db.session.commit()
+        self.assertFalse(state(self.record)['unlocked'])
+        self.assignment.participation_status = 'Confirmed'
+        db.session.commit()
+        self.assertTrue(state(self.record)['unlocked'])
+        self.assignment.team_member_id = None
+        db.session.commit()
+        self.assertFalse(state(self.record)['unlocked'])
 
     def test_upload_name_folder_count_replacement_and_speaking_steps(self):
         self.assertEqual(self.upload().status_code, 200)

@@ -17,7 +17,7 @@ class StaffReportITIssuesTest(unittest.TestCase):
         self.record.format = 'Online'; self.record.modules = modules; db.session.commit()
 
     def entry(self, number='001230', **values):
-        item = dict(number=number, name='Candidate Example', institution='Example School', exam='B2 Competency',
+        item = dict(number=number, name='Candidate Example', exam='B2 Competency',
                     modules=['Listening and speaking','Reading and writing'], reason='Power outage prevented completion.')
         item.update(values)
         return item
@@ -58,7 +58,7 @@ class StaffReportITIssuesTest(unittest.TestCase):
     def test_all_fields_and_allowed_modules_are_validated_on_server(self):
         self.online()
         self.assertEqual(self.submit([]).status_code,400)
-        for key in ('number','name','institution','exam','reason'):
+        for key in ('number','name','exam','reason'):
             invalid=self.entry();invalid[key]=''
             self.assertEqual(self.submit([invalid]).status_code,400,key)
         for modules in ([],['Unknown'],['Listening'],['Speaking','Reading and writing'],['Speaking']):
@@ -101,7 +101,7 @@ class StaffReportITIssuesTest(unittest.TestCase):
     def test_candidate_identity_must_match_across_sections(self):
         self.online()
         component=dict(number='001230',name='Candidate Example',institution='Example School',exam='B2 Competency',component='Listening',reason='Component absence explanation.')
-        for key,value in [('name','Different candidate'),('institution','Different school'),('exam','B1 Progress')]:
+        for key,value in [('name','Different candidate'),('exam','B1 Progress')]:
             response=self.submit([self.entry(**{key:value})],component_completion='component_absences',component_absences=json.dumps([component]))
             self.assertEqual(response.status_code,400,response.json)
             self.assertIn('must match',response.json['error'])
@@ -137,6 +137,8 @@ class StaffReportITIssuesTest(unittest.TestCase):
         response=self.submit([self.entry(modules=['Reading and writing'])])
         self.assertEqual(response.status_code,200,response.json)
         candidate=m.AbsenceCandidate.query.one()
+        self.attendance_state()
+        self.client.post(f'/pre-session-control-tower/post/sessions/{self.record.id}/attendance',data=dict(csrf_token='test',action='candidate',candidate_id=candidate.id,field='institution_name',value='Example School'))
         institution=db.session.get(m.AttendanceInstitution,candidate.institution_id)
         institution.notifications='{"external":true}'
         control=attendance.control(self.record,True)

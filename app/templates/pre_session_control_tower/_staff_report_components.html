@@ -18,7 +18,6 @@
       <div class="staff-report-component-fields">
         <label>Candidate number (excluding the appended digit)<input type="text" inputmode="numeric" pattern="[0-9]+" maxlength="80" data-component-field="number" required></label>
         <label>Candidate name<input type="text" maxlength="250" data-component-field="name" required></label>
-        <label>Institution<input type="text" maxlength="250" data-component-field="institution" required></label>
         <label>Exam<select data-component-field="exam" required><option value="">Select exam</option>{% for exam in detail.end_checks.component_exams %}<option>{{ exam }}</option>{% endfor %}</select></label>
         <label>Absent component<select data-component-field="component" required><option value="">Select component</option><option>Listening</option><option>Speaking</option></select></label>
         <label class="staff-report-component-reason">Reason<textarea rows="3" maxlength="10000" data-component-field="reason" required></textarea></label>

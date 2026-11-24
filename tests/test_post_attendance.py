@@ -311,9 +311,56 @@ class PostAttendanceTest(unittest.TestCase):
             self.assertIn('(Last online · 20/12/2026)',html)
             self.assertIn('absence-approval-notice',html)
 
+    def test_supervisor_report_and_institutional_upload_share_one_case(self):
+        from app.staff_report_components import merge
+        self.record.format = 'Online'
+        self.record.modules = 'Reading and writing'
+        db.session.commit()
+        merge(self.record, [dict(number='123', name='Candidate Example', exam='B2 Competency',
+            modules=['Reading and writing'], reason='Supervisor IT evidence')], reason_field='it_reason')
+        db.session.commit()
+        candidate = m.AbsenceCandidate.query.one()
+        self.assertEqual(candidate.institution_name, '')
+        self.assertEqual(self.submit().status_code, 409)
+        response = self.submit(replace='1', confirmed='1', previous_file_id='')
+        self.assertEqual(response.status_code, 200, response.json)
+        self.assertEqual(m.AbsenceCandidate.query.count(), 1)
+        self.assertEqual(m.AbsenceCandidate.query.one().id, candidate.id)
+        self.assertEqual(candidate.it_reason, 'Supervisor IT evidence')
+        self.assertTrue(candidate.document_id)
+        row = self.client.get(self.url).json['state']['candidates'][0]
+        self.assertTrue(row['edit_allowed'])
+        self.assertTrue(row['review_allowed'])
+        self.assertFalse(row['can_decline'], 'Institution must still be completed in Attendance')
+
+    def test_institutional_review_requires_core_fields_before_declining(self):
+        self.submit()
+        candidate = m.AbsenceCandidate.query.one()
+        self.prepare_review()
+        with self.closed_window():
+            row = self.client.get(self.url).json['state']['candidates'][0]
+            self.assertFalse(row['can_confirm']); self.assertFalse(row['can_decline'])
+            result = self.raw_action('candidate', candidate_id=candidate.id, field='review', value='Declined',
+                previous_file_id=candidate.document_id, reason='Not accepted')
+            self.assertEqual(result.status_code, 400)
+            self.complete_candidate_details(candidate)
+            row = self.client.get(self.url).json['state']['candidates'][0]
+            self.assertTrue(row['can_decline'])
+            self.assertFalse(row['can_confirm'], 'Credit is required only to confirm')
+            result = self.raw_action('candidate', candidate_id=candidate.id, field='review', value='Declined',
+                previous_file_id=candidate.document_id, reason='Not accepted')
+            self.assertEqual(result.status_code, 200, result.json)
+
     def review_candidate(self,field,value='',**extra):
         candidate=m.AbsenceCandidate.query.one()
         return self.post('candidate',candidate_id=candidate.id,field=field,value=value,**extra)
+
+    def complete_candidate_details(self, candidate=None):
+        candidate = candidate or m.AbsenceCandidate.query.one()
+        self.prepare_review()
+        for field, value, extra in [('institution_name', self.record.exam_session_name, {}), ('exam', 'Ready', {}), ('modules', '', {'modules': ['Speaking']})]:
+            result = self.raw_action('candidate', candidate_id=candidate.id, field=field, value=value, **extra)
+            self.assertEqual(result.status_code, 200, result.json)
 
     def reopen_candidate(self):
         candidate=m.AbsenceCandidate.query.one()
@@ -362,6 +409,7 @@ class PostAttendanceTest(unittest.TestCase):
         self.submit();candidate=m.AbsenceCandidate.query.one();old=candidate.document_id
         self.assertEqual(self.review_candidate('review','Declined',previous_file_id=old,reason=' ').status_code,400)
         self.assertEqual(self.review_candidate('review','Declined',previous_file_id='stale',reason='Reason').status_code,400)
+        self.complete_candidate_details(candidate)
         reason='Document is not legible. <script>unsafe</script>'
         self.assertEqual(self.review_candidate('review','Declined',previous_file_id=old,reason=reason).status_code,200)
         data=self.client.get(self.public).json['entries'][0]
@@ -552,6 +600,7 @@ class PostAttendanceTest(unittest.TestCase):
         self.submit();candidate=m.AbsenceCandidate.query.one()
         self.assertEqual(self.client.get(self.url).json['state']['candidates'][0]['whatsapp_message'],'')
         self.assertEqual(self.client.get(self.url).json['state']['candidates'][0]['whatsapp_message_es'],'')
+        self.complete_candidate_details(candidate)
         response=self.review_candidate('review','Declined',previous_file_id=candidate.document_id,reason='Private review reason')
         message=response.json['state']['candidates'][0]['whatsapp_message']
         self.assertIn('- *Status:* Declined',message)
@@ -745,6 +794,7 @@ class PostAttendanceTest(unittest.TestCase):
             response=self.raw_action('candidate',candidate_id=candidate.id,field='review',value='Confirmed',previous_file_id=candidate.document_id)
             self.assertEqual(response.status_code,200,response.json);self.assertFalse(response.json['state']['results_notification_enabled'])
             self.assertEqual(self.raw_action('review_results_notified',value='1').status_code,400)
+            self.complete_candidate_details(waiting)
             response=self.raw_action('candidate',candidate_id=waiting.id,field='review',value='Declined',previous_file_id=waiting.document_id,reason='Not accepted')
             self.assertEqual(response.status_code,200,response.json);self.assertTrue(response.json['state']['results_notification_enabled'])
             self.assertEqual(self.raw_action('review_results_notified',value='1').status_code,200)
@@ -984,6 +1034,7 @@ class PostAttendanceTest(unittest.TestCase):
         self.submit();candidate=m.AbsenceCandidate.query.one()
         state=self.client.get(self.url).json['state']
         self.assertEqual(state['steps']['documentation']['status'],'in_progress');self.assertEqual(state['reviews_completed'],0);self.assertEqual(state['reviews_total'],1)
+        self.complete_candidate_details(candidate)
         with self.closed_window():
             state=self.raw_action('candidate',candidate_id=candidate.id,field='review',value='Declined',previous_file_id=candidate.document_id,reason='Not accepted').json['state']
             self.assertEqual(state['reviews_completed'],1);self.assertEqual(state['steps']['documentation']['status'],'in_progress')

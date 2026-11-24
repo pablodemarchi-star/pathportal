@@ -28,7 +28,7 @@
         <a class="secondary-button compact-action{% if not can_act or not schedule_url %} is-disabled{% endif %}" href="{{ schedule_url if can_act and schedule_url else '#' }}" target="_blank" rel="noopener noreferrer"{% if not can_act or not schedule_url %} aria-disabled="true" tabindex="-1"{% endif %}>Session schedule ↗</a>
       </div>
     </section>
-    {% if not records.unlocked %}<p class="exam-records-warning" role="status">Exam records is blocked. Schedule must be approved, all staff members and Staffing must be confirmed, and at least one Examiner must be confirmed.</p>{% endif %}
+    {% if not records.unlocked %}<p class="exam-records-warning" role="status">{{ records.blocking_message }}</p>{% endif %}
     {% set active_modules = session.modules_list()|map('lower')|list %}
     {% if 'speaking' in active_modules or 'listening and speaking' in active_modules %}
       {% include 'pre_session_control_tower/_speaking_records.html' %}

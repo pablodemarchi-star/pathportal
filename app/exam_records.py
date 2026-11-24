@@ -113,11 +113,15 @@ def state(record, cache=None):
     documents = cache[ExaminerSpeakingRecord].get(record.id, {}) if cache is not None else {d.person_ref: d for d in ExaminerSpeakingRecord.query.filter_by(exam_session_id=record.id)}
     control = cache[ExamRecordsControl].get(record.id) if cache is not None else db.session.get(ExamRecordsControl, record.id)
     confirmed = [p for p in people if p['confirmed']]
-    unlocked = bool(confirmed and staffing['ready'] and schedule_gate_status(record.schedule_workflow)['is_ready'])
+    modules = {module.lower() for module in record.modules_list()}
+    requires_examiner = not (record.format in {'Online', 'Online at exam centre'} and modules == {'reading and writing'})
+    unlocked = bool((confirmed or not requires_examiner) and staffing['ready'] and schedule_gate_status(record.schedule_workflow)['is_ready'])
+    blocking_message = 'Exam records is blocked. Schedule must be approved and all staff members and Staffing must be confirmed.'
+    if requires_examiner:
+        blocking_message += ' At least one Examiner must also be confirmed.'
     for person in people:
         person['document'] = documents.get(person['ref'])
     sections = dict(listening=beyond_state(record, 'listening', cache), speaking=speaking_state(record, cache), beyond=beyond_state(record, cache=cache))
-    modules = {module.lower() for module in record.modules_list()}
     required = []
     if modules & {'speaking', 'listening and speaking'}:
         required.append(('speaking', 3))
@@ -133,7 +137,7 @@ def state(record, cache=None):
     if unlocked and required and not completed:
         action = dict(department='LOGISTICS', section='exam_records',
                       description='Finalise the exam record configuration for the session' if status == 'in_progress' else 'Configure exam records for the session')
-    return dict(**sections, unlocked=unlocked, people=people, count=sum(p['ref'] in documents for p in confirmed),
+    return dict(**sections, unlocked=unlocked, requires_examiner=requires_examiner, blocking_message=blocking_message, people=people, count=sum(p['ref'] in documents for p in confirmed),
                 total=len(confirmed), started=started, status=status, label=label, action=action,
                 status_class={'completed': 'confirmed', 'in_progress': 'awaiting-confirmations', 'not_started': 'not-configured'}[status],
                 deadline=deadline_badge_contract(record.session_date - timedelta(days=7) if record.session_date else None))
@@ -206,7 +210,7 @@ def update(session_id):
         abort(404)
     current = state(record)
     if not current['unlocked']:
-        return jsonify(ok=False, error='Exam records is blocked until Schedule and Staffing are confirmed and at least one Examiner is confirmed.'), 409
+        return jsonify(ok=False, error=current['blocking_message']), 409
     control = db.session.get(ExamRecordsControl, session_id)
     if not control:
         control = ExamRecordsControl(exam_session_id=session_id)

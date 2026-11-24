@@ -22,7 +22,7 @@ class StaffReportComponentsTest(unittest.TestCase):
         db.session.commit()
 
     def entry(self, **values):
-        return dict(number='001230', name='Candidate Example', institution='Example School', exam='B2 Competency',
+        return dict(number='001230', name='Candidate Example', exam='B2 Competency',
                     component='Listening', reason='Connection lost during the Listening component.', **values)
 
     def submit_entries(self, rows):
@@ -52,6 +52,7 @@ class StaffReportComponentsTest(unittest.TestCase):
         response = self.submit_entries([self.entry()])
         self.assertEqual(response.status_code, 200, response.json)
         candidate = m.AbsenceCandidate.query.one()
+        self.assertEqual(candidate.institution_name, '')
         self.assertEqual(candidate.number, '001230')
         self.assertEqual(candidate.number_key, '001230')
         self.assertIsNone(candidate.document_id)
@@ -145,6 +146,8 @@ class StaffReportComponentsTest(unittest.TestCase):
         self.online()
         self.assertEqual(self.submit_entries([self.entry()]).status_code, 200)
         candidate = m.AbsenceCandidate.query.one()
+        self.attendance_state()
+        self.client.post(f'/pre-session-control-tower/post/sessions/{self.record.id}/attendance', data=dict(csrf_token='test',action='candidate',candidate_id=candidate.id,field='institution_name',value='Example School'))
         institution = db.session.get(m.AttendanceInstitution, candidate.institution_id)
         institution.notifications = '{"external":true}'
         value = attendance.control(self.record, True); value.submission_status = 'completed'; value.verified = True
