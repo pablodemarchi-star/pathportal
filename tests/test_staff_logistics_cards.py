@@ -111,11 +111,34 @@ class StaffLogisticsCardsTest(unittest.TestCase):
         self.assertEqual(response.status_code,200)
         html=response.get_data(as_text=True)
         self.assertIn('data-logistics-card-form',html)
+        self.assertIn('Changes save automatically',html)
+        self.assertIn('js/finance_payee_notifications.js', html)
+        self.assertIn('name="payment_notification_email"', html)
+        self.assertIn('data-payee-notification-languages', html)
+        self.assertNotIn('Save changes',html.split('data-logistics-card-form', 1)[1].split('</form>', 1)[0])
         self.assertIn('Schedule payment',html)
         self.assertIn('Not configured',html)
         self.assertNotIn('Open logistics files',html)
         self.assertNotIn('logistics-concepts-readonly-table',html)
         self.assertIn('packages-control-section',html)
+
+    def test_reordered_links_persist_and_render_in_portal_order(self):
+        card = self.enable('Complex logistics')
+        admin, _ = self.admin_client()
+        links = [{'name': 'Tickets', 'url': 'https://example.com/tickets'},
+                 {'name': 'Hotel', 'url': 'https://example.com/hotel'}]
+        url = f'/pre-session-control-tower/logistics/cards/{card.id}'
+        with patch('app.routes.logistics_actions_are_blocked', return_value=False):
+            for ordered in [links, list(reversed(links))]:
+                result = admin.post(url, data=dict(csrf_token='test', session_ids=str(self.record.id),
+                    status='Pending', instructions_html='<p>Travel instructions</p>', links=json.dumps(ordered)),
+                    headers={'X-Logistics-Autosave': '1'})
+                self.assertEqual(result.status_code, 200)
+                self.assertEqual(result.json['card']['links'], ordered)
+                self.assertEqual(json.loads(card.links), ordered)
+                share = db.session.get(m.StaffExamSessionsShare, self.submission.share_id)
+                html = self.app.test_client().get(f'/my-exam-sessions/{share.token}').get_data(as_text=True)
+                self.assertLess(html.index(f'>{ordered[0]["name"]}</a>'), html.index(f'>{ordered[1]["name"]}</a>'))
 
     def test_payment_created_from_blank_form_links_to_card_and_opens_in_modal(self):
         card=self.enable()

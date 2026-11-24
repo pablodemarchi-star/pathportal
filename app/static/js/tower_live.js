@@ -160,7 +160,8 @@
   const message = notice.querySelector('[data-tower-update-message]');
   const reloadButton = notice.querySelector('[data-tower-reload]');
   const active = () => !document.hidden && window.frameElement?.closest('.modal')?.classList.contains('is-open');
-  const dirty = () => [...dirtyForms].some(form => form.isConnected) || Boolean(document.querySelector('.nested-modal.is-open, dialog[open]'));
+  const dirty = () => [...dirtyForms].some(form => form.isConnected && !form.hasAttribute?.('data-logistics-card-form'))
+    || Boolean(window.logisticsHasUnsavedChanges?.()) || Boolean(document.querySelector('.nested-modal.is-open, dialog[open]'));
   window.towerHasUnsavedChanges = dirty;
   const reload = (explicit = false) => {
     try { sessionStorage.setItem(`tower-modal-scroll:${body.dataset.sessionId}`, String(window.scrollY)); } catch (_) {}
@@ -348,7 +349,7 @@
           revision = next; body.dataset.revision = next; stampAll();
           if (form) dirtyForms.delete(form);
           notifyParent('tower-session-saved');
-          if (headers.get('X-Finance-Autosave') !== '1') {
+          if (headers.get('X-Finance-Autosave') !== '1' && headers.get('X-Logistics-Autosave') !== '1') {
             needsRefresh = true;
             setTimeout(refreshIfClean, 1200);
           }

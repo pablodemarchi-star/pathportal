@@ -80,6 +80,20 @@ function childContext() {
   assert.equal(finance.messages.some(message => message.type === 'tower-session-refresh-request'), false,
     'Finance autosave must update the revision without refreshing the modal');
 
+  const logistics = childContext();
+  logistics.form.hasAttribute = name => name === 'data-logistics-card-form';
+  let pendingLogistics = true;
+  logistics.window.logisticsHasUnsavedChanges = () => pendingLogistics;
+  logistics.edit();
+  assert.equal(logistics.window.towerHasUnsavedChanges(), true);
+  await logistics.window.fetch('https://portal.test/save', {method: 'POST', headers: {'X-Logistics-Autosave': '1'}});
+  logistics.flushTimeouts();
+  assert.equal(logistics.window.towerHasUnsavedChanges(), true, 'An older response must not clear newer Logistics drafts');
+  pendingLogistics = false;
+  assert.equal(logistics.window.towerHasUnsavedChanges(), false);
+  assert.equal(logistics.messages.some(message => message.type === 'tower-session-refresh-request'), false,
+    'Logistics autosave must preserve the current modal and its other cards');
+
   const draft = childContext();
   draft.edit(); draft.setRemote('someone-elses-change');
   await draft.timers[0]();

@@ -1346,6 +1346,7 @@ const focusModalTarget = (targetId, { scroll = true } = {}) => {
 };
 
 const closeModal = (modal) => {
+  if (window.logisticsHasUnsavedChanges?.(modal) && !window.confirm('Logistics changes are still saving or could not be saved. Close anyway? Unsaved changes may be lost.')) return;
   if (modal.matches('[data-tower-session]')) {
     const frame = modal.querySelector('iframe');
     if (frame?.contentDocument?.body?.hasAttribute('data-tower-modal-document') && frame.contentWindow.towerHasUnsavedChanges?.() && !window.confirm('Close this session? Unsaved changes will be lost.')) return;
@@ -1355,6 +1356,7 @@ const closeModal = (modal) => {
     feedback.remove();
   });
   modal.querySelectorAll("form").forEach((form) => {
+    if (form.matches('[data-logistics-card-form]')) return;
     form.reset();
   });
   modal.querySelectorAll("[data-return-materials-form]").forEach(syncReturnMaterialsOptions);

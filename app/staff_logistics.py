@@ -334,7 +334,20 @@ def save(card_id):
         keeper.status = 'Pending'
     keeper.updated_by = getattr(getattr(g, 'current_user', None), 'email', '')
     db.session.commit()
-    return jsonify(ok=True, card_id=keeper.id, status=keeper.status, scope_changed=changed_scope)
+    payment_html = None
+    payment_count = None
+    if conflicts:
+        from flask import render_template
+        from app.routes import can_view_payment_request
+        payments = [payment for payment in m.PaymentRequest.query.filter_by(logistics_card_id=keeper.id)
+                    .order_by(m.PaymentRequest.id) if can_view_payment_request(getattr(g, 'current_user', None), payment)]
+        payment_html = render_template('pre_session_control_tower/_logistics_card_payment_rows.html', payments=payments)
+        payment_count = len(payments)
+    return jsonify(ok=True, card_id=keeper.id, status=keeper.status, scope_changed=changed_scope,
+                   payment_html=payment_html, payment_count=payment_count,
+                   retired_card_ids=[row.id for row in candidates if row.id != keeper.id],
+                   card=dict(instructions_html=keeper.instructions_html, description=keeper.description,
+                             links=json.loads(keeper.links), session_ids=json.loads(keeper.session_ids)))
 
 
 

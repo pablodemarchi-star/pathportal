@@ -47,15 +47,25 @@
 .staff-logistics-card .compact-action{flex-shrink:0;font-size:11px;line-height:1.4;padding:8px 12px;min-height:34px;border-radius:8px}
 .staff-logistics-links{display:grid;gap:8px;margin-top:12px}
 .staff-logistics-links:empty{display:none}
-.staff-logistics-links>div{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1.7fr) 55px 30px;gap:8px;align-items:center;padding:10px;border:1px solid #e2eaf0;border-radius:10px;background:#f9fbfc}
+.staff-logistics-links>div{display:grid;grid-template-columns:24px minmax(0,1fr) minmax(0,1.7fr) 55px 30px;gap:8px;align-items:center;padding:10px;border:1px solid #e2eaf0;border-radius:10px;background:#f9fbfc}
+.staff-logistics-drag-handle{display:grid;place-items:center;width:24px;min-height:36px;padding:0;border:0;border-radius:5px;background:transparent;color:#658190;font-size:23px;cursor:grab;touch-action:none;user-select:none}
+.staff-logistics-drag-handle:hover:not(:disabled){background:#e5eff4;color:#00506b}
+.staff-logistics-drag-handle:active{cursor:grabbing}
+.staff-logistics-links>div.is-dragging{border-color:#538da5;box-shadow:0 0 0 2px #00506b18;background:#edf6f9}
+.staff-logistics-links a[hidden]{display:none}
 .staff-logistics-links a{font-size:11px;font-weight:600;color:#00506b;white-space:nowrap;text-align:center;text-decoration:none}
-.staff-logistics-links [data-remove-logistics-link]{grid-column:4;display:grid;place-items:center;width:28px;height:28px;border:0;border-radius:7px;background:transparent;color:#8c6b70;font:inherit;font-size:19px;cursor:pointer}
+.staff-logistics-links [data-remove-logistics-link]{grid-column:5;display:grid;place-items:center;width:28px;height:28px;border:0;border-radius:7px;background:transparent;color:#8c6b70;font:inherit;font-size:19px;cursor:pointer}
 .staff-logistics-links [data-remove-logistics-link]:hover{background:#fae9e9;color:#9d3636}
 .staff-logistics-card .staff-logistics-save-bar{display:flex;justify-content:space-between;align-items:flex-end;gap:16px;margin-top:22px;padding:16px 0 20px;border-top:1px solid #e7eef2}
 .staff-logistics-save-bar label{display:grid;gap:7px;min-width:160px;margin:0!important}
 .staff-logistics-save-bar .primary-button{min-width:112px}
 .staff-logistics-card [data-logistics-save-status]{font-size:12px;color:#91542a;margin:0 0 14px;overflow-wrap:anywhere}
 .staff-logistics-card [data-logistics-save-status]:empty{display:none}
+.staff-logistics-autosave{display:grid;gap:8px;justify-items:end;text-align:right;max-width:60%}
+.staff-logistics-card .staff-logistics-autosave [data-logistics-save-status]{margin:0;font-size:11px;color:#718793}
+.staff-logistics-card [data-autosave-state=saved] [data-logistics-save-status]{color:#37735a}
+.staff-logistics-card [data-autosave-state=error] [data-logistics-save-status]{color:#a13232}
+.staff-logistics-autosave [hidden]{display:none}
 .staff-logistics-editor:disabled{opacity:.65}
 .staff-logistics-payments{padding:19px 24px 20px;background:#f7fafc;border-top:1px solid #e1eaf0}
 .staff-logistics-count{display:inline-grid;place-items:center;min-width:19px;height:19px;padding:0 4px;border:1px solid #dae6ed;border-radius:6px;background:#fff;color:#658190;font-size:10px;font-weight:500;box-sizing:border-box}
@@ -75,6 +85,7 @@
 .staff-logistics-card button:focus-visible,.staff-logistics-card a:focus-visible{outline:2px solid #00506b;outline-offset:3px}
 @container(max-width:400px){.staff-logistics-planning-grid:has(.staff-logistics-scope){grid-template-columns:minmax(0,1fr)}.staff-logistics-card-header{padding:18px 16px 16px;gap:10px}.staff-logistics-person{gap:9px}.staff-logistics-avatar{width:35px;height:35px;flex-basis:35px;border-radius:10px;font-size:12px}.staff-logistics-name-line>a{font-size:15px}.staff-logistics-person-hint{font-size:10px}.staff-logistics-card .staff-logistics-editor{padding:18px 16px 0}.staff-logistics-session-strip{padding:11px 16px;grid-template-columns:minmax(0,1fr);gap:7px}.staff-logistics-payments{padding:17px 16px}.staff-logistics-section-heading{align-items:flex-start;flex-wrap:wrap}.staff-logistics-links>div{grid-template-columns:minmax(0,1fr) 55px 30px}.staff-logistics-links input{grid-column:1/-1}.staff-logistics-links a{grid-column:2}.staff-logistics-links [data-remove-logistics-link]{grid-column:3}}
 @media(max-width:700px){.staff-logistics-payment-details{grid-template-columns:1fr}}
+@container(max-width:400px){.staff-logistics-links>div{grid-template-columns:24px minmax(0,1fr) 30px}.staff-logistics-links input{grid-column:2/-1}.staff-logistics-links .staff-logistics-drag-handle{grid-column:1;grid-row:1 / span 2}.staff-logistics-links a{grid-column:2}.staff-logistics-links [data-remove-logistics-link]{grid-column:3}}
 @media(prefers-reduced-motion:reduce){.staff-logistics-card input,.staff-logistics-card textarea,.staff-logistics-card select{transition:none}}
 
 .staff-logistics-rich-box{min-width:0;border:1px solid #cddde5;border-radius:9px;overflow:hidden;background:#fff}

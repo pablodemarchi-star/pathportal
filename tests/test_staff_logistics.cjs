@@ -1,47 +1,91 @@
-const assert=require('node:assert/strict'),fs=require('node:fs'),vm=require('node:vm');
-const handlers={};let redirected,posted;
-const rows=[];
-const status={};const submit={disabled:false};
-const hidden={value:'',dispatchEvent(){}};
-const editor={innerHTML:'<p><strong>Flight details</strong></p>',editable:true,getAttribute(){return String(this.editable);},focus(){},closest:()=>form};
-const commands=[];
-const range={collapsed:false,cloneRange(){return this;},commonAncestorContainer:{nodeType:1,closest:()=>editor}};
-const selection={rangeCount:1,getRangeAt:()=>range,removeAllRanges(){},addRange(){}};
-const panel={hidden:true},linkError={},linkInput={value:'',focus(){}};
-const wrapper={querySelector:key=>({'[data-logistics-instructions-editor]':editor,'[data-logistics-rich-link-panel]':panel,'[data-logistics-rich-link-error]':linkError,'[data-logistics-rich-link-url]':linkInput}[key])};
+const assert = require('node:assert/strict');
+const {harness} = require('./staff_logistics_harness.cjs');
 
-const form={action:'https://portal.test/pre-session-control-tower/logistics/cards/1',dataset:{sessionId:'10'},querySelector(key){return key==='[name="instructions_html"]'?hidden:key==='[data-logistics-instructions-editor]'?editor:key==='[data-logistics-links]'?{append(row){rows.push(row);}}:key==='[data-logistics-save-status]'?status:key==='[name=session_ids]:checked'?{value:'10'}:submit;},querySelectorAll:()=>rows};
-class Element{
- constructor(){this.children=[];this.dataset={};this.value='';}
- append(...nodes){this.children.push(...nodes);}
- setAttribute(){} focus(){}
- querySelector(key){return this.children.find(node=>key==='[data-link-name]'?'linkName'in node.dataset:'linkUrl'in node.dataset);}
- remove(){rows.splice(rows.indexOf(this),1);}
-}
-const window={getSelection:()=>selection,location:{href:'https://portal.test/pre-session-control-tower?session_year=2026&view=sessions',assign(url){redirected=String(url);}}};
-const document={addEventListener(name,fn){handlers[name]=fn;},createElement:()=>new Element(),execCommand(command){commands.push(command);}};
-class FormData{constructor(){this.values={};}set(key,value){this.values[key]=value;}}
-vm.runInNewContext(fs.readFileSync('app/static/js/staff_logistics.js','utf8'),{document,window,URL,FormData,Event:class{},fetch:async(url,options)=>{posted=options;return{ok:true,json:async()=>({ok:true})};}});
-(async()=>{
- const add={closest:()=>form};await handlers.click({target:{closest:key=>key==='[data-add-logistics-link]'?add:null}});
- assert.equal(rows.length,1);assert.equal(rows[0].children[0].required,true);assert.equal(rows[0].children[1].type,'url');
- rows[0].children[0].value='Hotel';rows[0].children[1].value='https://example.com/hotel';
- let prevented=false;await handlers.submit({target:{closest:()=>form},preventDefault(){prevented=true;}});
- assert.equal(posted.body.values.instructions_html,'<p><strong>Flight details</strong></p>');
- assert.equal(prevented,true);assert.deepEqual(JSON.parse(posted.body.values.links),[{name:'Hotel',url:'https://example.com/hotel'}]);
- assert.match(redirected,/open_schedule_modal=10/);assert.match(redirected,/open_modal_target=logistics/);
- const remove={closest:()=>rows[0]};await handlers.click({target:{closest:key=>key==='[data-remove-logistics-link]'?remove:null}});assert.equal(rows.length,0);
- const count={};handlers.change({target:{closest:()=>({querySelector:()=>count,querySelectorAll:()=>[{},{}]})}});assert.equal(count.textContent,'2 selected');
- handlers.selectionchange();
- const act=async attribute=>{
-   const button={dataset:{logisticsTextCommand:attribute==='bold'?'bold':undefined},closest:()=>wrapper,hasAttribute:key=>key===attribute};
-   await handlers.click({target:{closest:key=>key.startsWith('[data-logistics-text-command],')?button:null}});
- };
- await act('bold');assert.equal(commands.at(-1),'bold');assert.equal(hidden.value,editor.innerHTML);
- await act('data-logistics-text-link');assert.equal(panel.hidden,false);
- linkInput.value='javascript:alert(1)';await act('data-logistics-rich-link-apply');assert.equal(commands.length,1);assert.match(linkError.textContent,/http/);
- linkInput.value='https://example.com/booking';await act('data-logistics-rich-link-apply');assert.equal(commands.at(-1),'createLink');assert.equal(panel.hidden,true);
- editor.editable=false;await act('bold');assert.equal(commands.length,2);
- console.log('Rich instructions: formatting commands, HTML synchronisation, link validation and read-only protection passed.');
- console.log('Logistics cards: optional links, add/remove, JSON submission and reopening the current Logistics modal passed.');
-})().catch(error=>{console.error(error);process.exitCode=1;});
+(async () => {
+  const h = harness();
+  const {first: a, second: b} = h;
+  a.editor.innerHTML = '<p><strong>Flight details</strong></p>';
+  b.editor.innerHTML = '<p>Hotel instructions</p>';
+  await h.emit('input', a.editor); await h.emit('input', b.editor);
+  assert.equal(h.window.logisticsHasUnsavedChanges(), true);
+  assert.equal(h.beforeUnload().prevented, true);
+  await h.flush();
+  assert.equal(h.requests.length, 2, 'Both edited cards save without a reload');
+  assert.equal(h.requests[0].options.body.values.instructions_html, a.editor.innerHTML);
+  assert.equal(h.requests[1].options.body.values.instructions_html, b.editor.innerHTML);
+  assert.equal(h.requests[0].options.headers['X-Logistics-Autosave'], '1');
+  assert.equal(a.output.textContent, 'Saved'); assert.equal(b.output.textContent, 'Saved');
+  assert.equal(h.window.logisticsHasUnsavedChanges(), false);
+  assert.equal(h.beforeUnload().prevented, undefined);
+
+  await h.emit('click', a.add); await h.flush();
+  assert.equal(h.requests.length, 2, 'Incomplete new links stay local and never overwrite the server');
+  assert.match(a.output.textContent, /Complete each link/);
+  assert.equal(h.window.logisticsHasUnsavedChanges(), true);
+  const row = a.links.children[0];
+  row.querySelector('[data-link-name]').value = 'Hotel';
+  row.querySelector('[data-link-url]').value = 'https://example.com/hotel';
+  await h.emit('input', row.querySelector('[data-link-url]')); await h.flush();
+  assert.equal(row.querySelector('a').href, 'https://example.com/hotel');
+  assert.deepEqual(JSON.parse(h.requests.at(-1).options.body.values.links), [{name: 'Hotel', url: 'https://example.com/hotel'}]);
+
+  // A late response cannot mark a newer draft Saved or overwrite it.
+  let release;
+  const delayed = harness(async (_, options, n) => {
+    if (n === 1) await new Promise(resolve => {release = resolve;});
+    return {ok: true, status: 200, json: async () => ({ok: true, status: options.body.values.status})};
+  });
+  delayed.first.editor.innerHTML = 'Original'; await delayed.emit('input', delayed.first.editor); await delayed.flush();
+  assert.equal(delayed.first.output.textContent, 'Saving…');
+  delayed.first.editor.innerHTML = 'Latest draft'; await delayed.emit('input', delayed.first.editor);
+  delayed.second.editor.innerHTML = 'Other card draft'; await delayed.emit('input', delayed.second.editor); await delayed.flush();
+  assert.equal(delayed.requests.length, 1, 'Writes are serialized');
+  assert.equal(delayed.window.logisticsHasUnsavedChanges(), true);
+  release(); await delayed.settle(); await delayed.settle();
+  assert.equal(delayed.requests.length, 3);
+  assert.equal(delayed.requests.at(-1).options.body.values.instructions_html, 'Latest draft');
+  assert.equal(delayed.first.editor.innerHTML, 'Latest draft');
+  assert.equal(delayed.window.logisticsHasUnsavedChanges(), false);
+
+  // Failed requests keep the draft and a warning until an explicit retry succeeds.
+  let fail = true;
+  const failed = harness(async () => {if (fail) throw new Error('Network unavailable'); return {ok: true, json: async () => ({ok: true})};});
+  failed.first.editor.innerHTML = 'Keep this draft'; await failed.emit('input', failed.first.editor); await failed.flush();
+  assert.equal(failed.first.retry.hidden, false); assert.match(failed.first.output.textContent, /Network/);
+  assert.equal(failed.beforeUnload().prevented, true); assert.equal(failed.first.editor.innerHTML, 'Keep this draft');
+  fail = false; await failed.emit('click', failed.first.retry); await failed.settle();
+  assert.equal(failed.first.output.textContent, 'Saved'); assert.equal(failed.first.retry.hidden, true);
+  assert.equal(failed.window.logisticsHasUnsavedChanges(), false);
+
+  // Keyboard and pointer reordering serialize the DOM order used by the portal.
+  await h.emit('click', a.add);
+  const other = a.links.children[1];
+  other.querySelector('[data-link-name]').value = 'Tickets'; other.querySelector('[data-link-url]').value = 'https://example.com/tickets';
+  await h.emit('input', other.querySelector('[data-link-name]')); await h.flush();
+  await h.emit('keydown', other.querySelector('[data-logistics-drag-handle]'), {key: 'ArrowUp'}); await h.flush();
+  assert.deepEqual(JSON.parse(h.requests.at(-1).options.body.values.links).map(x => x.name), ['Tickets', 'Hotel']);
+  h.document.pointTarget = row;
+  await h.emit('pointerdown', other.querySelector('[data-logistics-drag-handle]'), {button: 0, pointerId: 1, clientY: 90});
+  await h.emit('pointermove', other.querySelector('[data-logistics-drag-handle]'), {clientX: 1, clientY: 135});
+  await h.emit('pointerup', other.querySelector('[data-logistics-drag-handle]')); await h.flush();
+  assert.deepEqual(JSON.parse(h.requests.at(-1).options.body.values.links).map(x => x.name), ['Hotel', 'Tickets']);
+  await h.emit('click', row.querySelector('[data-remove-logistics-link]')); await h.flush();
+  assert.equal(JSON.parse(h.requests.at(-1).options.body.values.links).length, 1);
+
+  // Rich text commands still sync the hidden HTML and schedule an autosave.
+  h.range.commonAncestorContainer = a.editor; a.editor.nodeType = 1; await h.emit('selectionchange', a.editor);
+  const action = new h.Element('button', {'data-logistics-text-command': 'bold'}); a.wrapper.append(action);
+  await h.emit('click', action); await h.flush();
+  assert.equal(h.document.commands.at(-1), 'bold'); assert.equal(a.hidden.value, a.editor.innerHTML);
+  const linkAction = new h.Element('button', {'data-logistics-text-link': ''}); a.wrapper.append(linkAction);
+  const applyLink = new h.Element('button', {'data-logistics-rich-link-apply': ''}); a.wrapper.append(applyLink);
+  await h.emit('click', linkAction); assert.equal(a.panel.hidden, false);
+  a.url.value = 'javascript:alert(1)'; await h.emit('click', applyLink);
+  assert.match(a.error.textContent, /http/); assert.equal(h.document.commands.at(-1), 'bold');
+  a.url.value = 'https://example.com/booking'; await h.emit('click', applyLink);
+  assert.equal(h.document.commands.at(-1), 'createLink'); assert.equal(a.panel.hidden, true);
+  a.fieldset.disabled = true;
+  const count = h.requests.length; await h.emit('click', a.add);
+  assert.equal(h.requests.length, count);
+  console.log('Logistics: multiple-card autosaves, in-flight drafts, errors/retry, close warnings, pointer/keyboard link order, rich text and read-only controls passed.');
+})().catch(error => {console.error(error); process.exitCode = 1;});

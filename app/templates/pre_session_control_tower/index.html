@@ -2230,7 +2230,8 @@
 {% for view in schedule_views %}{% set session = view.session %}{% set records = exam_records_state(session) %}{% include 'pre_session_control_tower/_exam_records.html' %}{% endfor %}
 <script src="{{ url_for('static', filename='js/exam_records.js', v='20261122-listening-records-1') }}"></script>
 {% endif %}
-<link rel="stylesheet" href="{{ url_for('static',filename='css/staff_logistics.css',v='20261124-three-cards-2') }}">
-<script src="{{ url_for('static',filename='js/staff_logistics.js',v='20261124-session-picker-1') }}"></script>
-<script src="{{ url_for('static', filename='js/tower_live.js', v='20261107-bundle-loading-4') }}"></script>
+<link rel="stylesheet" href="{{ url_for('static',filename='css/staff_logistics.css',v='20261124-logistics-autosave-1') }}">
+<script src="{{ url_for('static',filename='js/staff_logistics.js',v='20261124-logistics-autosave-1') }}"></script>
+{% if user_can_edit('finance_requests') %}<script src="{{ url_for('static', filename='js/finance_payee_notifications.js', v='20261104-client-notification-3') }}"></script>{% endif %}
+<script src="{{ url_for('static', filename='js/tower_live.js', v='20261124-logistics-autosave-1') }}"></script>
 {% endblock %}
