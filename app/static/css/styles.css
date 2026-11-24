@@ -17963,6 +17963,13 @@ body.staff-session-detail-open { overflow: hidden; }
 .staff-confirmed-logistics { font-size: 12px; color: #3e5660; }
 .staff-confirmed-logistics + .staff-confirmed-logistics { margin-top: 6px; }
 .staff-confirmed-logistics.is-not-applicable { color: #7a878c; }
+.staff-confirmed-logistics .staff-logistics-quick-link { color: var(--path-blue-303up); text-decoration: underline; text-underline-offset: 3px; }
+.staff-logistics-quick-link:hover { text-decoration-thickness: 2px; }
+.staff-logistics-dialog { box-sizing: border-box; width: min(760px, calc(100vw - 32px)); max-height: calc(100dvh - 40px); padding: 0; border: 1px solid var(--color-border); border-radius: 18px; color: var(--color-text); background: #f6f8f7; box-shadow: 0 24px 90px #003a4e44; overflow: auto; }
+.staff-logistics-dialog::backdrop { background: #003a4e99; backdrop-filter: blur(4px); }
+body.staff-logistics-dialog-open { overflow: hidden; }
+.staff-logistics-dialog :focus-visible, .staff-logistics-quick-link:focus-visible { outline: 3px solid var(--path-cyan); outline-offset: 3px; }
+@media (max-width: 700px) { .staff-logistics-dialog { width: calc(100vw - 16px); max-height: calc(100dvh - 16px); border-radius: 12px; } }
 .staff-confirmed-details-button { display: inline-flex; align-items: center; justify-content: center; gap: 6px; width: auto; box-sizing: border-box; padding: 8px 10px; border: 1px solid var(--path-blue-303up); border-radius: 8px; background: var(--path-blue-303up); color: white; font-size: 11px; font-weight: 600; text-align: left; text-decoration: none; }
 .staff-confirmed-details-button svg { flex: 0 0 auto; }
 .staff-confirmed-details-button span { white-space: nowrap; overflow-wrap: normal; }

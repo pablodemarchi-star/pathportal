@@ -629,7 +629,7 @@ class StaffPortalLogisticsTest(unittest.TestCase):
             db.session.commit()
             page = self.portal_page()
             self.assertIn(f'<span class="staff-detail-role">{value}</span>', page)
-            self.assertIn(f'>{value}</div>', page)
+            self.assertIn(f'>{value}</div>' if value == 'Does not apply' else f'>{value}</a>', page)
             self.assertEqual('data-staff-logistics-instructions-open' in page, value == "Complex Uber ride")
             if value == "Does not apply":
                 self.assertIn('arrive 30 minutes before the start of the exam session.', page)
@@ -646,6 +646,24 @@ class StaffPortalLogisticsTest(unittest.TestCase):
             if value == "Complex logistics":
                 self.assertIn('<strong>travel or commute</strong>', page)
                 self.assertIn('<strong>additional expenses previously approved by Path Examinations</strong>', page)
+
+    def test_logistics_column_links_to_standalone_dialog_except_does_not_apply(self):
+        import re
+        assignment = self.portal_assignment()
+        for kind in ['Does not apply', 'Uber ride', 'Complex Uber ride', 'Complex logistics', 'Carpooling']:
+            assignment.logistics_type = kind
+            db.session.commit()
+            page = self.portal_page()
+            cell = re.search(r'<td data-label="Logistics">(.*?)</td>', page, re.S).group(1)
+            self.assertEqual('data-staff-logistics-open' in cell, kind != 'Does not apply', kind)
+            if kind != 'Does not apply':
+                self.assertIn('href="#staff-logistics-dialog"', cell)
+                self.assertIn(f'data-staff-logistics-session="{self.record.id}"', cell)
+                self.assertIn('data-staff-logistics-role="examiner"', cell)
+                self.assertIn(f'data-staff-logistics-kind="{kind}"', cell)
+            self.assertEqual(page.count('id="staff-logistics-dialog"'), 1)
+            self.assertIn('data-staff-logistics-close', page)
+            self.assertIn('js/staff_logistics_portal.js', page)
 
     def test_supervisor_arrival_is_fifty_minutes_and_legacy_uber_is_normalized(self):
         assignment = self.portal_assignment("supervisor")
@@ -674,7 +692,7 @@ class StaffPortalLogisticsTest(unittest.TestCase):
             instructions_html="PRIVATE CARPOOL INSTRUCTIONS", staff_members=[other]))
         db.session.commit()
         page = self.portal_page()
-        self.assertIn('>Carpooling</div>', page)
+        self.assertIn('>Carpooling</a>', page)
         self.assertIn('<span class="staff-detail-role">Carpooling</span>', page)
         self.assertIn('Your journey to the exam centre will involve sharing a vehicle with other staff members. Please read and follow the important instructions below, as specific procedures and requirements must be observed.', page)
         self.assertIn('data-staff-logistics-instructions-open>View instructions</button>', page)

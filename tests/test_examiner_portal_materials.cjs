@@ -3,7 +3,7 @@ const source = fs.readFileSync('app/static/js/staff_exam_sessions.js', 'utf8');
 const shared = fs.readFileSync('app/static/js/app.js', 'utf8');
 const makeNode = tag => ({tag, children: [], style: {}, append(...items) { this.children.push(...items); }, setAttribute() {}});
 for (const format of ['Onsite', 'Online']) {
-  const materials = {children: [], insertBefore(node) { this.children.push(node); }};
+  const materials = {children: [], querySelector() { return null; }, insertBefore(node) { this.children.push(node); }};
   const context = {URL, document: {createElement: makeNode}, materials, role: 'Examiner', zoomAccess: null,
     data: {format, material_for_examiners_url: 'https://example.com/configured-material'},
     cleanEmailValue: value => String(value || '').trim(), SINAPSIS_LOGIN_URL: 'https://sinapsis.pathexaminations.com/login',

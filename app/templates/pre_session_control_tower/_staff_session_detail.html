@@ -5,7 +5,7 @@
   </header>
   <div class="staff-detail-content">
     {% for detail in session_details[exam_session.id] %}
-    <article class="staff-detail-assignment" data-staff-session-payload='{{ detail|tojson }}'>
+    <article class="staff-detail-assignment" data-staff-logistics-role="{{ detail.assignment_type }}" data-staff-logistics-kind="{{ detail.logistics_status or 'Does not apply' }}" data-staff-session-payload='{{ detail|tojson }}'>
       <div class="staff-detail-intro"><div class="staff-detail-invited-role"><span>You have been assigned as</span><strong>{% if detail.role == 'Supervisor' and detail.is_remote %}Remote supervisor{% else %}{{ detail.role }}{% endif %}</strong></div><span class="staff-detail-pending{% if detail.participation_confirmed %} is-confirmed{% endif %}">{{ 'Participation confirmed' if detail.participation_confirmed else 'Awaiting your confirmation' }}</span></div>
       <section class="staff-detail-summary" aria-label="Session at a glance">
         <div><span>Date</span><strong>{{ detail.session_date }}</strong></div>
@@ -75,7 +75,7 @@
         </aside>
         {% endif %}
         {% if detail.role == 'Intern' %}
-        <section class="staff-detail-section staff-detail-travel-section" aria-label="Instructions">
+        <section class="staff-detail-section staff-detail-travel-section" data-staff-travel-section aria-label="Instructions">
           <div class="staff-detail-instructions-heading">
             <h3>Instructions</h3>
             <span class="staff-detail-logistics-progress{% if detail.logistics_progress == 'Confirmed' %} is-confirmed{% endif %}">{{ detail.logistics_progress }}</span>
