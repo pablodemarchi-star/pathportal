@@ -313,9 +313,20 @@
             </div>
             <button class="icon-button" type="button" data-close-modal aria-label="Close modal">&times;</button>
           </div>
-          <form id="edit-archived-payment-receipt-form-{{ payment.id }}" class="finance-form-panel finance-modal-form" method="post" action="{{ url_for('staff.update_archived_payment_receipt', payment_id=payment.id) }}">
+          <form id="edit-archived-payment-receipt-form-{{ payment.id }}" class="finance-form-panel finance-modal-form" method="post" enctype="multipart/form-data" action="{{ url_for('staff.update_archived_payment_receipt', payment_id=payment.id) }}">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
             <input type="hidden" name="tab" value="finance_payments">
-            <label>Payment receipt <input name="payment_proof_url" value="{{ payment.payment_proof_url or '' }}" placeholder="https://"></label>
+            <input type="hidden" name="previous_receipt" value="{{ payment.payment_proof_url or '' }}">
+            {% if payment.payment_proof_url %}<div class="finance-document-links">{% for link in payment.payment_proof_url.splitlines() %}<a href="{{ link }}" target="_blank" rel="noopener noreferrer">Current receipt{% if not loop.first %} {{ loop.index }}{% endif %} ↗</a>{% endfor %}</div>{% endif %}
+            <div class="finance-supporting-document-row">
+              <span class="finance-supporting-document-label">Replacement payment receipt</span>
+              <label class="finance-upload-dropzone" data-finance-upload-dropzone>
+                <input type="file" name="payment_proof_file" required aria-label="Upload replacement payment receipt" data-finance-upload-input>
+                <span data-finance-upload-text data-finance-upload-placeholder="Select one file or drop it here">Select one file or drop it here</span>
+              </label>
+              <div class="finance-upload-file-list" data-finance-upload-list></div>
+              <p class="muted">Save to replace the current receipt and move its previous Drive file to the trash.</p>
+            </div>
           </form>
           <div class="form-actions">
             <button class="secondary-button" type="button" data-close-modal>Close</button>

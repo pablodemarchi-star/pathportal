@@ -29318,21 +29318,28 @@ def cancel_payment_hold(payment_id):
 @login_required
 def update_archived_payment_receipt(payment_id):
     require_menu_edit(FINANCE_REQUESTS_MENU_KEY)
-    payment = PaymentRequest.query.get_or_404(payment_id)
+    from app.finance_receipts import locked_payment, replace_receipt
+    from sqlalchemy.exc import SQLAlchemyError
+    payment = locked_payment(payment_id)
     user = getattr(g, "current_user", None)
     if not can_edit_archived_payment_receipt(user, payment):
         abort(403, description="Only the Superadmin can edit archived payment receipts.")
+    if not validate_csrf():
+        abort(400, description="Security token expired. Reload the page.")
     try:
-        payment.payment_proof_url = clean_optional_url(request.form.get("payment_proof_url"), "Payment receipt")
-    except ValueError as exc:
-        flash(str(exc), "error")
+        files = [upload for upload in request.files.getlist("payment_proof_file") if upload and upload.filename]
+        if len(files) != 1:
+            raise ValueError("Select exactly one replacement receipt file.")
+        replace_receipt(payment, files[0], request.form.get("previous_receipt"))
+    except (ValueError, OSError, SQLAlchemyError) as exc:
+        db.session.rollback()
+        from app.google_drive import DriveStorageError
+        flash(str(exc) if isinstance(exc, (ValueError, DriveStorageError)) else "The payment receipt could not be replaced. Please retry.", "error")
         return finance_request_redirect(
             request.form.get("tab") or "finance_payments",
             show_archived="1",
             open_staff_modal=f"edit-archived-payment-receipt-{payment.id}",
         )
-    add_payment_event(payment, "Payment receipt updated", previous_status=payment.status, new_status=payment.status)
-    db.session.commit()
     flash("Payment receipt updated.", "success")
     return finance_request_redirect(
         request.form.get("tab") or "finance_payments",

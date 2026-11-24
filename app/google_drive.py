@@ -218,6 +218,20 @@ def destination_for_category(category):
     return db.session.get(GoogleDriveDestination, key) if key else None
 
 
+def set_document_trashed(file_id, trashed=True):
+    try:
+        with urlopen(Request(API + '/files/' + quote(file_id, safe='') + '?supportsAllDrives=true&fields=id%2Ctrashed',
+            data=json.dumps({'trashed': trashed}).encode(), method='PATCH',
+            headers={'Authorization': 'Bearer ' + access_token(), 'Content-Type': 'application/json'}), timeout=20) as response:
+            result = json.load(response)
+        if result.get('id') != file_id or result.get('trashed') is not trashed:
+            raise DriveStorageError('Drive did not confirm the receipt file change. Please retry.')
+    except DriveStorageError:
+        raise
+    except (OSError, ValueError) as exc:
+        raise DriveStorageError('The receipt file could not be updated in Google Drive. Please retry.') from exc
+
+
 def remember_uncommitted(file_id):
     if not hasattr(g, '_uncommitted_drive_files'):
         g._uncommitted_drive_files = []

@@ -9471,8 +9471,15 @@ const renderFinanceUploadFiles = (input) => {
 
 const addFinanceUploadFiles = (input, incomingFiles) => {
   if (!input || !incomingFiles?.length) return;
+  if (input.disabled || input.closest("fieldset")?.disabled) return;
+  if (!input.multiple && incomingFiles.length !== 1) {
+    input.setCustomValidity("Select exactly one replacement receipt file.");
+    input.reportValidity();
+    return;
+  }
+  input.setCustomValidity("");
   const currentFiles = financeUploadFiles.get(input) || [];
-  const nextFiles = [...currentFiles, ...Array.from(incomingFiles)];
+  const nextFiles = input.multiple ? [...currentFiles, ...Array.from(incomingFiles)] : Array.from(incomingFiles);
   syncFinanceUploadInputFiles(input, nextFiles);
   renderFinanceUploadFiles(input);
 };
@@ -9481,6 +9488,14 @@ document.addEventListener("change", (event) => {
   const input = event.target.closest?.("[data-finance-upload-input]");
   if (!input) return;
   addFinanceUploadFiles(input, input.files);
+});
+
+document.addEventListener("reset", (event) => {
+  event.target.querySelectorAll("[data-finance-upload-input]").forEach((input) => {
+    input.setCustomValidity("");
+    syncFinanceUploadInputFiles(input, []);
+    renderFinanceUploadFiles(input);
+  });
 });
 
 document.addEventListener("dragenter", (event) => {

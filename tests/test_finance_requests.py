@@ -2125,16 +2125,23 @@ class FinanceRequestsTest(unittest.TestCase):
         self.assertIn(f'data-open-modal="edit-archived-payment-receipt-{payment.id}"', body)
         self.assertIn(f'id="edit-archived-payment-receipt-{payment.id}"', body)
         self.assertIn(f'action="/finance-requests/payment-requests/{payment.id}/receipt"', body)
-        self.assertIn("Payment receipt", body)
-        self.assertIn('value="https://example.com/old-receipt"', body)
+        self.assertIn("Replacement payment receipt", body)
+        self.assertIn('name="previous_receipt" value="https://example.com/old-receipt"', body)
+        form = body.split(f'id="edit-archived-payment-receipt-form-{payment.id}"', 1)[1].split('</form>', 1)[0]
+        self.assertIn('enctype="multipart/form-data"', form)
+        self.assertIn('type="file" name="payment_proof_file" required', form)
+        self.assertNotIn('name="payment_proof_url"', form)
 
-        response = self.client_for(superadmin).post(
-            f"/finance-requests/payment-requests/{payment.id}/receipt",
-            data={
-                "tab": "finance_payments",
-                "payment_proof_url": "https://example.com/new-receipt",
-            },
-        )
+        with patch("app.routes.save_finance_supporting_document", return_value="https://example.com/new-receipt") as upload:
+            response = self.client_for(superadmin).post(
+                f"/finance-requests/payment-requests/{payment.id}/receipt",
+                data={
+                    "tab": "finance_payments",
+                    "csrf_token": "token",
+                    "previous_receipt": "https://example.com/old-receipt",
+                    "payment_proof_file": (BytesIO(b"replacement receipt"), "replacement.pdf"),
+                },
+            )
 
         db.session.refresh(payment)
         self.assertEqual(response.status_code, 302)
@@ -2142,6 +2149,7 @@ class FinanceRequestsTest(unittest.TestCase):
         self.assertIn("show_archived=1", response.headers["Location"])
         self.assertIn(f"open_staff_modal=archived-payment-request-{payment.id}", response.headers["Location"])
         self.assertEqual(payment.payment_proof_url, "https://example.com/new-receipt")
+        self.assertEqual(upload.call_args.kwargs["category"], "payment_proofs")
 
     def test_non_superadmin_cannot_edit_archived_finance_action_payment_receipt(self):
         user = self.create_user("finance@example.com", department="Finance")
