@@ -574,6 +574,7 @@
             <span>{{ '↑' if filters.sort == 'sessions' and filters.dir == 'asc' else '↓' if filters.sort == 'sessions' else '↕' }}</span>
           </a>
         </th>
+        <th>Portal</th>
         <th>
           <a class="table-sort {% if filters.sort == 'updated_on' %}is-active{% endif %}" href="{{ sort_url('updated_on') }}">
             Updated on
@@ -702,6 +703,14 @@
             <span class="staff-session-count-chip staff-session-count-chip-history" title="Confirmed participation across all years" aria-label="Confirmed sessions across all years">{{ all_years_confirmed_session_counts.get(member.id, 0) if all_years_confirmed_session_counts is defined else 0 }}</span>
           </div>
         </td>
+        <td>
+          {% set portal_token = staff_portal_tokens.get(member.id|string) %}
+          {% if portal_token %}
+            <a class="mini-button link-button" href="{{ url_for('staff.staff_exam_sessions', token=portal_token) }}" target="_blank" rel="noopener noreferrer" aria-label="Access portal for {{ member.full_name }}">Access</a>
+          {% else %}
+            <span class="muted">-</span>
+          {% endif %}
+        </td>
         <td class="datetime-cell">{{ member.updated_on|localdt }}</td>
         <td>
           <div class="row-actions">
@@ -718,7 +727,7 @@
       </tr>
       {% else %}
       <tr>
-        <td colspan="22" class="empty-state">No members found.</td>
+        <td colspan="24" class="empty-state">No members found.</td>
       </tr>
       {% endfor %}
     </tbody>

@@ -29864,6 +29864,12 @@ def index():
         return url_for("staff.index", **args)
 
     members, pagination = paginate_query(query)
+    staff_portal_tokens = {
+        share.person_ref: share.token
+        for share in StaffExamSessionsShare.query.filter(
+            StaffExamSessionsShare.person_ref.in_([str(member.id) for member in members])
+        ).all()
+    }
     confirmed_session_counts = assigned_session_counts_by_member([member.id for member in members], staff_sessions_year)
     all_years_confirmed_session_counts = assigned_session_counts_by_member([member.id for member in members], confirmed_only=True)
     staff_member_session_details = assigned_session_details_by_member([member.id for member in members], staff_sessions_year)
@@ -29881,6 +29887,7 @@ def index():
         "staff/index.html",
         page_mode="staff",
         members=members,
+        staff_portal_tokens=staff_portal_tokens,
         staff_id_document_members=staff_id_document_members,
         staff_id_documents=staff_id_documents,
         pagination=pagination,
