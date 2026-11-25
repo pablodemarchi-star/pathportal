@@ -3,11 +3,12 @@
   <div class="pen-section-heading"><div><h4 id="pen-title-{{ session.id }}">Arrangements for candidates with PEN</h4><p>Candidate arrangements and examiner recommendations.</p></div><div class="pen-section-badges"><span class="pen-completion-chip" data-pen-completion-chip>Pending</span><span class="pen-count" data-pen-count>0 candidates</span></div></div>
   <div class="pen-deadline">{{ shipment_deadline_chip(view.final_checks_gate.pen_deadline_badge) }}</div>
   <div class="pen-section-actions"><button type="button" class="secondary-button compact-action" data-pen-add disabled>+ Add candidate</button><span data-pen-section-status role="status" aria-live="polite">Loading arrangements…</span><button type="button" class="secondary-button compact-action" data-pen-load-retry hidden>Retry loading</button></div>
-  <p class="pen-empty" data-pen-empty hidden>No candidates added yet. Add a candidate to record their exam arrangements.</p>
+  <p class="pen-empty" data-pen-empty hidden>No candidate arrangements have been added.</p>
   <div class="pen-cards" data-pen-cards></div>
   <div class="pen-completion">
     <label><input type="checkbox" data-pen-confirm disabled><span>It has been verified that <strong>all candidates requiring exam arrangements have the corresponding instructions and specifications available for the relevant staff members</strong>.</span></label>
-    <small data-pen-confirm-status role="status" aria-live="polite">Add and save at least one candidate before verifying this section.</small>
+    <label data-pen-no-arrangements-field hidden><input type="checkbox" data-pen-no-arrangements disabled><span>Candidates with Personal Educational Needs (PENs) in this exam session do not require any specific examination arrangements.</span></label>
+    <small data-pen-confirm-status role="status" aria-live="polite">Add a candidate or confirm that no specific examination arrangements are required.</small>
   </div>
   <template data-pen-card-template>
     <form class="pen-card" method="post" data-pen-form novalidate>

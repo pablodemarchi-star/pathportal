@@ -314,6 +314,8 @@ def create_app():
         db.create_all()
         from app.schema_migrations import migrate_marketing_visibility
         migrate_marketing_visibility()
+        from app.schema_migrations import migrate_pen_no_arrangements
+        migrate_pen_no_arrangements()
         from app.staff_logistics import ensure_schema as ensure_staff_logistics_schema
         ensure_staff_logistics_schema()
         from app.schema_migrations import migrate_absence_reviews

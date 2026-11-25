@@ -28,8 +28,10 @@ class PenReportTarget:
 
 def _completion(rows, control):
     snapshot = hashlib.sha256(json.dumps(sorted((row.id, row.revision) for row in rows)).encode()).hexdigest()
-    complete = bool(rows and control and control.confirmed_at and control.confirmed_snapshot == snapshot)
-    return dict(count=len(rows), complete=complete, snapshot=snapshot,
+    no_arrangements = bool(control and control.no_arrangements_required)
+    valid_mode = not rows if no_arrangements else bool(rows)
+    complete = bool(valid_mode and control and control.confirmed_at and control.confirmed_snapshot == snapshot)
+    return dict(count=len(rows), complete=complete, no_arrangements_required=bool(complete and no_arrangements), snapshot=snapshot,
                 completed_at=control.confirmed_at if complete else None)
 
 
@@ -57,6 +59,7 @@ def mark_pending(record):
     control = db.session.get(ExamSessionPenControl, record.id)
     if control:
         control.confirmed_snapshot = ''
+        control.no_arrangements_required = False
         control.confirmed_at = None
         control.confirmed_by = ''
     if has_app_context():
@@ -222,13 +225,20 @@ def confirm(session_id):
     if request.form.get('snapshot') != current['snapshot']:
         return jsonify(ok=False, error='The PEN candidates have changed. Reopen the session and review the current arrangements before confirming.'), 409
     checked = request.form['confirmed'] == '1'
-    if checked and not current['count']:
+    mode = request.form.get('no_arrangements_required', '0')
+    if mode not in {'0', '1'}:
+        return jsonify(ok=False, error='Choose a valid PEN confirmation option.'), 400
+    no_arrangements = mode == '1'
+    if no_arrangements and current['count']:
+        return jsonify(ok=False, error='No specific arrangements can only be confirmed when there are no candidate cards.'), 400
+    if checked and not no_arrangements and not current['count']:
         return jsonify(ok=False, error='Add and save at least one candidate before confirming the PEN arrangements.'), 400
     control = db.session.get(ExamSessionPenControl, session_id)
     if control is None:
         control = ExamSessionPenControl(exam_session_id=session_id)
         db.session.add(control)
     control.confirmed_snapshot = current['snapshot'] if checked else ''
+    control.no_arrangements_required = checked and no_arrangements
     control.confirmed_at = datetime.now(timezone.utc) if checked else None
     control.confirmed_by = session.get('user', '') if checked else ''
     db.session.commit()

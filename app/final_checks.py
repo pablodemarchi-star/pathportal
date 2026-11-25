@@ -186,7 +186,7 @@ def final_checks_state(record, control=None, today=None):
     pen_applicable = bool(record.pen_enabled)
     from app.pen_arrangements import completion_state
     pen = completion_state(record) if pen_applicable else dict(count=0, complete=True, completed_at=None)
-    has_activity = has_activity or bool(pen['count'])
+    has_activity = has_activity or bool(pen['count']) or (pen_applicable and pen['complete'])
     progress = 'completed' if complete and all_checked and pen['complete'] else 'in_progress' if has_activity else 'not_started'
     finished = max((local_date(item.checked_at) for item in items if item.checked_at), default=None) if all_checked else None
     checks_deadline = argentina_subtract_business_days(record.session_date, 4) if record.session_date else None

@@ -61,3 +61,5 @@
 .pen-completion>small{display:block;padding-left:26px;margin-top:5px;font-size:11px;line-height:1.5;color:#7a8e99}
 .pen-completion.is-complete{border-color:#c5dfd1;background:#f2f9f5}
 .pen-completion.has-error>small{color:#986c17}
+
+.pen-completion>label+label{margin-top:14px;padding-top:14px;border-top:1px solid #dce6eb}

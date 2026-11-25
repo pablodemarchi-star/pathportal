@@ -271,3 +271,11 @@ def migrate_marketing_visibility():
     if 'external_hidden' not in columns:
         db.session.execute(text('ALTER TABLE marketing_material_info ADD COLUMN external_hidden BOOLEAN NOT NULL DEFAULT FALSE'))
         db.session.commit()
+
+
+def migrate_pen_no_arrangements():
+    from sqlalchemy import inspect
+    columns = {column['name'] for column in inspect(db.engine).get_columns('exam_session_pen_control')}
+    if 'no_arrangements_required' not in columns:
+        db.session.execute(text('ALTER TABLE exam_session_pen_control ADD COLUMN no_arrangements_required BOOLEAN NOT NULL DEFAULT FALSE'))
+        db.session.commit()

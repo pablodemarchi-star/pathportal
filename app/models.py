@@ -3213,6 +3213,7 @@ class ExamSessionPenCandidate(db.Model):
 
 
 class ExamSessionPenControl(db.Model):
+    no_arrangements_required = db.Column(db.Boolean, nullable=False, default=False, server_default=db.false())
     exam_session_id = db.Column(db.Integer, db.ForeignKey('exam_session.id'), primary_key=True)
     confirmed_snapshot = db.Column(db.String(64), nullable=False, default='')
     confirmed_at = db.Column(db.DateTime(timezone=True), nullable=True)

@@ -287,6 +287,75 @@ class PenArrangementsTest(unittest.TestCase):
         self.record.pen_enabled=False;db.session.commit()
         self.assertNotIn('exam arrangements for candidates with PEN',page())
 
+    def test_no_specific_arrangements_completes_empty_section_and_is_mutually_exclusive(self):
+        response=self.confirmation(no_arrangements_required='1')
+        self.assertEqual(response.status_code,200,response.json)
+        self.assertTrue(response.json['completion']['complete'])
+        self.assertTrue(response.json['completion']['no_arrangements_required'])
+        self.assertEqual(response.json['completion']['count'],0)
+        self.assertTrue(m.ExamSessionPenControl.query.one().no_arrangements_required)
+        self.assertTrue(self.client.get(self.url).json['completion']['complete'])
+        with patch('app.routes.user_can_edit',return_value=False):
+            self.assertEqual(self.confirmation(False,no_arrangements_required='1').status_code,403)
+        self.assertEqual(self.confirmation(False,no_arrangements_required='1').status_code,200)
+        self.assertFalse(self.client.get(self.url).json['completion']['complete'])
+        self.assertFalse(m.ExamSessionPenControl.query.one().no_arrangements_required)
+        self.assertEqual(self.confirmation().status_code,400)
+        self.assertEqual(self.confirmation(no_arrangements_required='invalid').status_code,400)
+
+    def test_no_arrangements_cannot_be_selected_with_cards_and_does_not_replace_normal_verification(self):
+        self.save();self.confirmation()
+        response=self.confirmation(no_arrangements_required='1')
+        self.assertEqual(response.status_code,400,response.json)
+        current=self.client.get(self.url).json['completion']
+        self.assertTrue(current['complete']);self.assertFalse(current['no_arrangements_required'])
+        self.assertFalse(m.ExamSessionPenControl.query.one().no_arrangements_required)
+
+    def test_creating_a_card_and_deleting_the_last_card_never_restore_no_arrangements_confirmation(self):
+        self.confirmation(no_arrangements_required='1')
+        old=self.client.get(self.url).json['completion']['snapshot']
+        response=self.save()
+        self.assertEqual(response.status_code,200,response.json)
+        self.assertFalse(response.json['completion']['complete'])
+        self.assertFalse(response.json['completion']['no_arrangements_required'])
+        self.assertFalse(m.ExamSessionPenControl.query.one().no_arrangements_required)
+        self.assertEqual(self.confirmation(no_arrangements_required='1',snapshot=old).status_code,409)
+        self.confirmation()
+        response=self.client.post(self.url+'/'+self.key,data=dict(csrf_token='test',revision=1,action='delete'))
+        self.assertEqual(response.status_code,200,response.json)
+        self.assertEqual(response.json['completion']['count'],0)
+        self.assertFalse(response.json['completion']['complete'])
+        self.assertFalse(response.json['completion']['no_arrangements_required'])
+        self.assertTrue(self.confirmation(no_arrangements_required='1').json['completion']['complete'])
+
+    def test_no_arrangements_closes_management_action_and_completes_final_checks_with_zero_candidates(self):
+        from datetime import datetime,timezone
+        from app.routes import ensure_sinapsis_checklist_items
+        from app.final_checks import final_checks_state
+        from app.quality_control import load_rows
+        self.record.format='Online'
+        control=m.ExamSessionSinapsisControl(exam_session_id=self.record.id)
+        db.session.add(control);ensure_sinapsis_checklist_items(control)
+        for item in control.checklist_items:item.is_checked=True;item.checked_at=datetime.now(timezone.utc)
+        db.session.commit()
+        user=m.User(full_name='No arrangements manager',email='noarrangements@example.com',department='Management',is_active=True,is_superadmin=True,password_hash='test')
+        db.session.add(user);db.session.commit()
+        manager=self.app.test_client()
+        with manager.session_transaction() as state:state.update(user=user.full_name,user_id=user.id,user_email=user.email,user_department='Management')
+        url='/my-actions?session_year=2026&actions_section=sinapsis'
+        self.assertIn('Complete exam arrangements for candidates with PEN',manager.get(url).get_data(as_text=True))
+        self.assertTrue(self.confirmation(no_arrangements_required='1').json['completion']['complete'])
+        gate=final_checks_state(self.record)
+        self.assertTrue(gate['pen_complete']);self.assertEqual(gate['progress'],'completed')
+        self.assertEqual(gate['pen_count'],0)
+        self.assertFalse(any('candidates with PEN' in action['description'] for action in gate['actions']))
+        self.assertNotIn('exam arrangements for candidates with PEN',manager.get(url).get_data(as_text=True))
+        cells={cell['key']:cell for cell in load_rows([self.record])[0]['cells']}
+        self.assertTrue(cells['final_checks']['complete'])
+        self.confirmation(False,no_arrangements_required='1')
+        self.assertFalse(final_checks_state(self.record)['pen_complete'])
+        self.assertIn('Complete exam arrangements for candidates with PEN',manager.get(url).get_data(as_text=True))
+
     def test_designated_drive_folder_cannot_be_redirected(self):
         url = '/integrations/google/drive/folders/pen_assessment_reports'
         self.assertEqual(self.client.post(url, data=dict(csrf_token='test', folder_id='some-other-folder')).status_code, 400)
@@ -315,3 +384,20 @@ class PenArrangementsTest(unittest.TestCase):
             self.record.pen_enabled = False; db.session.commit()
             self.assertNotIn('data-pen-section', self.client.get(url).get_data(as_text=True))
             self.record.pen_enabled = True; db.session.commit()
+
+
+class PenNoArrangementsMigrationTest(unittest.TestCase):
+    def test_existing_confirmations_are_preserved_and_default_to_normal_verification(self):
+        from types import SimpleNamespace
+        from sqlalchemy import create_engine,text
+        from sqlalchemy.orm import Session
+        from app.schema_migrations import migrate_pen_no_arrangements
+        engine=create_engine('sqlite:///:memory:')
+        with Session(engine) as unit:
+            unit.execute(text('CREATE TABLE exam_session_pen_control (exam_session_id INTEGER PRIMARY KEY, confirmed_snapshot TEXT)'))
+            unit.execute(text("INSERT INTO exam_session_pen_control VALUES (1,'existing-confirmation')"));unit.commit()
+            with patch('app.schema_migrations.db',SimpleNamespace(engine=engine,session=unit)):
+                migrate_pen_no_arrangements();migrate_pen_no_arrangements()
+            row=unit.execute(text('SELECT confirmed_snapshot,no_arrangements_required FROM exam_session_pen_control')).one()
+            self.assertEqual(tuple(row),('existing-confirmation',0))
+        engine.dispose()

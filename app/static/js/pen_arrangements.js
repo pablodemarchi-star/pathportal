@@ -2,7 +2,7 @@
   const controllers = new Map();
   const sectionStates = new WeakMap();
   const sections = new Set();
-  window.penHasUnsavedChanges = root => [...sections].some(section => (!root || root.contains(section)) && sectionStates.get(section).completing) || [...controllers].some(([card, state]) => (!root || root.contains(card)) && (state.controller.dirty || state.deleting));
+  window.penHasUnsavedChanges = root => [...sections].some(section => (!root || root.contains(section)) && (sectionStates.get(section).completing || sectionStates.get(section).addingCard)) || [...controllers].some(([card, state]) => (!root || root.contains(card)) && (state.controller.dirty || state.deleting));
   window.addEventListener('beforeunload', event => {
     if (window.penHasUnsavedChanges()) { event.preventDefault(); event.returnValue = ''; }
   });
@@ -23,17 +23,28 @@
     const message = section.querySelector('[data-pen-confirm-status]');
     const completion = settings.completion || {count:0, complete:false};
     const dirty = [...controllers].some(([card, state]) => section.contains(card) && (state.controller.dirty || state.deleting));
-    checkbox.checked = Boolean(completion.complete && !dirty && !settings.completionStale);
-    checkbox.disabled = !settings.loaded || !settings.can_edit || completion.count < 1 || dirty || Boolean(settings.completing) || Boolean(settings.completionStale);
-    chip.textContent = checkbox.checked ? 'Completed' : 'Pending';
-    chip.classList.toggle('is-complete', checkbox.checked);
+    const noArrangements = section.querySelector('[data-pen-no-arrangements]');
+    const noArrangementsField = section.querySelector('[data-pen-no-arrangements-field]');
+    const hasCards = Boolean(completion.count || section.querySelectorAll('[data-pen-form]').length);
+    const noSpecificArrangements = Boolean(completion.no_arrangements_required);
+    const verified = Boolean(completion.complete && !dirty && !settings.completionStale && (noSpecificArrangements ? !hasCards : completion.count));
+    const blocked = !settings.loaded || !settings.can_edit || dirty || Boolean(settings.completing || settings.addingCard || settings.completionStale);
+    checkbox.checked = verified && !noSpecificArrangements;
+    checkbox.disabled = blocked || completion.count < 1;
+    noArrangementsField.hidden = !settings.loaded || hasCards;
+    noArrangements.checked = verified && noSpecificArrangements && !noArrangementsField.hidden;
+    noArrangements.disabled = blocked || hasCards;
+    section.querySelector('[data-pen-add]').disabled = !settings.loaded || !settings.can_edit || Boolean(settings.completing || settings.addingCard);
+    chip.textContent = verified ? 'Completed' : 'Pending';
+    chip.classList.toggle('is-complete', verified);
     const panel = checkbox.closest('.pen-completion');
-    panel.classList.toggle('is-complete', checkbox.checked);
+    panel.classList.toggle('is-complete', verified);
     panel.classList.toggle('has-error', Boolean(settings.completionError));
     message.textContent = settings.completing ? 'Saving verification…' : settings.completionError ||
       (dirty ? 'Complete and save all candidate changes before verifying this section.' :
-       !completion.count ? 'Add and save at least one candidate before verifying this section.' :
-       checkbox.checked ? 'Verified. Any change to a candidate or report will require a new verification.' : 'Verify the arrangements to complete this section.');
+       verified && noSpecificArrangements ? 'Verified. No specific examination arrangements are required.' :
+       !completion.count ? 'Add a candidate or confirm that no specific examination arrangements are required.' :
+       verified ? 'Verified. Any change to a candidate or report will require a new verification.' : 'Verify the arrangements to complete this section.');
   };
   const count = section => {
     const total = section.querySelectorAll('[data-pen-form]').length;
@@ -216,20 +227,37 @@
       } catch (error) { status.textContent = error.message; retry.hidden = false; }
       finally { settings.loading = false; }
     };
-    section.querySelector('[data-pen-confirm]').addEventListener('change', async event => {
-      const desired = event.target.checked;
-      const dirty = [...controllers].some(([card, state]) => section.contains(card) && (state.controller.dirty || state.deleting));
-      if (!settings.can_edit || settings.completing || dirty || !settings.completion?.count) { renderCompletion(section); return; }
+    const saveCompletion = async (desired, noArrangements) => {
       settings.completing = true; settings.completionError = ''; renderCompletion(section);
       try {
         const body = new FormData(); body.set('csrf_token', section.dataset.penCsrf);
         body.set('snapshot', settings.completion.snapshot); body.set('confirmed', desired ? '1' : '0');
+        body.set('no_arrangements_required', noArrangements ? '1' : '0');
         const result = await request(settings.url + '/confirmation', {method:'POST', body});
-        settings.completion = result.completion;
-      } catch (error) { settings.completionError = error.message; settings.completionStale = error.status === 409; }
+        settings.completion = result.completion; settings.completionStale = false;
+        return true;
+      } catch (error) { settings.completionError = error.message; settings.completionStale = error.status === 409; return false; }
       finally { settings.completing = false; renderCompletion(section); }
+    };
+    for (const [selector, noArrangements] of [['[data-pen-confirm]', false], ['[data-pen-no-arrangements]', true]]) {
+      section.querySelector(selector).addEventListener('change', async event => {
+        const desired = event.target.checked;
+        const dirty = [...controllers].some(([card, state]) => section.contains(card) && (state.controller.dirty || state.deleting));
+        const hasCards = Boolean(settings.completion?.count || section.querySelectorAll('[data-pen-form]').length);
+        if (!settings.loaded || !settings.can_edit || settings.completing || settings.addingCard || settings.completionStale || dirty || (noArrangements ? hasCards : !settings.completion?.count)) { renderCompletion(section); return; }
+        await saveCompletion(desired, noArrangements);
+      });
+    }
+    retry.addEventListener('click', load);
+    add.addEventListener('click', async () => {
+      if (!settings.loaded || !settings.can_edit || settings.completing || settings.addingCard || settings.completionStale) return;
+      settings.addingCard = true; renderCompletion(section);
+      try {
+        // Reopen the saved section before creating even an incomplete local card.
+        if (settings.completion?.complete && !await saveCompletion(false, Boolean(settings.completion.no_arrangements_required))) return;
+        makeCard(section);
+      } finally { settings.addingCard = false; renderCompletion(section); }
     });
-    retry.addEventListener('click', load); add.addEventListener('click', () => { if (settings.can_edit) makeCard(section); });
     // Fetch only when this section becomes visible in its session modal.
     if (typeof IntersectionObserver !== 'undefined') {
       const observer = new IntersectionObserver(entries => { if (entries.some(entry => entry.isIntersecting)) { load(); observer.disconnect(); } });

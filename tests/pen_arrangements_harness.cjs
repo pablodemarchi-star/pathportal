@@ -41,7 +41,7 @@ function harness(settings={}){
  };
  const section=new Node('section',{'data-pen-section':'','data-pen-url':'/sessions/1/pen-candidates','data-pen-csrf':'csrf'});
  for(const [tag,key]of [['span','data-pen-count'],['button','data-pen-add'],['button','data-pen-load-retry'],['span','data-pen-section-status'],['p','data-pen-empty'],['div','data-pen-cards']])element(tag,key,section);
- const completionPanel=new Node('div',{class:'pen-completion'});section.append(completionPanel);element('input','data-pen-confirm',completionPanel);element('small','data-pen-confirm-status',completionPanel);element('span','data-pen-completion-chip',section);
+ const completionPanel=new Node('div',{class:'pen-completion'});section.append(completionPanel);element('input','data-pen-confirm',completionPanel);const noArrangements=element('label','data-pen-no-arrangements-field',completionPanel);element('input','data-pen-no-arrangements',noArrangements);element('small','data-pen-confirm-status',completionPanel);element('span','data-pen-completion-chip',section);
  const template=element('template','data-pen-card-template',section);template.content={firstElementChild:{cloneNode:buildCard}};
  const document={querySelectorAll:selector=>match(section,selector)?[section]:[],createElement:tag=>new Node(tag),commands:[],execCommand(command){this.commands.push(command);}};
  const window={addEventListener:(name,fn)=>{(events[name]||=[]).push(fn);},confirm:()=>true,alerts:[],alert(message){this.alerts.push(message);},getSelection:()=>({rangeCount:0})};
@@ -53,7 +53,7 @@ function harness(settings={}){
    if(responder)return responder(url,options);
    const fields=options.body.values,key=url.split('/').at(-1);
    if(key==='confirmation'){
-     data.completion={...data.completion,complete:fields.confirmed==='1'};
+     data.completion={...data.completion,complete:fields.confirmed==='1',no_arrangements_required:fields.confirmed==='1'&&fields.no_arrangements_required==='1'};
      return{ok:true,status:200,json:async()=>({ok:true,completion:data.completion})};
    }
    let candidate;
