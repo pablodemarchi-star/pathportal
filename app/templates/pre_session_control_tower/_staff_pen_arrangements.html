@@ -7,6 +7,7 @@
   {% else %}
   <p>Candidates assigned to your exam room have <strong>Personal Educational Needs (PENs)</strong> that require specific examination arrangements or additional considerations. <strong>Please read the information provided carefully and ensure that all relevant instructions are followed.</strong></p>
   {% endif %}
+  <div class="staff-pen-guidelines"><a class="staff-travel-document-chip" href="{{ url_for('static', filename='documents/pen-guidelines.pdf') }}" target="_blank" rel="noopener noreferrer">PEN guidelines ↗</a></div>
   <div class="staff-pen-candidates" aria-label="{{ 'Candidates with PEN in this session' if detail.pen_arrangements.supervisor else 'Your assigned candidates with PEN' }}">
   {% for candidate in detail.pen_arrangements.candidates %}
     {% set candidate_dialog_id = pen_dialog_prefix ~ '-' ~ candidate.id %}
