@@ -8,27 +8,36 @@
 
   if (!child) {
     let summaryBusy = false;
+    let summaryRequested = false;
     const refreshSummary = async () => {
+      summaryRequested = true;
       if (summaryBusy) return;
       summaryBusy = true;
       try {
-        const response = await nativeFetch(window.location.href, {cache: 'no-store'});
-        if (!response.ok || response.redirected) return;
-        const page = new DOMParser().parseFromString(await response.text(), 'text/html');
-        const current = document.querySelector('[data-tower-table-region]');
-        const fresh = page.querySelector('[data-tower-table-region]');
-        if (!current || !fresh) return;
-        const positions = [...current.querySelectorAll('.table-wrap')].map(item => [item.scrollLeft, item.scrollTop]);
-        current.replaceWith(fresh);
-        [...fresh.querySelectorAll('.table-wrap')].forEach((item, index) => {
-          [item.scrollLeft, item.scrollTop] = positions[index] || [0, 0];
-        });
-        page.querySelectorAll('[data-tower-session]').forEach(modal => {
-          if (!document.getElementById(modal.id)) document.body.append(modal);
-        });
-        window.initTowerSummaryControls?.(fresh);
-      } catch (_) { /* Keep the current table until the next successful refresh. */ }
-      finally { summaryBusy = false; }
+        do {
+          summaryRequested = false;
+          try {
+            const response = await nativeFetch(window.location.href, {cache: 'no-store'});
+            if (!response.ok || response.redirected) continue;
+            const page = new DOMParser().parseFromString(await response.text(), 'text/html');
+            // Another save finished during this request. Fetch its state before
+            // installing a table that would still show the previous action.
+            if (summaryRequested) continue;
+            const current = document.querySelector('[data-tower-table-region]');
+            const fresh = page.querySelector('[data-tower-table-region]');
+            if (!current || !fresh) continue;
+            const positions = [...current.querySelectorAll('.table-wrap')].map(item => [item.scrollLeft, item.scrollTop]);
+            current.replaceWith(fresh);
+            [...fresh.querySelectorAll('.table-wrap')].forEach((item, index) => {
+              [item.scrollLeft, item.scrollTop] = positions[index] || [0, 0];
+            });
+            page.querySelectorAll('[data-tower-session]').forEach(modal => {
+              if (!document.getElementById(modal.id)) document.body.append(modal);
+            });
+            window.initTowerSummaryControls?.(fresh);
+          } catch (_) { /* Keep the current table; still process any queued save. */ }
+        } while (summaryRequested);
+      } finally { summaryBusy = false; }
     };
     const displayLoadedFrame = (modal, frame) => {
       const loading = modal.querySelector('[data-tower-loading]');
