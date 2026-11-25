@@ -18499,3 +18499,28 @@ body.staff-logistics-dialog-open, body.staff-return-dialog-open, body.staff-repo
 .staff-session-action-link:focus-visible{outline:3px solid var(--path-cyan);outline-offset:3px}
 .staff-session-actions .staff-confirmed-details-button{max-width:100%}
 .staff-session-actions .staff-confirmed-details-button span{white-space:normal}
+
+/* Examiner-only PEN arrangements and their direct portal shortcut. */
+.staff-pen-section{border:1px solid #ead7a9;border-radius:12px;padding:18px;background:#fffaf0;min-width:0}
+.staff-pen-heading{display:flex;align-items:flex-start;justify-content:space-between;gap:12px}
+.staff-pen-heading>.staff-detail-logistics-progress{flex:0 0 auto;white-space:nowrap}
+.staff-pen-heading h4{margin:0;line-height:1.5;color:#735c27}
+.staff-pen-section>p{line-height:1.7;font-size:13px;color:#5e6570}
+.staff-pen-candidates{display:flex;flex-wrap:wrap;gap:8px;margin-top:14px}
+.staff-pen-candidate-chip{max-width:100%;white-space:normal;text-align:left;overflow-wrap:anywhere;cursor:pointer}
+.staff-pen-candidate-dialog h3{overflow-wrap:anywhere;margin-top:6px}
+.staff-pen-candidate-details{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,2fr);gap:14px;margin:20px 0}
+.staff-pen-candidate-details dt{color:#6c8491;font-size:11px;margin-bottom:5px}
+.staff-pen-candidate-details dd{margin:0;color:#24566d;font-size:14px;font-weight:600;overflow-wrap:anywhere}
+.staff-pen-candidate-content{padding-top:16px;border-top:1px solid #e3ebef;margin:18px 0}
+.staff-pen-candidate-content h4{color:#24566d;font-size:14px;margin:0 0 12px}
+.staff-pen-candidate-content .staff-travel-document-chip{max-width:100%;white-space:normal;overflow-wrap:anywhere}
+.staff-pen-dialog .staff-detail-content{padding:20px}
+body.staff-pen-dialog-open{overflow:hidden}
+@media(max-width:600px){.staff-pen-heading{flex-wrap:wrap}.staff-pen-section{padding:14px}.staff-pen-candidate-details{grid-template-columns:minmax(0,1fr)}.staff-pen-dialog .staff-detail-content{padding:14px}}
+
+.staff-pen-candidate-chip.is-session-candidate{display:inline-flex;flex-direction:column;align-items:flex-start;gap:4px}
+.staff-pen-candidate-examiners{font-size:11px;font-weight:400;line-height:1.5;color:#657c89}
+.staff-pen-examiner-assignment{margin:18px 0;padding:12px 14px;background:#f2f7fa;border:1px solid #dce7ed;border-radius:9px}
+.staff-pen-examiner-assignment h4{margin:0 0 5px;font-size:12px;color:#456879}
+.staff-pen-examiner-assignment p{margin:0;font-size:13px;line-height:1.6;overflow-wrap:anywhere}

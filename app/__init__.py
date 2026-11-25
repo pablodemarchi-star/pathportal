@@ -213,7 +213,7 @@ def create_app():
             or request.endpoint in {"staff_invoices.preview", "staff_id_documents.preview", "quality_control.edit_session_report"}
             else "DENY"
         )
-        response.headers["Referrer-Policy"] = "no-referrer" if request.endpoint in {"staff.staff_exam_sessions", "staff_invoices.upload", "staff_invoices.download", "staff_invoices.preview", "staff_invoices.remove"} else "strict-origin-when-cross-origin"
+        response.headers["Referrer-Policy"] = "no-referrer" if request.endpoint in {"pen_arrangements.staff_document", "staff.staff_exam_sessions", "staff_invoices.upload", "staff_invoices.download", "staff_invoices.preview", "staff_invoices.remove"} else "strict-origin-when-cross-origin"
         response.headers["Permissions-Policy"] = "camera=(), microphone=(), geolocation=()"
         if request.endpoint in {"staff.shared_path_session_journey", "staff.path_session_journey", "staff.preview_path_session_journey"}:
             response.headers["Cache-Control"] = "no-store"

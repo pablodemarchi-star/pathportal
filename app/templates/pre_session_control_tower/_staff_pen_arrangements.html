@@ -1,0 +1,26 @@
+{% if detail.pen_arrangements %}
+<section class="staff-detail-material staff-pen-section" data-staff-pen-section>
+  <div class="staff-pen-heading"><h4>⚠️ Candidates with Personal Educational Needs (PENs)</h4><span class="staff-detail-logistics-progress{% if detail.pen_arrangements.status == 'Completed' %} is-confirmed{% endif %}">{{ detail.pen_arrangements.status }}</span></div>
+  {% if detail.pen_arrangements.supervisor %}
+  <p>Candidates in this exam session have <strong>Personal Educational Needs (PENs)</strong> that require specific exam arrangements or additional considerations from examiners. <strong>Please review the information carefully to ensure that each candidate receives the appropriate support and has a positive, inclusive exam experience.</strong></p>
+  <p>Ensure that the <strong>examiners concerned are aware of and understand the arrangements required</strong>. This information is also available in their respective <strong>Session portals</strong>.</p>
+  {% else %}
+  <p>Candidates assigned to your exam room have <strong>Personal Educational Needs (PENs)</strong> that require specific examination arrangements or additional considerations. <strong>Please read the information provided carefully and ensure that all relevant instructions are followed.</strong></p>
+  {% endif %}
+  <div class="staff-pen-candidates" aria-label="{{ 'Candidates with PEN in this session' if detail.pen_arrangements.supervisor else 'Your assigned candidates with PEN' }}">
+  {% for candidate in detail.pen_arrangements.candidates %}
+    {% set candidate_dialog_id = pen_dialog_prefix ~ '-' ~ candidate.id %}
+    <button type="button" class="staff-travel-document-chip staff-pen-candidate-chip{% if detail.pen_arrangements.supervisor %} is-session-candidate{% endif %}" data-staff-pen-candidate="{{ candidate_dialog_id }}" aria-haspopup="dialog" aria-controls="{{ candidate_dialog_id }}"><span>{{ candidate.number }} · {{ candidate.name }}</span>{% if detail.pen_arrangements.supervisor %}<span class="staff-pen-candidate-examiners">{% if candidate.examiner_assignment_note %}{{ candidate.examiner_assignment_note }}{% elif candidate.examiner_names %}Examiner(s): {{ candidate.examiner_names|join(', ') }}{% else %}No Examiner assigned{% endif %}</span>{% endif %}</button>
+    <dialog id="{{ candidate_dialog_id }}" class="staff-detail-logistics-instructions-dialog staff-pen-candidate-dialog" data-staff-pen-candidate-dialog aria-labelledby="{{ candidate_dialog_id }}-title">
+      <header class="staff-detail-logistics-instructions-header"><div><span class="staff-detail-eyebrow">PERSONAL EDUCATIONAL NEEDS</span><h3 id="{{ candidate_dialog_id }}-title">{{ candidate.number }} · {{ candidate.name }}</h3></div><button type="button" class="staff-detail-close" data-staff-pen-candidate-close aria-label="Close candidate information">&times;</button></header>
+      <dl class="staff-pen-candidate-details"><div><dt>Candidate no.</dt><dd>{{ candidate.number }}</dd></div><div><dt>Candidate name</dt><dd>{{ candidate.name }}</dd></div></dl>
+      {% if detail.pen_arrangements.supervisor %}<div class="staff-pen-examiner-assignment"><h4>Examiner(s) in charge</h4><p>{{ candidate.examiner_assignment_note or candidate.examiner_names|join(', ') or 'No Examiner assigned' }}</p></div>{% endif %}
+      {% if candidate.document %}<section class="staff-pen-candidate-content"><h4>Specialist assessment report</h4><a class="staff-travel-document-chip" href="{{ candidate.document.url }}" target="_blank" rel="noopener noreferrer">{{ candidate.document.filename }} ↗</a></section>{% endif %}
+      {% if candidate.recommendations_html %}<section class="staff-pen-candidate-content"><h4>Recommendations for the examiner</h4><div class="staff-detail-logistics-instruction">{{ candidate.recommendations_html|safe }}</div></section>{% endif %}
+      {% if not candidate.document and not candidate.recommendations_html %}<p class="staff-detail-muted">No additional documents or recommendations have been added yet.</p>{% endif %}
+      <button type="button" class="secondary-button" data-staff-pen-candidate-close>Close</button>
+    </dialog>
+  {% endfor %}
+  </div>
+</section>
+{% endif %}

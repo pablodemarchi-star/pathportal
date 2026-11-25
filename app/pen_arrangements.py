@@ -233,3 +233,58 @@ def confirm(session_id):
     control.confirmed_by = session.get('user', '') if checked else ''
     db.session.commit()
     return jsonify(ok=True, completion=completion_data(record))
+
+
+def staff_pen_view(record, role, assignment, share):
+    """Confirmed supervisors see all cases; examiners see only their assignments."""
+    if role not in {'examiner', 'supervisor'} or not record.pen_enabled or assignment.participation_status != 'Confirmed':
+        return None
+    from app.routes import staffing_assignment_person_ref
+    if staffing_assignment_person_ref(assignment) != share.person_ref:
+        return None
+    supervisor = role == 'supervisor'
+    names = {item['value']: item['label'] for item in examiner_options(record)} if supervisor else {}
+    rows = ExamSessionPenCandidate.query.filter_by(exam_session_id=record.id).order_by(ExamSessionPenCandidate.created_at, ExamSessionPenCandidate.id).all()
+    candidates = []
+    for row in rows:
+        refs = json.loads(row.examiner_refs)
+        if not supervisor and share.person_ref not in refs:
+            continue
+        candidates.append(dict(id=row.id, number=row.candidate_no, name=row.candidate_name,
+            recommendations_html=sanitize_instructions(row.recommendations_html),
+            examiner_names=list(dict.fromkeys(names.get(ref, 'Examiner no longer assigned to this session') for ref in refs)) if supervisor and record.format != 'Online at exam centre' else [],
+            examiner_assignment_note='Examiner assignment does not apply to this session format' if supervisor and record.format == 'Online at exam centre' else '',
+            document=dict(filename=row.filename, url=url_for('pen_arrangements.staff_document', token=share.token,
+                session_id=record.id, candidate_id=row.id)) if row.file_id else None))
+    if not candidates:
+        return None
+    return dict(status='Completed' if completion_state(record)['complete'] else 'Pending', supervisor=supervisor, candidates=candidates)
+
+
+@pen_bp.get('/my-exam-sessions/<token>/sessions/<int:session_id>/pen-candidates/<candidate_id>/document')
+def staff_document(token, session_id, candidate_id):
+    from app.models import StaffExamSessionsShare
+    from app.routes import staff_submission_assignment
+    share = StaffExamSessionsShare.query.filter_by(token=token).first_or_404()
+    record = db.session.get(ExamSession, session_id)
+    if record is None or not record.pen_enabled:
+        abort(404)
+    authorized = False
+    supervisor = False
+    for submission in share.submissions:
+        if submission.exam_session_id != session_id or submission.assignment_type not in {'examiner', 'supervisor'}:
+            continue
+        assignment, person_ref = staff_submission_assignment(record, submission.assignment_type, submission.assignment_id)
+        if assignment and person_ref == share.person_ref and assignment.participation_status == 'Confirmed':
+            authorized = True
+            if submission.assignment_type == 'supervisor':
+                supervisor = True
+                break
+    if not authorized:
+        abort(404)
+    row = ExamSessionPenCandidate.query.filter_by(exam_session_id=session_id, id=candidate_id).first_or_404()
+    if not row.file_id or (not supervisor and share.person_ref not in json.loads(row.examiner_refs)):
+        abort(404)
+    response = stream_document(row)
+    response.headers['X-Robots-Tag'] = 'noindex, nofollow'
+    return response

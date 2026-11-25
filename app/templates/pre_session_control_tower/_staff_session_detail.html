@@ -58,6 +58,8 @@
             {% endif %}
           {% set return_dialog_id = 'staff-return-instructions-' ~ exam_session.id ~ '-' ~ loop.index0 %}
           {% include 'pre_session_control_tower/_staff_return_materials.html' %}
+          {% set pen_dialog_prefix = 'staff-pen-' ~ exam_session.id ~ '-' ~ loop.index0 %}
+          {% include 'pre_session_control_tower/_staff_pen_arrangements.html' %}
           </div></section>
           <section class="staff-detail-section" data-staff-responsibilities-section><h3 data-staff-responsibilities-title>Your responsibilities</h3><ul class="staff-detail-checklist" data-staff-responsibilities></ul></section>
         </div>

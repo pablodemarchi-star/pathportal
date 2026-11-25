@@ -89,7 +89,9 @@
           item.after(zoomAccess);
         }
       });
-      if (!rows.length && !zoomAccess) root.querySelector("[data-staff-materials-section]").hidden = true;
+      const penSection = materials.querySelector('[data-staff-pen-section]');
+      if (penSection) materials.insertBefore(penSection, null);
+      if (!rows.length && !zoomAccess && !penSection) root.querySelector("[data-staff-materials-section]").hidden = true;
       const duties = role === "Emergency contact" ? {
         title: "Your responsibilities",
         items: ["Remain available and monitor your phone throughout the session, particularly at the beginning and end.",

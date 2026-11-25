@@ -20963,6 +20963,7 @@ def staff_portal_logistics_details(record, assignment):
 @staff_bp.route("/my-exam-sessions/<token>")
 def staff_exam_sessions(token):
     from app.staff_return_materials import return_view
+    from app.pen_arrangements import staff_pen_view
     share = StaffExamSessionsShare.query.filter_by(token=token).first_or_404()
     if share.person_ref.startswith("potential:"):
         person = db.session.get(PotentialEntry, int(share.person_ref.split(":", 1)[1]))
@@ -21020,6 +21021,7 @@ def staff_exam_sessions(token):
                 "assignment_type": role,
                 "receives_shipment": bool(getattr(assignment, "is_shipment_recipient", False)),
                 "return_materials": return_view(record, assignment, share),
+                "pen_arrangements": staff_pen_view(record, role, assignment, share),
                 "speaking_record_url": staff_portal_speaking_record_url(record, role, share.person_ref),
                 "examiner_receives_shipment": (
                     role == "examiner" and bool(assignment.is_shipment_recipient)
