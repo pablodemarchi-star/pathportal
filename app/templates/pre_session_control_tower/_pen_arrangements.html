@@ -1,6 +1,6 @@
 {% if session.pen_enabled %}
 <section class="pen-arrangements" data-pen-section data-pen-url="{{ url_for('pen_arrangements.listing', session_id=session.id) }}" data-pen-csrf="{{ csrf_token }}" aria-labelledby="pen-title-{{ session.id }}">
-  <div class="pen-section-heading"><div><h4 id="pen-title-{{ session.id }}">Arrangement for candidates with PEN</h4><p>Candidate arrangements and examiner recommendations.</p></div><div class="pen-section-badges"><span class="pen-completion-chip" data-pen-completion-chip>Pending</span><span class="pen-count" data-pen-count>0 candidates</span></div></div>
+  <div class="pen-section-heading"><div><h4 id="pen-title-{{ session.id }}">Arrangements for candidates with PEN</h4><p>Candidate arrangements and examiner recommendations.</p></div><div class="pen-section-badges"><span class="pen-completion-chip" data-pen-completion-chip>Pending</span><span class="pen-count" data-pen-count>0 candidates</span></div></div>
   <div class="pen-deadline">{{ shipment_deadline_chip(view.final_checks_gate.pen_deadline_badge) }}</div>
   <div class="pen-section-actions"><button type="button" class="secondary-button compact-action" data-pen-add disabled>+ Add candidate</button><span data-pen-section-status role="status" aria-live="polite">Loading arrangements…</span><button type="button" class="secondary-button compact-action" data-pen-load-retry hidden>Retry loading</button></div>
   <p class="pen-empty" data-pen-empty hidden>No candidates added yet. Add a candidate to record their exam arrangements.</p>

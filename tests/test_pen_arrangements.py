@@ -309,7 +309,7 @@ class PenArrangementsTest(unittest.TestCase):
             response = self.client.get(url)
             self.assertEqual(response.status_code, 200)
             html = response.get_data(as_text=True)
-            self.assertIn('Arrangement for candidates with PEN', html)
+            self.assertIn('Arrangements for candidates with PEN', html)
             self.assertLess(html.index('aria-label="Sinapsis checks"'), html.index('data-pen-section'))
             self.assertIn('data-pen-card-template', html)
             self.record.pen_enabled = False; db.session.commit()
