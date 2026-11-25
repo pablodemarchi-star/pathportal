@@ -20,6 +20,8 @@ DRIVE_SCOPE = 'https://www.googleapis.com/auth/drive.file'
 API = 'https://www.googleapis.com/drive/v3'
 FOLDER_MIME = 'application/vnd.google-apps.folder'
 DESTINATIONS = {
+    'session_announcements': {'label': 'Session announcement audios', 'section': 'Logistics', 'category': 'session_announcements',
+        'suggested_id': '18WLG_ySfTwpSbFOcAPp8pkqBSZlPUI-L'},
     'pen_assessment_reports': {'label': 'PEN specialist assessment reports', 'section': 'Final checks', 'category': 'pen_assessment_reports',
         'suggested_id': '1eAMGIptHmy7O9sgeyqon3UTQ8c32gsXu'},
     'attendance_lists': {'label':'Absent candidate lists','section':'Post · Attendance','category':'attendance_lists','suggested_id':'1OSADWoQ9pZDmqh-TAirlqHk89X8dwxlv'},
@@ -196,6 +198,8 @@ def save_folder(key):
         return jsonify(ok=False, error='Select the designated Staff ID documents folder.'), 400
     if key == 'attendance_lists' and request.form.get('folder_id', '').strip() != DESTINATIONS[key]['suggested_id']:
         return jsonify(ok=False,error='Select the designated absent candidate lists folder.'),400
+    if key == 'session_announcements' and request.form.get('folder_id', '').strip() != DESTINATIONS[key]['suggested_id']:
+        return jsonify(ok=False, error='Select the designated Session announcement audios folder.'), 400
     if key == 'pen_assessment_reports' and request.form.get('folder_id', '').strip() != DESTINATIONS[key]['suggested_id']:
         return jsonify(ok=False, error='Select the designated PEN specialist assessment reports folder.'), 400
     if key == 'return_shipping_labels' and request.form.get('folder_id', '').strip() != DESTINATIONS[key]['suggested_id']:
@@ -362,6 +366,12 @@ def upload_document(upload, payment, destination):
             db.session.add(document)
             payment.document = document
             return url_for('return_labels.preview', file_id=file_id, _external=True)
+        from app.announcements import AnnouncementTarget
+        if isinstance(payment, AnnouncementTarget):
+            document = payment.document
+            document.file_id, document.filename, document.mime_type = file_id, filename, mime
+            db.session.add(document)
+            return url_for('announcements.audio', session_id=document.exam_session_id, announcement_id=document.id)
         if isinstance(payment, PenReportTarget):
             document = payment.document
             document.file_id, document.filename, document.mime_type = file_id, filename, mime
@@ -408,9 +418,13 @@ def download(file_id):
 
 def stream_document(document):
     file_id = document.file_id
+    audio = document.mime_type in {'audio/mpeg', 'audio/wav'}
     try:
+        headers = {'Authorization': 'Bearer ' + access_token()}
+        if audio and re.fullmatch(r'bytes=\d+-\d*', request.headers.get('Range', '')):
+            headers['Range'] = request.headers['Range']
         upstream = urlopen(Request(API + '/files/' + file_id + '?alt=media&supportsAllDrives=true',
-            headers={'Authorization': 'Bearer ' + access_token()}), timeout=30)
+            headers=headers), timeout=30)
     except (OSError, ValueError):
         abort(503, description='The document could not be retrieved from Google Drive. Please try again.')
     def chunks():
@@ -422,8 +436,13 @@ def stream_document(document):
                 yield data
         finally:
             upstream.close()
-    safe_inline = document.mime_type in {'application/pdf', 'image/jpeg', 'image/png', 'image/gif', 'image/webp', 'text/plain'}
+    safe_inline = audio or document.mime_type in {'application/pdf', 'image/jpeg', 'image/png', 'image/gif', 'image/webp', 'text/plain'}
     response = Response(stream_with_context(chunks()), mimetype=document.mime_type if safe_inline else 'application/octet-stream')
+    if audio:
+        response.status_code = getattr(upstream, 'status', 200)
+        for key in ('Content-Length', 'Content-Range', 'Accept-Ranges'):
+            if upstream.headers.get(key):
+                response.headers[key] = upstream.headers[key]
     response.headers['Content-Disposition'] = ('inline' if safe_inline else 'attachment') + "; filename*=UTF-8''" + quote(document.filename, safe='')
     response.headers['Cache-Control'] = 'private, no-store'
     response.headers['Referrer-Policy'] = 'no-referrer'

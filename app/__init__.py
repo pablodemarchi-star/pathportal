@@ -173,6 +173,8 @@ def create_app():
     app.jinja_env.globals['logistics_card_views'] = logistics_card_views
     from app.return_labels import return_labels_bp
     app.register_blueprint(return_labels_bp)
+    from app.announcements import bp as announcements_bp
+    app.register_blueprint(announcements_bp)
     from app.pen_arrangements import pen_bp
     app.register_blueprint(pen_bp)
     from app.finance_completion import completion_bp

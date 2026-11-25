@@ -1,0 +1,16 @@
+<section class="announcements-section" data-announcements-section="{{ session.id }}" data-url="{{ url_for('announcements.listing', session_id=session.id) }}" data-csrf="{{ csrf_token }}" hidden aria-labelledby="announcements-heading-{{ session.id }}">
+  <header class="announcements-heading"><div><span class="eyebrow">SESSION AUDIO</span><h3 id="announcements-heading-{{ session.id }}">Announcements <span class="announcement-status" data-announcements-badge>Pending</span></h3><p>Add the audio announcements supervisors will play during this session.</p></div><button type="button" class="secondary-button compact-action" data-announcement-add disabled>+ Add announcement</button></header>
+  <p class="announcements-feedback" data-announcements-feedback role="status" aria-live="polite">Loading announcements…</p>
+  <button type="button" class="secondary-button compact-action" data-announcements-retry hidden>Retry</button>
+  <div class="announcements-cards" data-announcements-cards></div>
+  <p class="announcements-empty" data-announcements-empty>No announcements yet. Add a title and an MP3 or WAV audio to get started.</p>
+  <footer class="announcements-completion"><label><input type="checkbox" data-announcements-ready disabled><strong>Announcements are ready</strong></label><small data-announcements-help>Add at least one announcement and finish all uploads before confirming.</small></footer>
+</section>
+<template data-announcement-template="{{ session.id }}">
+  <form class="announcement-card" data-announcement-form novalidate>
+    <div class="announcement-card-top"><label>Title <span aria-hidden="true">*</span><input name="title" required maxlength="300" placeholder="e.g. Before the examination begins" autocomplete="off"></label><button type="button" class="announcement-delete" data-announcement-delete aria-label="Delete announcement" title="Delete announcement">×</button></div>
+    <label class="announcement-drop" data-announcement-drop><input type="file" name="audio" accept=".mp3,.wav,audio/mpeg,audio/wav" aria-label="Select an MP3 or WAV audio" required><span class="announcement-upload-symbol" aria-hidden="true">♫</span><span><strong data-announcement-filename>Drop audio here or browse</strong><small>One MP3 or WAV file · Required</small></span></label>
+    <audio data-announcement-player controls preload="none" hidden></audio>
+    <div class="announcement-save-status"><span data-announcement-feedback role="status" aria-live="polite">Complete the title and choose an audio file.</span><button type="button" class="secondary-button compact-action" data-announcement-retry hidden>Retry</button></div>
+  </form>
+</template>

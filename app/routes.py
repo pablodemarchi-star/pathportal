@@ -2638,8 +2638,12 @@ def is_valid_rejected_potential_entry_delete_password():
 
 
 def delete_exam_session_dependencies(session_id):
-    from app.models import ExamSessionPenCandidate, ExamSessionPenControl
+    from app.models import ExamSessionPenCandidate, ExamSessionPenControl, ExamSessionAnnouncement, ExamSessionAnnouncementControl
     from app.staff_invoices import trash_document
+    for announcement in ExamSessionAnnouncement.query.filter_by(exam_session_id=session_id).all():
+        trash_document(announcement)
+        db.session.delete(announcement)
+    ExamSessionAnnouncementControl.query.filter_by(exam_session_id=session_id).delete(synchronize_session=False)
     for candidate in ExamSessionPenCandidate.query.filter_by(exam_session_id=session_id).all():
         if candidate.file_id:
             trash_document(candidate)
@@ -15316,6 +15320,8 @@ def schedule_workflow_view(session_record, workflow=None, today=None, staffing=N
     if session_record.format in PRE_SESSION_SESSIONS_VIEW_EXCLUDED_FORMATS and not any(action.get("section") == "finance" for action in detail_actions):
         detail_actions.extend(session_finance_action_items(finance_view, schedule_preparation_unlocked))
     detail_actions.extend(final_checks_gate["actions"])
+    from app.announcements import pending_action as announcement_action
+    detail_actions.extend(announcement_action(session_record, today=today))
     if notification_pending:
         detail_actions.insert(0, {"department": "ADMIN", "description": "Notify institution of schedule auto-approval", "section": "schedule"})
     return {
@@ -20964,6 +20970,7 @@ def staff_portal_logistics_details(record, assignment):
 def staff_exam_sessions(token):
     from app.staff_return_materials import return_view
     from app.pen_arrangements import staff_pen_view
+    from app.announcements import staff_view as staff_announcements_view
     share = StaffExamSessionsShare.query.filter_by(token=token).first_or_404()
     if share.person_ref.startswith("potential:"):
         person = db.session.get(PotentialEntry, int(share.person_ref.split(":", 1)[1]))
@@ -21022,6 +21029,7 @@ def staff_exam_sessions(token):
                 "receives_shipment": bool(getattr(assignment, "is_shipment_recipient", False)),
                 "return_materials": return_view(record, assignment, share),
                 "pen_arrangements": staff_pen_view(record, role, assignment, share),
+                "announcements": staff_announcements_view(record, role, assignment, share),
                 "speaking_record_url": staff_portal_speaking_record_url(record, role, share.person_ref),
                 "examiner_receives_shipment": (
                     role == "examiner" and bool(assignment.is_shipment_recipient)

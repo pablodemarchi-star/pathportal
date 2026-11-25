@@ -3219,3 +3219,23 @@ class ExamSessionPenControl(db.Model):
     confirmed_at = db.Column(db.DateTime(timezone=True), nullable=True)
     confirmed_by = db.Column(db.String(254), nullable=False, default='')
     exam_session = db.relationship('ExamSession', backref=db.backref('pen_control', uselist=False, cascade='all, delete-orphan'))
+
+
+class ExamSessionAnnouncementControl(db.Model):
+    exam_session_id = db.Column(db.Integer, db.ForeignKey('exam_session.id'), primary_key=True)
+    enabled = db.Column(db.Boolean, nullable=False, default=False)
+    ready = db.Column(db.Boolean, nullable=False, default=False)
+    revision = db.Column(db.Integer, nullable=False, default=1)
+    exam_session = db.relationship('ExamSession', backref=db.backref('announcement_control', uselist=False, cascade='all, delete-orphan'))
+    __mapper_args__ = {'version_id_col': revision}
+
+
+class ExamSessionAnnouncement(db.Model):
+    id = db.Column(db.String(36), primary_key=True)
+    exam_session_id = db.Column(db.Integer, db.ForeignKey('exam_session.id'), nullable=False, index=True)
+    title = db.Column(db.String(300), nullable=False)
+    file_id = db.Column(db.String(160), nullable=False)
+    filename = db.Column(db.String(500), nullable=False)
+    mime_type = db.Column(db.String(160), nullable=False)
+    created_at = db.Column(db.DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))
+    exam_session = db.relationship('ExamSession', backref=db.backref('announcements', cascade='all, delete-orphan'))

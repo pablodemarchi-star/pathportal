@@ -37,6 +37,7 @@
           <div class="modal-session-header-actions modal-session-only-context" aria-label="Session quick links">
             <a class="secondary-button compact-action link-button" href="{{ url_for('staff.exam_session_planner', session_year=session.session_date.year if session.session_date else selected_session_year, open_session_modal=session.id, session_fullscreen=1) }}" target="_blank" rel="noopener noreferrer">View session planner</a>
             <a class="secondary-button compact-action link-button{% if not view.sinapsis_available %} is-disabled{% endif %}" href="{{ view.sinapsis_url if view.sinapsis_available else '#' }}" target="_blank" rel="noopener noreferrer"{% if not view.sinapsis_available %} aria-disabled="true" tabindex="-1"{% endif %}>View in Sinapsis</a>
+            {% if session.format == 'Onsite' %}<button type="button" class="announcement-toggle" data-announcement-toggle="{{ session.id }}" aria-label="Enable Announcements" title="Announcements" aria-pressed="false" disabled><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M11 5 6 9H3v6h3l5 4V5Z"/><path d="M15 8a6 6 0 0 1 0 8m3-11a10 10 0 0 1 0 14"/></svg></button>{% endif %}
           </div>
           <p class="modal-focused-context" data-focused-context hidden></p>
           <p class="modal-subtitle modal-session-only-context">{{ session.session_date|long_session_date }}</p>
@@ -494,6 +495,7 @@
 
         {% if session.format in ['Onsite', 'Online at exam centre'] %}
           {% include 'pre_session_control_tower/_logistics_cards.html' %}
+          {% if session.format == 'Onsite' %}{% include 'pre_session_control_tower/_announcements.html' %}{% endif %}
         {% else %}
         <section class="logistics-detail-grid" aria-label="Logistics summary">
           <div>

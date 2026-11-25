@@ -169,8 +169,8 @@
   const message = notice.querySelector('[data-tower-update-message]');
   const reloadButton = notice.querySelector('[data-tower-reload]');
   const active = () => !document.hidden && window.frameElement?.closest('.modal')?.classList.contains('is-open');
-  const dirty = () => [...dirtyForms].some(form => form.isConnected && !form.hasAttribute?.('data-logistics-card-form') && !form.hasAttribute?.('data-pen-form'))
-    || Boolean(window.logisticsHasUnsavedChanges?.()) || Boolean(window.penHasUnsavedChanges?.()) || Boolean(document.querySelector('.nested-modal.is-open, dialog[open]'));
+  const dirty = () => [...dirtyForms].some(form => form.isConnected && !form.hasAttribute?.('data-logistics-card-form') && !form.hasAttribute?.('data-pen-form') && !form.hasAttribute?.('data-announcement-form'))
+    || Boolean(window.announcementsHasUnsavedChanges?.()) || Boolean(window.logisticsHasUnsavedChanges?.()) || Boolean(window.penHasUnsavedChanges?.()) || Boolean(document.querySelector('.nested-modal.is-open, dialog[open]'));
   window.towerHasUnsavedChanges = dirty;
   const reload = (explicit = false) => {
     try { sessionStorage.setItem(`tower-modal-scroll:${body.dataset.sessionId}`, String(window.scrollY)); } catch (_) {}

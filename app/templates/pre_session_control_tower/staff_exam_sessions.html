@@ -10,6 +10,16 @@
   <link rel="stylesheet" href="{{ url_for('static', filename='css/staff_report_flow.css', v='20261124-report-return-1') }}">
 </head>
 <body>
+<link rel="stylesheet" href="{{ url_for('static', filename='css/announcements.css', v='20261125-1') }}">
+<script defer src="{{ url_for('static', filename='js/staff_announcements.js', v='20261125-1') }}"></script>
+{% for exam_session in (confirmed_regular_sessions + confirmed_remote_sessions)|unique(attribute='id') %}
+{% set announcements_detail = session_details[exam_session.id]|selectattr('announcements')|first %}
+{% if announcements_detail %}
+<dialog class="announcements-dialog" id="staff-announcements-{{ exam_session.id }}" aria-labelledby="announcements-title-{{ exam_session.id }}">
+  <header><div><span class="eyebrow">{{ exam_session.exam_session_name }}</span><h2 id="announcements-title-{{ exam_session.id }}">Announcements</h2></div><button type="button" class="icon-button" data-announcements-close aria-label="Close Announcements">×</button></header>
+  <div class="announcements-playlist">{% for announcement in announcements_detail.announcements %}<article><h3>{{ announcement.title }}</h3><audio controls preload="none" src="{{ announcement.audio_url }}" aria-label="{{ announcement.title }}">Your browser does not support audio playback.</audio></article>{% endfor %}</div>
+</dialog>
+{% endif %}{% endfor %}
 <main class="staff-exam-sessions-shell">
   <section class="journey-page journey-page-institution" lang="en">
     <header class="journey-hero">
@@ -70,6 +80,8 @@
             <td data-label="Actions"><div class="staff-session-actions"><button type="button" class="staff-detail-link staff-confirmed-details-button" data-staff-session-open="staff-session-detail-{{ exam_session.id }}" aria-haspopup="dialog" aria-controls="staff-session-detail-{{ exam_session.id }}" aria-label="Access session details for {{ exam_session.exam_session_name }}"><span>Access session details</span><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M5 12h14m-6-6 6 6-6 6"/></svg></button>
               {% set pen_detail = (table_details|selectattr('assignment_type', 'equalto', 'supervisor')|selectattr('pen_arrangements')|first) or (table_details|selectattr('pen_arrangements')|first) %}
               {% if pen_detail %}<a class="staff-session-action-link" href="#staff-pen-dialog" data-staff-pen-open data-staff-pen-session="{{ exam_session.id }}" data-staff-pen-role="{{ pen_detail.assignment_type }}" data-staff-pen-name="{{ exam_session.exam_session_name }}" data-staff-pen-date="{{ exam_session.session_date.strftime('%d/%m/%Y') if exam_session.session_date else 'Date to be confirmed' }}" aria-haspopup="dialog" aria-controls="staff-pen-dialog">⚠️ Personal Educational Needs</a>{% endif %}
+              {% set announcements_detail = table_details|selectattr('announcements')|first %}
+              {% if announcements_detail %}<a class="staff-session-action-link" href="#staff-announcements-{{ exam_session.id }}" data-announcements-open="staff-announcements-{{ exam_session.id }}" aria-haspopup="dialog" aria-controls="staff-announcements-{{ exam_session.id }}">🔊 Announcements</a>{% endif %}
               {% set report_detail = namespace(value=none) %}
               {% for candidate_detail in table_details %}{% if candidate_detail.end_checks is defined and candidate_detail.end_checks.report_shortcut_kind|default('') and report_detail.value is none %}{% set report_detail.value = candidate_detail %}{% endif %}{% endfor %}
               {% if report_detail.value %}{% set report = report_detail.value %}<a class="staff-session-action-link" href="#staff-report-dialog" data-staff-report-quick data-staff-report-session="{{ exam_session.id }}" data-staff-report-role="{{ report.assignment_type }}" data-staff-report-kind="{{ report.end_checks.report_shortcut_kind }}" data-staff-report-opens-at="{{ report.end_checks.opens_at }}" data-staff-report-name="{{ exam_session.exam_session_name }}" data-staff-report-date="{{ exam_session.session_date.strftime('%d/%m/%Y') }}" aria-haspopup="dialog" aria-controls="staff-report-dialog">📋 End-of-session report</a>{% endif %}
