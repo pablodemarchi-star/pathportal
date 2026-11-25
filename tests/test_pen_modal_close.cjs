@@ -1,0 +1,11 @@
+const assert=require('node:assert/strict'),fs=require('node:fs'),vm=require('node:vm');
+const source=fs.readFileSync('app/static/js/app.js','utf8');const start=source.indexOf('const closeModal = (modal) => {'),end=source.indexOf('\nconst openRequestedSessionModal',start);
+let dirty=true,confirm=false,warning='',closed=false,resets=0;
+const pen={matches:selector=>selector==='[data-pen-form]',reset:()=>resets++};
+const other={matches:()=>false,reset:()=>resets++};
+const modal={matches:()=>false,dataset:{},querySelectorAll:selector=>selector==='form'?[pen,other]:[],classList:{remove(){closed=true;}},setAttribute(){}};
+const context={window:{penHasUnsavedChanges:()=>dirty,confirm:message=>{warning=message;return confirm;}},document:{},modalOpeners:new Map(),clearFocusedMode(){},resetControlSectionsToDefault(){},syncReturnMaterialsOptions(){},syncInterviewInvitationConfirmation(){},syncInductionStatusPanels(){},syncOnboardingFollowUpControls(){},syncPotentialInterviewNoShow(){}};
+vm.runInNewContext(source.slice(start,end)+'\nglobalThis.close=closeModal;',context);
+context.close(modal);assert.match(warning,/PEN arrangements/);assert.equal(closed,false);assert.equal(resets,0);
+dirty=false;context.close(modal);assert.equal(closed,true);assert.equal(resets,1);
+console.log('PEN modal close: unsaved/incomplete cards warn before dismissal; saved PEN card values survive closing.');

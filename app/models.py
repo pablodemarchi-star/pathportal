@@ -102,6 +102,7 @@ class StaffInvoiceCancellationNotification(db.Model):
 
 
 class MarketingMaterialInfo(db.Model):
+    external_hidden = db.Column(db.Boolean, nullable=False, default=False, server_default=db.false())
     id = db.Column(db.Integer, primary_key=True)
     session_id = db.Column(db.Integer, db.ForeignKey("exam_session.id", ondelete="CASCADE"), nullable=False, unique=True)
     exam_session = db.relationship("ExamSession", backref=db.backref("marketing_info", uselist=False, cascade="all, delete-orphan"))
@@ -3192,3 +3193,28 @@ class ListeningMarkingRecord(db.Model):
     filename = db.Column(db.String(500), nullable=False)
     mime_type = db.Column(db.String(160), nullable=False)
     updated_at = db.Column(db.DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
+
+
+class ExamSessionPenCandidate(db.Model):
+    id = db.Column(db.String(36), primary_key=True)
+    exam_session_id = db.Column(db.Integer, db.ForeignKey('exam_session.id'), nullable=False, index=True)
+    candidate_no = db.Column(db.String(80), nullable=False)
+    candidate_name = db.Column(db.String(300), nullable=False)
+    examiner_refs = db.Column(db.Text, nullable=False, default='[]')
+    recommendations_html = db.Column(db.Text, nullable=False, default='')
+    file_id = db.Column(db.String(160), nullable=True)
+    filename = db.Column(db.String(500), nullable=True)
+    mime_type = db.Column(db.String(160), nullable=True)
+    revision = db.Column(db.Integer, nullable=False, default=1)
+    created_at = db.Column(db.DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))
+    updated_at = db.Column(db.DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
+    exam_session = db.relationship('ExamSession', backref=db.backref('pen_candidates', cascade='all, delete-orphan'))
+    __mapper_args__ = {'version_id_col': revision}
+
+
+class ExamSessionPenControl(db.Model):
+    exam_session_id = db.Column(db.Integer, db.ForeignKey('exam_session.id'), primary_key=True)
+    confirmed_snapshot = db.Column(db.String(64), nullable=False, default='')
+    confirmed_at = db.Column(db.DateTime(timezone=True), nullable=True)
+    confirmed_by = db.Column(db.String(254), nullable=False, default='')
+    exam_session = db.relationship('ExamSession', backref=db.backref('pen_control', uselist=False, cascade='all, delete-orphan'))

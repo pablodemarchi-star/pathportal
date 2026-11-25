@@ -150,12 +150,14 @@ def load_rows(records, today=None):
             supervisor = r.shipment_recipient_supervisor_assignment([a for a in groups[0].get(record.id, []) if a.participation_status not in {'Declined','Cancelled'}])
             if supervisor:
                 combined_eligible[record.id] = eligible_by_supervisor[supervisor.team_member_id] - {record.id}
+    from app.pen_arrangements import completion_states
+    pen_states = completion_states(records)
     old_cache = {}
     if has_app_context():
         for name, value in {'_final_checks_assignment_rows': {sid: sum((group.get(sid, []) for group in groups), []) for sid in ids},
                             '_final_checks_controls': {sid: first(controls, sid) for sid in ids},
                             '_final_checks_events': {sid: event_types[sid] for sid in ids},
-                            '_quality_combined_eligible': combined_eligible}.items():
+                            '_quality_combined_eligible': combined_eligible, '_pen_arrangement_states': pen_states}.items():
             old_cache[name] = getattr(g, name, None)
             setattr(g, name, value)
     rows = []
@@ -240,8 +242,9 @@ def load_rows(records, today=None):
                      near=bool(gate and gate['return_complete'] and checked == total_checks-1),
                      issue=bool(gate and gate['review_required']),
                      deadline=min([b['date'] for b in [gate['return_deadline_badge'] if not gate['return_complete'] else None,
-                         gate['checks_deadline_badge'] if gate['checks_enabled'] and not gate['checks_complete'] else None] if b and b.get('date')], default=None) if gate else None,
+                         gate['checks_deadline_badge'] if (gate['checks_enabled'] and not gate['checks_complete']) or (gate['pen_applicable'] and not gate['pen_complete']) else None] if b and b.get('date')], default=None) if gate else None,
                      today=today, detail=f"{checked}/{total_checks} Sinapsis checks" + (f" · Return {'complete' if gate and gate['return_complete'] else 'pending'}" if onsite else '') +
+                         (f" · PEN {'complete' if gate['pen_complete'] else 'pending'}" if gate and gate['pen_applicable'] else '') +
                          (f" · {gate['message']}" if gate and gate['message'] else '')),
             ]
             att=attendance.get(sid)
@@ -521,7 +524,7 @@ def edit_session_report_media(session_id):
 # Collect affected sessions during flush (including explicit flushes before commit).
 # Never recalculate all sessions or perform network calls while saving a session.
 TRACKED_MODELS = {m.PostAttendance,m.AbsenceCandidate,m.AttendanceInstitution,m.AttendanceEvent,m.ExamSession, *ASSIGNMENTS, m.ExamSessionScheduleWorkflow,
-                 m.ExamSessionStaffingControl, m.ExamSessionFinanceControl, m.ExamSessionSinapsisControl,
+                 m.ExamSessionStaffingControl, m.ExamSessionFinanceControl, m.ExamSessionSinapsisControl, m.ExamSessionPenCandidate, m.ExamSessionPenControl,
                  m.ExamSessionLogistics, m.ExamSessionLogisticsConcept, m.ExamSessionMonthlyCandidateTotal,
                  m.ExamSessionMonthlyRegistration, m.ExamRecordsControl, m.ExaminerSpeakingRecord, m.SpeakingRecordsSetup, m.BeyondSetupControl, m.ListeningRecordsSetup, m.RWMarkingRecord, m.ListeningMarkingRecord, m.ExamSessionShipmentBundleSession, m.ExamSessionStaffingEvent, m.ExamSessionIncident}
 
@@ -542,7 +545,7 @@ def collect_quality_changes(unit, *_):
             changed = {attr.key for attr in inspect(obj).attrs if attr.history.has_changes()}
             watched = None
             if isinstance(obj, m.ExamSession):
-                watched = {'date_confirmation_status','monthly_registrations_closed','monthly_registrations_closed_at',
+                watched = {'pen_enabled','date_confirmation_status','monthly_registrations_closed','monthly_registrations_closed_at',
                            'session_date','format','modules','exam_session_name','schedule_folder_url','details_url','concat_session_ids','emergency_contact_required','emergency_contact_not_required',
                            'emergency_contact_member_id','emergency_contact_participation_status','emergency_contact_additional_contacts',
                            'emergency_contact_status_due_at','staff_member_ids_snapshot'} | {field for field in changed if field.endswith('_status')}

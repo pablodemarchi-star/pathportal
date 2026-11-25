@@ -1346,6 +1346,7 @@ const focusModalTarget = (targetId, { scroll = true } = {}) => {
 };
 
 const closeModal = (modal) => {
+  if (window.penHasUnsavedChanges?.(modal) && !window.confirm('PEN arrangements have unsaved changes or incomplete required fields. Close anyway? Unsaved changes will be lost.')) return;
   if (window.logisticsHasUnsavedChanges?.(modal) && !window.confirm('Logistics changes are still saving or could not be saved. Close anyway? Unsaved changes may be lost.')) return;
   if (modal.matches('[data-tower-session]')) {
     const frame = modal.querySelector('iframe');
@@ -1356,7 +1357,7 @@ const closeModal = (modal) => {
     feedback.remove();
   });
   modal.querySelectorAll("form").forEach((form) => {
-    if (form.matches('[data-logistics-card-form]')) return;
+    if (form.matches('[data-logistics-card-form]') || form.matches('[data-pen-form]')) return;
     form.reset();
   });
   modal.querySelectorAll("[data-return-materials-form]").forEach(syncReturnMaterialsOptions);

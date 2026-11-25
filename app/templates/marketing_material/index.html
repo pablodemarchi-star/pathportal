@@ -1,7 +1,7 @@
 {% extends 'marketing_material/public_base.html' if public else 'base.html' %}
 {% block title %}Marketing material | Path Examinations{% endblock %}
 {% block content %}
-{% if not public %}<link rel="stylesheet" href="{{ url_for('static', filename='css/marketing_material.css', v='20261105-format-colors') }}">{% endif %}
+{% if not public %}<link rel="stylesheet" href="{{ url_for('static', filename='css/marketing_material.css', v='20261125-marketing-visibility-1') }}">{% endif %}
 <header class="marketing-header">
   <img src="{{ url_for('static', filename='img/path-logo-white-transparent.png') }}" alt="Path International Examinations" class="marketing-logo">
   <div><p class="marketing-eyebrow">SESSION RESOURCES · {{ year }}</p><h1>Marketing material</h1><p>Photos and information for our marketing team.</p></div>
@@ -80,7 +80,15 @@
       <button type="button" class="logistics-instructions-button{% if row.content %} has-instructions{% endif %}" data-logistics-instructions-open data-instructions-url="{{ url_for('marketing.save_info', session_id=row.id) }}" aria-label="{{ 'View or edit More info' if row.content else 'Add More info' }}">{{ 'View' if row.content else '✎' }}</button>
     {% elif row.content %}<button type="button" class="marketing-view" data-marketing-open="marketing-info-{{ row.id }}">View</button>
     {% else %}<span class="muted">—</span>{% endif %}
+    <span class="marketing-row-actions">
     {% if row.content or (not public and can_edit) %}<button type="button" class="marketing-copy" data-marketing-copy="marketing-info-{{ row.id }}" aria-label="Copy More info" title="Copy More info"{% if not row.content %} disabled{% endif %}>⧉</button>{% endif %}
+    {% if not public %}
+      <button type="button" class="marketing-visibility{% if row.external_hidden %} is-hidden{% endif %}" data-marketing-visibility data-hidden="{{ '1' if row.external_hidden else '0' }}"{% if can_edit %} data-visibility-url="{{ url_for('marketing.save_visibility', session_id=row.id) }}" data-visibility-csrf="{{ csrf_token }}"{% else %} disabled{% endif %} aria-pressed="{{ 'true' if row.external_hidden else 'false' }}" aria-label="{{ 'Show session on external marketing link' if row.external_hidden else 'Hide session from external marketing link' }}" title="{{ 'Hidden from external marketing link' if row.external_hidden else 'Visible on external marketing link. Click to hide.' }}">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 10h18M6 10l3-6h6l3 6"/><circle cx="7.5" cy="16" r="3.5"/><circle cx="16.5" cy="16" r="3.5"/><path d="M11 16h2"/></svg>
+      </button>
+    {% endif %}
+    </span>
+    {% if not public %}<span class="marketing-visibility-feedback" data-marketing-visibility-feedback role="status" aria-live="polite"></span>{% endif %}
     <span class="marketing-copy-feedback" role="status" aria-live="polite"></span>
   </td>
 </tr>
@@ -96,5 +104,5 @@
 {% endfor %}
 {% if not public and can_edit %}{% set instructions_can_edit = true %}{% set instructions_heading = 'More info' %}{% include '_instructions_editor.html' %}{% endif %}
 <footer class="marketing-footer">Path International Examinations · Marketing material</footer>
-<script src="{{ url_for('static', filename='js/marketing_material.js') }}" defer></script>
+<script src="{{ url_for('static', filename='js/marketing_material.js', v='20261125-marketing-visibility-1') }}" defer></script>
 {% endblock %}

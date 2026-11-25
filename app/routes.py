@@ -2638,6 +2638,14 @@ def is_valid_rejected_potential_entry_delete_password():
 
 
 def delete_exam_session_dependencies(session_id):
+    from app.models import ExamSessionPenCandidate, ExamSessionPenControl
+    from app.staff_invoices import trash_document
+    for candidate in ExamSessionPenCandidate.query.filter_by(exam_session_id=session_id).all():
+        if candidate.file_id:
+            trash_document(candidate)
+        db.session.delete(candidate)
+    ExamSessionPenControl.query.filter_by(exam_session_id=session_id).delete(synchronize_session=False)
+    db.session.flush()
     from app.models import ExamRecordsControl, ExaminerSpeakingRecord, BeyondSetupControl, RWMarkingRecord, SpeakingRecordsSetup, ListeningRecordsSetup, ListeningMarkingRecord
     ListeningRecordsSetup.query.filter_by(exam_session_id=session_id).delete(synchronize_session=False)
     ListeningMarkingRecord.query.filter_by(exam_session_id=session_id).delete(synchronize_session=False)

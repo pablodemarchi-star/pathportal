@@ -1,7 +1,7 @@
 {% extends 'base.html' %}
 {% block title %}{{ tower_title }} · Post controls{% endblock %}
 {% block content %}
-<link rel="stylesheet" href="{{ url_for('static',filename='css/post_attendance.css',v='20261124-online-incidents-1') }}">
+<link rel="stylesheet" href="{{ url_for('static',filename='css/post_attendance.css',v='20261125-delete-candidate-1') }}">
 <header class="page-header"><div><p class="eyebrow">{{ tower_title }}</p><h1>Post controls</h1><p>Attendance and absence follow-up for {{ 'online' if is_online_tower else 'onsite' }} exam sessions.</p></div></header>
 <nav class="control-tower-view-tabs" aria-label="{{ tower_title }} views">
 {% if not is_online_tower %}<a class="control-tower-view-tab" href="{{ url_for(tower_endpoint,session_year=selected_year,view='bundles') }}">Bundles</a>{% endif %}
@@ -27,7 +27,19 @@
 <header><h2 id="component-reason-heading">Candidate component absence</h2><button type="button" class="icon-button" data-component-reason-close aria-label="Close explanation">×</button></header>
 <h3 data-component-reason-title></h3><p data-component-reason-text style="white-space:pre-wrap;overflow-wrap:anywhere"></p>
 </dialog>
+<dialog class="pa-small-dialog pa-delete-dialog" data-candidate-delete-dialog aria-labelledby="pa-delete-candidate-title">
+  <form data-candidate-delete-form>
+    <h2 id="pa-delete-candidate-title">Delete this candidate?</h2>
+    <p class="pa-delete-identity" data-candidate-delete-name></p>
+    <p>This will permanently remove the candidate from <strong>Absence documentation review</strong> and move their supporting documents to the <strong>Drive trash</strong>.</p>
+    <aside class="pa-warning"><p>Before proceeding, review the related <strong>Absence records</strong>, <strong>End-of-session report</strong> and <strong>Sinapsis attendance status</strong> to ensure they remain accurate and consistent.</p><p><strong>These records will not be updated automatically.</strong></p></aside>
+    <label class="pa-delete-password" data-candidate-delete-password-field hidden>Authorisation password<input type="password" name="delete_password" autocomplete="off" data-candidate-delete-password></label>
+    <p data-candidate-delete-status role="alert" aria-live="polite"></p>
+    <div class="pa-actions"><button type="button" class="secondary-button" data-candidate-delete-cancel>Cancel</button><button type="submit" class="danger-button" data-candidate-delete-submit>Delete candidate</button></div>
+  </form>
+</dialog>
 <div data-post-config data-open-session="{{ request.args.get('open_attendance','') }}" data-csrf="{{ csrf_token }}"></div>
 <script src="{{ url_for('static',filename='js/attendance_group_messages.js',v='20261119-2') }}" defer></script>
-<script src="{{ url_for('static',filename='js/post_attendance.js',v='20261124-online-incidents-1') }}" defer></script>
+<script src="{{ url_for('static',filename='js/attendance_candidate_delete.js',v='20261125-delete-candidate-1') }}" defer></script>
+<script src="{{ url_for('static',filename='js/post_attendance.js',v='20261125-delete-candidate-1') }}" defer></script>
 {% endblock %}

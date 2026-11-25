@@ -173,6 +173,8 @@ def create_app():
     app.jinja_env.globals['logistics_card_views'] = logistics_card_views
     from app.return_labels import return_labels_bp
     app.register_blueprint(return_labels_bp)
+    from app.pen_arrangements import pen_bp
+    app.register_blueprint(pen_bp)
     from app.finance_completion import completion_bp
     app.register_blueprint(completion_bp)
     from app.payee_notifications import payee_bp
@@ -310,6 +312,8 @@ def create_app():
 
     with app.app_context():
         db.create_all()
+        from app.schema_migrations import migrate_marketing_visibility
+        migrate_marketing_visibility()
         from app.staff_logistics import ensure_schema as ensure_staff_logistics_schema
         ensure_staff_logistics_schema()
         from app.schema_migrations import migrate_absence_reviews

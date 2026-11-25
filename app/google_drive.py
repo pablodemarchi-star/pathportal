@@ -20,6 +20,8 @@ DRIVE_SCOPE = 'https://www.googleapis.com/auth/drive.file'
 API = 'https://www.googleapis.com/drive/v3'
 FOLDER_MIME = 'application/vnd.google-apps.folder'
 DESTINATIONS = {
+    'pen_assessment_reports': {'label': 'PEN specialist assessment reports', 'section': 'Final checks', 'category': 'pen_assessment_reports',
+        'suggested_id': '1eAMGIptHmy7O9sgeyqon3UTQ8c32gsXu'},
     'attendance_lists': {'label':'Absent candidate lists','section':'Post · Attendance','category':'attendance_lists','suggested_id':'1OSADWoQ9pZDmqh-TAirlqHk89X8dwxlv'},
     'return_shipping_labels': {'label': 'Return shipping labels', 'section': 'Final checks', 'category': 'return_shipping_labels',
         'suggested_id': '1bzB2g3XWlISXh606AzCQtvKdJPpDvtJD'},
@@ -194,6 +196,8 @@ def save_folder(key):
         return jsonify(ok=False, error='Select the designated Staff ID documents folder.'), 400
     if key == 'attendance_lists' and request.form.get('folder_id', '').strip() != DESTINATIONS[key]['suggested_id']:
         return jsonify(ok=False,error='Select the designated absent candidate lists folder.'),400
+    if key == 'pen_assessment_reports' and request.form.get('folder_id', '').strip() != DESTINATIONS[key]['suggested_id']:
+        return jsonify(ok=False, error='Select the designated PEN specialist assessment reports folder.'), 400
     if key == 'return_shipping_labels' and request.form.get('folder_id', '').strip() != DESTINATIONS[key]['suggested_id']:
         return jsonify(ok=False, error='Select the designated Return shipping labels folder.'), 400
     try:
@@ -323,6 +327,7 @@ def upload_document(upload, payment, destination):
         if not result or result.get('id') != file_id:
             raise ValueError('Upload not confirmed')
         from app.staff_invoices import StaffInvoiceTarget
+        from app.pen_arrangements import PenReportTarget
         from app.staff_id_documents import StaffIdTarget
         from app.return_labels import ReturnLabelTarget
         from app.staff_report_media import ReportMediaTarget
@@ -357,6 +362,11 @@ def upload_document(upload, payment, destination):
             db.session.add(document)
             payment.document = document
             return url_for('return_labels.preview', file_id=file_id, _external=True)
+        if isinstance(payment, PenReportTarget):
+            document = payment.document
+            document.file_id, document.filename, document.mime_type = file_id, filename, mime
+            db.session.add(document)
+            return url_for('pen_arrangements.document', session_id=document.exam_session_id, candidate_id=document.id, _external=True)
         if isinstance(payment, StaffIdTarget):
             from app.models import StaffIdDocument
             document = payment.document or StaffIdDocument(member_id=payment.member_id)

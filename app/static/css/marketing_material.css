@@ -76,3 +76,14 @@
   .marketing-dialog-actions button, .marketing-info-dialog .staff-detail-close { min-height: 44px; }
   .marketing-info-dialog .staff-detail-close { width: 44px; }
 }
+
+.marketing-row-actions{display:inline-flex;align-items:center;gap:2px;vertical-align:middle;white-space:nowrap}
+.marketing-visibility{display:inline-flex;align-items:center;justify-content:center;width:30px;height:30px;flex:0 0 30px;padding:5px;border:1px solid transparent;border-radius:7px;background:transparent;color:#81929c;cursor:pointer;vertical-align:middle}
+.marketing-visibility svg{width:20px;height:20px;fill:none;stroke:currentColor;stroke-width:1.7;stroke-linecap:round;stroke-linejoin:round}
+.marketing-visibility:hover{background:#f1f4f7;color:#486778}
+.marketing-visibility.is-hidden{background:#eee7f6;border-color:#d4c5e7;color:#68438b}
+.marketing-visibility:focus-visible{outline:2px solid #1487b6;outline-offset:2px}
+.marketing-visibility:disabled{cursor:default;opacity:.65}
+.marketing-visibility-feedback{display:block;font-size:11px;line-height:1.5;color:#617b86}
+.marketing-visibility-feedback.is-error{color:#a52b34}
+@media(max-width:800px){.marketing-visibility{width:40px;height:44px;flex-basis:40px}}

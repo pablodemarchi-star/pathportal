@@ -99,6 +99,58 @@ class MarketingMaterialTest(unittest.TestCase):
         self.assertNotIn('Conflicting Session pictures folders', public)
         self.assertEqual(public.count('>Access ↗</a>'), 1)
 
+    def visibility(self, hidden, previous=False, record=None, **fields):
+        record=record or self.first
+        return self.client.post(f'/marketing-material/sessions/{record.id}/visibility', data={
+            'csrf_token':'test', 'hidden':'1' if hidden else '0', 'previous_hidden':'1' if previous else '0', **fields})
+
+    def test_visibility_hides_group_only_externally_and_is_reversible(self):
+        self.record('Unaffected session',2026,'Onsite');db.session.commit()
+        self.client.post(self.info_url,data={'csrf_token':'test','title':'Hidden title','instructions':'<p>Hidden description</p>'})
+        public_url=self.share()
+        self.assertEqual(self.visibility(True).status_code,200)
+        for info in MarketingMaterialInfo.query.all():
+            self.assertTrue(info.external_hidden)
+            self.assertEqual(info.title,'Hidden title')
+        public=self.app.test_client().get(public_url).get_data(as_text=True)
+        for value in ('Patagonian RW','Patagonian LS','Hidden title','Hidden description','data-marketing-visibility','/visibility'):
+            self.assertNotIn(value,public)
+        self.assertIn('Unaffected session',public)
+        internal=self.client.get('/marketing-material').get_data(as_text=True)
+        self.assertIn('Patagonian RW',internal);self.assertIn('Patagonian LS',internal)
+        self.assertIn('aria-pressed="true"',internal)
+        self.assertLess(internal.index('data-marketing-copy='),internal.index('data-marketing-visibility '))
+        self.assertEqual(self.visibility(False,previous=True,record=self.second).status_code,200)
+        self.assertIn('Patagonian RW',self.app.test_client().get(public_url).get_data(as_text=True))
+        self.assertTrue(all(not info.external_hidden for info in MarketingMaterialInfo.query.all()))
+
+    def test_visibility_permissions_csrf_validation_and_stale_state(self):
+        url=f'/marketing-material/sessions/{self.first.id}/visibility'
+        self.assertEqual(self.app.test_client().post(url,data={'hidden':'1'}).status_code,302)
+        self.assertEqual(self.visibility(True,csrf_token='wrong').status_code,400)
+        self.assertEqual(self.client.post(url,data={'csrf_token':'test','hidden':'invalid','previous_hidden':'0'}).status_code,400)
+        with patch('app.routes.user_can_edit',return_value=False):
+            self.assertEqual(self.visibility(True).status_code,403)
+            internal=self.client.get('/marketing-material').get_data(as_text=True)
+            self.assertNotIn('data-visibility-url=',internal)
+        self.assertEqual(self.visibility(True).status_code,200)
+        self.assertEqual(self.visibility(False).status_code,409)
+        self.assertTrue(MarketingMaterialInfo.query.first().external_hidden)
+        self.assertEqual(self.client.post('/marketing-material/sessions/999999/visibility',data={'csrf_token':'test','hidden':'1','previous_hidden':'0'}).status_code,404)
+
+    def test_hidden_rows_cannot_be_recovered_by_public_search_or_sort_and_survive_group_split(self):
+        public_url=self.share();self.visibility(True)
+        for query in ('?q=Patagonian','?format=Online','?sort=date&dir=desc'):
+            public=self.client.get(public_url+query).get_data(as_text=True)
+            self.assertNotIn('Patagonian RW',public);self.assertNotIn('Patagonian LS',public)
+        self.client.post(self.info_url,data={'csrf_token':'test','instructions':'<p>New internal-only notes</p>'})
+        self.assertTrue(all(info.external_hidden for info in MarketingMaterialInfo.query.all()))
+        self.first.concat_session_ids='[]';self.second.concat_session_ids='[]';db.session.commit()
+        self.assertNotIn('Patagonian',self.client.get(public_url).get_data(as_text=True))
+        self.visibility(False,previous=True)
+        public=self.client.get(public_url).get_data(as_text=True)
+        self.assertIn('Patagonian RW',public);self.assertNotIn('Patagonian LS',public)
+
     def test_permissions_csrf_and_validation(self):
         self.assertEqual(self.app.test_client().get('/marketing-material').status_code, 302)
         self.assertEqual(self.client.post(self.info_url, data={'instructions':'text'}).status_code, 400)
@@ -173,3 +225,20 @@ class MarketingMaterialTest(unittest.TestCase):
             self.assertNotIn('data-marketing-row=', page)
             page = self.client.get(base + '?q=Independent&format=Onsite').get_data(as_text=True)
             self.assertIn('No exam sessions match your filters.', page)
+
+
+class MarketingVisibilityMigrationTest(unittest.TestCase):
+    def test_existing_sessions_stay_visible_and_migration_preserves_information(self):
+        from types import SimpleNamespace
+        from sqlalchemy import create_engine, text
+        from sqlalchemy.orm import Session
+        from app.schema_migrations import migrate_marketing_visibility
+        engine=create_engine('sqlite:///:memory:')
+        with Session(engine) as unit:
+            unit.execute(text('CREATE TABLE marketing_material_info (id INTEGER PRIMARY KEY, title TEXT, content TEXT)'))
+            unit.execute(text("INSERT INTO marketing_material_info (id,title,content) VALUES (1,'Existing title','Existing notes')"));unit.commit()
+            with patch('app.schema_migrations.db',SimpleNamespace(engine=engine,session=unit)):
+                migrate_marketing_visibility();migrate_marketing_visibility()
+            row=unit.execute(text('SELECT title,content,external_hidden FROM marketing_material_info')).one()
+            self.assertEqual(tuple(row),('Existing title','Existing notes',0))
+        engine.dispose()

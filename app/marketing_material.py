@@ -99,7 +99,7 @@ def marketing_rows():
             if city and city.casefold() not in city_keys:
                 cities.append(city)
                 city_keys.add(city.casefold())
-        rows.append({"id": anchor, "names": [item.exam_session_name for item in group],
+        rows.append({"external_hidden": any(note.external_hidden for note in notes), "id": anchor, "names": [item.exam_session_name for item in group],
                      "dates": distinct(item.session_date for item in group), "formats": distinct(item.format for item in group),
                      "cities": cities, "folder": "" if conflict else folder,
                      "folder_error": "Conflicting Session pictures folders. Configure the same folder for every concatenated session." if conflict else "Invalid Session pictures folder URL." if folders and not folder else "",
@@ -154,6 +154,7 @@ def shared(token):
     if not share.enabled:
         abort(410)
     year, rows = marketing_rows()
+    rows = [row for row in rows if not row["external_hidden"]]
     sorting = sort_marketing_rows(rows)
     # Public output is allowlisted; no editing endpoints or internal error details.
     fields = {"id", "names", "dates", "formats", "cities", "folder", "title", "content"}
@@ -161,10 +162,21 @@ def shared(token):
     return render_template("marketing_material/index.html", rows=safe_rows, year=year, public=True, can_edit=False, **sorting)
 
 
+def lock_marketing_group(record):
+    from app.routes import monthly_unified_total_session_ids
+    ids = sorted(monthly_unified_total_session_ids(record))
+    if db.engine.dialect.name == 'sqlite':
+        connection = db.session.connection()
+        if not connection.connection.driver_connection.in_transaction:
+            connection.exec_driver_sql('BEGIN IMMEDIATE')
+    else:
+        db.session.query(ExamSession.id).filter(ExamSession.id.in_(ids)).order_by(ExamSession.id).with_for_update().all()
+    return ids
+
+
 @marketing_bp.post("/marketing-material/sessions/<int:session_id>/info")
 @permission(edit=True)
 def save_info(session_id):
-    from app.routes import monthly_unified_total_session_ids
     if not validate_csrf():
         abort(400)
     record = ExamSession.query.get_or_404(session_id)
@@ -173,7 +185,7 @@ def save_info(session_id):
         return jsonify(ok=False, error="Title must be 200 characters or fewer and content 50,000 characters or fewer."), 400
     content = sanitize_instructions(content)
     # Copy to each member so the text remains available if the group is later split.
-    for member_id in monthly_unified_total_session_ids(record):
+    for member_id in lock_marketing_group(record):
         info = MarketingMaterialInfo.query.filter_by(session_id=member_id).first()
         if info is None:
             info = MarketingMaterialInfo(session_id=member_id)
@@ -183,3 +195,29 @@ def save_info(session_id):
         info.updated_at = datetime.now(timezone.utc)
     db.session.commit()
     return jsonify(ok=True, title=title, instructions=content)
+
+
+@marketing_bp.post('/marketing-material/sessions/<int:session_id>/visibility')
+@permission(edit=True)
+def save_visibility(session_id):
+    if not validate_csrf():
+        return jsonify(ok=False, error='Security token expired. Reload the page and try again.'), 400
+    if request.form.get('hidden') not in {'0', '1'}:
+        return jsonify(ok=False, error='Choose a valid visibility status.'), 400
+    record = db.get_or_404(ExamSession, session_id)
+    # A concatenated group is one displayed row: apply its visibility to every member.
+    ids = lock_marketing_group(record)
+    hidden = request.form['hidden'] == '1'
+    infos = {info.session_id: info for info in MarketingMaterialInfo.query.filter(MarketingMaterialInfo.session_id.in_(ids)).all()}
+    if request.form.get('previous_hidden') != ('1' if any(info.external_hidden for info in infos.values()) else '0'):
+        return jsonify(ok=False, error='This row was updated by another user. Reload the list before changing its visibility.'), 409
+    for member_id in ids:
+        info = infos.get(member_id)
+        if info is None:
+            info = MarketingMaterialInfo(session_id=member_id)
+            db.session.add(info)
+        info.external_hidden = hidden
+        info.updated_by = session.get('user_email') or session.get('user')
+        info.updated_at = datetime.now(timezone.utc)
+    db.session.commit()
+    return jsonify(ok=True, hidden=hidden)

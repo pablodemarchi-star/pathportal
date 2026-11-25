@@ -6,6 +6,7 @@ import secrets
 from datetime import datetime, timezone
 from decimal import Decimal
 from flask import Blueprint, abort, jsonify, render_template, request, session, url_for, current_app
+from werkzeug.exceptions import HTTPException
 from sqlalchemy import extract
 from sqlalchemy.orm import joinedload, load_only
 from app import db, login_required, validate_csrf
@@ -447,6 +448,7 @@ def state(record):
             modules=absent,approved=candidate.review_status=='Confirmed',review_status=candidate.review_status,decline_reason=candidate.decline_reason,institution_name=candidate.institution_name,institution_key=institution_key(candidate.institution_name),allowed_modules=[module for module in candidate_exam_modules(candidate) if module in choices['modules']],allowed_exams=choices['exams'],selection_hint=choices['reason'],rescheduled_label=requested_date_label(candidate),notes=candidate.notes,rescheduled_for=candidate.rescheduled_for or default,
             whatsapp_message=candidate_whatsapp_message(candidate,credit_enabled,choices=choices),whatsapp_message_es=candidate_whatsapp_message(candidate,credit_enabled,language='es',choices=choices),currency=candidate.currency if credit_enabled else '',credit_balance=str(candidate.credit_balance) if credit_enabled and candidate.credit_balance is not None else '',credit_applicable=credit_enabled,
             component_reason=candidate.component_reason,it_reason=candidate.it_reason,document=document_data(candidate.document,record),actionable=bool(candidate.review_status=='Confirmed' and ready),
+            delete_allowed=bool(local_today()>record.session_date or immediate),delete_version=candidate_delete_version(candidate),
             edit_allowed=editable,review_allowed=reviewable,fields_complete=complete,confirmation_complete=ready,can_confirm=reviewable and ready,can_decline=reviewable and complete))
     from app.attendance_notifications import decorate_notifications
     concat_ids=monthly_unified_total_session_ids(record)-{record.id}
@@ -503,7 +505,7 @@ def manage(session_id):
     require_menu_edit('pre_session_control_tower')
     if not validate_csrf():return jsonify(ok=False,error='Security token expired. Reload the page.'),400
     if local_today()<=record.session_date:
-        candidate=db.session.get(m.AbsenceCandidate,request.form.get('candidate_id',type=int)) if request.form.get('action')=='candidate' else None
+        candidate=db.session.get(m.AbsenceCandidate,request.form.get('candidate_id',type=int)) if request.form.get('action') in {'candidate','delete_candidate'} else None
         if not candidate or candidate.exam_session_id!=record.id or not immediate_report_review(record,candidate):
             return jsonify(ok=False,error='Attendance is read-only until the day after the exam session (GMT-3).'),403
     lock_session(record)
@@ -517,6 +519,9 @@ def manage(session_id):
     except (ValueError,drive.DriveStorageError) as error:
         db.session.rollback();restore(trashed)
         return jsonify(ok=False,error=str(error)),400
+    except HTTPException as error:
+        db.session.rollback();restore(trashed)
+        return jsonify(ok=False,error=error.description),error.code
     except Exception:
         db.session.rollback();restore(trashed)
         current_app.logger.exception('Attendance update failed')
@@ -528,6 +533,11 @@ def restore(file_ids):
     for ident in file_ids:
         try:drive.trash(ident,False)
         except Exception:current_app.logger.exception('Attendance Drive file needs recovery: %s',ident)
+
+
+def candidate_delete_version(candidate):
+    values={column.name:getattr(candidate,column.name) for column in candidate.__table__.columns}
+    return hashlib.sha256(json.dumps(values,sort_keys=True,default=str).encode()).hexdigest()
 
 
 def confirmed():
@@ -548,9 +558,30 @@ def single_file():
 def mutate(record,trashed):
     action=request.form.get('action')
     candidate=None
-    if action=='candidate':
-        candidate=db.session.get(m.AbsenceCandidate,request.form.get('candidate_id',type=int))
+    if action in {'candidate','delete_candidate'}:
+        candidate=m.AbsenceCandidate.query.filter_by(id=request.form.get('candidate_id',type=int),exam_session_id=record.id).populate_existing().first()
         if not candidate or candidate.exam_session_id!=record.id:abort(404)
+    if action=='delete_candidate':
+        confirmed()
+        if not secrets.compare_digest(request.form.get('delete_version',''),candidate_delete_version(candidate)):
+            raise ValueError('This candidate changed since the review was opened. Refresh Attendance and review the current details before deleting.')
+        if candidate.review_status in {'Confirmed','Declined'} and not secrets.compare_digest(request.form.get('password','').encode(),b'EditOK'):
+            raise ValueError('Incorrect authorisation password. The candidate has not been deleted.')
+        if candidate.review_status not in {'Pending','Confirmed','Declined'}:
+            raise ValueError('This review status cannot be deleted. Refresh Attendance.')
+        document=candidate.document
+        if document and (m.AttendanceModule.query.filter_by(document_id=document.file_id).first() or
+                         m.AbsenceCandidate.query.filter(m.AbsenceCandidate.document_id==document.file_id,m.AbsenceCandidate.id!=candidate.id).first()):
+            raise ValueError('This document is also used by another attendance record. Review those references before deleting this candidate.')
+        db.session.add(m.AttendanceEvent(exam_session_id=record.id,source='internal',action='candidate_deleted',payload=json.dumps({
+            'candidate_id':candidate.id,'number':candidate.number,'name':candidate.name,'review_status':candidate.review_status,
+            'document_id':candidate.document_id,'deleted_by':session.get('user','')})))
+        m.AbsenceSubmissionEvent.query.filter_by(candidate_id=candidate.id).delete(synchronize_session=False)
+        retire(document,trashed)
+        db.session.delete(candidate)
+        value=touch(record);value.review_results_notified=False;value.no_documentation_received=False;value.review_completed_at=None
+        db.session.flush()
+        return
     if action=='submission_status':
         status=request.form.get('value','')
         if status not in {'completed','pending'}:raise ValueError('Select a valid Sinapsis submission status.')

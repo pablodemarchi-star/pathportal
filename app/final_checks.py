@@ -183,7 +183,11 @@ def final_checks_state(record, control=None, today=None):
     has_activity = bool((not online and control and (control.return_materials_method or control.reviewed_at or control.return_reviewed_at or control.return_instructions_html))
                         or any(item.is_checked or item.note or item.needs_review for item in items)
                         or any(event.event_type in (activity_types - {'return_materials_method', 'return_review_confirmed', 'return_instructions_updated'} if online else activity_types) for event in events))
-    progress = 'completed' if complete and all_checked else 'in_progress' if has_activity else 'not_started'
+    pen_applicable = bool(record.pen_enabled)
+    from app.pen_arrangements import completion_state
+    pen = completion_state(record) if pen_applicable else dict(count=0, complete=True, completed_at=None)
+    has_activity = has_activity or bool(pen['count'])
+    progress = 'completed' if complete and all_checked and pen['complete'] else 'in_progress' if has_activity else 'not_started'
     finished = max((local_date(item.checked_at) for item in items if item.checked_at), default=None) if all_checked else None
     checks_deadline = argentina_subtract_business_days(record.session_date, 4) if record.session_date else None
     actions = []
@@ -206,7 +210,12 @@ def final_checks_state(record, control=None, today=None):
         description = 'Continue with pre-session Sinapsis checks' if any(item.is_checked for item in items) else 'Start pre-session Sinapsis checks'
         actions.append({'department': 'ADMIN', 'description': description, 'section': 'sinapsis',
                         'overdue': bool(checks_deadline and today > checks_deadline), 'deadline': checks_deadline})
+    if pen_applicable and not pen['complete']:
+        actions.append({'department': 'MANAGEMENT', 'description':
+                        'Finalise exam arrangements for candidates with PEN' if pen['count'] else 'Complete exam arrangements for candidates with PEN',
+                        'section': 'sinapsis', 'overdue': bool(checks_deadline and today > checks_deadline), 'deadline': checks_deadline})
     return {'status': status, 'label': status.upper().replace('_', '-'), 'return_enabled': enabled,
+            'pen_applicable': pen_applicable, 'pen_complete': pen['complete'], 'pen_count': pen['count'],
             'message': ' '.join(reasons), 'return_opens_on': opens_on, 'checks_opens_on': checks_opens_on,
             'progress': progress,
             'checks_enabled': checks_enabled, 'within_window': days is not None and days <= 8,
@@ -215,4 +224,5 @@ def final_checks_state(record, control=None, today=None):
             'return_deadline_badge': deadline_badge_contract(deadline, completed=complete,
                 completed_date=local_date(control.return_completed_at) if complete and control else None, today=today) if started and not online else None,
             'checks_deadline_badge': deadline_badge_contract(checks_deadline, completed=all_checked, completed_date=finished, today=today),
+            'pen_deadline_badge': deadline_badge_contract(checks_deadline, completed=pen['complete'], completed_date=local_date(pen['completed_at']) if pen['completed_at'] else None, today=today) if pen_applicable else None,
             'checks_complete': all_checked}

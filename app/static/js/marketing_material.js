@@ -60,7 +60,7 @@
   document.querySelectorAll('[data-marketing-copy]').forEach(button => {
     button.addEventListener('click', async () => {
       const source = document.getElementById(button.dataset.marketingCopy).querySelector('[data-marketing-rich-content]');
-      const feedback = button.parentElement.querySelector('.marketing-copy-feedback');
+      const feedback = (button.closest('td, .marketing-dialog-actions') || button.parentElement).querySelector('.marketing-copy-feedback');
       const clone = source.cloneNode(true);
       clone.style.cssText = 'position:fixed;left:-10000px;top:0;white-space:normal';
       document.body.append(clone);
@@ -87,6 +87,36 @@
       } catch (error) {
         feedback.textContent = 'Unable to copy. Please select and copy the text manually.';
       }
+    });
+  });
+  document.querySelectorAll('[data-marketing-visibility]').forEach(button => {
+    if (button.disabled || !button.dataset.visibilityUrl) return;
+    button.addEventListener('click', async () => {
+      if (button.disabled) return;
+      const hidden = button.dataset.hidden === '1';
+      const feedback = button.closest('td').querySelector('[data-marketing-visibility-feedback]');
+      button.disabled = true; button.setAttribute('aria-busy', 'true');
+      feedback.classList.remove('is-error'); feedback.textContent = 'Saving visibility…';
+      let conflict = false;
+      try {
+        const body = new FormData(); body.set('csrf_token', button.dataset.visibilityCsrf);
+        body.set('hidden', hidden ? '0' : '1'); body.set('previous_hidden', hidden ? '1' : '0');
+        const response = await fetch(button.dataset.visibilityUrl, {method:'POST', body, headers:{Accept:'application/json'}});
+        const result = await response.json().catch(() => ({}));
+        if (!response.ok || response.redirected || !result.ok || typeof result.hidden !== 'boolean') {
+          conflict = response.status === 409;
+          throw new Error(result.error || 'Visibility could not be saved. Please retry.');
+        }
+        button.dataset.hidden = result.hidden ? '1' : '0';
+        button.classList.toggle('is-hidden', result.hidden);
+        button.setAttribute('aria-pressed', String(result.hidden));
+        button.setAttribute('aria-label', result.hidden ? 'Show session on external marketing link' : 'Hide session from external marketing link');
+        button.title = result.hidden ? 'Hidden from external marketing link' : 'Visible on external marketing link. Click to hide.';
+        feedback.textContent = result.hidden ? 'Hidden from external marketing link.' : 'Visible on external marketing link.';
+      } catch (error) {
+        feedback.textContent = error.message || 'Visibility could not be saved. Please retry.';
+        feedback.classList.add('is-error');
+      } finally { button.disabled = conflict; button.removeAttribute('aria-busy'); }
     });
   });
   document.addEventListener('instructions:saved', event => {

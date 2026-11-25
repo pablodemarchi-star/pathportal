@@ -263,3 +263,11 @@ def migrate_staff_report_components():
         finally:
             connection.exec_driver_sql('PRAGMA foreign_keys=' + ('ON' if foreign_keys else 'OFF'))
             connection.commit()
+
+
+def migrate_marketing_visibility():
+    from sqlalchemy import inspect
+    columns = {column['name'] for column in inspect(db.engine).get_columns('marketing_material_info')}
+    if 'external_hidden' not in columns:
+        db.session.execute(text('ALTER TABLE marketing_material_info ADD COLUMN external_hidden BOOLEAN NOT NULL DEFAULT FALSE'))
+        db.session.commit()

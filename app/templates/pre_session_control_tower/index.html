@@ -490,6 +490,7 @@
     <small>{{ view.final_checks_gate.actions|map(attribute='department')|unique|join(' / ') or '—' }}</small>
     {% if view.return_deadline_badge %}<span>Return: {{ shipment_deadline_chip(view.return_deadline_badge, 'final-checks-column-deadline-chip') }}</span>{% endif %}
     {% if view.final_checks_gate.checks_enabled %}<span>Sinapsis: {{ shipment_deadline_chip(view.final_checks_gate.checks_deadline_badge, 'final-checks-column-deadline-chip') }}</span>{% endif %}
+    {% if view.final_checks_gate.pen_applicable %}<span>PEN: {{ shipment_deadline_chip(view.final_checks_gate.pen_deadline_badge, 'final-checks-column-deadline-chip') }}</span>{% endif %}
   </span>
 {%- endmacro %}
 
@@ -2233,5 +2234,8 @@
 <link rel="stylesheet" href="{{ url_for('static',filename='css/staff_logistics.css',v='20261124-logistics-autosave-1') }}">
 <script src="{{ url_for('static',filename='js/staff_logistics.js',v='20261124-logistics-autosave-1') }}"></script>
 {% if user_can_edit('finance_requests') %}<script src="{{ url_for('static', filename='js/finance_payee_notifications.js', v='20261104-client-notification-3') }}"></script>{% endif %}
-<script src="{{ url_for('static', filename='js/tower_live.js', v='20261124-logistics-autosave-1') }}"></script>
+<link rel="stylesheet" href="{{ url_for('static',filename='css/pen_arrangements.css',v='20261125-pen-completion-1') }}">
+<script src="{{ url_for('static',filename='js/pen_autosave.js',v='20261125-pen-completion-1') }}"></script>
+<script src="{{ url_for('static',filename='js/pen_arrangements.js',v='20261125-pen-completion-1') }}"></script>
+<script src="{{ url_for('static', filename='js/tower_live.js', v='20261125-pen-completion-1') }}"></script>
 {% endblock %}

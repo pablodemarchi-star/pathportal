@@ -27,6 +27,13 @@ assert.match(context.api.documentation(), /data-add-candidate disabled/);
 assert.match(context.api.documentation(), /data-group-message disabled/);
 current.documentation_accessible = false;
 assert.match(context.api.documentation(), /^<fieldset data-documentation-fields disabled>/);
+current.candidates = [{delete_allowed:true}];
+assert.match(context.api.documentation(), /^<fieldset data-documentation-fields>/, 'Deletion remains available without unlocking document editing or institutional review');
+assert.match(context.api.documentation(), /data-add-candidate disabled/);
+assert.match(context.api.documentation(), /data-group-message disabled/);
+current.can_edit=false;assert.match(context.api.documentation(), /^<fieldset data-documentation-fields disabled>/);
+current.can_edit=true;
+
 current.format = 'Online'; current.candidates = [reported, institutional];
 context.api.tick();
 assert.equal(current.review_allowed, false, 'Deadline alone must not bypass institution workflow gates');

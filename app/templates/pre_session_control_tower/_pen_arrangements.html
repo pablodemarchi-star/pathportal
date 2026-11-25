@@ -1,0 +1,36 @@
+{% if session.pen_enabled %}
+<section class="pen-arrangements" data-pen-section data-pen-url="{{ url_for('pen_arrangements.listing', session_id=session.id) }}" data-pen-csrf="{{ csrf_token }}" aria-labelledby="pen-title-{{ session.id }}">
+  <div class="pen-section-heading"><div><h4 id="pen-title-{{ session.id }}">Arrangement for candidates with PEN</h4><p>Candidate arrangements and examiner recommendations.</p></div><div class="pen-section-badges"><span class="pen-completion-chip" data-pen-completion-chip>Pending</span><span class="pen-count" data-pen-count>0 candidates</span></div></div>
+  <div class="pen-deadline">{{ shipment_deadline_chip(view.final_checks_gate.pen_deadline_badge) }}</div>
+  <div class="pen-section-actions"><button type="button" class="secondary-button compact-action" data-pen-add disabled>+ Add candidate</button><span data-pen-section-status role="status" aria-live="polite">Loading arrangements…</span><button type="button" class="secondary-button compact-action" data-pen-load-retry hidden>Retry loading</button></div>
+  <p class="pen-empty" data-pen-empty hidden>No candidates added yet. Add a candidate to record their exam arrangements.</p>
+  <div class="pen-cards" data-pen-cards></div>
+  <div class="pen-completion">
+    <label><input type="checkbox" data-pen-confirm disabled><span>It has been verified that <strong>all candidates requiring exam arrangements have the corresponding instructions and specifications available for the relevant staff members</strong>.</span></label>
+    <small data-pen-confirm-status role="status" aria-live="polite">Add and save at least one candidate before verifying this section.</small>
+  </div>
+  <template data-pen-card-template>
+    <form class="pen-card" method="post" data-pen-form novalidate>
+      <div class="pen-card-heading"><strong data-pen-card-title>New candidate</strong><button type="button" class="pen-delete" data-pen-delete aria-label="Delete candidate" title="Delete candidate">&times;</button></div>
+      <label>Candidate no. <span class="pen-required">Required</span><input name="candidate_no" maxlength="80" autocomplete="off" required></label>
+      <label>Candidate name <span class="pen-required">Required</span><input name="candidate_name" maxlength="300" autocomplete="off" required></label>
+      <div class="pen-examiners"><span class="pen-field-label">Examiner(s) in charge <span class="pen-required" data-pen-examiners-required>Required</span></span>
+        <details class="pen-examiner-picker"><summary><span data-pen-examiners-label>Select examiners</span><span aria-hidden="true">⌄</span></summary><div class="pen-examiner-options" data-pen-examiners></div></details>
+        <p class="pen-field-help" data-pen-examiners-help hidden></p>
+      </div>
+      <details class="pen-extra"><summary>Specialist assessment report <span>Optional</span><span class="pen-detail-indicator" data-pen-file-indicator hidden>Added</span></summary>
+        <a class="pen-document" data-pen-document target="_blank" rel="noopener noreferrer" hidden></a>
+        <label class="pen-dropzone" data-pen-dropzone><strong>Drop a file or click to browse</strong><small>One file per candidate. A new file replaces the previous report.</small><input type="file" data-pen-file aria-label="Specialist assessment report"></label>
+        <div class="pen-file-actions"><span data-pen-filename></span><button type="button" class="pen-text-action" data-pen-file-remove hidden>Remove file</button></div>
+      </details>
+      <details class="pen-extra"><summary>Recommendations for the examiner <span>Optional</span><span class="pen-detail-indicator" data-pen-text-indicator hidden>Added</span></summary>
+        <div class="pen-editor-toolbar" role="toolbar" aria-label="Recommendations formatting">
+          <button type="button" data-pen-command="bold" aria-label="Bold" title="Bold"><b>B</b></button><button type="button" data-pen-command="italic" aria-label="Italic" title="Italic"><i>I</i></button><button type="button" data-pen-command="underline" aria-label="Underline" title="Underline"><u>U</u></button><button type="button" data-pen-command="insertUnorderedList" aria-label="Bullet list" title="Bullet list">• List</button><button type="button" data-pen-command="insertOrderedList" aria-label="Numbered list" title="Numbered list">1. List</button>
+        </div>
+        <div class="pen-editor" data-pen-editor contenteditable="true" role="textbox" aria-multiline="true" aria-label="Recommendations for the examiner" data-placeholder="Add recommendations…"></div>
+      </details>
+      <div class="pen-card-footer"><span data-pen-status role="status" aria-live="polite"></span><button type="button" class="pen-text-action" data-pen-retry hidden>Retry saving</button></div>
+    </form>
+  </template>
+</section>
+{% endif %}

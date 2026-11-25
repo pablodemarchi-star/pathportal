@@ -87,10 +87,13 @@ class FinalChecksWorkflowTest(unittest.TestCase):
     def test_29_calendar_day_window_and_clock_begin_when_both_conditions_are_met(self):
         today = date(2026,11,5)
         self.session_record.session_date = date(2026,12,20)
-        assigned = self.assign()
-        control = self.control()
+        # Keep the initial confirmation before the opening date, regardless of when the suite runs.
+        with patch('app.final_checks.datetime') as clock:
+            clock.now.return_value = datetime(2026,11,5,12,tzinfo=LOCAL_TZ)
+            assigned = self.assign()
+            control = self.control()
         self.assertIsNone(control.return_started_on)
-        self.assertEqual(control.return_recipient_confirmed_on, datetime.now(LOCAL_TZ).date())
+        self.assertEqual(control.return_recipient_confirmed_on, today)
         self.assertEqual(self.state(date(2026,11,20))['status'], 'blocked')
         opened = self.state(date(2026,11,21))
         self.assertEqual(opened['status'], 'semi_unblocked')
