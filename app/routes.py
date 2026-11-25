@@ -20995,12 +20995,13 @@ def staff_exam_sessions(token):
                 awaiting_ids.add(record.id)
     session_years = sorted({record.session_date.year for record in records.values() if record.session_date})
     requested_year = request.args.get("session_year", type=int)
-    current_year = datetime.now(LOCAL_TZ).year
+    portal_today = datetime.now(LOCAL_TZ).date()
+    current_year = portal_today.year
     selected_year = requested_year if requested_year in session_years else (
         current_year if current_year in session_years else session_years[-1] if session_years else current_year)
     records = {key: record for key, record in records.items()
                if record.session_date and record.session_date.year == selected_year}
-    ordered_sessions = sorted(records.values(), key=lambda item: (item.session_date or date.max, item.id))
+    ordered_sessions = sorted(records.values(), key=lambda item: (bool(item.session_date and item.session_date < portal_today), item.session_date or date.max, item.id))
     session_details = {}
     next_payment = ""
     if ordered_sessions:
@@ -21054,7 +21055,7 @@ def staff_exam_sessions(token):
     staff_invoice_upload = GoogleDriveStaffInvoiceUpload.query.filter_by(share_id=share.id, year=selected_year).order_by(GoogleDriveStaffInvoiceUpload.created_at.desc()).first()
     response = current_app.make_response(render_template("pre_session_control_tower/staff_exam_sessions.html",
         staff_name=person.full_name, staff_is_senior=bool(getattr(person, "seniority", False)),
-        session_details=session_details, exam_sessions=ordered_sessions,
+        session_details=session_details, exam_sessions=ordered_sessions, portal_today=portal_today,
         share_token=share.token, session_years=session_years, selected_session_year=selected_year,
         fee_rows=fee_rows, total_session_fees=format_currency_totals(session_fee_totals),
         next_payment_date=next_payment,

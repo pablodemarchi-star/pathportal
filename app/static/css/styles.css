@@ -18524,3 +18524,15 @@ body.staff-pen-dialog-open{overflow:hidden}
 .staff-pen-examiner-assignment{margin:18px 0;padding:12px 14px;background:#f2f7fa;border:1px solid #dce7ed;border-radius:9px}
 .staff-pen-examiner-assignment h4{margin:0 0 5px;font-size:12px;color:#456879}
 .staff-pen-examiner-assignment p{margin:0;font-size:13px;line-height:1.6;overflow-wrap:anywhere}
+
+/* Past staff sessions stay usable, with a distinctly grey full-row background. */
+.staff-confirmed-sessions-table tbody tr.is-past-session,
+.staff-confirmed-sessions-table tbody tr.is-past-session td { background: #e7ebef; border-color: #d3dbe2; }
+.staff-confirmed-sessions-table tbody tr.is-past-session:hover td { background: #dfe5eb; }
+.staff-confirmed-sessions-table tbody tr.is-past-session td:first-child { box-shadow: inset 3px 0 #a9b5c0; }
+.staff-exam-session-chip.is-past-session { background: #e7ebef; color: #455869; border-color: #c4ced7; box-shadow: inset 3px 0 #a9b5c0; }
+.staff-exam-session-chip.is-past-session:hover { background: #dfe5eb; }
+@media (max-width: 600px) {
+  .staff-confirmed-sessions-table tbody tr.is-past-session { box-shadow: inset 3px 0 #a9b5c0; }
+  .staff-confirmed-sessions-table tbody tr.is-past-session td:first-child { box-shadow: none; }
+}
