@@ -20665,7 +20665,8 @@ def staff_report_recordings_required(record):
 
 
 def staff_report_assignment_eligible(record, assignment, assignment_type):
-    return bool(assignment and assignment.participation_status == 'Confirmed'
+    return bool(assignment_type in {'supervisor', 'examiner'} and assignment
+                and assignment.participation_status == 'Confirmed'
                 and ((assignment_type == 'supervisor' and record.format in {'Online', 'Onsite'})
                      or staff_remote_report_participant(record, assignment, assignment_type)))
 

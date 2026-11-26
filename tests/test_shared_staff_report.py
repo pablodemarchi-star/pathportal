@@ -145,3 +145,24 @@ class SharedStaffReportTest(unittest.TestCase):
         rows = load_report_rows(2026)
         self.assertTrue(rows[0]['report_applicable'])
         self.assertIn(self.person.full_name, rows[0]['supervisors'])
+
+
+    def test_confirmed_emergency_contact_does_not_enter_report_eligibility(self):
+        person = m.AcademicStaff(full_name='Emergency contact', status='Active', roles='Emergency contact')
+        db.session.add(person); db.session.flush()
+        share = m.StaffExamSessionsShare(person_ref=str(person.id), token='emergency-contact-no-report')
+        db.session.add(share); db.session.flush()
+        self.record.emergency_contact_member_id = person.id
+        self.record.emergency_contact_participation_status = 'Confirmed'
+        submission = m.StaffExamSessionSubmission(exam_session_id=self.record.id, assignment_type='emergency_contact',
+            assignment_id=self.record.id, share_id=share.id)
+        db.session.add(submission); db.session.commit()
+        from app.routes import staff_report_assignment_eligible
+        self.assertFalse(staff_report_assignment_eligible(self.record, self.record, 'emergency_contact'))
+        for session_format in ['Onsite', 'Online', 'Online at exam centre']:
+            with self.subTest(session_format=session_format):
+                self.record.format = session_format; db.session.commit()
+                response = self.client.get('/my-exam-sessions/' + share.token)
+                self.assertEqual(response.status_code, 200)
+                self.assertNotIn('data-staff-exam-day-report', response.get_data(as_text=True))
+                self.assertNotIn('data-staff-end-checks ', response.get_data(as_text=True))
