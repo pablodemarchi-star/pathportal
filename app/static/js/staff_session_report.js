@@ -1,6 +1,8 @@
 (() => {
   document.querySelectorAll('[data-staff-exam-day-report]').forEach((section) => {
     const sharedDraft = Boolean(section.dataset.sharedReportUrl);
+    const actorRole = section.dataset.sharedReportRole;
+    const cannotSubmit = Boolean(actorRole && actorRole !== 'supervisor');
     const adminEdit = section.hasAttribute?.('data-admin-report-edit') || false;
     const opener = section.querySelector('[data-exam-day-report-link]');
     const dialog = section.querySelector('[data-session-report-dialog]');
@@ -45,6 +47,7 @@
         if (status) status.textContent = 'Draft saved in this browser tab.';
       } catch { if (status) status.textContent = 'Your browser could not save the draft. Keep this page open to retain your answers.'; }
     };
+    form.addEventListener('report:shared-progress', () => { submit.disabled = cannotSubmit || form.sharedReportCompletion?.ready !== true || Boolean(form.sharedDraftPending?.()) || returnBlocked || recordsFolderMissing || !institutionSubmitted || saving || mediaPending; });
     form.addEventListener('input', saveDraft);
     form.addEventListener('change', saveDraft);
     const lockReport = (author) => {
@@ -89,7 +92,7 @@
           badge.classList.toggle('is-available', institutionSubmitted);
           form.querySelector('[data-report-feedback-help]').hidden = institutionSubmitted;
         }
-        submit.disabled = returnBlocked || recordsFolderMissing || !institutionSubmitted || mediaPending;
+        submit.disabled = cannotSubmit || (sharedDraft && form.sharedReportCompletion?.ready !== true) || returnBlocked || recordsFolderMissing || !institutionSubmitted || mediaPending;
       } catch {} finally { checkingFeedback = false; }
     };
     opener.addEventListener('click', refreshFeedbackStatus);
@@ -97,7 +100,7 @@
     document.addEventListener('visibilitychange', () => { if (!document.hidden) refreshFeedbackStatus(); });
     window.setInterval(() => {
       if (!document.hidden && (dialog.open || section.closest('dialog')?.open)) refreshFeedbackStatus();
-    }, 5000);
+    }, sharedDraft ? 1000 : 5000);
 
     const updateReasons = () => {
       const needed = ['The session finished ahead of schedule', 'There were minor delays', 'There were significant delays'].includes(outcome.value);
@@ -223,6 +226,7 @@
       marketingCheckbox = mediaBox.querySelector('[data-report-marketing-confirmed]');
       uploadedCount = list.querySelectorAll('li').length;
       const uploadFiles = async (files) => {
+        if (actorRole && actorRole !== 'examiner') return;
         if (mediaPending || saving || mediaBox.dataset.folderConfigured !== 'true' || !available()) return;
         if (!files.length) {
           status.textContent = 'No photo or video files were received. Click the upload area to select the original files. If needed, download them to your device first.';
@@ -259,7 +263,7 @@
         } finally {
           mediaPending = false;
           input.disabled = false;
-          submit.disabled = returnBlocked || recordsFolderMissing || !institutionSubmitted;
+          submit.disabled = cannotSubmit || (sharedDraft && form.sharedReportCompletion?.ready !== true) || returnBlocked || recordsFolderMissing || !institutionSubmitted;
           marketingCheckbox.disabled = uploadedCount === 0;
           input.value = '';
           saveDraft();
@@ -280,6 +284,7 @@
         feedback.textContent = 'The exam centre must submit its Exam session feedback form before this report can be submitted.';
         return;
       }
+      if (cannotSubmit) { feedback.textContent = 'The Remote supervisor is responsible for submitting this shared report.'; return; }
       if (saving || mediaPending) return;
       if (form.sharedDraftFlush && !await form.sharedDraftFlush()) return;
       if (returnBlocked) {
@@ -326,7 +331,7 @@
         feedback.textContent = error.message || 'The report could not be submitted. Please try again.';
       } finally {
         saving = false;
-        submit.disabled = returnBlocked || recordsFolderMissing || !institutionSubmitted || !opener.dataset.folderUrl;
+        submit.disabled = cannotSubmit || (sharedDraft && form.sharedReportCompletion?.ready !== true) || returnBlocked || recordsFolderMissing || !institutionSubmitted || !opener.dataset.folderUrl;
       }
     });
     const restoreDraft = values => {

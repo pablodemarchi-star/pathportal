@@ -18,7 +18,7 @@ function page(includeModules=true, resume=false, onsite=false){
  const warning=new Node('p'),feedback=new Node('p'),draft=new Node('small');
  actions.append(close,submit);actions.querySelector=selector=>selector==='[type="submit"]'?submit:close;
  const details={open:false};
- const control=(required=true,valid=false)=>({required,disabled:false,willValidate:true,valid,type:'text',checkValidity(){return this.valid;},reportValidity(){this.reports=(this.reports||0)+1;return this.valid;},closest(selector){return selector==='details'?this.details||null:this.card;}});
+ const control=(required=true,valid=false)=>({required,disabled:false,willValidate:true,valid,type:'text',checkValidity(){return this.valid;},reportValidity(){this.reports=(this.reports||0)+1;return this.valid;},closest(selector){return selector==='details'?this.details||null:selector==='[data-report-role-locked]'?null:this.card;}});
  const fields=onsite ? {session:[control()],centre:[control()],materials:[control(),control()],team:[control(),control()],media:[control()],checks:[control()],finish:[control(false,true)]} : {session:[control()],modules:[control()],candidates:[control(false,true)],team:[control(),control()],finish:[control()]};
  if(resume)fields.session[0].valid=true;
  fields.team[1].details=details;fields.team[1].disabled=true;
@@ -90,7 +90,7 @@ console.log('Onsite prerequisites: unavailable media/centre-feedback confirmatio
 
 const returnPending=page(true,false,true);
 Object.values(returnPending.fields).flat().forEach(field=>field.valid=true);
-const acknowledgement={disabled:true,checked:false,required:true,willValidate:false,type:'checkbox',matches:selector=>selector.includes('[data-report-return-confirmed]'),checkValidity:()=>true,reportValidity(){},closest(){return this.card;}};
+const acknowledgement={disabled:true,checked:false,required:true,willValidate:false,type:'checkbox',matches:selector=>selector.includes('[data-report-return-confirmed]'),checkValidity:()=>true,reportValidity(){},closest(selector){return selector==='[data-report-role-locked]'?null:this.card;}};
 const returnCard=new Node('li');returnCard.dataset={reportStage:'checks'};returnCard.querySelectorAll=()=>[acknowledgement];acknowledgement.card=returnCard;
 // Use the existing checks card's live query result to simulate the extra return acknowledgement.
 const checksCard=returnPending.cards.find(card=>card.dataset.reportStage==='checks');
@@ -100,3 +100,13 @@ returnPending.nav.children[6].fire('click');returnPending.form.fire('report:befo
 assert.equal(checksCard.hidden,false);
 acknowledgement.disabled=false;acknowledgement.checked=true;returnPending.form.fire('change');assert.equal(returnPending.progress.textContent,'7 of 7 sections ready');
 console.log('Final checks: disabled return acknowledgement stays pending and invalid submission reveals its stage.');
+
+const sharedView=page(true,false,true);
+Object.values(sharedView.fields).flat().forEach(field=>field.valid=true);
+sharedView.cards.forEach(card=>{card.dataset.reportBlock=card.dataset.reportStage;});
+const foreignField=sharedView.fields.session[0];foreignField.valid=false;
+foreignField.closest=selector=>selector==='[data-report-role-locked]'?{}:foreignField.card;
+sharedView.form.sharedReportCompletion={ready:false,blocks:{session:false,centre:true,materials:true,team:true,media:true,checks:true,finish:true}};
+sharedView.form.fire('report:shared-progress');assert.equal(sharedView.progress.textContent,'5 of 7 sections ready');
+sharedView.next.fire('click');assert.equal(sharedView.cards[1].hidden,false);assert.equal(foreignField.reports,undefined);
+console.log('Shared flow: pending work of the other role stays visible without blocking navigation through read-only sections.');

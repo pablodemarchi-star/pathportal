@@ -47,6 +47,10 @@ def draft(token, submission_id):
         abort(404)
     if not staff_report_assignment_eligible(record, assignment, submission.assignment_type) or not staff_shared_onsite_report(record) or not staff_report_available(record):
         return jsonify(ok=False, error='This shared report is only available to confirmed eligible staff on the exam day.'), 403
+    from app.shared_report_roles import role, owner, completion, roster
+    actor_role = role(assignment, submission.assignment_type)
+    if not actor_role:
+        abort(403)
     report = report_for_session(record)
     if report:
         return jsonify(ok=True, submitted=True, author_name=report.author_name)
@@ -61,7 +65,10 @@ def draft(token, submission_id):
             return jsonify(ok=False, error='Invalid report draft.'), 400
         if not isinstance(changes, dict) or not isinstance(base, dict) or len(changes) > 500:
             return jsonify(ok=False, error='Invalid report draft.'), 400
+        review_roster = roster(record)
         for key, value in changes.items():
+            if owner(record, key, review_roster) != actor_role:
+                return jsonify(ok=False, error='You can only complete sections labelled with your role.'), 403
             if (not re.fullmatch(r'[a-zA-Z_][a-zA-Z0-9_.:-]{0,240}', key)
                     or key in {'csrf_token', 'shared_report_revision'}
                     or not (isinstance(value, str) or isinstance(value, list) and all(isinstance(item, str) for item in value))
@@ -82,4 +89,5 @@ def draft(token, submission_id):
         except (IntegrityError, StaleDataError):
             db.session.rollback()
             return jsonify(ok=False, conflict=True, error='The shared report changed while saving. Reopen the report before continuing.'), 409
-    return jsonify(ok=True, submitted=False, values=values, revision=row.revision if row else 0)
+    return jsonify(ok=True, submitted=False, values=values, revision=row.revision if row else 0,
+                   completion=completion(record, values, submission, share))

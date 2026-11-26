@@ -609,7 +609,7 @@ class StaffSessionReportTest(unittest.TestCase):
         with patch('app.routes.staff_report_available', return_value=False):
             self.assertEqual(self.client.post(self.url, data=dict(csrf_token='test', schedule_outcome='There were no delays')).status_code, 403)
         self.assignment.is_remote = True; db.session.commit()
-        self.assertEqual(self.post().status_code, 409)  # Shared reports require the currently displayed draft revision.
+        self.assertEqual(self.post().status_code, 400)  # Shared reports need a confirmed recipient Examiner.
         self.assignment.is_remote = False
         self.assignment.participation_status = 'Pending'; db.session.commit()
         self.assertEqual(self.post().status_code, 403)

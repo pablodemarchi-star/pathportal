@@ -35,6 +35,8 @@
     const context = form.querySelector('[data-report-session-context]');
     header.append(heading);
     if (context) header.append(context);
+    const sharedIntro = form.querySelector('.report-shared-intro');
+    if (sharedIntro) header.append(sharedIntro);
     if (subtitle) subtitle.hidden = true;
     const workspace = make('div', undefined, 'report-flow-workspace');
     const sidebar = make('aside', undefined, 'report-flow-sidebar');
@@ -80,6 +82,8 @@
     const footerStatus = make('div', undefined, 'report-flow-footer-status');
     if (feedback) footerStatus.append(feedback);
     if (draft) footerStatus.append(draft);
+    const sharedNotice = form.querySelector('.report-shared-submit-notice');
+    if (sharedNotice) footer.append(sharedNotice);
     footer.append(footerStatus, actions);
     form.prepend(header);
     form.append(workspace, footer);
@@ -89,7 +93,7 @@
       input.matches?.('[data-report-feedback-checkbox], [data-report-marketing-confirmed], [data-report-return-confirmed]');
     const controls = key => cards.filter(card => !key || card.dataset.reportStage === key)
       .flatMap(card => Array.from(card.querySelectorAll('input, select, textarea')))
-      .filter(input => blockedConfirmation(input) || (!input.disabled && input.willValidate !== false));
+      .filter(input => !input.closest?.('[data-report-role-locked]') && (blockedConfirmation(input) || (!input.disabled && input.willValidate !== false)));
     const invalid = key => {
       const radioGroups = new Set();
       return controls(key).filter(input => {
@@ -116,7 +120,9 @@
       let ready = 0;
       summaryRows.replaceChildren();
       steps.forEach(([key, label], index) => {
-        const pending = key === 'finish' ? invalid().length : invalid(key).length;
+        const shared = form.sharedReportCompletion;
+        const sharedCards = cards.filter(card => card.dataset.reportStage === key && card.dataset.reportBlock);
+        const pending = shared ? (key === 'finish' ? Number(!shared.ready) : sharedCards.filter(card => !shared.blocks[card.dataset.reportBlock]).length) : key === 'finish' ? invalid().length : invalid(key).length;
         const required = key === 'finish' || controls(key).some(input => input.required);
         if (!pending) ready++;
         const {button, number, state} = buttons[index];
@@ -172,6 +178,7 @@
     form.addEventListener('input', update);
     form.addEventListener('change', update);
     form.addEventListener('report:draft-restored', update);
+    form.addEventListener('report:shared-progress', update);
     form.addEventListener('report:before-validate', () => {
       const first = invalid()[0];
       if (first) reveal(first);

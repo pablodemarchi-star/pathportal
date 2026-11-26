@@ -20701,13 +20701,21 @@ def submit_staff_session_report(token, submission_id, _editing=None):
         return jsonify(ok=False, error="This report is only available to confirmed eligible staff members during its availability period."), 403
     if _editing is None and report_for_session(record):
         return jsonify(ok=False, error="This report has already been submitted and cannot be edited."), 409
-    if _editing is None and staff_shared_onsite_report(record):
+    report_form = request.form
+    shared_roles = _editing is None and staff_shared_onsite_report(record)
+    if shared_roles:
+        from app.shared_report_roles import role, form_values, examiner as shared_examiner
+        if role(assignment, submission.assignment_type) != 'supervisor':
+            return jsonify(ok=False, error='Only the Remote supervisor can submit this shared report.'), 403
+        if not shared_examiner(record):
+            return jsonify(ok=False, error='A confirmed Examiner marked Receives shipment must be assigned before submitting this shared report.'), 400
         from app.models import StaffSharedSessionReportDraft
         draft = db.session.get(StaffSharedSessionReportDraft, record.id)
         if request.form.get('shared_report_revision') != str(draft.revision if draft else 0):
             return jsonify(ok=False, code='shared_draft_changed', error='The shared report has changed. Wait for the latest changes to load before submitting.'), 409
-    outcome = request.form.get("schedule_outcome", "").strip()
-    reasons = request.form.get("reasons", "").strip()
+        report_form = form_values(json.loads(draft.values_json) if draft else {})
+    outcome = report_form.get("schedule_outcome", "").strip()
+    reasons = report_form.get("reasons", "").strip()
     if outcome not in {"The session finished ahead of schedule", "There were no delays", "There were minor delays", "There were significant delays"}:
         return jsonify(ok=False, error="Please select a valid schedule outcome."), 400
     if outcome != "There were no delays" and not reasons:
@@ -20715,21 +20723,21 @@ def submit_staff_session_report(token, submission_id, _editing=None):
     if len(reasons) > 10000:
         return jsonify(ok=False, error="Reasons must not exceed 10,000 characters."), 400
     attendance_fields = ("absent_candidates_checked", "submitted_candidates_checked", "session_completed_checked")
-    attendance = {key: request.form.get(key) == "1" for key in attendance_fields}
+    attendance = {key: report_form.get(key) == "1" for key in attendance_fields}
     if not attendance["absent_candidates_checked"] or not attendance["submitted_candidates_checked"]:
         return jsonify(ok=False, error="Please confirm the first two Candidate Attendance statements."), 400
     required_online_checks = staff_report_online_attendance_fields(record)
-    online_attendance = {key: key in required_online_checks and request.form.get(key) == "1"
+    online_attendance = {key: key in required_online_checks and report_form.get(key) == "1"
                          for key in ("speaking_records_checked", "listening_speaking_components_checked")}
     from app.staff_report_components import validate as validate_components, validate_it, merge as merge_components
     try:
-        component_completion, component_absences = validate_components(record, request.form)
-        it_issues, it_absences = validate_it(record, request.form, component_absences)
+        component_completion, component_absences = validate_components(record, report_form)
+        it_issues, it_absences = validate_it(record, report_form, component_absences)
     except ValueError as error:
         return jsonify(ok=False, error=str(error)), 400
     module_sections = staff_report_module_sections(record)
     required_module_fields = {field for section in module_sections for field in section["fields"]}
-    module_verifications = {field: field in required_module_fields and request.form.get(field) == "1"
+    module_verifications = {field: field in required_module_fields and report_form.get(field) == "1"
                             for field in MODULE_VERIFICATION_FIELDS}
     if any(not module_verifications[field] for field in required_module_fields):
         return jsonify(ok=False, error="Please complete all module verifications."), 400
@@ -20739,29 +20747,30 @@ def submit_staff_session_report(token, submission_id, _editing=None):
     facilities_outcome = facilities_comments = emergency_pack_outcome = emergency_pack_reasons = ""
     return_steps = []
     if not online:
-        facilities_outcome = request.form.get("facilities_outcome", "").strip()
-        facilities_comments = request.form.get("facilities_comments", "").strip()
+        facilities_outcome = report_form.get("facilities_outcome", "").strip()
+        facilities_comments = report_form.get("facilities_comments", "").strip()
         if facilities_outcome not in {"Satisfactory", "Satisfactory, with comments", "Unsatisfactory"}:
             return jsonify(ok=False, error="Please select an exam centre facilities and organisation outcome."), 400
         if facilities_outcome != "Satisfactory" and not facilities_comments:
             return jsonify(ok=False, error="Please provide comments on the exam centre facilities and organisation."), 400
         if len(facilities_comments) > 10000:
             return jsonify(ok=False, error="Comments must not exceed 10,000 characters."), 400
-        emergency_pack_outcome = request.form.get("emergency_pack_outcome", "").strip()
-        emergency_pack_reasons = request.form.get("emergency_pack_reasons", "").strip()
+        emergency_pack_outcome = report_form.get("emergency_pack_outcome", "").strip()
+        emergency_pack_reasons = report_form.get("emergency_pack_reasons", "").strip()
         if emergency_pack_outcome not in {"No, it was not needed", "Yes, it was opened and used", "It was opened but not used"}:
             return jsonify(ok=False, error="Please select whether the Emergency exam pack was used."), 400
         if emergency_pack_outcome != "No, it was not needed" and not emergency_pack_reasons:
             return jsonify(ok=False, error="Please provide reasons for opening the Emergency exam pack."), 400
         if len(emergency_pack_reasons) > 10000:
             return jsonify(ok=False, error="Reasons must not exceed 10,000 characters."), 400
-        return_steps = request.form.getlist("return_verification")
+        return_steps = report_form.getlist("return_verification")
         required_return_steps = ["submitted_papers", "submitted_packages", "absent_packages", "sealing", "labelling", "institutional_verification"]
         if return_steps != required_return_steps:
             return jsonify(ok=False, error="Please complete all six Exam return package verification steps in order."), 400
     from app.staff_report_review import validate_assessments
     try:
-        assessments = validate_assessments(record, request.form, roster=json.loads(_editing.staff_assessments) if _editing is not None else None)
+        from app.shared_report_roles import roster as shared_roster
+        assessments = validate_assessments(record, report_form, roster=json.loads(_editing.staff_assessments) if _editing is not None else shared_roster(record) if shared_roles else None)
     except ValueError as error:
         return jsonify(ok=False, error=str(error)), 400
     media = []
@@ -20769,40 +20778,44 @@ def submit_staff_session_report(token, submission_id, _editing=None):
         if not session_pictures_folder(record):
             return jsonify(ok=False, error="Session pictures folder is not configured. Please contact Path Examinations."), 400
         media = media_for_submission(record, submission)
-        if not media or request.form.get("marketing_confirmed") != "1":
+        if not media or report_form.get("marketing_confirmed") != "1":
             return jsonify(ok=False, error="Upload at least one file and confirm Marketing material before submitting."), 400
     feedback_required = not online
     if feedback_required and not staff_report_feedback_submitted(record):
         return jsonify(ok=False, error="The exam centre must submit its Exam session feedback form before this report can be submitted."), 400
-    if feedback_required and request.form.get("centre_feedback_confirmed") != "1":
+    if feedback_required and report_form.get("centre_feedback_confirmed") != "1":
         return jsonify(ok=False, error="Please confirm that the exam centre has completed its feedback form."), 400
     return_acknowledgement = None
     if record.format == "Onsite":
         from app.staff_return_materials import report_return_view
-        return_acknowledgement = report_return_view(record, assignment, share)
+        if shared_roles:
+            from app.shared_report_roles import return_view as shared_return_view
+            return_acknowledgement = shared_return_view(record, share)
+        else:
+            return_acknowledgement = report_return_view(record, assignment, share)
         if not return_acknowledgement['complete']:
             return jsonify(ok=False, error=return_acknowledgement['error']), 400
-        if request.form.get('return_instructions_version') != return_acknowledgement['version']:
+        if report_form.get('return_instructions_version') != return_acknowledgement['version']:
             return jsonify(ok=False, error="The return instructions or responsible staff member have changed. Please reload the report, review the current instructions and confirm them again."), 400
-        if request.form.get('return_instructions_confirmed') != '1':
+        if report_form.get('return_instructions_confirmed') != '1':
             return jsonify(ok=False, error="Please confirm that the return instructions have been read and understood by the staff member responsible for returning the exam materials."), 400
     recordings_required = staff_report_recordings_required(record)
-    recordings_confirmed = request.form.get("recordings_reminder_confirmed") == "1"
+    recordings_confirmed = report_form.get("recordings_reminder_confirmed") == "1"
     if recordings_required and not recordings_confirmed:
         return jsonify(ok=False, error="Please confirm that all examiners have been reminded to upload their recordings."), 400
-    optional_comments = request.form.get("optional_comments", "").strip()
+    optional_comments = report_form.get("optional_comments", "").strip()
     if len(optional_comments) > 10000:
         return jsonify(ok=False, error="Optional comments must not exceed 10,000 characters."), 400
     module_comments = None
     if online:
-        comments = {key: optional_comments if key == "overall" else request.form.get("comments_" + key, "").strip()
+        comments = {key: optional_comments if key == "overall" else report_form.get("comments_" + key, "").strip()
                     for key, _ in staff_report_comment_sections(record)}
         if any(len(value) > 10000 for value in comments.values()):
             return jsonify(ok=False, error="Each Optional comments field must not exceed 10,000 characters."), 400
         module_comments = json.dumps(comments)
     from app.staff_report_considerations import validate as validate_considerations
     try:
-        considerations = validate_considerations(record, request.form)
+        considerations = validate_considerations(record, report_form)
     except ValueError as error:
         return jsonify(ok=False, error=str(error)), 400
     person = (assignment.team_member or assignment.potential_entry) if assignment else None
@@ -20878,7 +20891,10 @@ def staff_end_checks_view(record, role, status, submission, share):
     report_eligible = staff_report_assignment_eligible(record, assignment, submission.assignment_type)
     if not check_fields and not report_eligible:
         return {}
+    shared_roles = report_eligible and staff_shared_onsite_report(record)
+    from app.shared_report_roles import roster as shared_roster, return_view as shared_return_view
     return {"end_checks": {
+        "shared_role": role if shared_roles else '',
         "available": staff_end_checks_available(record),
         "opens_at": datetime.combine(record.session_date, time.min, tzinfo=LOCAL_TZ).isoformat() if record.session_date else "",
         "values": {key: bool(getattr(saved, key, False)) for key in check_fields},
@@ -20906,9 +20922,9 @@ def staff_end_checks_view(record, role, status, submission, share):
         "session_report_media": media_view(record, submission) if report_eligible else {"folder_configured": False, "files": []},
         "institutional_feedback_submitted": record.format == "Online" or staff_report_feedback_submitted(record),
         "feedback_status_url": url_for("staff.staff_report_feedback_status", token=share.token, submission_id=submission.id),
-        "return_materials": report_return_view(record, assignment, share) if report_eligible else None,
+        "return_materials": (shared_return_view(record, share) if shared_roles else report_return_view(record, assignment, share)) if report_eligible else None,
         "report_recordings_required": staff_report_recordings_required(record),
-        "assessment_roster": assessment_roster(record) if report_eligible else [],
+        "assessment_roster": (shared_roster(record) if shared_roles else assessment_roster(record)) if report_eligible else [],
         "assessment_criteria": assessment_criteria(record),
         "url": url_for("staff.update_staff_end_checks", token=share.token, submission_id=submission.id),
     }}

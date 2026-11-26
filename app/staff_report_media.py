@@ -74,6 +74,10 @@ def upload_media(token, submission_id, _editing=False):
         return jsonify(ok=False, error='Uploads are only available to confirmed eligible staff members during report availability.'), 403
     if not _editing and report_for_session(record):
         return jsonify(ok=False, error='This report has already been submitted. Uploads are locked.'), 409
+    if not _editing:
+        from app.routes import staff_shared_onsite_report
+        if staff_shared_onsite_report(record) and submission.assignment_type != 'examiner':
+            return jsonify(ok=False, error='Marketing material must be uploaded by the Examiner.'), 403
     folder_id = session_pictures_folder(record)
     if not folder_id:
         return jsonify(ok=False, error='Session pictures folder is not configured. Please contact Path Examinations.'), 400

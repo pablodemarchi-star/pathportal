@@ -1,5 +1,6 @@
 {% set report_return = detail.end_checks.return_materials %}
-<li data-report-stage="checks" data-report-return-materials>
+<li data-report-stage="checks" data-report-return-materials{% if shared_role %} data-report-owner="examiner" data-report-block="return_materials"{% endif %}>
+  {% if shared_role %}<div class="report-owner-heading"><span class="report-role-chip is-examiner">Examiner</span>{% if shared_role != 'examiner' %}<small>To be completed by the Examiner</small>{% endif %}<span class="report-block-status" data-report-block-status></span></div>{% endif %}
   <b>Return of exam session materials</b>
   {% if report_return.recipient_name and not report_return.is_recipient %}
   <div class="staff-report-return-warning" role="note"><strong>Important:</strong> the following instructions apply to <strong>{{ report_return.recipient_name }}</strong>.</div>
@@ -12,6 +13,8 @@
   {% with show_package_dimensions=false %}
     {% include 'pre_session_control_tower/_staff_return_configuration.html' %}
   {% endwith %}
+  <fieldset class="report-owned-fields"{% if shared_role and shared_role != 'examiner' %} disabled data-report-role-locked{% endif %}>
   <input type="hidden" name="return_instructions_version" value="{{ report_return.version }}" data-report-return-version>
   <label class="staff-session-report-checkbox staff-report-return-confirmation"><input type="checkbox" name="return_instructions_confirmed" value="1" required data-report-return-confirmed{% if not report_return.complete %} disabled{% endif %}><span>{{ report_return.confirmation }}</span></label>
+  </fieldset>
 </li>

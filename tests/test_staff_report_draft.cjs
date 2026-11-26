@@ -4,7 +4,7 @@ const vm=require('node:vm');
 const storage=new Map();
 const classes=()=>({values:new Set(),toggle(key,value){if(value)this.values.add(key);else this.values.delete(key);},add(key){this.values.add(key);}});
 const source=fs.readFileSync('app/static/js/staff_session_report.js','utf8');
-function page(online=false,adminEdit=false,returnOptions=null){
+function page(online=false,adminEdit=false,returnOptions=null,actorRole=''){
  const make=(name,type='text',value='')=>({name,type,value,checked:false,disabled:false,dataset:{},handlers:{},classList:classes(),addEventListener(event,fn){(this.handlers[event]||=[]).push(fn);},setAttribute(key,value){this[key]=value;}});
  const outcome=make('schedule_outcome','select');const reasons=make('reasons','textarea');
  const facilities=make('facilities_outcome','select');const comments=make('facilities_comments','textarea');
@@ -28,7 +28,7 @@ function page(online=false,adminEdit=false,returnOptions=null){
  const form={reportValidity:()=>true,reset(){},handlers:{},querySelector:key=>nodes[key],querySelectorAll:key=>key==='[data-review-row]'?[]:fields,addEventListener(event,fn){(this.handlers[event]||=[]).push(fn);}};
  const dialog={open:true,querySelector:()=>form,querySelectorAll:()=>[],addEventListener(){},close(){this.open=false;}};
  const opener=make('opener');opener.dataset.folderUrl='/report';
- const section={hasAttribute:name=>adminEdit&&name==='data-admin-report-edit',dataset:{reportDraftKey:'shared-session-draft',feedbackStatusUrl:'/status',opensAt:'2026-11-13T00:00:00-03:00'},querySelector:key=>key==='[data-exam-day-report-link]'?opener:dialog,closest:()=>({open:true})};
+ const section={hasAttribute:name=>adminEdit&&name==='data-admin-report-edit',dataset:{sharedReportRole:actorRole,reportDraftKey:'shared-session-draft',feedbackStatusUrl:'/status',opensAt:'2026-11-13T00:00:00-03:00'},querySelector:key=>key==='[data-exam-day-report-link]'?opener:dialog,closest:()=>({open:true})};
  const events={},documentEvents={};let result={ok:true,submitted:false,report_submitted:false};let poll;
  const window={addEventListener(name,fn){events[name]=fn;},setInterval(fn,ms){assert.equal(ms,5000);poll=fn;}};
  const document={hidden:false,querySelectorAll:()=>[section],addEventListener(name,fn){documentEvents[name]=fn;}};
@@ -78,6 +78,14 @@ function page(online=false,adminEdit=false,returnOptions=null){
  await blocked.form.handlers.submit[0]({preventDefault(){}});
  assert.equal(blocked.feedback.textContent,'Return instructions are pending.');
  assert.equal(blocked.opener.textContent,undefined);
+ const examinerOnly=page(false,false,null,'examiner');
+ examinerOnly.setResult({ok:true,submitted:true,report_submitted:false});await examinerOnly.events.focus();
+ assert.equal(examinerOnly.submit.disabled,true);
+ examinerOnly.form.sharedReportCompletion={ready:true};examinerOnly.form.handlers['report:shared-progress'].forEach(fn=>fn());
+ assert.equal(examinerOnly.submit.disabled,true);
+ await examinerOnly.form.handlers.submit[0]({preventDefault(){}});
+ assert.match(examinerOnly.feedback.textContent,/Remote supervisor is responsible/);
+ console.log('Examiner final-submit button remains disabled after feedback and shared-completion updates.');
  console.log('Return acknowledgement: matching-version draft restored, changed instructions clear only confirmation, pending return blocks submission and feedback refresh cannot unlock it.');
  console.log('Quality control editor can save outside the exam day.');
  console.log('Online report submits without return, facilities, emergency pack or marketing sections.');
