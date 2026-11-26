@@ -4,7 +4,7 @@ const vm=require('node:vm');
 const storage=new Map();
 const classes=()=>({values:new Set(),toggle(key,value){if(value)this.values.add(key);else this.values.delete(key);},add(key){this.values.add(key);}});
 const source=fs.readFileSync('app/static/js/staff_session_report.js','utf8');
-function page(online=false,adminEdit=false,returnOptions=null,actorRole=''){
+function page(online=false,adminEdit=false,returnOptions=null,actorRole='',noReview=false){
  const make=(name,type='text',value='')=>({name,type,value,checked:false,disabled:false,dataset:{},handlers:{},classList:classes(),addEventListener(event,fn){(this.handlers[event]||=[]).push(fn);},setAttribute(key,value){this[key]=value;}});
  const outcome=make('schedule_outcome','select');const reasons=make('reasons','textarea');
  const facilities=make('facilities_outcome','select');const comments=make('facilities_comments','textarea');
@@ -22,6 +22,7 @@ function page(online=false,adminEdit=false,returnOptions=null,actorRole=''){
  '[data-report-emergency-pack]':emergency,'[data-report-emergency-reasons]':emergencyReasons,'[data-report-feedback]':feedback,'[type="submit"]':submit,
  '[data-report-feedback-checkbox]':feedbackCheckbox,'[data-report-feedback-status]':badge,'[data-report-feedback-help]':help,
  '[data-report-return-timeline]':{classList:classes(),querySelectorAll:()=>steps},'[data-return-progress]':{},'[data-review-count]':{classList:classes()}};
+ if(noReview)delete nodes['[data-review-count]'];
  if(returnOptions){nodes['[data-report-return-confirmed]']=returnConfirmation;nodes['[data-report-return-version]']=returnVersion;nodes['[data-report-return-blocked]']={textContent:'Return instructions are pending.'};}
  for(const name of ['reasons-field','comments-field','emergency-reasons-field'])nodes[`[data-report-${name}]`]={};
  if(online) for(const key of ['[data-report-feedback-checkbox]','[data-report-facilities]','[data-report-comments]','[data-report-emergency-pack]','[data-report-emergency-reasons]','[data-report-return-timeline]','[data-return-progress]'])delete nodes[key];
@@ -85,6 +86,17 @@ function page(online=false,adminEdit=false,returnOptions=null,actorRole=''){
  assert.equal(examinerOnly.submit.disabled,true);
  await examinerOnly.form.handlers.submit[0]({preventDefault(){}});
  assert.match(examinerOnly.feedback.textContent,/Remote supervisor is responsible/);
+ const remoteWithoutReview=page(false,false,null,'supervisor',true);
+ remoteWithoutReview.setResult({ok:true,submitted:true,report_submitted:false});await remoteWithoutReview.events.focus();
+ remoteWithoutReview.steps.forEach(step=>step.checked=true);
+ remoteWithoutReview.form.sharedDraftFlush=async()=>true;
+ remoteWithoutReview.form.sharedReportCompletion={ready:true};
+ remoteWithoutReview.form.handlers['report:shared-progress'].forEach(fn=>fn());
+ assert.equal(remoteWithoutReview.submit.disabled,false);
+ await remoteWithoutReview.form.handlers.submit[0]({preventDefault(){}});
+ assert.equal(remoteWithoutReview.opener.textContent,'Report submitted');
+ assert.equal(remoteWithoutReview.opener.disabled,true);
+ console.log('Remote supervisor can submit when no other staff members need a performance review.');
  console.log('Examiner final-submit button remains disabled after feedback and shared-completion updates.');
  console.log('Return acknowledgement: matching-version draft restored, changed instructions clear only confirmation, pending return blocks submission and feedback refresh cannot unlock it.');
  console.log('Quality control editor can save outside the exam day.');

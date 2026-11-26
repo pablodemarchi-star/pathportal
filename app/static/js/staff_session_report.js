@@ -207,8 +207,10 @@
         if (complete && missingComments) row.querySelector('[data-review-row-status]').textContent = 'Comments required';
       });
       const counter = form.querySelector('[data-review-count]');
-      counter.textContent = `${completed}/${reviewRows.length} completed`;
-      counter.classList.toggle('is-complete', completed === reviewRows.length);
+      if (counter) {
+        counter.textContent = `${completed}/${reviewRows.length} completed`;
+        counter.classList.toggle('is-complete', completed === reviewRows.length);
+      }
     };
     reviewRows.forEach((row) => {
       row.querySelectorAll('[data-review-select]').forEach((select) => select.addEventListener('change', updateReview));
