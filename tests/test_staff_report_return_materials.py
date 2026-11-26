@@ -28,7 +28,7 @@ class StaffReportReturnMaterialsTest(unittest.TestCase):
 
     def test_own_instructions_follow_feedback_and_confirmation_is_saved(self):
         html, section = self.page()
-        self.assertLess(html.index('<b class="staff-report-block-title">Exam centre feedback</b>'), html.index('data-report-return-materials>'))
+        self.assertLess(html.index('<b class="staff-report-check-title">Exam centre feedback</b>'), html.index('data-report-return-materials>'))
         self.assertIn('Return of exam session materials', section)
         self.assertIn('Immediate location drop-off', section)
         self.assertIn('href="https://maps.example.com/materials-return"', section)

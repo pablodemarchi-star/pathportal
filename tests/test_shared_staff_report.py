@@ -270,8 +270,8 @@ class SharedStaffReportTest(unittest.TestCase):
     def test_return_verification_placement_and_exact_text(self):
         for share in [self.share, self.examiner_share]:
             html = self.client.get('/my-exam-sessions/' + share.token).get_data(as_text=True)
-            self.assertLess(html.index('<b>Return of exam session materials</b>'), html.index('<b>Return of materials verification</b>'))
-            self.assertLess(html.index('<b>Return of materials verification</b>'), html.index('<li data-report-stage="finish"'))
+            self.assertLess(html.index('<b class="staff-report-check-title">Return of exam session materials</b>'), html.index('<b class="staff-report-check-title">Return of materials verification</b>'))
+            self.assertLess(html.index('<b class="staff-report-check-title">Return of materials verification</b>'), html.index('<li data-report-stage="finish"'))
             self.assertIn('I confirm that I have reviewed the return instructions with the Examiner and verified that they understand the required procedures and deadlines.', html)
             self.assertIn('name="return_materials_verified" value="1" required', html)
         self.assignment.is_remote = False
@@ -311,9 +311,9 @@ class SharedStaffReportTest(unittest.TestCase):
     def test_feedback_heading_matches_recordings_visibility_and_title_style(self):
         url = '/my-exam-sessions/' + self.share.token
         html = self.client.get(url).get_data(as_text=True)
-        self.assertIn('<b class="staff-report-block-title">Exam centre feedback</b>', html)
+        self.assertIn('<b class="staff-report-check-title">Exam centre feedback</b>', html)
         db.session.add(m.ExamSessionMonthlyRegistration(exam_session_id=self.record.id, month=11, module='Speaking', registration_number=1))
         db.session.commit()
         html = self.client.get(url).get_data(as_text=True)
-        self.assertIn('<b class="staff-report-block-title">Exam centre feedback and recordings verification</b>', html)
+        self.assertIn('<b class="staff-report-check-title">Exam centre feedback and recordings verification</b>', html)
         self.assertIn('name="recordings_reminder_confirmed"', html)

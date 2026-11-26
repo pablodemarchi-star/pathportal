@@ -1,7 +1,7 @@
 {% set report_return = detail.end_checks.return_materials %}
 <li data-report-stage="checks" data-report-return-materials{% if shared_role %} data-report-owner="examiner" data-report-block="return_materials"{% endif %}>
   {% if shared_role %}<div class="report-owner-heading"><span class="report-role-chip is-examiner">Examiner</span>{% if shared_role != 'examiner' %}<small>To be completed by the Examiner</small>{% endif %}<span class="report-block-status" data-report-block-status></span></div>{% endif %}
-  <b>Return of exam session materials</b>
+  <b class="staff-report-check-title">Return of exam session materials</b>
   {% if report_return.recipient_name and not report_return.is_recipient %}
   <div class="staff-report-return-warning" role="note"><strong>Important:</strong> the following instructions apply to <strong>{{ report_return.recipient_name }}</strong>.</div>
   {% endif %}

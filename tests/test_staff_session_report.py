@@ -691,7 +691,7 @@ class StaffSessionReportTest(unittest.TestCase):
             for title, visible in zip(titles, expected):
                 self.assertEqual(title in html, visible)
                 if visible:
-                    self.assertGreater(html.index('<b>' + title + '</b>'), html.index('<b>Candidate attendance</b>'))
+                    self.assertGreater(html.index('<b>' + title + '</b>'), html.index('<b class="staff-report-check-title">Candidate attendance</b>'))
             if expected[0] or expected[1]:
                 self.assertIn(self.record.digitalised_exams_url, html)
         self.record.format = 'Onsite'; db.session.commit()

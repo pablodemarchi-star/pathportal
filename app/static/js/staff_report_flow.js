@@ -12,13 +12,13 @@
       ['team', 'Staff review', 'Evaluate each staff member and add comments where needed.'],
       ['media', 'Photos & videos', 'Upload the session photos and videos, then confirm that the upload is complete.'],
       ['checks', 'Final checks', 'Confirm the exam centre feedback and any required reminders for examiners.'],
-      ['finish', 'Finish', 'Review your progress and add optional comments before submitting.'],
+      ['finish', 'Finish', 'Add optional comments, then review your progress before submitting.'],
     ] : [
       ['session', 'Session', 'Confirm the session outcome and candidate attendance.'],
       ['modules', 'Exam modules', 'Verify the files for each module in this session.'],
       ['candidates', 'Candidate IT issues', 'Record any technical difficulties affecting candidates.'],
       ['team', 'Staff review', 'Evaluate each staff member, add comments where needed and complete the final checks.'],
-      ['finish', 'Finish', 'Review your progress and add optional comments before submitting.'],
+      ['finish', 'Finish', 'Add optional comments, then review your progress before submitting.'],
     ];
     const steps = definitions.filter(([key]) => cards.some(card => card.dataset.reportStage === key));
     if (!steps.length) return;
@@ -64,7 +64,7 @@
     summary.append(summaryTitle, summaryText, summaryRows);
     content.append(stageHeading);
     if (warning) content.append(warning);
-    content.append(summary, questions);
+    content.append(questions, summary);
     workspace.append(sidebar, content);
     const footer = make('footer', undefined, 'report-flow-footer');
     const feedback = form.querySelector('[data-report-feedback]');

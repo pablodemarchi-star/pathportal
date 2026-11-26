@@ -18,7 +18,7 @@
               <li data-report-stage="session"{% if shared_role %} data-report-owner="examiner" data-report-block="schedule"{% endif %}>
                 {% if shared_role %}<div class="report-owner-heading"><span class="report-role-chip is-examiner">Examiner</span>{% if shared_role != "examiner" %}<small>To be completed by the Examiner</small>{% endif %}<span class="report-block-status" data-report-block-status></span></div>{% endif %}
                 <fieldset class="report-owned-fields"{% if shared_role and shared_role != "examiner" %} disabled data-report-role-locked{% endif %}>
-                <label><b>Did the exam session run according to the approved schedule?</b>
+                <label><b class="staff-report-check-title">Did the exam session run according to the approved schedule?</b>
                   <select name="schedule_outcome" required data-report-outcome>
                     <option value="">Select an option</option>
                     <option>The session finished ahead of schedule</option>
@@ -35,7 +35,7 @@
               <li data-report-stage="session"{% if shared_role %} data-report-owner="supervisor" data-report-block="attendance"{% endif %}>
                 {% if shared_role %}<div class="report-owner-heading"><span class="report-role-chip is-supervisor">Remote supervisor</span>{% if shared_role != "supervisor" %}<small>To be completed by the Remote supervisor</small>{% endif %}<span class="report-block-status" data-report-block-status></span></div>{% endif %}
                 <fieldset class="report-owned-fields"{% if shared_role and shared_role != "supervisor" %} disabled data-report-role-locked{% endif %}>
-                <b>Candidate attendance</b>
+                <b class="staff-report-check-title">Candidate attendance</b>
                 <label class="staff-session-report-checkbox"><input type="checkbox" name="absent_candidates_checked" value="1" required><span>All absent candidates have been marked as <b>Absent</b> in Sinapsis{% if detail.format != 'Online' %} and on the printed candidate list{% endif %}.</span></label>
                 <label class="staff-session-report-checkbox"><input type="checkbox" name="submitted_candidates_checked" value="1" required><span>All candidates who took the exam have been marked as <b>Submitted</b> in Sinapsis{% if detail.format != 'Online' %} and on the printed candidate list{% endif %}.</span></label>
                 <label class="staff-session-report-checkbox"><input type="checkbox" name="session_completed_checked" value="1"><span>The exam session is marked as <b>Completed</b> in Sinapsis, with no candidates remaining in <b>Pending</b> status.</span></label>
@@ -77,7 +77,7 @@
               <li data-report-stage="materials" data-report-owner="supervisor" data-report-block="package_review">
                 <div class="report-owner-heading"><span class="report-role-chip is-supervisor">Remote supervisor</span>{% if shared_role != 'supervisor' %}<small>To be completed by the Remote supervisor</small>{% endif %}<span class="report-block-status" data-report-block-status></span></div>
                 <fieldset class="report-owned-fields"{% if shared_role != 'supervisor' %} disabled data-report-role-locked{% endif %}>
-                  <b class="staff-report-block-title">Exam return package review</b>
+                  <b>Exam return package review</b>
                   <label class="staff-session-report-checkbox"><input type="checkbox" name="return_package_reviewed" value="1" required><span><strong>This is a critical procedure to ensure the efficient handling and accurate sorting of completed examination papers.</strong> I confirm that I have carefully reviewed each step outlined in the section above with the Examiner and verified that all procedures have been correctly followed.</span></label>
                 </fieldset>
               </li>
@@ -182,7 +182,7 @@
               <li data-report-stage="{{ 'checks' if detail.format == 'Onsite' else 'team' }}"{% if shared_role %} data-report-owner="supervisor" data-report-block="feedback"{% endif %}>
                 {% if shared_role %}<div class="report-owner-heading"><span class="report-role-chip is-supervisor">Remote supervisor</span>{% if shared_role != "supervisor" %}<small>To be completed by the Remote supervisor</small>{% endif %}<span class="report-block-status" data-report-block-status></span></div>{% endif %}
                 <fieldset class="report-owned-fields"{% if shared_role and shared_role != "supervisor" %} disabled data-report-role-locked{% endif %}>
-                <b{% if detail.format == 'Onsite' %} class="staff-report-block-title"{% endif %}>{% if detail.format == 'Onsite' %}{{ 'Exam centre feedback and recordings verification' if detail.end_checks.report_recordings_required else 'Exam centre feedback' }}{% else %}Final checks{% endif %}</b>
+                <b{% if detail.format == 'Onsite' %} class="staff-report-check-title"{% endif %}>{% if detail.format == 'Onsite' %}{{ 'Exam centre feedback and recordings verification' if detail.end_checks.report_recordings_required else 'Exam centre feedback' }}{% else %}Final checks{% endif %}</b>
                 {% if detail.format != 'Online' %}
                 {% set feedback_submitted = detail.end_checks.institutional_feedback_submitted %}
                 <label class="staff-session-report-checkbox"><input type="checkbox" name="centre_feedback_confirmed" value="1" required data-report-feedback-checkbox data-submitted="{{ 'true' if feedback_submitted else 'false' }}"{% if not feedback_submitted %} disabled{% endif %}><span>I confirm that the exam centre has submitted its feedback form. <span class="staff-end-checks-status{% if feedback_submitted %} is-available{% endif %}" data-report-feedback-status>{{ 'Feedback form submitted' if feedback_submitted else 'Feedback form not submitted' }}</span></span></label>
@@ -203,7 +203,7 @@
               <li data-report-stage="checks" data-report-owner="supervisor" data-report-block="return_materials_verification">
                 <div class="report-owner-heading"><span class="report-role-chip is-supervisor">Remote supervisor</span>{% if shared_role != 'supervisor' %}<small>To be completed by the Remote supervisor</small>{% endif %}<span class="report-block-status" data-report-block-status></span></div>
                 <fieldset class="report-owned-fields"{% if shared_role != 'supervisor' %} disabled data-report-role-locked{% endif %}>
-                  <b>Return of materials verification</b>
+                  <b class="staff-report-check-title">Return of materials verification</b>
                   <label class="staff-session-report-checkbox"><input type="checkbox" name="return_materials_verified" value="1" required><span>I confirm that I have reviewed the return instructions with the Examiner and verified that they understand the required procedures and deadlines.</span></label>
                 </fieldset>
               </li>
@@ -212,7 +212,7 @@
                 {% if shared_role %}<div class="report-owner-heading"><span class="report-role-chip is-examiner">Examiner</span>{% if shared_role != "examiner" %}<small>To be completed by the Examiner</small>{% endif %}<span class="report-block-status" data-report-block-status></span></div>{% endif %}
                 <fieldset class="report-owned-fields"{% if shared_role and shared_role != "examiner" %} disabled data-report-role-locked{% endif %}>
                 {% if detail.format == 'Online' %}
-                <b>Optional comments</b>
+                <b class="staff-report-check-title">Optional comments</b>
                 <p>Please share any feedback or suggestions that could help us improve the Path experience.</p>
                 <div class="staff-report-comments-grid" style="--comment-columns:{{ detail.end_checks.comment_sections|length }}">
                   {% for key, label in detail.end_checks.comment_sections %}
@@ -220,7 +220,7 @@
                   {% endfor %}
                 </div>
                 {% else %}
-                <label><b>Optional comments</b>
+                <label><b class="staff-report-check-title">Optional comments</b>
                   <span>Please share any feedback or suggestions that could help us improve the Path experience.</span>
                   <textarea name="optional_comments" rows="4" maxlength="10000" placeholder="Optional"></textarea>
                 </label>
