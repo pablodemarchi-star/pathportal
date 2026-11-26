@@ -71,7 +71,7 @@ def upload_media(token, submission_id, _editing=False):
     if not _editing and (not assignment or person_ref != share.person_ref):
         abort(404)
     if not _editing and (record.format != 'Onsite' or not staff_report_assignment_eligible(record, assignment, submission.assignment_type) or not staff_report_available(record)):
-        return jsonify(ok=False, error='Uploads are only available to confirmed eligible Supervisors during report availability.'), 403
+        return jsonify(ok=False, error='Uploads are only available to confirmed eligible staff members during report availability.'), 403
     if not _editing and report_for_session(record):
         return jsonify(ok=False, error='This report has already been submitted. Uploads are locked.'), 409
     folder_id = session_pictures_folder(record)

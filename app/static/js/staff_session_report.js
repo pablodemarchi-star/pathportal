@@ -1,5 +1,6 @@
 (() => {
   document.querySelectorAll('[data-staff-exam-day-report]').forEach((section) => {
+    const sharedDraft = Boolean(section.dataset.sharedReportUrl);
     const adminEdit = section.hasAttribute?.('data-admin-report-edit') || false;
     const opener = section.querySelector('[data-exam-day-report-link]');
     const dialog = section.querySelector('[data-session-report-dialog]');
@@ -34,6 +35,10 @@
         } else values[input.name] = input.value;
       });
       if (returnVersion) values._return_instructions_version = returnVersion.value;
+      if (sharedDraft) {
+        form.dispatchEvent(new CustomEvent('report:shared-change', {detail:values}));
+        return;
+      }
       const status = form.querySelector('[data-report-draft-status]');
       try {
         sessionStorage.setItem(section.dataset.reportDraftKey, JSON.stringify(values));
@@ -109,14 +114,15 @@
       event.preventDefault();
       if (available()) { updateReasons(); dialog.showModal(); }
     });
+    const canClose = () => !form.sharedDraftPending?.() || window.confirm('The shared report has unsaved changes. Close anyway? Keep this page open until the changes have been saved.');
     dialog.querySelectorAll('[data-session-report-close]').forEach((button) => {
-      button.addEventListener('click', () => { if (!saving) dialog.close(); });
+      button.addEventListener('click', () => { if (!saving && canClose()) dialog.close(); });
     });
-    dialog.addEventListener('cancel', (event) => { if (saving) event.preventDefault(); });
+    dialog.addEventListener('cancel', (event) => { if (saving || !canClose()) event.preventDefault(); });
     dialog.addEventListener('click', event => {
       if (saving || event.target !== dialog) return;
       const bounds = dialog.getBoundingClientRect();
-      if (event.clientX < bounds.left || event.clientX > bounds.right || event.clientY < bounds.top || event.clientY > bounds.bottom) dialog.close();
+      if (event.clientX < bounds.left || event.clientX > bounds.right || event.clientY < bounds.top || event.clientY > bounds.bottom) { if (canClose()) dialog.close(); }
     });
     outcome.addEventListener('change', updateReasons);
     const updateComments = () => {
@@ -275,6 +281,7 @@
         return;
       }
       if (saving || mediaPending) return;
+      if (form.sharedDraftFlush && !await form.sharedDraftFlush()) return;
       if (returnBlocked) {
         if (typeof Event !== 'undefined' && form.dispatchEvent) form.dispatchEvent(new Event('report:before-validate'));
         feedback.textContent = form.querySelector('[data-report-return-blocked]')?.textContent || 'Return instructions are pending. Please contact Logistics.';
@@ -303,7 +310,7 @@
       try {
         const response = await fetch(form.action, { method: 'POST', body: new FormData(form), headers: { Accept: 'application/json' } });
         const result = await response.json();
-        if (response.status === 409 && !adminEdit) { lockReport(); return; }
+        if (response.status === 409 && !adminEdit && result.code !== 'shared_draft_changed') { lockReport(); return; }
         if (!response.ok || !result.ok) throw new Error(result.error || 'The report could not be submitted. Please try again.');
         opener.dataset.folderUrl = '';
         opener.textContent = 'Report submitted';
@@ -322,9 +329,7 @@
         submit.disabled = returnBlocked || recordsFolderMissing || !institutionSubmitted || !opener.dataset.folderUrl;
       }
     });
-    if (opener.dataset?.folderUrl && section.dataset.reportDraftKey) {
-      try {
-        const values = JSON.parse(sessionStorage.getItem(section.dataset.reportDraftKey) || '{}');
+    const restoreDraft = values => {
         draftFields.forEach(input => {
           if ((input.type === 'checkbox' || input.type === 'radio') && Array.isArray(values[input.name])) input.checked = values[input.name].includes(input.value);
           else if (input.type !== 'checkbox' && input.type !== 'radio' && typeof values[input.name] === 'string') input.value = values[input.name];
@@ -332,7 +337,16 @@
         if (returnConfirmation && (returnBlocked || values._return_instructions_version !== returnVersion?.value)) returnConfirmation.checked = false;
         if (institutionalFeedback && !institutionSubmitted) institutionalFeedback.checked = false;
         if (marketingCheckbox && !uploadedCount) marketingCheckbox.checked = false;
-      } catch {}
+    };
+    if (sharedDraft) {
+      form.addEventListener('report:shared-restore', event => {
+        restoreDraft(event.detail);
+        updateReasons(); updateComments(); updateEmergencyReasons(); updateReturnSteps(); updateReview();
+        form.dispatchEvent(new Event('report:draft-restored'));
+      });
+      form.addEventListener('report:shared-locked', event => lockReport(event.detail?.author_name));
+    } else if (opener.dataset?.folderUrl && section.dataset.reportDraftKey) {
+      try { restoreDraft(JSON.parse(sessionStorage.getItem(section.dataset.reportDraftKey) || '{}')); } catch {}
     }
     if (typeof Event !== 'undefined' && form.dispatchEvent) form.dispatchEvent(new Event('report:draft-restored'));
     updateReasons();

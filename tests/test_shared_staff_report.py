@@ -1,0 +1,147 @@
+import json
+import unittest
+from unittest.mock import patch
+from app import db, models as m
+from app.shared_staff_report import discard_legacy_checks
+from tests import test_staff_session_report as fixtures
+
+
+class SharedStaffReportTest(unittest.TestCase):
+    setUpBase = fixtures.StaffSessionReportTest.setUp
+    tearDown = fixtures.StaffSessionReportTest.tearDown
+    post = fixtures.StaffSessionReportTest.post
+
+    def setUp(self):
+        self.setUpBase()
+        self.assignment.is_remote = True
+        self.assignment.is_shipment_recipient = False
+        self.examiner = m.AcademicStaff(full_name='Recipient Examiner', status='Active', roles='Examiner')
+        db.session.add(self.examiner); db.session.flush()
+        self.recipient = m.ExamSessionExaminerAssignment(exam_session_id=self.record.id, team_member_id=self.examiner.id,
+            participation_status='Confirmed', is_shipment_recipient=True, logistics_type='Does not apply')
+        self.examiner_share = m.StaffExamSessionsShare(person_ref=str(self.examiner.id), token='recipient-report')
+        db.session.add_all([self.recipient, self.examiner_share]); db.session.flush()
+        self.examiner_submission = m.StaffExamSessionSubmission(exam_session_id=self.record.id, assignment_type='examiner',
+            assignment_id=self.recipient.id, share_id=self.examiner_share.id)
+        db.session.add(self.examiner_submission); db.session.commit()
+        control = m.ExamSessionSinapsisControl.query.filter_by(exam_session_id=self.record.id).one()
+        control.return_review_required = False
+        db.session.commit()
+        self.remote_url = self.url
+        self.examiner_url = f'/my-exam-sessions/{self.examiner_share.token}/submissions/{self.examiner_submission.id}/report'
+        self.available = patch('app.routes.staff_report_available', return_value=True); self.available.start(); self.addCleanup(self.available.stop)
+
+    def draft(self, url=None, changes=None, base=None, **extra):
+        url = (url or self.remote_url) + '/draft'
+        if changes is None:
+            return self.client.get(url)
+        return self.client.post(url, data=(dict(csrf_token='test', changes=json.dumps(changes), base=json.dumps(base or {})) | extra))
+
+    def test_shared_drafts_merge_independent_answers_and_reject_conflicting_answers(self):
+        self.assertEqual(self.draft().json['values'], {})
+        first = self.draft(changes={'schedule_outcome':'There were no delays'})
+        self.assertEqual(first.status_code, 200, first.json)
+        second = self.draft(self.examiner_url, changes={'optional_comments':'All good'})
+        self.assertEqual(second.status_code, 200, second.json)
+        values = self.draft().json['values']
+        self.assertEqual(values, {'schedule_outcome':'There were no delays', 'optional_comments':'All good'})
+        self.assertEqual(self.draft(self.examiner_url).json['values'], values)
+        self.assertEqual(self.draft(self.examiner_url, changes={'schedule_outcome':'There were minor delays'}).status_code, 409)
+        self.assertEqual(self.draft(changes={'schedule_outcome':'There were minor delays'}, base=values).status_code, 200)
+        self.assertEqual(self.draft().json['values']['optional_comments'], 'All good')
+
+    def test_portal_reuses_native_onsite_report_and_actions_for_both_roles(self):
+        for share in [self.share, self.examiner_share]:
+            html = self.client.get('/my-exam-sessions/' + share.token).get_data(as_text=True)
+            self.assertIn('data-onsite-report-flow', html)
+            self.assertIn('data-staff-exam-day-report', html)
+            self.assertIn('data-staff-report-quick', html)
+            self.assertIn('data-staff-report-kind="native"', html)
+            self.assertIn('data-shared-report-url=', html)
+            self.assertNotIn('data-staff-end-checks ', html)
+            self.assertIn('Exam return package verification', html)
+            self.assertIn('name="return_instructions_confirmed"', html)
+            self.assertIn('Recipient Examiner', html)
+
+    def test_one_immutable_report_after_either_person_submits_and_draft_is_removed(self):
+        saved = self.draft(changes={'optional_comments':'Shared answer'})
+        self.url = self.examiner_url
+        from app.staff_report_review import assessment_roster, assessment_criteria
+        reviews = {f"review.{row['key']}.{criterion['key']}":criterion['best'] for row in assessment_roster(self.record) for criterion in assessment_criteria(self.record)}
+        response = self.post(shared_report_revision=str(saved.json['revision']), **reviews)
+        self.assertEqual(response.status_code, 200, response.json)
+        report = m.StaffExamSessionReport.query.one()
+        self.assertEqual(report.author_name, self.examiner.full_name)
+        self.assertEqual(report.exam_session_id, self.record.id)
+        self.assertEqual(m.StaffSharedSessionReportDraft.query.count(), 0)
+        self.url = self.remote_url
+        self.assertEqual(self.post(shared_report_revision='0', **reviews).status_code, 409)
+        self.assertTrue(self.draft().json['submitted'])
+        self.assertEqual(m.StaffExamSessionReport.query.count(), 1)
+
+    def test_authorization_current_shipment_remote_status_format_date_and_csrf(self):
+        self.assertEqual(self.draft(changes={'optional_comments':'test'}, csrf_token='bad').status_code, 400)
+        self.recipient.is_shipment_recipient = False; db.session.commit()
+        self.assertEqual(self.draft(self.examiner_url).status_code, 403)
+        self.recipient.is_shipment_recipient = True; self.assignment.is_remote = False; db.session.commit()
+        self.assertEqual(self.draft(self.examiner_url).status_code, 403)
+        self.assignment.is_remote = True; self.recipient.participation_status = 'Pending'; db.session.commit()
+        self.assertEqual(self.draft(self.examiner_url).status_code, 403)
+        self.recipient.participation_status = 'Confirmed'; db.session.commit()
+        with patch('app.routes.staff_report_available', return_value=False):
+            self.assertEqual(self.draft().status_code, 403)
+        wrong = self.remote_url.replace(self.share.token, self.examiner_share.token)
+        self.assertEqual(self.draft(wrong).status_code, 404)
+        self.record.format = 'Online'; db.session.commit()
+        self.assertEqual(self.draft().status_code, 403)
+
+    def test_legacy_checks_are_discarded_only_for_replaced_profiles_and_cannot_be_written(self):
+        db.session.add_all([m.StaffExamSessionEndChecks(submission_id=self.submission.id, attendance=True),
+            m.StaffExamSessionEndChecks(submission_id=self.examiner_submission.id, printed_attendance=True)])
+        db.session.commit()
+        discard_legacy_checks(); discard_legacy_checks()
+        self.assertEqual(m.StaffExamSessionEndChecks.query.count(), 0)
+        for url in [self.remote_url, self.examiner_url]:
+            response = self.client.post(url.replace('/report', '/end-checks'), data=dict(csrf_token='test', check='attendance', checked='1'))
+            self.assertEqual(response.status_code, 404)
+        self.assertEqual(self.draft().json['values'], {})
+
+    def test_shared_media_feedback_access_and_stale_final_submit(self):
+        for url in [self.remote_url, self.examiner_url]:
+            response = self.client.get(url + '/feedback-status')
+            self.assertEqual(response.status_code, 200, response.json)
+            self.assertEqual(len(response.json['files']), 1)
+        self.draft(changes={'optional_comments':'latest'})
+        response = self.post(shared_report_revision='0')
+        self.assertEqual(response.status_code, 409)
+        self.assertEqual(response.json['code'], 'shared_draft_changed')
+
+    def test_examiner_can_upload_media_shared_with_supervisor(self):
+        from io import BytesIO
+        def upload(file, target, destination):
+            db.session.add(m.StaffSessionReportMedia(submission_id=target.submission_id, file_id='sharedExaminerMedia123',
+                folder_id=destination.folder_id, filename=file.filename, mime_type='image/jpeg'))
+        with patch('app.staff_report_media.folder_metadata'), patch('app.staff_report_media.upload_document', side_effect=upload):
+            response = self.client.post(self.examiner_url + '/media', data=dict(csrf_token='test', file=(BytesIO(b'photo'), 'examiner-photo.jpg')))
+        self.assertEqual(response.status_code, 200, response.json)
+        response = self.client.get(self.remote_url + '/feedback-status')
+        self.assertEqual({row['filename'] for row in response.json['files']}, {'photo.jpg', 'examiner-photo.jpg'})
+
+    def test_remote_supervisor_can_submit_shared_report_with_all_onsite_validations(self):
+        from app.staff_report_review import assessment_roster, assessment_criteria
+        reviews = {f"review.{row['key']}.{criterion['key']}":criterion['best'] for row in assessment_roster(self.record) for criterion in assessment_criteria(self.record)}
+        response = self.post(shared_report_revision='0', return_verification=[], **reviews)
+        self.assertEqual(response.status_code, 400)
+        self.assertIn('six Exam return package', response.json['error'])
+        response = self.post(shared_report_revision='0', **reviews)
+        self.assertEqual(response.status_code, 200, response.json)
+        self.assertEqual(m.StaffExamSessionReport.query.one().author_name, self.person.full_name)
+        html = self.client.get('/my-exam-sessions/' + self.examiner_share.token).get_data(as_text=True)
+        self.assertIn('Report submitted', html)
+
+    def test_remote_session_remains_pending_in_management_session_reports(self):
+        from app.session_reports import load_report_rows
+        # The report is now required even when all Supervisors are remote.
+        rows = load_report_rows(2026)
+        self.assertTrue(rows[0]['report_applicable'])
+        self.assertIn(self.person.full_name, rows[0]['supervisors'])

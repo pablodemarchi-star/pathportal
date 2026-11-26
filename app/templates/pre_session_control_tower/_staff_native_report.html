@@ -1,0 +1,12 @@
+      <section class="staff-detail-section staff-end-session-report{% if not detail.end_checks.session_report_available %} is-unavailable{% endif %}" aria-label="End-of-session report" data-staff-exam-day-report data-shared-report-url="{{ detail.end_checks.shared_report_url }}" data-opens-at="{{ detail.end_checks.opens_at }}" data-feedback-status-url="{{ detail.end_checks.feedback_status_url }}" data-report-draft-key="{{ detail.end_checks.session_report_draft_key }}">
+        <div class="staff-end-checks-heading">
+          <h3>End-of-session report</h3>
+          <span class="staff-end-checks-status{% if detail.end_checks.session_report_available %} is-available{% endif %}" data-report-availability>{{ 'Available' if detail.end_checks.session_report_available else 'Available on exam date' }}</span>
+        </div>
+        <p>This section will be available <strong>on the exam day only</strong>.{% if detail.format == 'Onsite' %} The report must be completed <strong>before leaving the exam venue</strong>.{% endif %}</p>
+        <p>To formally close your exam session, please complete the following report:</p>
+        {% set report_submitted = detail.end_checks.session_report_submitted %}
+        {% set report_available = detail.end_checks.session_report_available and not report_submitted %}
+        <button type="button" class="staff-detail-link staff-end-checks-folder{% if not report_available %} is-disabled{% endif %}" data-exam-day-report-link data-folder-url="{{ '' if report_submitted else detail.end_checks.session_report_url }}"{% if not report_available %} aria-disabled="true" tabindex="-1"{% endif %}>{{ 'Report submitted' if report_submitted else 'End-of-session report ↗' }}</button>
+        {% include 'pre_session_control_tower/_staff_report_form.html' %}
+      </section>

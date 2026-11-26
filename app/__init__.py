@@ -173,6 +173,8 @@ def create_app():
     app.jinja_env.globals['logistics_card_views'] = logistics_card_views
     from app.return_labels import return_labels_bp
     app.register_blueprint(return_labels_bp)
+    from app.shared_staff_report import bp as shared_staff_report_bp
+    app.register_blueprint(shared_staff_report_bp)
     from app.announcements import bp as announcements_bp
     app.register_blueprint(announcements_bp)
     from app.pen_arrangements import pen_bp
@@ -1342,6 +1344,8 @@ def create_app():
         db.session.commit()
         from app.staff_logistics import migrate as migrate_staff_logistics
         migrate_staff_logistics()
+        from app.shared_staff_report import discard_legacy_checks
+        discard_legacy_checks()
         if not ExaminerCertificationYear.query.filter_by(year=2026).first():
             db.session.add(ExaminerCertificationYear(year=2026, is_archived=False))
             db.session.commit()

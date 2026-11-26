@@ -2638,6 +2638,8 @@ def is_valid_rejected_potential_entry_delete_password():
 
 
 def delete_exam_session_dependencies(session_id):
+    from app.models import StaffSharedSessionReportDraft
+    StaffSharedSessionReportDraft.query.filter_by(exam_session_id=session_id).delete(synchronize_session=False)
     from app.models import ExamSessionPenCandidate, ExamSessionPenControl, ExamSessionAnnouncement, ExamSessionAnnouncementControl
     from app.staff_invoices import trash_document
     for announcement in ExamSessionAnnouncement.query.filter_by(exam_session_id=session_id).all():
@@ -20563,7 +20565,24 @@ def staff_session_has_recording_candidates(record):
     ).first() is not None
 
 
+def staff_remote_report_participant(record, assignment, assignment_type):
+    if record.format != 'Onsite' or not assignment:
+        return False
+    if assignment_type == 'supervisor':
+        return bool(assignment.is_remote)
+    return bool(assignment_type == 'examiner' and assignment.is_shipment_recipient
+                and any(item.is_remote and (item.team_member_id or item.potential_entry_id)
+                        and item.participation_status not in {'Declined', 'Cancelled'} for item in record.supervisor_assignments))
+
+
+def staff_shared_onsite_report(record):
+    return record.format == 'Onsite' and any(item.is_remote and (item.team_member_id or item.potential_entry_id)
+        and item.participation_status not in {'Declined', 'Cancelled'} for item in record.supervisor_assignments)
+
+
 def staff_assignment_end_check_fields(record, role, assignment):
+    if staff_remote_report_participant(record, assignment, role):
+        return ()
     if role == "supervisor":
         fields = ONLINE_STAFF_END_CHECK_FIELDS if record.format == "Online" else (
             REMOTE_STAFF_END_CHECK_FIELDS if assignment.is_remote else STAFF_END_CHECK_FIELDS)
@@ -20646,9 +20665,9 @@ def staff_report_recordings_required(record):
 
 
 def staff_report_assignment_eligible(record, assignment, assignment_type):
-    return bool(assignment_type == "supervisor" and assignment
-                and assignment.participation_status == "Confirmed"
-                and (record.format == "Online" or (record.format == "Onsite" and not assignment.is_remote)))
+    return bool(assignment and assignment.participation_status == 'Confirmed'
+                and ((assignment_type == 'supervisor' and record.format in {'Online', 'Onsite'})
+                     or staff_remote_report_participant(record, assignment, assignment_type)))
 
 
 def staff_report_available(record, now=None):
@@ -20678,9 +20697,14 @@ def submit_staff_session_report(token, submission_id, _editing=None):
     if _editing is None and (not assignment or person_ref != share.person_ref):
         abort(404)
     if _editing is None and (not staff_report_assignment_eligible(record, assignment, submission.assignment_type) or not staff_report_available(record)):
-        return jsonify(ok=False, error="This report is only available to confirmed eligible Supervisors during its availability period."), 403
+        return jsonify(ok=False, error="This report is only available to confirmed eligible staff members during its availability period."), 403
     if _editing is None and report_for_session(record):
         return jsonify(ok=False, error="This report has already been submitted and cannot be edited."), 409
+    if _editing is None and staff_shared_onsite_report(record):
+        from app.models import StaffSharedSessionReportDraft
+        draft = db.session.get(StaffSharedSessionReportDraft, record.id)
+        if request.form.get('shared_report_revision') != str(draft.revision if draft else 0):
+            return jsonify(ok=False, code='shared_draft_changed', error='The shared report has changed. Wait for the latest changes to load before submitting.'), 409
     outcome = request.form.get("schedule_outcome", "").strip()
     reasons = request.form.get("reasons", "").strip()
     if outcome not in {"The session finished ahead of schedule", "There were no delays", "There were minor delays", "There were significant delays"}:
@@ -20799,6 +20823,9 @@ def submit_staff_session_report(token, submission_id, _editing=None):
                                         reasons=reasons if outcome != "There were no delays" else "", **attendance, **online_attendance, **module_verifications)
         if _editing is None:
             db.session.add(StaffExamSessionReport(**values))
+            if staff_shared_onsite_report(record):
+                from app.models import StaffSharedSessionReportDraft
+                StaffSharedSessionReportDraft.query.filter_by(exam_session_id=record.id).delete(synchronize_session=False)
         else:
             from app.session_report_edit import apply_edit
             apply_edit(_editing, values, record, component_absences, it_absences)
@@ -20847,9 +20874,9 @@ def staff_end_checks_view(record, role, status, submission, share):
     saved = submission.end_checks
     assignment, _ = staff_submission_assignment(record, submission.assignment_type, submission.assignment_id)
     check_fields = staff_assignment_end_check_fields(record, role, assignment) if assignment else ()
-    if not check_fields:
-        return {}
     report_eligible = staff_report_assignment_eligible(record, assignment, submission.assignment_type)
+    if not check_fields and not report_eligible:
+        return {}
     return {"end_checks": {
         "available": staff_end_checks_available(record),
         "opens_at": datetime.combine(record.session_date, time.min, tzinfo=LOCAL_TZ).isoformat() if record.session_date else "",
@@ -20871,6 +20898,8 @@ def staff_end_checks_view(record, role, status, submission, share):
             and current_app.config.get('STAFF_END_OF_SESSION_REPORT_URL')) else '',
         "session_report_submitted": bool(report_for_session(record)) if report_eligible else False,
         "session_report_draft_key": f"staff-report:{share.token}:{record.id}",
+        "shared_report_url": url_for('shared_staff_report.draft', token=share.token, submission_id=submission.id)
+            if report_eligible and staff_shared_onsite_report(record) and staff_report_available(record) and not report_for_session(record) else '',
         "session_report_url": url_for("staff.submit_staff_session_report", token=share.token, submission_id=submission.id),
         "session_report_media_url": url_for("staff.upload_staff_report_media", token=share.token, submission_id=submission.id),
         "session_report_media": media_view(record, submission) if report_eligible else {"folder_configured": False, "files": []},
@@ -21032,6 +21061,10 @@ def staff_exam_sessions(token):
                 "pen_arrangements": staff_pen_view(record, role, assignment, share),
                 "announcements": staff_announcements_view(record, role, assignment, share),
                 "speaking_record_url": staff_portal_speaking_record_url(record, role, share.person_ref),
+                "examiner_requires_early_arrival": (
+                    role == "examiner" and bool(getattr(assignment, "is_shipment_recipient", False))
+                    and any(item.is_remote and (item.team_member_id or item.potential_entry_id)
+                            and item.participation_status not in {"Declined", "Cancelled"} for item in supervisors)),
                 "examiner_receives_shipment": (
                     role == "examiner" and bool(assignment.is_shipment_recipient)
                     and not is_session_supervisor),

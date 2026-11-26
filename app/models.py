@@ -3239,3 +3239,11 @@ class ExamSessionAnnouncement(db.Model):
     mime_type = db.Column(db.String(160), nullable=False)
     created_at = db.Column(db.DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))
     exam_session = db.relationship('ExamSession', backref=db.backref('announcements', cascade='all, delete-orphan'))
+
+
+class StaffSharedSessionReportDraft(db.Model):
+    exam_session_id = db.Column(db.Integer, db.ForeignKey('exam_session.id'), primary_key=True)
+    values_json = db.Column(db.Text, nullable=False, default='{}')
+    revision = db.Column(db.Integer, nullable=False, default=1)
+    exam_session = db.relationship('ExamSession', backref=db.backref('shared_report_draft', uselist=False, cascade='all, delete-orphan'))
+    __mapper_args__ = {'version_id_col': revision}

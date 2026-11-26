@@ -9,7 +9,7 @@
       <div class="staff-detail-intro"><div class="staff-detail-invited-role"><span>You have been assigned as</span><strong>{% if detail.role == 'Supervisor' and detail.is_remote %}Remote supervisor{% else %}{{ detail.role }}{% endif %}</strong></div><span class="staff-detail-pending{% if detail.participation_confirmed %} is-confirmed{% endif %}">{{ 'Participation confirmed' if detail.participation_confirmed else 'Awaiting your confirmation' }}</span></div>
       <section class="staff-detail-summary" aria-label="Session at a glance">
         <div><span>Date</span><strong>{{ detail.session_date }}</strong></div>
-        <div><span>Your time range · GMT-3</span><strong>{{ detail.time_ranges|join(' / ') or 'To be confirmed' }}</strong><small data-staff-arrival>{% if detail.role == 'Intern' and detail.format == 'Online' %}Join the Zoom session <em><u>at least</u></em> 15 minutes before the start.{% elif detail.format == 'Online at exam centre' and detail.role in ['Supervisor', 'Intern'] %}Arrive <em><u>at least</u></em> 50 minutes before the start.{% elif detail.format in ['Online', 'Online at exam centre'] and detail.role in ['Supervisor', 'Examiner'] %}{{ 'Start' if detail.role == 'Supervisor' else 'Join' }} the Zoom session <em><u>at least</u></em> {{ '15' if detail.role == 'Supervisor' else '10' }} minutes before the start.{% elif detail.role == 'Emergency contact' or (detail.role == 'Supervisor' and detail.is_remote) %}Remote assignment · no venue attendance required{% else %}Arrive <em><u>at least</u></em> {{ '50' if detail.role in ['Supervisor', 'Intern'] else '30' }} minutes before the start.{% endif %}</small></div>
+        <div><span>Your time range · GMT-3</span><strong>{{ detail.time_ranges|join(' / ') or 'To be confirmed' }}</strong><small data-staff-arrival>{% if detail.role == 'Intern' and detail.format == 'Online' %}Join the Zoom session <em><u>at least</u></em> 15 minutes before the start.{% elif detail.format == 'Online at exam centre' and detail.role in ['Supervisor', 'Intern'] %}Arrive <em><u>at least</u></em> 50 minutes before the start.{% elif detail.format in ['Online', 'Online at exam centre'] and detail.role in ['Supervisor', 'Examiner'] %}{{ 'Start' if detail.role == 'Supervisor' else 'Join' }} the Zoom session <em><u>at least</u></em> {{ '15' if detail.role == 'Supervisor' else '10' }} minutes before the start.{% elif detail.role == 'Emergency contact' or (detail.role == 'Supervisor' and detail.is_remote) %}Remote assignment · no venue attendance required{% else %}Arrive <em><u>at least</u></em> {{ '50' if detail.role in ['Supervisor', 'Intern'] or detail.examiner_requires_early_arrival else '30' }} minutes before the start.{% endif %}</small></div>
         <div><span>Format</span><strong>{{ detail.format or 'To be confirmed' }}</strong></div>
         {% if detail.format != 'Online' %}
         <div class="staff-detail-venue"><span>Venue address</span>{% if detail.address %}<a class="staff-detail-address" href="https://www.google.com/maps/search/?api=1&amp;query={{ detail.address|urlencode }}" target="_blank" rel="noopener noreferrer">{{ detail.address }} <span aria-hidden="true">↗</span></a>{% else %}<strong>To be confirmed</strong>{% endif %}</div>
@@ -99,14 +99,14 @@
       {% if detail.role == 'Supervisor' and detail.is_remote %}
       <section class="staff-detail-section staff-detail-coordination" aria-label="Pre-session coordination with the Examiner">
         <h3>Pre-session coordination with the Examiner</h3>
-        <p><strong>Contact the Examiner in charge before the exam day</strong> to reconfirm their arrival time, coordinate the handling of exam materials, clarify any questions and agree on the procedures to follow after the session. Remember that <strong>you must both complete your respective End-of-session checks</strong>, available in your individual session details.</p>
+        <p><strong>Contact the Examiner in charge before the exam day</strong> to reconfirm their arrival time, coordinate the handling of exam materials, clarify any questions and agree on the procedures to follow after the session. Remember that <strong>you must both complete your respective End-of-session report</strong>, available in your individual session details.</p>
       </section>
       {% endif %}
       {% if detail.examiner_receives_shipment %}
       <section class="staff-detail-section staff-detail-remote-arrangements" aria-label="Remote supervision arrangements">
         <h3><strong>Remote supervision arrangements</strong></h3>
         <p>Please note that a <strong>Remote supervisor</strong> has been assigned to this session. This means you will be responsible for <strong>bringing the exam materials to the session and arranging their return shipment to Path International Examinations afterwards.</strong></p>
-        <p>The Remote supervisor will contact you to coordinate the return of materials and guide you through the <strong>End-of-session checks.</strong></p>
+        <p>Once the exam session has concluded, please contact your <strong>Remote supervisor</strong>, who will guide you through completing the <strong>End-of-session report</strong>. <strong>Do not leave the examination premises until the report has been completed.</strong></p>
       </section>
       {% endif %}
       <section class="staff-detail-section"><h3>Your session team</h3><p class="staff-detail-muted">The people working with you on this exam session.</p><div class="staff-detail-contacts">
@@ -132,22 +132,11 @@
         {% endif %}
       </section>
       {% endif %}
-      {% if detail.format not in ['Onsite', 'Online'] or (detail.is_remote and detail.format != 'Online') %}
+      {% if detail.end_checks.report_shortcut_kind != 'native' %}
         {% include 'pre_session_control_tower/_staff_session_end_checks.html' %}
       {% endif %}
-      {% if detail.format in ['Onsite', 'Online'] and (not detail.is_remote or detail.format == 'Online') %}
-      <section class="staff-detail-section staff-end-session-report{% if not detail.end_checks.session_report_available %} is-unavailable{% endif %}" aria-label="End-of-session report" data-staff-exam-day-report data-opens-at="{{ detail.end_checks.opens_at }}" data-feedback-status-url="{{ detail.end_checks.feedback_status_url }}" data-report-draft-key="{{ detail.end_checks.session_report_draft_key }}">
-        <div class="staff-end-checks-heading">
-          <h3>End-of-session report</h3>
-          <span class="staff-end-checks-status{% if detail.end_checks.session_report_available %} is-available{% endif %}" data-report-availability>{{ 'Available' if detail.end_checks.session_report_available else 'Available on exam date' }}</span>
-        </div>
-        <p>This section will be available <strong>on the exam day only</strong>.{% if detail.format == 'Onsite' %} The report must be completed <strong>before leaving the exam venue</strong>.{% endif %}</p>
-        <p>To formally close your exam session, please complete the following report:</p>
-        {% set report_submitted = detail.end_checks.session_report_submitted %}
-        {% set report_available = detail.end_checks.session_report_available and not report_submitted %}
-        <button type="button" class="staff-detail-link staff-end-checks-folder{% if not report_available %} is-disabled{% endif %}" data-exam-day-report-link data-folder-url="{{ '' if report_submitted else detail.end_checks.session_report_url }}"{% if not report_available %} aria-disabled="true" tabindex="-1"{% endif %}>{{ 'Report submitted' if report_submitted else 'End-of-session report ↗' }}</button>
-        {% include 'pre_session_control_tower/_staff_report_form.html' %}
-      </section>
+      {% if detail.end_checks.report_shortcut_kind == 'native' %}
+      {% include 'pre_session_control_tower/_staff_native_report.html' %}
       {% endif %}
       {% if detail.end_checks.report_shortcut_kind|default('') == 'external' %}
       <section class="staff-detail-section" data-staff-external-report-section hidden>
@@ -158,8 +147,12 @@
       </section>
       {% endif %}
       {% endif %}
-      {% if detail.role == 'Examiner' and detail.examiner_receives_shipment and detail.participation_confirmed %}
+      {% if detail.role == 'Examiner' and detail.participation_confirmed and detail.end_checks %}
+      {% if detail.end_checks.report_shortcut_kind == 'native' %}
+      {% include 'pre_session_control_tower/_staff_native_report.html' %}
+      {% else %}
       {% include 'pre_session_control_tower/_staff_session_end_checks.html' %}
+      {% endif %}
       {% endif %}
       {% if not detail.participation_confirmed %}
       <section class="staff-detail-response"><h3>Update your participation status</h3><p>Please ensure you can access all the materials listed above, then confirm your participation, contact us if you have any questions, or decline the session.</p><div class="staff-detail-response-actions" data-staff-response-actions></div><small>Confirm your participation here to update your status immediately.</small></section>

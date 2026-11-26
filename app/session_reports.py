@@ -72,7 +72,7 @@ def load_report_rows(year, format_name=None):
     for record in records:
         report,feedback = report_by_id.get(record.id),feedback_by_id.get(record.id)
         assignments=by_session.get(record.id,[])
-        applicable = bool(report) or record.format == 'Online' or record.format=='Onsite' and (not assignments or any(not a.is_remote for a in assignments))
+        applicable = bool(report) or record.format in {'Online', 'Onsite'}
         feedback_applicable = record.format != 'Online'
         past = record.session_date < today
         status = lambda saved, applies=True: 'Submitted' if saved else 'Not applicable' if not applies else 'Not submitted — exam date passed' if past else 'Pending'
@@ -93,7 +93,7 @@ def load_report_rows(year, format_name=None):
         people=[]
         for assignment in assignments:
             person=assignment.team_member or assignment.potential_entry
-            if not assignment.is_remote and person and person.full_name not in people: people.append(person.full_name)
+            if (not assignment.is_remote or record.format == 'Onsite') and person and person.full_name not in people: people.append(person.full_name)
         rows.append(dict(session=record,report=report,feedback=feedback,report_status=status(report,applicable),feedback_status=status(feedback, feedback_applicable),
             report_applicable=applicable,feedback_applicable=feedback_applicable,report_author=names[report.id] if report else '',supervisors=people,reviews_count=len(reviews),
             scores=scores,average=round(sum(score['value'] for score in scores)/4,1) if scores else None,

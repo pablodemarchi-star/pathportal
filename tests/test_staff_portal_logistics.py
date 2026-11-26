@@ -879,5 +879,38 @@ class StaffPortalLogisticsTest(unittest.TestCase):
                         self.assertIn('log in to Beyond well in advance of the exam session', html)
 
 
+    def test_examiner_arrives_50_minutes_only_with_shipment_and_assigned_remote_supervisor(self):
+        import re
+        examiner = ExamSessionExaminerAssignment(exam_session_id=self.record.id, team_member_id=self.person.id,
+            staffing_role_check_verified=True, participation_status='Pre-confirmed', logistics_type='Does not apply')
+        other = AcademicStaff(full_name='Remote supervisor', status='Active', roles='Supervisor')
+        db.session.add_all([examiner, other]); db.session.flush()
+        supervisor = ExamSessionSupervisorAssignment(exam_session_id=self.record.id, team_member_id=other.id,
+            participation_status='Confirmed', is_remote=False, logistics_type='Does not apply')
+        db.session.add(supervisor); db.session.commit()
+        added = self.add('examiner', examiner.id)
+        self.assertEqual(added.status_code, 200)
+        for confirmed in [False, True]:
+            examiner.participation_status = 'Confirmed' if confirmed else 'Pre-confirmed'
+            for receives, remote, status, minutes in [
+                (False, False, 'Confirmed', 30),
+                (True, False, 'Confirmed', 30),
+                (False, True, 'Confirmed', 30),
+                (True, True, 'Confirmed', 50),
+                (True, True, 'Pre-confirmed', 50),
+                (True, True, 'Declined', 30),
+                (True, True, 'Cancelled', 30),
+            ]:
+                with self.subTest(confirmed=confirmed, receives=receives, remote=remote, status=status):
+                    examiner.is_shipment_recipient = receives
+                    supervisor.is_remote = remote
+                    supervisor.participation_status = status
+                    db.session.commit()
+                    response = self.app.test_client().get(added.json['url'])
+                    self.assertEqual(response.status_code, 200)
+                    arrival = re.search(r'<small data-staff-arrival>(.*?)</small>', response.get_data(as_text=True)).group(1)
+                    self.assertEqual(arrival, f'Arrive <em><u>at least</u></em> {minutes} minutes before the start.')
+
+
 if __name__ == "__main__":
     unittest.main()

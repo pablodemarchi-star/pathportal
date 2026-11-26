@@ -345,7 +345,7 @@ class StaffSessionReportTest(unittest.TestCase):
         self.assertIn('name="recordings_reminder_confirmed"', html)
         self.assertIn('within two business days after the exam session', html)
 
-    def test_old_end_checks_removed_only_for_nonremote_onsite_supervisors(self):
+    def test_old_end_checks_replaced_for_all_onsite_supervisors(self):
         url = f'/my-exam-sessions/{self.share.token}?session_year=2026'
         html = self.client.get(url).get_data(as_text=True)
         self.assertNotIn('data-staff-end-checks ', html)
@@ -354,8 +354,8 @@ class StaffSessionReportTest(unittest.TestCase):
         self.assignment.is_remote = True
         db.session.commit()
         html = self.client.get(url).get_data(as_text=True)
-        self.assertIn('data-staff-end-checks ', html)
-        self.assertNotIn('data-staff-exam-day-report', html)
+        self.assertNotIn('data-staff-end-checks ', html)
+        self.assertIn('data-staff-exam-day-report', html)
         self.assignment.is_remote = False
         self.record.format = 'Online'
         db.session.commit()
@@ -609,7 +609,7 @@ class StaffSessionReportTest(unittest.TestCase):
         with patch('app.routes.staff_report_available', return_value=False):
             self.assertEqual(self.client.post(self.url, data=dict(csrf_token='test', schedule_outcome='There were no delays')).status_code, 403)
         self.assignment.is_remote = True; db.session.commit()
-        self.assertEqual(self.post().status_code, 403)
+        self.assertEqual(self.post().status_code, 409)  # Shared reports require the currently displayed draft revision.
         self.assignment.is_remote = False
         self.assignment.participation_status = 'Pending'; db.session.commit()
         self.assertEqual(self.post().status_code, 403)
