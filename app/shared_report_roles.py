@@ -3,7 +3,7 @@ from werkzeug.datastructures import MultiDict
 from app.models import ExamSessionExaminerAssignment
 
 SUPERVISOR_FIELDS = {'absent_candidates_checked', 'submitted_candidates_checked', 'session_completed_checked',
-                     'centre_feedback_confirmed', 'recordings_reminder_confirmed'}
+                     'centre_feedback_confirmed', 'recordings_reminder_confirmed', 'return_materials_verified', 'return_package_reviewed'}
 EXAMINER_FIELDS = {'schedule_outcome', 'reasons', 'facilities_outcome', 'facilities_comments', 'return_verification',
                    'emergency_pack_outcome', 'emergency_pack_reasons', 'marketing_confirmed', 'optional_comments',
                    'return_instructions_confirmed', '_return_instructions_version'}
@@ -76,13 +76,15 @@ def completion(record, values, submission, share):
         attendance=checked('absent_candidates_checked') and checked('submitted_candidates_checked'),
         facilities=bool(facilities in {'Satisfactory', 'Satisfactory, with comments', 'Unsatisfactory'} and (facilities == 'Satisfactory' or form.get('facilities_comments', '').strip())),
         materials=form.getlist('return_verification') == RETURN_STEPS,
+        package_review=checked('return_package_reviewed'),
         emergency=bool(emergency in {'No, it was not needed', 'Yes, it was opened and used', 'It was opened but not used'} and (emergency == 'No, it was not needed' or form.get('emergency_pack_reasons', '').strip())),
         review=reviews,
         media=bool(session_pictures_folder(record) and media_for_submission(record, submission) and checked('marketing_confirmed')),
         feedback=bool(staff_report_feedback_submitted(record) and checked('centre_feedback_confirmed') and (not staff_report_recordings_required(record) or checked('recordings_reminder_confirmed'))),
         return_materials=bool(examiner(record) and return_info['complete'] and checked('return_instructions_confirmed') and form.get('return_instructions_version') == return_info['version']),
+        return_materials_verification=checked('return_materials_verified'),
         comments=len(form.get('optional_comments', '')) <= 10000,
     )
     examiner_complete = all(blocks[key] for key in ('schedule', 'facilities', 'materials', 'emergency', 'review', 'media', 'return_materials', 'comments'))
-    supervisor_complete = blocks['attendance'] and blocks['feedback']
+    supervisor_complete = blocks['attendance'] and blocks['feedback'] and blocks['return_materials_verification'] and blocks['package_review']
     return dict(blocks=blocks, examiner=examiner_complete, supervisor=supervisor_complete, ready=examiner_complete and supervisor_complete)

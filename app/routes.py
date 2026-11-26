@@ -20767,6 +20767,8 @@ def submit_staff_session_report(token, submission_id, _editing=None):
         required_return_steps = ["submitted_papers", "submitted_packages", "absent_packages", "sealing", "labelling", "institutional_verification"]
         if return_steps != required_return_steps:
             return jsonify(ok=False, error="Please complete all six Exam return package verification steps in order."), 400
+        if shared_roles and report_form.get('return_package_reviewed') != '1':
+            return jsonify(ok=False, error="The Remote supervisor must complete Exam return package review before submitting this shared report."), 400
     from app.staff_report_review import validate_assessments
     try:
         from app.shared_report_roles import roster as shared_roster
@@ -20799,6 +20801,11 @@ def submit_staff_session_report(token, submission_id, _editing=None):
             return jsonify(ok=False, error="The return instructions or responsible staff member have changed. Please reload the report, review the current instructions and confirm them again."), 400
         if report_form.get('return_instructions_confirmed') != '1':
             return jsonify(ok=False, error="Please confirm that the return instructions have been read and understood by the staff member responsible for returning the exam materials."), 400
+        if shared_roles and report_form.get('return_materials_verified') != '1':
+            return jsonify(ok=False, error="The Remote supervisor must complete Return of materials verification before submitting this shared report."), 400
+        if shared_roles:
+            return_acknowledgement['context']['supervisor_return_verified'] = True
+            return_acknowledgement['context']['supervisor_return_package_reviewed'] = True
     recordings_required = staff_report_recordings_required(record)
     recordings_confirmed = report_form.get("recordings_reminder_confirmed") == "1"
     if recordings_required and not recordings_confirmed:

@@ -73,6 +73,15 @@
                 <small data-return-progress role="status">0 of 6 steps completed</small>
                 </fieldset>
               </li>
+              {% if shared_role %}
+              <li data-report-stage="materials" data-report-owner="supervisor" data-report-block="package_review">
+                <div class="report-owner-heading"><span class="report-role-chip is-supervisor">Remote supervisor</span>{% if shared_role != 'supervisor' %}<small>To be completed by the Remote supervisor</small>{% endif %}<span class="report-block-status" data-report-block-status></span></div>
+                <fieldset class="report-owned-fields"{% if shared_role != 'supervisor' %} disabled data-report-role-locked{% endif %}>
+                  <b class="staff-report-block-title">Exam return package review</b>
+                  <label class="staff-session-report-checkbox"><input type="checkbox" name="return_package_reviewed" value="1" required><span><strong>This is a critical procedure to ensure the efficient handling and accurate sorting of completed examination papers.</strong> I confirm that I have carefully reviewed each step outlined in the section above with the Examiner and verified that all procedures have been correctly followed.</span></label>
+                </fieldset>
+              </li>
+              {% endif %}
               <li data-report-stage="centre"{% if shared_role %} data-report-owner="examiner" data-report-block="facilities"{% endif %}>
                 {% if shared_role %}<div class="report-owner-heading"><span class="report-role-chip is-examiner">Examiner</span>{% if shared_role != "examiner" %}<small>To be completed by the Examiner</small>{% endif %}<span class="report-block-status" data-report-block-status></span></div>{% endif %}
                 <fieldset class="report-owned-fields"{% if shared_role and shared_role != "examiner" %} disabled data-report-role-locked{% endif %}>
@@ -173,7 +182,7 @@
               <li data-report-stage="{{ 'checks' if detail.format == 'Onsite' else 'team' }}"{% if shared_role %} data-report-owner="supervisor" data-report-block="feedback"{% endif %}>
                 {% if shared_role %}<div class="report-owner-heading"><span class="report-role-chip is-supervisor">Remote supervisor</span>{% if shared_role != "supervisor" %}<small>To be completed by the Remote supervisor</small>{% endif %}<span class="report-block-status" data-report-block-status></span></div>{% endif %}
                 <fieldset class="report-owned-fields"{% if shared_role and shared_role != "supervisor" %} disabled data-report-role-locked{% endif %}>
-                <b>{{ 'Exam centre feedback' if detail.format == 'Onsite' else 'Final checks' }}</b>
+                <b{% if detail.format == 'Onsite' %} class="staff-report-block-title"{% endif %}>{% if detail.format == 'Onsite' %}{{ 'Exam centre feedback and recordings verification' if detail.end_checks.report_recordings_required else 'Exam centre feedback' }}{% else %}Final checks{% endif %}</b>
                 {% if detail.format != 'Online' %}
                 {% set feedback_submitted = detail.end_checks.institutional_feedback_submitted %}
                 <label class="staff-session-report-checkbox"><input type="checkbox" name="centre_feedback_confirmed" value="1" required data-report-feedback-checkbox data-submitted="{{ 'true' if feedback_submitted else 'false' }}"{% if not feedback_submitted %} disabled{% endif %}><span>I confirm that the exam centre has submitted its feedback form. <span class="staff-end-checks-status{% if feedback_submitted %} is-available{% endif %}" data-report-feedback-status>{{ 'Feedback form submitted' if feedback_submitted else 'Feedback form not submitted' }}</span></span></label>
@@ -189,6 +198,15 @@
               {% endif %}
               {% if detail.format == 'Onsite' %}
               {% include 'pre_session_control_tower/_staff_report_return_materials.html' %}
+              {% endif %}
+              {% if shared_role %}
+              <li data-report-stage="checks" data-report-owner="supervisor" data-report-block="return_materials_verification">
+                <div class="report-owner-heading"><span class="report-role-chip is-supervisor">Remote supervisor</span>{% if shared_role != 'supervisor' %}<small>To be completed by the Remote supervisor</small>{% endif %}<span class="report-block-status" data-report-block-status></span></div>
+                <fieldset class="report-owned-fields"{% if shared_role != 'supervisor' %} disabled data-report-role-locked{% endif %}>
+                  <b>Return of materials verification</b>
+                  <label class="staff-session-report-checkbox"><input type="checkbox" name="return_materials_verified" value="1" required><span>I confirm that I have reviewed the return instructions with the Examiner and verified that they understand the required procedures and deadlines.</span></label>
+                </fieldset>
+              </li>
               {% endif %}
               <li data-report-stage="finish"{% if shared_role %} data-report-owner="examiner" data-report-block="comments"{% endif %}>
                 {% if shared_role %}<div class="report-owner-heading"><span class="report-role-chip is-examiner">Examiner</span>{% if shared_role != "examiner" %}<small>To be completed by the Examiner</small>{% endif %}<span class="report-block-status" data-report-block-status></span></div>{% endif %}

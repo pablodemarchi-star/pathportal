@@ -31,7 +31,7 @@
 .is-guided-online-report .staff-session-report-warning{font-size:12px;line-height:1.65;padding:12px 16px;border-left:3px solid #d8ab43;border-radius:9px;margin:0 0 18px;background:#fff6df;color:#765c23}
 .is-guided-online-report .staff-session-report-questions{list-style:none;padding:0;margin:0;display:grid;gap:16px}
 .is-guided-online-report .staff-session-report-questions>li{min-width:0;margin:0;padding:20px;border:1px solid #dce6eb;border-radius:12px;background:#fff;box-shadow:0 2px 5px #123b4a04}
-.is-guided-online-report .staff-session-report-questions>li>b{display:block;color:#174f65;font-size:15px;line-height:1.4;margin-bottom:12px}
+.is-guided-online-report .staff-session-report-questions>li>b,.is-guided-online-report .staff-report-block-title{display:block;color:#174f65;font-size:15px;line-height:1.4;margin-bottom:12px}
 .is-guided-online-report .staff-session-report-questions>li>label:first-child{margin-top:0}
 .is-guided-online-report .staff-session-report-checkbox{padding:9px 0;font-size:12px;line-height:1.65;margin:0!important}
 .is-guided-online-report .staff-session-report-checkbox+.staff-session-report-checkbox{border-top:1px solid #edf2f5}

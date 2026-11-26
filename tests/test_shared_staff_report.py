@@ -45,7 +45,7 @@ class SharedStaffReportTest(unittest.TestCase):
         values = dict(schedule_outcome='There were no delays', facilities_outcome='Satisfactory',
             emergency_pack_outcome='No, it was not needed', return_verification=['submitted_papers', 'submitted_packages', 'absent_packages', 'sealing', 'labelling', 'institutional_verification'],
             absent_candidates_checked=['1'], submitted_candidates_checked=['1'], marketing_confirmed=['1'],
-            centre_feedback_confirmed=['1'], recordings_reminder_confirmed=['1'], return_instructions_confirmed=['1'],
+            centre_feedback_confirmed=['1'], recordings_reminder_confirmed=['1'], return_materials_verified=['1'], return_package_reviewed=['1'], return_instructions_confirmed=['1'],
             _return_instructions_version=info['version'], optional_comments='Examiner notes')
         from app.staff_report_review import assessment_criteria
         from app.shared_report_roles import roster
@@ -153,7 +153,7 @@ class SharedStaffReportTest(unittest.TestCase):
     def test_role_permissions_completion_and_unfinished_report_cannot_submit(self):
         for key, value in [('schedule_outcome', 'There were no delays'), ('return_instructions_confirmed', ['1']), ('optional_comments', 'Wrong role')]:
             self.assertEqual(self.draft(changes={key:value}).status_code, 403)
-        for key in ['absent_candidates_checked', 'centre_feedback_confirmed', 'recordings_reminder_confirmed']:
+        for key in ['absent_candidates_checked', 'centre_feedback_confirmed', 'recordings_reminder_confirmed', 'return_materials_verified', 'return_package_reviewed']:
             self.assertEqual(self.draft(self.examiner_url, changes={key:['1']}).status_code, 403)
         self.assertFalse(self.draft().json['completion']['ready'])
         self.assertEqual(self.post(shared_report_revision='0').status_code, 400)
@@ -213,7 +213,7 @@ class SharedStaffReportTest(unittest.TestCase):
     def test_role_labels_intro_and_readonly_blocks_match_each_actor(self):
         import re
         owners = {'schedule':'examiner', 'attendance':'supervisor', 'facilities':'examiner', 'materials':'examiner',
-                  'emergency':'examiner', 'media':'examiner', 'feedback':'supervisor', 'return_materials':'examiner', 'comments':'examiner'}
+                  'emergency':'examiner', 'media':'examiner', 'feedback':'supervisor', 'return_materials':'examiner', 'comments':'examiner', 'return_materials_verification':'supervisor', 'package_review':'supervisor'}
         for actor, share, contact in [('supervisor', self.share, 'Examiner'), ('examiner', self.examiner_share, 'Remote supervisor')]:
             html = self.client.get('/my-exam-sessions/' + share.token).get_data(as_text=True)
             self.assertIn(f'<strong>This is a shared report.</strong> Please contact the {contact}', html)
@@ -242,3 +242,78 @@ class SharedStaffReportTest(unittest.TestCase):
             response = self.client.post(self.remote_url + '/media', data=dict(csrf_token='test', file=(BytesIO(b'photo'), 'photo.jpg')))
         self.assertEqual(response.status_code, 403)
         upload.assert_not_called()
+
+
+    def test_supervisor_return_verification_is_required_saved_and_examiner_readonly(self):
+        saved = self.complete_answers()
+        self.assertTrue(saved['completion']['blocks']['return_materials_verification'])
+        self.assertTrue(saved['completion']['ready'])
+        values = saved['values']
+        response = self.draft(changes={'return_materials_verified':[]}, base=values)
+        self.assertEqual(response.status_code, 200, response.json)
+        self.assertFalse(response.json['completion']['blocks']['return_materials_verification'])
+        self.assertFalse(response.json['completion']['supervisor'])
+        self.assertTrue(response.json['completion']['examiner'])
+        self.assertFalse(response.json['completion']['ready'])
+        self.assertEqual(self.draft(self.examiner_url, changes={'return_materials_verified':['1']}, base=response.json['values']).status_code, 403)
+        # The final submit must read the shared draft, so a forged checked value cannot bypass this requirement.
+        submitted = self.post(shared_report_revision=str(response.json['revision']), return_materials_verified='1')
+        self.assertEqual(submitted.status_code, 400)
+        self.assertIn('Return of materials verification', submitted.json['error'])
+        response = self.draft(changes={'return_materials_verified':['1']}, base=response.json['values'])
+        self.assertEqual(response.status_code, 200, response.json)
+        submitted = self.post(shared_report_revision=str(response.json['revision']))
+        self.assertEqual(submitted.status_code, 200, submitted.json)
+        report = m.StaffExamSessionReport.query.one()
+        self.assertTrue(json.loads(report.return_instructions_context)['supervisor_return_verified'])
+
+    def test_return_verification_placement_and_exact_text(self):
+        for share in [self.share, self.examiner_share]:
+            html = self.client.get('/my-exam-sessions/' + share.token).get_data(as_text=True)
+            self.assertLess(html.index('<b>Return of exam session materials</b>'), html.index('<b>Return of materials verification</b>'))
+            self.assertLess(html.index('<b>Return of materials verification</b>'), html.index('<li data-report-stage="finish"'))
+            self.assertIn('I confirm that I have reviewed the return instructions with the Examiner and verified that they understand the required procedures and deadlines.', html)
+            self.assertIn('name="return_materials_verified" value="1" required', html)
+        self.assignment.is_remote = False
+        db.session.commit()
+        html = self.client.get('/my-exam-sessions/' + self.share.token).get_data(as_text=True)
+        self.assertNotIn('Return of materials verification', html)
+        self.assertNotIn('name="return_materials_verified"', html)
+
+    def test_package_review_is_supervisor_only_required_and_saved(self):
+        saved = self.complete_answers()
+        response = self.draft(changes={'return_package_reviewed':[]}, base=saved['values'])
+        self.assertEqual(response.status_code, 200, response.json)
+        self.assertFalse(response.json['completion']['blocks']['package_review'])
+        self.assertFalse(response.json['completion']['supervisor'])
+        self.assertFalse(response.json['completion']['ready'])
+        self.assertTrue(response.json['completion']['examiner'])
+        self.assertEqual(self.draft(self.examiner_url, changes={'return_package_reviewed':['1']}, base=response.json['values']).status_code, 403)
+        submitted = self.post(shared_report_revision=str(response.json['revision']), return_package_reviewed='1')
+        self.assertEqual(submitted.status_code, 400)
+        self.assertIn('Exam return package review', submitted.json['error'])
+        response = self.draft(changes={'return_package_reviewed':['1']}, base=response.json['values'])
+        self.assertEqual(self.post(shared_report_revision=str(response.json['revision'])).status_code, 200)
+        self.assertTrue(json.loads(m.StaffExamSessionReport.query.one().return_instructions_context)['supervisor_return_package_reviewed'])
+
+    def test_package_review_placement_text_and_shared_only_scope(self):
+        for share in [self.share, self.examiner_share]:
+            html = self.client.get('/my-exam-sessions/' + share.token).get_data(as_text=True)
+            self.assertLess(html.index('<b>Exam return package verification</b>'), html.index('>Exam return package review</b>'))
+            self.assertLess(html.index('>Exam return package review</b>'), html.index("<label><b>Exam centre's facilities"))
+            self.assertIn('<strong>This is a critical procedure to ensure the efficient handling and accurate sorting of completed examination papers.</strong>', html)
+            self.assertIn('I confirm that I have carefully reviewed each step outlined in the section above with the Examiner and verified that all procedures have been correctly followed.', html)
+            self.assertIn('name="return_package_reviewed" value="1" required', html)
+        self.assignment.is_remote = False; db.session.commit()
+        html = self.client.get('/my-exam-sessions/' + self.share.token).get_data(as_text=True)
+        self.assertNotIn('>Exam return package review</b>', html)
+
+    def test_feedback_heading_matches_recordings_visibility_and_title_style(self):
+        url = '/my-exam-sessions/' + self.share.token
+        html = self.client.get(url).get_data(as_text=True)
+        self.assertIn('<b class="staff-report-block-title">Exam centre feedback</b>', html)
+        db.session.add(m.ExamSessionMonthlyRegistration(exam_session_id=self.record.id, month=11, module='Speaking', registration_number=1))
+        db.session.commit()
+        html = self.client.get(url).get_data(as_text=True)
+        self.assertIn('<b class="staff-report-block-title">Exam centre feedback and recordings verification</b>', html)
+        self.assertIn('name="recordings_reminder_confirmed"', html)
