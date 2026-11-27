@@ -530,15 +530,17 @@
     {% set fuel_blocked_by_logistics = logistics_type in ['Uber ride', 'Complex Uber ride'] %}
     {% set fuel_vehicle_allowed = not fuel_blocked_by_logistics and selected_member and selected_member.has_car == 'Yes' and assignment and assignment.km is not none and assignment.km >= 60 %}
     {% set fuel_vehicle_enabled = not fuel_blocked_by_logistics and assignment and (assignment.fuel_enabled or assignment.fuel or assignment.vehicle_dep) %}
+    {% set fuel_is_enabled = not fuel_blocked_by_logistics and assignment and (assignment.fuel_enabled or assignment.fuel) %}
       <div class="staff-card-field" data-fuel-cell>
       <span class="staff-card-field-label">Fuel</span>
       {% if fuel_vehicle_enabled %}
-        <input type="hidden" name="{{ section_key }}_fuel_enabled_{{ row_key }}" value="1" data-fuel-enabled-input>
+        <label class="fuel-checkbox-label"><input type="checkbox" data-toggle-fuel aria-label="Include Fuel"{% if fuel_is_enabled %} checked{% elif not fuel_vehicle_allowed %} disabled{% endif %}></label>
+        <input type="hidden" name="{{ section_key }}_fuel_enabled_{{ row_key }}" value="{{ '1' if fuel_is_enabled else '0' }}" data-fuel-enabled-input>
         <input type="hidden" name="{{ section_key }}_fuel_{{ row_key }}" value="{{ assignment.fuel if assignment and assignment.fuel else '' }}" data-fuel-input>
         <input type="hidden" name="{{ section_key }}_fuel_currency_{{ row_key }}" value="{{ assignment.fuel_currency if assignment and assignment.fuel_currency else '' }}" data-fuel-currency-input>
         <input type="hidden" name="{{ section_key }}_fuel_base_value_{{ row_key }}" value="{{ assignment.fuel_base_value if assignment and assignment.fuel_base_value else '' }}" data-fuel-base-input>
         <input type="hidden" name="{{ section_key }}_fuel_unit_{{ row_key }}" value="{{ assignment.fuel_unit if assignment and assignment.fuel_unit else '' }}" data-fuel-unit-input>
-        <span class="calculated-role-fee" data-fuel-display title="{{ assignment.fuel if assignment and assignment.fuel else '' }}">{{ assignment.fuel if assignment and assignment.fuel else 'No Fuel fee configured' }}</span>
+        <span class="calculated-role-fee" data-fuel-display title="{{ assignment.fuel if assignment and assignment.fuel else '' }}">{{ assignment.fuel if assignment and assignment.fuel else 'No Fuel fee configured' if fuel_is_enabled else '-' }}</span>
       {% elif fuel_vehicle_allowed %}
         <label class="fuel-checkbox-label">
           <input type="checkbox" data-enable-fuel-vehicle data-fuel-name="{{ section_key }}_fuel_{{ row_key }}" data-vehicle-name="{{ section_key }}_vehicle_dep_{{ row_key }}">

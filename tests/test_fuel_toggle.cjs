@@ -1,0 +1,15 @@
+const assert=require('node:assert/strict'),fs=require('node:fs'),vm=require('node:vm');
+const source=fs.readFileSync('app/static/js/app.js','utf8');
+const nodes={};for(const [key,value]of Object.entries({'data-fuel-enabled-input':'1','data-fuel-input':'ARS 40','data-fuel-currency-input':'ARS','data-fuel-base-input':'2','data-fuel-unit-input':'per km'}))nodes[`[${key}]`]={value};
+nodes['[data-fuel-display]']={textContent:'ARS 40',title:'Fuel'};
+const cell={dataset:{},querySelector:key=>nodes[key]};
+const row={km:120,vehicle:'ARS 50',roleFee:'ARS 100',querySelector:key=>key==='[data-fuel-cell]'?cell:nodes[key]};
+let total=0,recalculations=0;
+const context={syncFuel:()=>recalculations++,syncAssignmentTotalFee:()=>{total=150+Number(nodes['[data-fuel-input]'].value.replace('ARS ','')||0);}};
+vm.createContext(context);vm.runInContext(source.slice(source.indexOf('const toggleFuelCharge ='),source.indexOf('\ndocument.addEventListener("change", (event) => {\n  const fuelToggle')),context);
+context.row=row;vm.runInContext('toggleFuelCharge(row, false)',context);
+assert.equal(nodes['[data-fuel-enabled-input]'].value,'0');assert.equal(nodes['[data-fuel-input]'].value,'');assert.equal(total,150);assert.equal(recalculations,0);assert.equal(row.km,120);assert.equal(row.vehicle,'ARS 50');assert.equal(row.roleFee,'ARS 100');
+vm.runInContext('toggleFuelCharge(row, true)',context);assert.equal(nodes['[data-fuel-enabled-input]'].value,'1');assert.equal(nodes['[data-fuel-input]'].value,'ARS 40');assert.equal(total,190);
+const guard=source.slice(source.indexOf('const syncFuel ='),source.indexOf('const syncFuelPlaceholder ='));
+vm.runInContext(guard,context);nodes['[data-fuel-enabled-input]'].value='0';vm.runInContext('syncFuel(row, {forceEmpty:true})',context);
+console.log('Fuel toggle: clears only Fuel and metadata, updates total, preserves Kms/Vehicle dep./other fees, supports undo and prevents automatic reactivation.');

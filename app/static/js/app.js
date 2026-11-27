@@ -3829,7 +3829,15 @@ const renderFuelCalculatedField = (baseName = "") => {
   display.setAttribute("data-fuel-display", "");
   display.textContent = "-";
 
-  return [enabledInput, valueInput, currencyInput, baseInput, unitInput, display];
+  const label = document.createElement("label");
+  label.className = "fuel-checkbox-label";
+  const checkbox = document.createElement("input");
+  checkbox.type = "checkbox";
+  checkbox.checked = true;
+  checkbox.setAttribute("data-toggle-fuel", "");
+  checkbox.setAttribute("aria-label", "Include Fuel");
+  label.appendChild(checkbox);
+  return [label, enabledInput, valueInput, currencyInput, baseInput, unitInput, display];
 };
 
 const renderVehicleDepCalculatedField = (baseName = "") => {
@@ -3917,6 +3925,7 @@ const manualFeeCurrencyForField = (valueInput, currencyInput) => (
 
 const updateManualFeeValue = (row, config, valueInput, currencyInput, display, currencySelect, amountInput) => {
   if (!valueInput || !display || !currencySelect || !amountInput) return;
+  if (config.enabledAttribute && row.querySelector(`[${config.enabledAttribute}]`)?.value === "0") return;
   const amount = amountInput.value.trim();
   const currency = currencySelect.value || "ARS";
   valueInput.value = amount ? `${currency} ${amount}` : "";
@@ -3957,7 +3966,7 @@ const ensureManualFeeField = (row, config) => {
   const cell = row?.querySelector(config.cellSelector);
   if (!cell) return null;
   if (config.enabledField) {
-    ensureHiddenInput(cell, assignmentFieldName(row, config.enabledField), config.enabledAttribute, "1").value = "1";
+    ensureHiddenInput(cell, assignmentFieldName(row, config.enabledField), config.enabledAttribute, "1");
   }
   const valueInput = ensureHiddenInput(cell, assignmentFieldName(row, config.field), config.valueAttribute);
   const currencyInput = config.currencyField
@@ -4234,7 +4243,33 @@ const syncFuelVehicleCells = (row) => {
   syncAssignmentTotalFee(row);
 };
 
+const toggleFuelCharge = (row, enabled) => {
+  const cell = row?.querySelector("[data-fuel-cell]");
+  const flag = cell?.querySelector("[data-fuel-enabled-input]");
+  if (!flag) return;
+  const attributes = ["data-fuel-input", "data-fuel-currency-input", "data-fuel-base-input", "data-fuel-unit-input"];
+  const display = cell.querySelector("[data-fuel-display]");
+  if (!enabled) {
+    cell.dataset.previousFuelValues = JSON.stringify(attributes.map(attribute => cell.querySelector(`[${attribute}]`)?.value || ""));
+    attributes.forEach(attribute => { const input = cell.querySelector(`[${attribute}]`); if (input) input.value = ""; });
+    flag.value = "0";
+    if (display) { display.textContent = "-"; display.title = ""; }
+  } else {
+    flag.value = "1";
+    const values = JSON.parse(cell.dataset.previousFuelValues || "[]");
+    attributes.forEach((attribute, index) => { const input = cell.querySelector(`[${attribute}]`); if (input) input.value = values[index] || ""; });
+    if (display) { display.textContent = values[0] || "-"; display.title = values[0] || ""; }
+    syncFuel(row, { forceEmpty: true });
+  }
+  syncAssignmentTotalFee(row);
+};
+
 document.addEventListener("change", (event) => {
+  const fuelToggle = event.target.closest("[data-toggle-fuel]");
+  if (fuelToggle) {
+    toggleFuelCharge(staffAssignmentRow(fuelToggle), fuelToggle.checked);
+    return;
+  }
   const checkbox = event.target.closest("[data-enable-fuel-vehicle]");
   if (!checkbox || !checkbox.checked) return;
   const row = staffAssignmentRow(checkbox);
@@ -5800,6 +5835,7 @@ const syncCommutingPlaceholder = (row) => {
 
 const syncFuel = (row, { forceEmpty = false } = {}) => {
   if (!row) return;
+  if (row.querySelector("[data-fuel-enabled-input]")?.value === "0") return;
   if (rowFeesAreLocked(row)) return;
   if (rowHasManualFeeOverride(row)) return;
   const form = row.closest("[data-session-members-form]");

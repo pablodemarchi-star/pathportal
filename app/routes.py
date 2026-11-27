@@ -6018,7 +6018,7 @@ def apply_fuel_calculation(assignment, fuel_fee, now, *, recalculated=False):
 def apply_vehicle_dep_calculation(assignment, vehicle_dep_fee, now, *, recalculated=False):
     if (
         assignment.exam_session.format == "Online"
-        or not getattr(assignment, "fuel_enabled", False)
+        or not (getattr(assignment, "fuel_enabled", False) or assignment.vehicle_dep)
         or not vehicle_dep_fee
         or vehicle_dep_fee.unit_of_measure != "per km"
         or assignment.km is None
@@ -25645,10 +25645,12 @@ def save_exam_session_assignment_section(
         fuel_currency = request.form.get(f"{section_key}_fuel_currency_{row_key}", "").strip() if fuel_enabled else ""
         fuel_base_value = request.form.get(f"{section_key}_fuel_base_value_{row_key}", "").strip() if fuel_enabled else ""
         fuel_unit = request.form.get(f"{section_key}_fuel_unit_{row_key}", "").strip() if fuel_enabled else ""
-        vehicle_dep = request.form.get(f"{section_key}_vehicle_dep_{row_key}", "").strip() if fuel_enabled else ""
-        vehicle_dep_currency = request.form.get(f"{section_key}_vehicle_dep_currency_{row_key}", "").strip() if fuel_enabled else ""
-        vehicle_dep_base_value = request.form.get(f"{section_key}_vehicle_dep_base_value_{row_key}", "").strip() if fuel_enabled else ""
-        vehicle_dep_unit = request.form.get(f"{section_key}_vehicle_dep_unit_{row_key}", "").strip() if fuel_enabled else ""
+        vehicle_dep_enabled = (logistics_type not in {"Uber ride", "Complex Uber ride"} and session_record.format != "Online"
+                               and (fuel_enabled or (same_person and assignment.vehicle_dep)))
+        vehicle_dep = request.form.get(f"{section_key}_vehicle_dep_{row_key}", "").strip() if vehicle_dep_enabled else ""
+        vehicle_dep_currency = request.form.get(f"{section_key}_vehicle_dep_currency_{row_key}", "").strip() if vehicle_dep_enabled else ""
+        vehicle_dep_base_value = request.form.get(f"{section_key}_vehicle_dep_base_value_{row_key}", "").strip() if vehicle_dep_enabled else ""
+        vehicle_dep_unit = request.form.get(f"{section_key}_vehicle_dep_unit_{row_key}", "").strip() if vehicle_dep_enabled else ""
         team_member = member_map.get(team_member_id) if team_member_id is not None else None
         fuel_vehicle_allowed = km is not None and km >= 60 and team_member is not None and team_member.has_car == "Yes"
         if has_live_calculation and not manual_fee_override and not fuel_vehicle_allowed:
@@ -25675,7 +25677,15 @@ def save_exam_session_assignment_section(
             flash("Wrong time", "error")
             return None
 
-        if has_live_calculation and not manual_fee_override:
+        fee_fields = ('role_fee', 'device_dep', 'commuting', 'vehicle_dep')
+        fuel_only_removal = bool(same_person and (assignment.fuel_enabled or assignment.fuel)
+            and request.form.get(f"{section_key}_fuel_enabled_{row_key}") == '0'
+            and km == assignment.km and participation_status == previous_participation_status
+            and logistics_type == assignment.logistics_type
+            and time_ranges == assignment.time_ranges_list()
+            and all(request.form.get(f"{section_key}_{field}{suffix}_{row_key}", '').strip() == (getattr(assignment, field + suffix) or '')
+                    for field in fee_fields for suffix in ('', '_currency', '_base_value', '_unit')))
+        if has_live_calculation and not manual_fee_override and not fuel_only_removal:
             role_fee_source = (remote_supervisor_fee if is_remote else supervisor_fee) if section_key == "supervisor" else examiner_fee if section_key == "examiner" else None
             if section_key == "supervisor":
                 role_fee_source = supervisor_fee_for_session(session_record, role_fee_source)
@@ -25740,7 +25750,7 @@ def save_exam_session_assignment_section(
                     vehicle_dep_base_value = ""
                     vehicle_dep_unit = ""
 
-        if has_live_calculation and not manual_fee_override:
+        if has_live_calculation and not manual_fee_override and not fuel_only_removal:
             seniority_result = seniority_calculation_from_role_fee(team_member, role_fee)
             seniority_fee = seniority_result["value"] if seniority_result else ""
             seniority_applied = bool(seniority_result)

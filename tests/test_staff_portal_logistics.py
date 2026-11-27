@@ -912,5 +912,67 @@ class StaffPortalLogisticsTest(unittest.TestCase):
                     self.assertEqual(arrival, f'Arrive <em><u>at least</u></em> {minutes} minutes before the start.')
 
 
+    def test_planner_can_remove_fuel_without_changing_kms_or_other_fees(self):
+        from app.routes import staffing_email_total_fee
+        self.person.has_car = 'Yes'
+        assignment = ExamSessionExaminerAssignment(exam_session_id=self.record.id, team_member_id=self.person.id,
+            participation_status='Confirmed', logistics_type='Does not apply', km=120, fuel_enabled=True,
+            time_ranges='[{"start": "09:00", "end": "10:00"}]', start_time='09:00', end_time='10:00',
+            role_fee='ARS 100', role_fee_currency='ARS', role_fee_base_value='100', role_fee_unit='per hour',
+            device_dep='ARS 20', device_dep_currency='ARS', commuting='ARS 30', commuting_currency='ARS',
+            fuel='ARS 40', fuel_currency='ARS', fuel_base_value='2', fuel_unit='per km',
+            vehicle_dep='ARS 50', vehicle_dep_currency='ARS', vehicle_dep_base_value='5', vehicle_dep_unit='per km',
+            seniority_fee='ARS 10', seniority_currency='ARS', seniority_percentage='10', seniority_applied=True)
+        db.session.add(assignment); db.session.commit()
+        key = f'existing-{assignment.id}'
+        other_fields = ['km', 'time_ranges', 'team_member_id', 'participation_status', 'logistics_type',
+            'role_fee', 'role_fee_currency', 'role_fee_base_value', 'role_fee_unit',
+            'device_dep', 'device_dep_currency', 'commuting', 'commuting_currency',
+            'vehicle_dep', 'vehicle_dep_currency', 'vehicle_dep_base_value', 'vehicle_dep_unit',
+            'seniority_fee', 'seniority_currency', 'seniority_percentage', 'seniority_applied']
+        before = {field:getattr(assignment, field) for field in other_fields}
+        self.assertIn('250', staffing_email_total_fee(assignment))
+        data = {'csrf_token':'test', 'session_year':'2026', 'examiner_row_keys':key,
+            f'examiner_assignment_id_{key}':str(assignment.id), f'examiner_team_member_id_{key}':str(self.person.id),
+            f'examiner_participation_status_{key}':'Confirmed', f'examiner_logistics_type_{key}':'Does not apply',
+            f'examiner_km_{key}':'120', f'examiner_start_time_{key}':'09:00', f'examiner_end_time_{key}':'10:00',
+            f'examiner_fuel_enabled_{key}':'0', f'examiner_fuel_{key}':'ARS 40', f'examiner_seniority_applied_{key}':'1'}
+        for field in other_fields:
+            if field not in {'km', 'time_ranges', 'team_member_id', 'participation_status', 'logistics_type', 'seniority_applied'}:
+                data[f'examiner_{field}_{key}'] = getattr(assignment, field) or ''
+        response = self.client.post(f'/exam-session-planner/sessions/{self.record.id}/members', data=data, headers={'Accept':'application/json'})
+        self.assertEqual(response.status_code, 200, response.json)
+        db.session.refresh(assignment)
+        self.assertFalse(assignment.fuel_enabled)
+        for field in ['fuel', 'fuel_currency', 'fuel_base_value', 'fuel_unit']:
+            self.assertFalse(getattr(assignment, field))
+        self.assertEqual({field:getattr(assignment, field) for field in other_fields}, before)
+        self.assertIn('210', staffing_email_total_fee(assignment))
+        # Saving again must retain Vehicle dep. with Fuel still off.
+        self.assertEqual(self.client.post(f'/exam-session-planner/sessions/{self.record.id}/members', data=data, headers={'Accept':'application/json'}).status_code, 200)
+        db.session.refresh(assignment)
+        self.assertFalse(assignment.fuel_enabled)
+        self.assertEqual(assignment.vehicle_dep, 'ARS 50')
+
+        # Live cards must not recalculate and change unrelated fees when only Fuel is removed.
+        assignment.participation_status = 'Pre-confirmed'
+        assignment.fuel_enabled = True
+        assignment.fuel = 'ARS 40'
+        assignment.fuel_currency = 'ARS'
+        assignment.fuel_base_value = '2'
+        assignment.fuel_unit = 'per km'
+        db.session.commit()
+        data[f'examiner_participation_status_{key}'] = 'Pre-confirmed'
+        before = {field:getattr(assignment, field) for field in other_fields}
+        response = self.client.post(f'/exam-session-planner/sessions/{self.record.id}/members', data=data, headers={'Accept':'application/json'})
+        self.assertEqual(response.status_code, 200, response.json)
+        db.session.refresh(assignment)
+        self.assertFalse(assignment.fuel_enabled)
+        self.assertEqual({field:getattr(assignment, field) for field in other_fields}, before)
+        html = self.client.get(f'/exam-session-planner?session_year=2026&open_session_modal={self.record.id}&session_fullscreen=1&staff_card=examiner:{assignment.id}').get_data(as_text=True)
+        self.assertIn(f'name="examiner_fuel_enabled_{key}" value="0"', html)
+        self.assertIn('data-toggle-fuel', html)
+
+
 if __name__ == "__main__":
     unittest.main()
