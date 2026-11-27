@@ -5,6 +5,18 @@
   const nativeFetch = window.fetch.bind(window);
   const controllerURL = document.currentScript.src;
   const notifyParent = type => window.parent.postMessage({type, revision: document.body.dataset.revision}, window.location.origin);
+  const modalRefreshURL = (href, sessionId, modal) => {
+    const url = new URL(href);
+    url.searchParams.set('session_modal', sessionId);
+    url.searchParams.set('open_schedule_modal', sessionId);
+    for (const mode of MODES) {
+      url.searchParams.delete(`${mode}_only`);
+      if (modal?.classList.contains(`is-${mode}-only`)) url.searchParams.set(`${mode}_only`, '1');
+    }
+    if (modal?.id === `exam-records-${sessionId}`) url.searchParams.set('open_modal_target', 'exam-records');
+    return url.href;
+  };
+
 
   if (!child) {
     let summaryBusy = false;
@@ -117,6 +129,8 @@
       candidate.onload = () => {
         if (finished) return;
         try {
+          // Appending an iframe can fire a load for its initial blank document.
+          if (candidate.contentDocument?.URL === 'about:blank') return;
           if (!candidate.contentDocument?.body.matches('[data-tower-modal-document]') || !candidate.contentDocument.querySelector('.modal.is-open')) {
             keepCurrent(); return;
           }
@@ -140,7 +154,8 @@
       };
       candidate.onerror = keepCurrent;
       previous.parentElement.append(candidate);
-      candidate.src = previous.contentWindow.location.href;
+      const currentModal = previous.contentDocument?.querySelector?.('.modal.is-open') || modal;
+      candidate.src = modalRefreshURL(previous.contentWindow.location.href, modal.dataset.towerSession, currentModal);
       window.setTimeout(() => { if (!finished) keepCurrent(); }, 20000);
     };
     window.addEventListener('message', event => {
@@ -162,6 +177,10 @@
   let lastForm = null;
   let writeQueue = Promise.resolve();
   let needsRefresh = false;
+  let writeState = 'saved';
+  let writeError = '';
+  let formEditSequence = 0;
+  const formEdits = new WeakMap();
   const dirtyForms = new Set();
   const userEdits = new WeakMap();
   let editSequence = 0;
@@ -169,13 +188,25 @@
   const message = notice.querySelector('[data-tower-update-message]');
   const reloadButton = notice.querySelector('[data-tower-reload]');
   const active = () => !document.hidden && window.frameElement?.closest('.modal')?.classList.contains('is-open');
-  const dirty = () => [...dirtyForms].some(form => form.isConnected && !form.hasAttribute?.('data-logistics-card-form') && !form.hasAttribute?.('data-pen-form') && !form.hasAttribute?.('data-announcement-form'))
-    || Boolean(window.announcementsHasUnsavedChanges?.()) || Boolean(window.logisticsHasUnsavedChanges?.()) || Boolean(window.penHasUnsavedChanges?.()) || Boolean(document.querySelector('.nested-modal.is-open, dialog[open]'));
+  const hasUnsavedEdits = () => [...dirtyForms].some(form => form.isConnected && !form.hasAttribute?.('data-logistics-card-form') && !form.hasAttribute?.('data-pen-form') && !form.hasAttribute?.('data-announcement-form'))
+    || Boolean(window.announcementsHasUnsavedChanges?.()) || Boolean(window.logisticsHasUnsavedChanges?.()) || Boolean(window.penHasUnsavedChanges?.());
+  const dirty = () => writes > 0 || hasUnsavedEdits() || Boolean(document.querySelector('.nested-modal.is-open, dialog[open]'));
+  const renderSaveState = () => {
+    const pending = hasUnsavedEdits();
+    const state = writes ? 'saving' : writeState === 'error' ? 'error' : pending || writeState === 'pending' ? 'pending' : 'saved';
+    notice.dataset.saveState = state;
+    notice.hidden = false;
+    message.textContent = {saving:'Saving…', saved:'Saved', pending:'Unsaved changes', error:'Not saved'}[state];
+    notice.title = state === 'error' ? writeError : state === 'pending' ? 'Your changes are kept in this view.' : state === 'saved' ? 'All changes in this view have been saved.' : 'Waiting for the server to confirm your changes.';
+    reloadButton.hidden = !stale;
+  };
+  renderSaveState();
   window.towerHasUnsavedChanges = dirty;
   const reload = (explicit = false) => {
     try { sessionStorage.setItem(`tower-modal-scroll:${body.dataset.sessionId}`, String(window.scrollY)); } catch (_) {}
     needsRefresh = false;
-    if (explicit || body.hasAttribute('data-tower-staff-card')) window.location.reload();
+    if (body.hasAttribute('data-tower-staff-card')) window.location.reload();
+    else if (explicit) window.location.assign(modalRefreshURL(window.location.href, body.dataset.sessionId, document.querySelector('.modal.is-open')));
     else notifyParent('tower-session-refresh-request');
   };
   window.addEventListener('load', () => {
@@ -192,17 +223,20 @@
 
   window.addEventListener('message', event => {
     if (event.origin !== window.location.origin || event.source !== window.parent) return;
-    if (event.data?.type === 'tower-refresh-failed') {
-      notice.hidden = false; reloadButton.hidden = false;
-      message.textContent = 'The session could not be refreshed. Your current view and changes have been kept. You can retry or reload when ready.';
-    } else if (event.data?.type === 'tower-refresh-deferred') {
-      conflict();
+    if (event.data?.type === 'tower-refresh-failed' || event.data?.type === 'tower-refresh-deferred') {
+      // A display refresh is independent from a confirmed save. Retry quietly.
+      needsRefresh = true;
+      renderSaveState();
     }
   });
 
   const conflict = () => {
-    stale = true; notice.hidden = false; reloadButton.hidden = false;
-    message.textContent = 'This session was updated by another user.';
+    stale = true; needsRefresh = true;
+    if (hasUnsavedEdits()) {
+      writeState = 'error';
+      writeError = 'New session information is available. Your changes have been kept; review the updates before saving.';
+    }
+    renderSaveState();
   };
   const stamp = form => {
     if (form.method.toLowerCase() !== 'post' || new URL(form.action, window.location.href).origin !== window.location.origin) return;
@@ -224,32 +258,33 @@
   for (const type of ['input', 'change']) document.addEventListener(type, event => {
     const form = event.target.closest('form');
     if (event.isTrusted) userEdits.set(event.target, ++editSequence);
-    if (form) { dirtyForms.add(form); lastForm = form; }
+    if (form) { dirtyForms.add(form); formEdits.set(form, ++formEditSequence); lastForm = form; renderSaveState(); }
   }, true);
 
   const check = async () => {
     if (checking || writes || !active() || document.querySelector('[data-staffing-card-frame]')?.closest('.modal')?.classList.contains('is-open')) return;
     checking = true;
+    const checkedRevision = revision;
     try {
       const response = await nativeFetch(body.dataset.revisionUrl, {cache: 'no-store', headers: {Accept: 'application/json'}});
       if (!response.ok || response.redirected) throw new Error('Refresh failed');
       const result = await response.json();
+      // A poll started before our own save must not invalidate its newer snapshot.
+      if (writes || revision !== checkedRevision) return;
       if (result.revision !== revision) {
         if (dirty() || document.activeElement?.matches('input, textarea, select, [contenteditable="true"]')) conflict();
         else reload();
-      } else if (!stale) notice.hidden = true;
+      } else if (!stale) { renderSaveState(); refreshIfClean(); }
     } catch (_) {
-      if (!stale) {
-        notice.hidden = false; reloadButton.hidden = true;
-        message.textContent = 'Unable to check for updates. Your changes have been kept. Retrying shortly.';
-      }
+      // A failed background check says nothing about the result of our last save.
+      renderSaveState();
     } finally { checking = false; }
   };
   window.setInterval(check, 25000);
   window.addEventListener('focus', check);
   document.addEventListener('visibilitychange', () => { if (!document.hidden) check(); });
   reloadButton.addEventListener('click', () => {
-    if (dirty() && !window.confirm('Reload this session? Unsaved changes will be lost.')) return;
+    if (dirty() && !window.confirm('Open the latest session details? Unsaved changes in this view will be lost.')) return;
     reload(true);
   });
   document.addEventListener('click', event => {
@@ -274,7 +309,9 @@
     doc.body.dataset.revisionUrl = body.dataset.revisionUrl;
     doc.body.prepend(notice.cloneNode(true));
     const style = doc.createElement('link'); style.rel = 'stylesheet';
-    style.href = new URL('../css/tower_live.css', controllerURL).href; doc.head.append(style);
+    const styleURL = new URL('../css/tower_live.css', controllerURL);
+    styleURL.search = new URL(controllerURL).search;
+    style.href = styleURL.href; doc.head.append(style);
     const script = doc.createElement('script'); script.src = controllerURL; doc.body.append(script);
   });
   window.addEventListener('message', event => {
@@ -294,7 +331,7 @@
     const form = event.target;
     if (form.method.toLowerCase() !== 'post' || new URL(form.action, window.location.href).origin !== window.location.origin) return;
     lastForm = form;
-    if (approved.has(form)) { approved.delete(form); stamp(form); return; }
+    if (approved.has(form)) { approved.delete(form); stamp(form); notice.dataset.saveState = 'saving'; message.textContent = 'Saving…'; return; }
     event.preventDefault(); event.stopImmediatePropagation();
     if (stale) { conflict(); return; }
     try {
@@ -305,8 +342,7 @@
       if ((await response.json()).revision !== revision) { conflict(); return; }
       approved.add(form); form.requestSubmit(event.submitter || undefined);
     } catch (_) {
-      notice.hidden = false; reloadButton.hidden = true;
-      message.textContent = 'Unable to verify the latest session information. Please try saving again.';
+      writeState = 'error'; writeError = 'Unable to verify the latest session information. Please try saving again.'; renderSaveState();
     }
   }, true);
   const preserveRejectedDraft = (form, response) => {
@@ -339,9 +375,11 @@
     const method = String(options.method || (input instanceof Request ? input.method : 'GET')).toUpperCase();
     if (method !== 'POST' || url.origin !== window.location.origin) return nativeFetch(input, options);
     const form = lastForm?.action === url.href ? lastForm : [...document.forms].find(item => item.action === url.href);
+    const savedEdit = form ? formEdits.get(form) : undefined;
     const save = async () => {
       if (stale) {
         conflict();
+        writeState = 'error'; writeError ||= 'New session information is available. Your changes have been kept.';
         return preserveRejectedDraft(form, new Response(JSON.stringify({ok: false, saved: false, code: 'stale_session', error: 'This session was updated by another user.'}), {status: 409, headers: {'Content-Type': 'application/json'}}));
       }
       const headers = new Headers(options.headers || (input instanceof Request ? input.headers : {}));
@@ -356,21 +394,31 @@
         const result = response.headers.get('Content-Type')?.includes('application/json') ? await response.clone().json() : {};
         if (result.ok !== false && result.saved !== false && !result.confirmation_required) {
           revision = next; body.dataset.revision = next; stampAll();
-          if (form) dirtyForms.delete(form);
+          writeState = 'saved'; writeError = '';
+          if (form && formEdits.get(form) === savedEdit) dirtyForms.delete(form);
           notifyParent('tower-session-saved');
           if (headers.get('X-Finance-Autosave') !== '1' && headers.get('X-Logistics-Autosave') !== '1' && headers.get('X-PEN-Autosave') !== '1') {
             needsRefresh = true;
             setTimeout(refreshIfClean, 1200);
           }
+        } else {
+          writeState = result.confirmation_required ? 'pending' : 'error';
+          writeError = result.error || 'The server did not confirm the save. Your changes have been kept.';
         }
+      } else {
+        writeState = 'error';
+        writeError ||= 'The save could not be confirmed. Your changes have been kept; try saving again.';
       }
       return response;
     };
     // Serializing this document's writes avoids mistaking our own autosaves for
     // another user's update, while each write still checks the server snapshot.
-    writes++;
-    const pending = writeQueue.then(save);
+    writes++; renderSaveState();
+    const pending = writeQueue.then(save).catch(error => {
+      writeState = 'error'; writeError = 'The save failed. Your changes have been kept; try saving again.';
+      throw error;
+    });
     writeQueue = pending.catch(() => {});
-    return pending.finally(() => { writes--; });
+    return pending.finally(() => { writes--; renderSaveState(); setTimeout(renderSaveState, 0); });
   };
 })();

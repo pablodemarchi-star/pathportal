@@ -17,8 +17,9 @@ function childContext() {
     append: input => fields.set(input.name, input)
   };
   const message = {textContent: ''};
-  const reloadButton = {hidden: false, addEventListener() {}};
-  const notice = {hidden: true, querySelector: selector => selector.includes('message') ? message : reloadButton};
+  let reloadClick;
+  const reloadButton = {hidden: false, addEventListener(type, callback) {reloadClick=callback;}};
+  const notice = {hidden: true, dataset:{}, querySelector: selector => selector.includes('message') ? message : reloadButton};
   const body = {
     dataset: {sessionId: '7', revision: 'r1', revisionUrl: '/revision'},
     matches: () => true, hasAttribute: () => false
@@ -26,7 +27,7 @@ function childContext() {
   const document = {
     body, forms: [form], hidden: false, activeElement: null,
     currentScript: {src: 'https://portal.test/static/js/tower_live.js'},
-    querySelector: selector => selector === '[data-tower-update-notice]' ? notice : null,
+    querySelector: selector => selector === '[data-tower-update-notice]' ? notice : selector === '.modal.is-open' ? {id:'schedule-workflow-7',classList:{contains:name=>name==='is-finance-only'}} : null,
     querySelectorAll: selector => selector === 'form' ? [form] : [],
     createElement: () => ({}),
     addEventListener: (type, listener) => {
@@ -35,28 +36,39 @@ function childContext() {
     }
   };
   let remote = 'r1';
+  let pauseReads=false;
+  const reads=[];
   let reloads = 0;
+  const navigations = [];
+  const windowEvents = new Map();
+  let failPosts=false,failReads=false;
+  let holdPosts=false;const heldPosts=[];
   const window = {
-    location: {href: 'https://portal.test/modal', origin: 'https://portal.test', reload: () => reloads++},
+    location: {href: 'https://portal.test/modal', origin: 'https://portal.test', reload: () => reloads++, assign:url=>navigations.push(url)},
     parent: {postMessage: data => messages.push(data)},
     frameElement: {closest: () => ({classList: {contains: () => true}})},
     fetch: async (input, options = {}) => {
       if ((options.method || 'GET') === 'POST') {
+        if(failPosts)throw new Error('Offline');
+        if(holdPosts)await new Promise(resolve=>heldPosts.push(resolve));
         posts.push(options.headers.get('X-Tower-Revision'));
         remote = `r${posts.length + 1}`;
         return new Response('{"ok":true}', {headers: {'Content-Type': 'application/json', 'X-Tower-Revision': remote}});
       }
-      return new Response(JSON.stringify({revision: remote}), {headers: {'Content-Type': 'application/json'}});
+      if(failReads)throw new Error('Check unavailable');
+      const snapshot = remote;
+      if(pauseReads)await new Promise(resolve=>reads.push(resolve));
+      return new Response(JSON.stringify({revision: snapshot}), {headers: {'Content-Type': 'application/json'}});
     },
-    addEventListener() {}, setInterval: fn => timers.push(fn), confirm: () => true
+    addEventListener(type, fn) {if(!windowEvents.has(type))windowEvents.set(type,[]);windowEvents.get(type).push(fn);}, setInterval: fn => timers.push(fn), confirm: () => true
   };
   const context = vm.createContext({window, document, URL, Request, Response, Headers,
     MutationObserver: class {observe() {}}, Element: class {},
     sessionStorage: {setItem() {},getItem: () => null,removeItem() {}}, setTimeout: fn => timeoutJobs.push(fn), console});
   vm.runInContext(source, context);
-  return {window, form, input, fields, notice, message, timers, posts, messages,
+  return {window, form, input, fields, notice, message, timers, posts, messages, navigations, failPosts:value=>failPosts=value, failReads:value=>failReads=value, holdPosts:()=>holdPosts=true, releasePosts:()=>{holdPosts=false;heldPosts.splice(0).forEach(resolve=>resolve());}, parentMessage:type=>(windowEvents.get('message')||[]).forEach(fn=>fn({origin:window.location.origin,source:window.parent,data:{type}})), reloadClick:()=>reloadClick(),
     flushTimeouts: () => timeoutJobs.splice(0).forEach(fn => fn()),
-    setRemote: value => {remote = value;}, reloads: () => reloads,
+    pauseReads:()=>{pauseReads=true;}, releaseReads:()=>{pauseReads=false;reads.splice(0).forEach(resolve=>resolve());}, setRemote: value => {remote = value;}, reloads: () => reloads,
     edit: () => events.get('input').forEach(listener => listener({target: input, isTrusted: true}))};
 }
 
@@ -69,7 +81,7 @@ function childContext() {
   ]);
   assert.deepEqual(concurrent.posts, ['r1', 'r2'], 'Our own simultaneous autosaves must use sequential snapshots');
   assert.equal(concurrent.fields.get('tower_revision').value, 'r3');
-  assert.equal(concurrent.notice.hidden, true);
+  assert.equal(concurrent.message.textContent, 'Saved');
 
   const finance = childContext();
   finance.edit();
@@ -97,7 +109,8 @@ function childContext() {
   const draft = childContext();
   draft.edit(); draft.setRemote('someone-elses-change');
   await draft.timers[0]();
-  assert.equal(draft.message.textContent, 'This session was updated by another user.');
+  assert.equal(draft.message.textContent, 'Not saved');
+  assert.match(draft.notice.title,/New session information/);
   assert.equal(draft.notice.hidden, false);
   assert.equal(draft.reloads(), 0, 'Never reload while the user has unsaved edits');
   const refused = await draft.window.fetch('https://portal.test/save', {method:'POST'});
@@ -114,6 +127,39 @@ function childContext() {
   assert.equal(reader.reloads(), 0, 'Automatic refresh must keep the current document until its replacement is ready');
   assert.ok(reader.messages.some(message => message.type === 'tower-session-refresh-request'), 'Read-only modals ask the parent for a staged refresh');
   assert.equal(reader.messages[0].type, 'tower-session-refresh-request');
+  const raced=childContext();raced.pauseReads();
+  const oldPoll=raced.timers[0]();
+  await raced.window.fetch('https://portal.test/save',{method:'POST',headers:{'X-Finance-Autosave':'1'}});
+  raced.releaseReads();await oldPoll;
+  assert.equal(raced.message.textContent,'Saved','An earlier poll must not mistake our own save for another user');
+  assert(!raced.messages.some(item=>item.type==='tower-session-refresh-request'));
+  const status=childContext();assert.equal(status.message.textContent,'Saved');
+  status.edit();assert.equal(status.message.textContent,'Unsaved changes');
+  status.holdPosts();const saving=status.window.fetch('https://portal.test/save',{method:'POST',headers:{'X-Finance-Autosave':'1'}});
+  await new Promise(resolve=>setImmediate(resolve));assert.equal(status.message.textContent,'Saving…');
+  status.releasePosts();await saving;status.flushTimeouts();assert.equal(status.message.textContent,'Saved');
+  status.parentMessage('tower-refresh-failed');assert.equal(status.message.textContent,'Saved');
+  status.failReads(true);await status.timers[0]();assert.equal(status.message.textContent,'Saved');status.failReads(false);
+  status.edit();status.parentMessage('tower-refresh-deferred');assert.equal(status.message.textContent,'Unsaved changes');
+  status.failPosts(true);await assert.rejects(status.window.fetch('https://portal.test/save',{method:'POST'}));
+  status.flushTimeouts();assert.equal(status.message.textContent,'Not saved');assert.equal(status.input.value,'Draft');
+  status.failPosts(false);await status.window.fetch('https://portal.test/save',{method:'POST',headers:{'X-Finance-Autosave':'1'}});
+  status.flushTimeouts();assert.equal(status.message.textContent,'Saved');
+  const newerEdit=childContext();newerEdit.edit();newerEdit.holdPosts();
+  const olderSave=newerEdit.window.fetch('https://portal.test/save',{method:'POST',headers:{'X-Finance-Autosave':'1'}});
+  await new Promise(resolve=>setImmediate(resolve));newerEdit.edit();newerEdit.input.value='Newer answer';newerEdit.releasePosts();await olderSave;
+  newerEdit.flushTimeouts();assert.equal(newerEdit.message.textContent,'Unsaved changes');assert.equal(newerEdit.input.value,'Newer answer');
+  const queued=childContext();queued.edit();queued.holdPosts();
+  const firstQueued=queued.window.fetch('https://portal.test/save',{method:'POST',headers:{'X-Finance-Autosave':'1'}});
+  const secondQueued=queued.window.fetch('https://portal.test/save',{method:'POST',headers:{'X-Finance-Autosave':'1'}});
+  await new Promise(resolve=>setImmediate(resolve));queued.edit();queued.input.value='Typed after both requests were queued';
+  queued.releasePosts();await Promise.all([firstQueued,secondQueued]);queued.flushTimeouts();
+  assert.equal(queued.message.textContent,'Unsaved changes','Queued requests must not acknowledge answers typed after their bodies were captured');
+  const manual=childContext();manual.reloadClick();
+  const manualURL=new URL(manual.navigations[0]);
+  assert.equal(manualURL.searchParams.get('session_modal'),'7');
+  assert.equal(manualURL.searchParams.get('open_schedule_modal'),'7');
+  assert.equal(manualURL.searchParams.get('finance_only'),'1');
   console.log('Tower live: autosave serialization, stale draft preservation, and reader refresh passed.');
 })().catch(error => {console.error(error); process.exitCode = 1;});
 

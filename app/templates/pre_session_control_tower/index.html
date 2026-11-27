@@ -1441,7 +1441,7 @@
 {% block content %}
 <link rel="stylesheet" href="{{ url_for('static', filename='css/announcements.css', v='20261125-1') }}">
 <script defer src="{{ url_for('static', filename='js/announcements.js', v='20261125-1') }}"></script>
-<link rel="stylesheet" href="{{ url_for('static', filename='css/tower_live.css') }}">
+<link rel="stylesheet" href="{{ url_for('static', filename='css/tower_live.css', v='20261127-save-status-1') }}">
 {% if not modal_session_id %}
 <header class="page-header">
   <div>
@@ -2239,5 +2239,5 @@
 <link rel="stylesheet" href="{{ url_for('static',filename='css/pen_arrangements.css',v='20261125-pen-none-1') }}">
 <script src="{{ url_for('static',filename='js/pen_autosave.js',v='20261125-pen-completion-1') }}"></script>
 <script src="{{ url_for('static',filename='js/pen_arrangements.js',v='20261125-pen-none-1') }}"></script>
-<script src="{{ url_for('static', filename='js/tower_live.js', v='20261125-announcements-1') }}"></script>
+<script src="{{ url_for('static', filename='js/tower_live.js', v='20261127-save-status-1') }}"></script>
 {% endblock %}
