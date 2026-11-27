@@ -31,11 +31,13 @@ function portal(server, actorRole='examiner') {
  const server={values:{},revision:0};const remote=portal(server,'supervisor'),examiner=portal(server);await remote.settle();await examiner.settle();
  examiner.change({schedule_outcome:'There were no delays'});assert(examiner.unload().prevented);assert(await examiner.form.sharedDraftFlush());
  await remote.poll();assert.equal(remote.fields[0].value,'There were no delays');
+ assert.equal(remote.fields[0].disabled,true);assert.equal(examiner.fields[3].disabled,true);
  remote.change({absent_candidates_checked:['1']});examiner.change({optional_comments:'Examiner note'});
  assert(await remote.form.sharedDraftFlush());assert(await examiner.form.sharedDraftFlush());assert.equal(server.values.optional_comments,'Examiner note');
  await remote.poll();assert.equal(remote.fields[1].value,'Examiner note');assert.deepEqual(server.values.absent_candidates_checked,['1']);
  // Read-only answers cannot be sent by the other role, even if the local DOM is tampered with.
- remote.change({optional_comments:'Forged note'});await remote.form.sharedDraftFlush();assert.equal(server.values.optional_comments,'Examiner note');
+ remote.change({optional_comments:'Forged note'});assert.equal(remote.fields[1].value,'Examiner note');await remote.form.sharedDraftFlush();assert.equal(server.values.optional_comments,'Examiner note');
+ examiner.fields[3].disabled=false;examiner.fields[3].checked=false;examiner.change({absent_candidates_checked:[]});assert.equal(examiner.fields[3].disabled,true);assert.equal(examiner.fields[3].checked,true);await examiner.form.sharedDraftFlush();assert.deepEqual(server.values.absent_candidates_checked,['1']);
  examiner.change({return_instructions_confirmed:['1'],_return_instructions_version:'recipient-version'});assert(await examiner.form.sharedDraftFlush());
  await remote.poll();assert(remote.fields[2].checked);assert.equal(server.values._return_instructions_version,'recipient-version');
  // Editing an owned field while a request is in flight keeps the newest answer.

@@ -71,6 +71,19 @@ class SharedStaffReportTest(unittest.TestCase):
         self.assertEqual(self.draft(self.examiner_url, changes={'schedule_outcome':'There were minor delays'}, base=values).status_code, 200)
         self.assertEqual(self.draft().json['values']['absent_candidates_checked'], ['1'])
 
+    def test_examiner_cannot_write_any_remote_supervisor_confirmation(self):
+        from app.shared_report_roles import SUPERVISOR_FIELDS
+        for field in SUPERVISOR_FIELDS:
+            with self.subTest(field=field):
+                response = self.draft(self.examiner_url, changes={field: ['1'], 'optional_comments': 'Must not save'})
+                self.assertEqual(response.status_code, 403, response.json)
+                self.assertEqual(self.draft().json['values'], {})
+        saved = self.draft(changes={'absent_candidates_checked': ['1']})
+        self.assertEqual(saved.status_code, 200)
+        response = self.draft(self.examiner_url, changes={'absent_candidates_checked': []}, base=saved.json['values'])
+        self.assertEqual(response.status_code, 403)
+        self.assertEqual(self.draft().json['values'], {'absent_candidates_checked': ['1']})
+
     def test_portal_reuses_native_onsite_report_and_actions_for_both_roles(self):
         for share in [self.share, self.examiner_share]:
             html = self.client.get('/my-exam-sessions/' + share.token).get_data(as_text=True)

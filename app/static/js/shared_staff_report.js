@@ -10,7 +10,16 @@
     const actorRole = section.dataset.sharedReportRole;
     const fieldOwners = Object.fromEntries(fields.map(input => [input.name, input.closest?.('[data-report-owner]')?.dataset.reportOwner]));
     fieldOwners._return_instructions_version = 'examiner';
-    const writable = key => !actorRole || fieldOwners[key] === actorRole;
+    const writable = key => ['examiner', 'supervisor'].includes(actorRole) && fieldOwners[key] === actorRole;
+    // Lock the controls themselves as well as their fieldset. Background refreshes
+    // must never make another role's answers editable.
+    const enforceRoleLocks = () => fields.forEach(input => {
+      if (!writable(input.name) && !input.disabled) input.disabled = true;
+    });
+    enforceRoleLocks();
+    if (typeof MutationObserver !== 'undefined') {
+      new MutationObserver(enforceRoleLocks).observe(form, {subtree:true, attributes:true, attributeFilter:['disabled']});
+    }
     const collect = () => {
       const values = {};
       fields.forEach(input => {
@@ -47,7 +56,10 @@
         if (chip) { chip.textContent = complete ? 'Completed' : 'Pending'; chip.classList.toggle('is-complete', complete); }
       });
     };
-    const restore = values => form.dispatchEvent(new CustomEvent('report:shared-restore', {detail:values}));
+    const restore = values => {
+      form.dispatchEvent(new CustomEvent('report:shared-restore', {detail:values}));
+      enforceRoleLocks();
+    };
     const accept = (data, remaining = diff()) => {
       if (data.submitted) {
         state.locked = true; state.failure = false; state.latest = {...defaults}; state.remote = {};
@@ -99,7 +111,11 @@
     form.sharedDraftFlush = flush;
     form.addEventListener('report:shared-change', event => {
       if (state.locked) return;
-      state.latest = {...event.detail};
+      const authoritative = {...defaults, ...state.remote};
+      const foreignEdit = Object.entries(event.detail).some(([key, value]) => !writable(key) && !equal(value, authoritative[key]));
+      state.latest = {...authoritative, ...Object.fromEntries(Object.entries(event.detail).filter(([key]) => writable(key)))};
+      if (foreignEdit) restore(state.latest);
+      enforceRoleLocks();
       progress();
       status.textContent = state.failure ? status.textContent : 'Saving shared draft…';
       clearTimeout(timer); timer = setTimeout(flush, 250);
