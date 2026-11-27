@@ -2181,7 +2181,7 @@ This stage has already been marked as complete. Reopening it may affect package 
           {% set return_method = view.sinapsis.control.return_materials_method if view.sinapsis.control else '' %}
           {% set combined_selection = namespace(complete=false) %}
           {% for other_session in combined_return_options_by_session.get(session.id, []) %}
-            {% if view.sinapsis.control and other_session.id in view.sinapsis.control.combined_return_session_ids and combined_return_examiner_confirmed(other_session) %}
+            {% if view.sinapsis.control and other_session.id in view.sinapsis.control.combined_return_session_ids and combined_return_selectable(session, other_session) %}
               {% set combined_selection.complete = true %}
             {% endif %}
           {% endfor %}
@@ -2195,7 +2195,7 @@ This stage has already been marked as complete. Reopening it may affect package 
                     {% set shipping = namespace(count=1) %}
                     {% if option.key == 'combined_dispatch' and return_method == 'combined_dispatch' %}
                       {% for other_session in combined_return_options_by_session.get(session.id, []) %}
-                        {% if view.sinapsis.control and other_session.id in view.sinapsis.control.combined_return_session_ids and combined_return_examiner_confirmed(other_session) %}{% set shipping.count = shipping.count + 1 %}{% endif %}
+                        {% if view.sinapsis.control and other_session.id in view.sinapsis.control.combined_return_session_ids and combined_return_selectable(session, other_session) %}{% set shipping.count = shipping.count + 1 %}{% endif %}
                       {% endfor %}
                     {% endif %}
                     <div class="return-shipping-info" data-return-shipping-info{% if return_method != option.key %} hidden{% endif %}>
@@ -2216,12 +2216,13 @@ This stage has already been marked as complete. Reopening it may affect package 
                           <span class="combined-return-session-label">Select exam sessions for combined return dispatch</span>
                           <details class="combined-return-session-picker">
                             <summary>Select exam sessions</summary>
+                            <p class="combined-return-picker-help">Grey sessions have a different shipment recipient or none assigned. Including them will not change their return configuration.</p>
                             <div class="combined-return-session-options">
                               {% for other_session in combined_return_options_by_session.get(session.id, []) %}
-                                {% set examiner_confirmed = combined_return_examiner_confirmed(other_session) %}
-                                <label{% if not examiner_confirmed %} class="combined-return-session-unconfirmed"{% endif %}><input type="checkbox" name="combined_return_session_ids" value="{{ other_session.id }}" data-return-combined-session{% if return_method == option.key and examiner_confirmed and view.sinapsis.control and other_session.id in view.sinapsis.control.combined_return_session_ids %} checked{% endif %}{% if not examiner_confirmed %} disabled{% endif %}><span>{{ other_session.exam_session_name }}{% if other_session.session_date %} — {{ other_session.session_date|session_date }}{% endif %}{% if examiner_confirmed %}<span class="badge combined-return-confirmed">Confirmed</span>{% else %}<span class="badge combined-return-not-confirmed">Not confirmed yet</span>{% endif %}</span></label>
+                                {% set examiner_confirmed = combined_return_selectable(session, other_session) %}
+                                <label class="{% if not combined_return_same_recipient(session, other_session) %}combined-return-session-other-recipient {% endif %}{% if not examiner_confirmed %}combined-return-session-unconfirmed{% endif %}" title="{% if not combined_return_same_recipient(session, other_session) %}Included in this return only. This session’s return configuration will not change.{% endif %}"><input type="checkbox" name="combined_return_session_ids" value="{{ other_session.id }}" data-return-combined-session{% if return_method == option.key and examiner_confirmed and view.sinapsis.control and other_session.id in view.sinapsis.control.combined_return_session_ids %} checked{% endif %}{% if not examiner_confirmed %} disabled{% endif %}><span>{{ other_session.exam_session_name }}{% if other_session.session_date %} — {{ other_session.session_date|session_date }}{% endif %}{% if examiner_confirmed %}<span class="badge combined-return-confirmed">Confirmed</span>{% else %}<span class="badge combined-return-not-confirmed">Not confirmed yet</span>{% endif %}</span></label>
                               {% else %}
-                                <p>No other exam sessions for this staff member marked Receives shipment.</p>
+                                <p>No other Onsite exam sessions.</p>
                               {% endfor %}
                             </div>
                           </details>

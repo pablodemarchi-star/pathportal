@@ -29,9 +29,9 @@ def recipient_ref(assignment):
 
 
 def combined_sessions_selected(record, control):
-    from app.routes import combined_return_session_options, combined_return_examiner_confirmed
+    from app.routes import combined_return_session_options, combined_return_selectable
     cache = getattr(g, '_quality_combined_eligible', {}) if has_app_context() else {}
-    eligible = cache[record.id] if record.id in cache else {peer.id for peer in combined_return_session_options(record) if combined_return_examiner_confirmed(peer)}
+    eligible = cache[record.id] if record.id in cache else {peer.id for peer in combined_return_session_options(record) if combined_return_selectable(record, peer)}
     return bool(control and set(control.combined_return_session_ids) & eligible)
 
 
@@ -42,7 +42,9 @@ def shared_return_controls(record, control):
         ExamSessionSinapsisControl.exam_session_id.in_(control.combined_return_session_ids),
         ExamSessionSinapsisControl.return_materials_method == control.return_materials_method,
         ExamSessionSinapsisControl.return_materials_local_override.is_(False)).all()
-    return [control] + [peer for peer in peers if record.id in peer.combined_return_session_ids]
+    from app.routes import combined_return_same_recipient
+    return [control] + [peer for peer in peers if record.id in peer.combined_return_session_ids
+                       and combined_return_same_recipient(record, peer.exam_session)]
 
 
 def return_instructions_payload(record, control):

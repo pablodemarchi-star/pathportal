@@ -149,7 +149,7 @@ class StaffReturnMaterialsTest(unittest.TestCase):
         db.session.add(label); control.combined_return_shipping_label = label
         control.combined_return_session_ids_json = json.dumps([peer.id])
         db.session.commit()
-        with self.app.test_request_context(), patch('app.routes.combined_return_session_options', return_value=[peer]), patch('app.routes.combined_return_examiner_confirmed', return_value=True):
+        with self.app.test_request_context(), patch('app.routes.combined_return_session_options', return_value=[peer]), patch('app.routes.combined_return_selectable', return_value=True):
             info = return_view(self.record, assignment, share)
             self.assertEqual(info['status'], 'Completed')
             self.assertEqual(info['sessions'][0]['name'], 'Combined peer')

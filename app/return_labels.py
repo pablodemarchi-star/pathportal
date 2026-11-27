@@ -91,12 +91,9 @@ def manage(session_id, method):
             upload_document(files[0], target, destination)
             setattr(control, field, target.document)
             if method == 'combined_dispatch':
-                peers = ExamSessionSinapsisControl.query.filter(
-                    ExamSessionSinapsisControl.exam_session_id.in_(control.combined_return_session_ids),
-                    ExamSessionSinapsisControl.return_materials_method == 'combined_dispatch',
-                    ExamSessionSinapsisControl.return_materials_local_override.is_(False)).all()
-                for peer in peers:
-                    if session_id in peer.combined_return_session_ids:
+                from app.final_checks import shared_return_controls
+                for peer in shared_return_controls(record, control):
+                    if peer is not control:
                         setattr(peer, field, target.document)
                         affected.append(peer)
         db.session.commit()

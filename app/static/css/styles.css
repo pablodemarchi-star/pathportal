@@ -18536,3 +18536,6 @@ body.staff-pen-dialog-open{overflow:hidden}
   .staff-confirmed-sessions-table tbody tr.is-past-session { box-shadow: inset 3px 0 #a9b5c0; }
   .staff-confirmed-sessions-table tbody tr.is-past-session td:first-child { box-shadow: none; }
 }
+
+.combined-return-session-options .combined-return-session-other-recipient { background: #e9ecef; border-radius: 5px; margin-block: 3px; color: #495057; }
+.combined-return-picker-help { font-size: 11px; color: var(--color-muted); max-width: 340px; margin: 5px 0; }

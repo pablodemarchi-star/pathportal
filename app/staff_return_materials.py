@@ -16,7 +16,7 @@ def return_view(record, assignment, share):
 
 def configuration_view(record, share):
     """Management configuration, shared by the invitation and supervisor report."""
-    from app.routes import RETURN_MATERIALS_OPTIONS, combined_return_session_options, combined_return_examiner_confirmed
+    from app.routes import RETURN_MATERIALS_OPTIONS, combined_return_session_options, combined_return_selectable
     control = ExamSessionSinapsisControl.query.filter_by(exam_session_id=record.id).first()
     complete = return_configuration_complete(record, control)
     method = control.return_materials_method if control else ''
@@ -31,7 +31,7 @@ def configuration_view(record, share):
     if method in {'combined_dispatch', 'combined_location_drop_off'}:
         result['sessions'] = [dict(name=peer.exam_session_name, date=peer.session_date.strftime('%d/%m/%Y') if peer.session_date else '')
             for peer in combined_return_session_options(record)
-            if peer.id in control.combined_return_session_ids and combined_return_examiner_confirmed(peer)]
+            if peer.id in control.combined_return_session_ids and combined_return_selectable(record, peer)]
     if method in {'immediate_dispatch', 'combined_dispatch'}:
         result['label_url'] = url_for('staff.staff_return_shipping_label', token=share.token, session_id=record.id)
         count = 1 + len(result['sessions'])

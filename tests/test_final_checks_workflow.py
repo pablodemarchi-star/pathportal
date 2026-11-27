@@ -445,7 +445,7 @@ class FinalChecksWorkflowTest(unittest.TestCase):
         db.session.add(other); db.session.flush()
         peer('Different person', 'examiner', member_id=other.id)
         db.session.commit()
-        expected = {as_supervisor.id, as_examiner.id, pending.id}
+        expected = {row.id for row in ExamSession.query.filter(ExamSession.format == 'Onsite', ExamSession.id != self.session_record.id).all()}
         self.assertEqual({row.id for row in combined_return_session_options(self.session_record)}, expected)
         self.assertFalse(combined_return_examiner_confirmed(pending))
         self.assertTrue(combined_return_examiner_confirmed(as_examiner))
@@ -495,6 +495,62 @@ class FinalChecksWorkflowTest(unittest.TestCase):
                 participation_status='Confirmed', is_shipment_recipient=True))
             return record
         same = peer('Potential same person', person.id)
-        peer('Potential different person', other.id)
+        different = peer('Potential different person', other.id)
         db.session.commit()
-        self.assertEqual([row.id for row in combined_return_session_options(self.session_record)], [same.id])
+        self.assertEqual({row.id for row in combined_return_session_options(self.session_record)}, {same.id, different.id})
+        from app.routes import combined_return_same_recipient
+        self.assertTrue(combined_return_same_recipient(self.session_record, same))
+        self.assertFalse(combined_return_same_recipient(self.session_record, different))
+
+    def test_other_recipient_returns_are_local_and_pending_staff_are_blocked(self):
+        from app.routes import combined_return_selectable
+        from app.final_checks import shared_return_controls
+        assigned = self.assign()
+        self.session_record.session_date = datetime.now(LOCAL_TZ).date() + timedelta(days=20)
+        def peer(name, marked, status='Confirmed'):
+            record = ExamSession(exam_session_name=name, category='Path School', status='Pending',
+                session_date=self.session_record.session_date, shifts='Morning', modules='Speaking', format='Onsite')
+            db.session.add(record); db.session.flush()
+            person = AcademicStaff(full_name=name, status='Active', roles='Examiner')
+            db.session.add(person); db.session.flush()
+            db.session.add(ExamSessionExaminerAssignment(exam_session_id=record.id, team_member_id=person.id,
+                participation_status=status, is_shipment_recipient=marked))
+            return record
+        different = peer('Other receiver', True)
+        no_receiver = peer('No receiver', False)
+        pending = peer('Pending receiver', True, 'Pending')
+        same_receiver = peer('Same receiver peer', False)
+        same_assignment = same_receiver.examiner_assignments[0]
+        same_assignment.team_member_id = assigned.team_member_id
+        same_assignment.is_shipment_recipient = True
+        db.session.commit()
+        other_control = ExamSessionSinapsisControl.query.filter_by(exam_session_id=different.id).one()
+        other_control.return_materials_method = 'location_drop_off'
+        other_control.return_drop_off_address_url = 'https://example.com/original'
+        other_control.return_instructions_title = 'Original'
+        other_control.return_instructions_html = '<p>Keep these instructions</p>'
+        db.session.add(other_control); db.session.commit()
+        self.assertTrue(combined_return_selectable(self.session_record, no_receiver))
+        self.assertFalse(combined_return_selectable(self.session_record, pending))
+        for method in ['combined_dispatch', 'combined_location_drop_off']:
+            response = self.return_post(return_materials_method=method, save_combined_return_sessions='1',
+                combined_return_session_ids=[str(different.id), str(no_receiver.id), str(same_receiver.id)],
+                confirm_return_option_session_ids=[str(same_receiver.id)],
+                combined_return_drop_off_address_url='https://example.com/combined')
+            self.assertEqual(response.status_code, 200, response.json)
+            self.assertEqual(set(self.control().combined_return_session_ids), {different.id, no_receiver.id, same_receiver.id})
+            shared = ExamSessionSinapsisControl.query.filter_by(exam_session_id=same_receiver.id).one()
+            self.assertEqual(shared.combined_return_session_ids, [self.session_record.id])
+            self.assertEqual(shared.return_materials_method, method)
+            self.assertEqual({item.exam_session_id for item in shared_return_controls(self.session_record, self.control())}, {self.session_record.id, same_receiver.id})
+            self.assertEqual(other_control.return_materials_method, 'location_drop_off')
+            self.assertEqual(other_control.return_drop_off_address_url, 'https://example.com/original')
+            self.assertEqual(other_control.return_instructions_title, 'Original')
+            self.assertEqual(other_control.combined_return_session_ids, [])
+            self.assertNotIn(different.id, [row['session_id'] for row in response.json.get('synced_sessions', [])])
+            rejected = self.return_post(return_materials_method=method, save_combined_return_sessions='1',
+                combined_return_session_ids=[str(pending.id)])
+            self.assertEqual(rejected.status_code, 400)
+        html = self.modal()
+        self.assertIn('combined-return-session-other-recipient', html)
+        self.assertRegex(html, r'value="' + str(pending.id) + r'" data-return-combined-session[^>]* disabled')

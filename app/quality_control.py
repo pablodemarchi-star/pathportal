@@ -150,15 +150,9 @@ def load_rows(records, today=None):
     if peer_ids:
         peers = m.ExamSession.query.options(selectinload(m.ExamSession.supervisor_assignments),
             selectinload(m.ExamSession.examiner_assignments), selectinload(m.ExamSession.intern_assignments)).filter(m.ExamSession.id.in_(peer_ids)).all()
-        eligible_by_recipient = defaultdict(set)
-        for peer in peers:
-            assigned = r.combined_return_recipient(peer)
-            if peer.format == 'Onsite' and assigned and r.combined_return_examiner_confirmed(peer):
-                eligible_by_recipient[r.staffing_assignment_person_ref(assigned)].add(peer.id)
         for record in records:
-            assigned = r.combined_return_recipient(record, groups[0].get(record.id, []) + groups[1].get(record.id, []))
-            if assigned:
-                combined_eligible[record.id] = eligible_by_recipient[r.staffing_assignment_person_ref(assigned)] - {record.id}
+            combined_eligible[record.id] = {peer.id for peer in peers if peer.id != record.id
+                and peer.format == 'Onsite' and r.combined_return_selectable(record, peer)}
     from app.pen_arrangements import completion_states
     pen_states = completion_states(records)
     old_cache = {}

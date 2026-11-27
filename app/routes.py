@@ -19,7 +19,7 @@ from openpyxl import Workbook
 from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from openpyxl.utils import get_column_letter
 from sqlalchemy import or_, union_all
-from sqlalchemy.orm import joinedload
+from sqlalchemy.orm import joinedload, selectinload
 from werkzeug.datastructures import MultiDict
 from werkzeug.utils import secure_filename
 
@@ -429,22 +429,26 @@ def combined_return_recipient(session_record, assignments=None):
                  and assignment.participation_status not in {'Declined', 'Cancelled'}), None)
 
 
+def combined_return_same_recipient(source, peer):
+    assigned = combined_return_recipient(source)
+    other = combined_return_recipient(peer)
+    return bool(assigned and other and staffing_assignment_person_ref(assigned) == staffing_assignment_person_ref(other))
+
+
+def combined_return_selectable(source, peer):
+    if combined_return_same_recipient(source, peer):
+        return combined_return_examiner_confirmed(peer)
+    assignments = list(peer.supervisor_assignments) + list(peer.examiner_assignments) + list(peer.intern_assignments)
+    return bool(assignments) and all(
+        (item.team_member_id or item.potential_entry_id) and item.participation_status == 'Confirmed'
+        for item in assignments)
+
+
 def combined_return_session_options(session_record):
-    assigned = combined_return_recipient(session_record)
-    if not assigned:
-        return []
-    session_ids = []
-    for model in (ExamSessionSupervisorAssignment, ExamSessionExaminerAssignment):
-        person_match = (model.team_member_id == assigned.team_member_id if assigned.team_member_id
-                        else model.potential_entry_id == assigned.potential_entry_id)
-        session_ids.append(db.session.query(model.exam_session_id).filter(
-            person_match, model.is_shipment_recipient.is_(True), model.participation_status.notin_(['Declined', 'Cancelled'])))
-    peers = (ExamSession.query.options(joinedload(ExamSession.supervisor_assignments), joinedload(ExamSession.examiner_assignments))
-             .filter(ExamSession.id != session_record.id, ExamSession.format == 'Onsite',
-                     ExamSession.id.in_(union_all(*session_ids)))
-             .order_by(ExamSession.session_date.asc(), ExamSession.exam_session_name.asc()).all())
-    person_ref = staffing_assignment_person_ref(assigned)
-    return [peer for peer in peers if staffing_assignment_person_ref(combined_return_recipient(peer)) == person_ref]
+    return (ExamSession.query.options(selectinload(ExamSession.supervisor_assignments),
+            selectinload(ExamSession.examiner_assignments), selectinload(ExamSession.intern_assignments))
+        .filter(ExamSession.id != session_record.id, ExamSession.format == 'Onsite')
+        .order_by(ExamSession.session_date.asc(), ExamSession.exam_session_name.asc()).all())
 
 
 RETURN_MATERIALS_OPTIONS = [
@@ -19576,6 +19580,8 @@ def pre_session_control_tower(_count_only=False):
         return_materials_options=RETURN_MATERIALS_OPTIONS,
         return_handover_staff_options=AcademicStaff.query.order_by(AcademicStaff.full_name.asc(), AcademicStaff.id.asc()).all(),
         combined_return_examiner_confirmed=combined_return_examiner_confirmed,
+        combined_return_selectable=combined_return_selectable,
+        combined_return_same_recipient=combined_return_same_recipient,
         combined_return_options_by_session={view["session"].id: combined_return_session_options(view["session"]) for view in modal_views},
         communications_status_options=COMMUNICATIONS_STATUS_OPTIONS,
         communications_groups=COMMUNICATIONS_GROUPS,
@@ -21691,9 +21697,9 @@ def update_return_materials_method(session_id):
             combined_session_ids = sorted({int(value) for value in request.form.getlist("combined_return_session_ids")})
         except ValueError:
             return jsonify(error="Select valid exam sessions."), 400
-        eligible_ids = {record.id for record in combined_return_session_options(session_record) if combined_return_examiner_confirmed(record)}
+        eligible_ids = {record.id for record in combined_return_session_options(session_record) if combined_return_selectable(session_record, record)}
         if not set(combined_session_ids).issubset(eligible_ids):
-            return jsonify(error="Select sessions for the same staff member marked Receives shipment, with confirmed Examiner participation."), 400
+            return jsonify(error="Select sessions with confirmed staff participation."), 400
     control = ExamSessionSinapsisControl.query.filter_by(exam_session_id=session_id).first()
     if control is None:
         control = ExamSessionSinapsisControl(exam_session_id=session_id, status="Not reviewed")
@@ -21703,9 +21709,12 @@ def update_return_materials_method(session_id):
         if request.form.get("confirm_return_method_change") != "1":
             return jsonify(confirmation_required=True, error="Are you sure you want to continue? Linked sessions will keep the original selection of return of exam packages."), 409
         control.return_materials_local_override = True
+    same_recipient_ids = {peer.id for peer in combined_return_session_options(session_record)
+                          if combined_return_same_recipient(session_record, peer)}
+    shared_ids = set(combined_session_ids or []) & same_recipient_ids
     if combined_session_ids is not None:
         conflicts = ExamSessionSinapsisControl.query.filter(
-            ExamSessionSinapsisControl.exam_session_id.in_(combined_session_ids),
+            ExamSessionSinapsisControl.exam_session_id.in_(shared_ids),
             ExamSessionSinapsisControl.return_materials_method.isnot(None),
             ExamSessionSinapsisControl.return_materials_method != "",
         ).all()
@@ -21713,7 +21722,7 @@ def update_return_materials_method(session_id):
             confirmed_ids = {int(value) for value in request.form.getlist("confirm_return_option_session_ids")}
         except ValueError:
             return jsonify(error="Invalid confirmation."), 400
-        desired_group = {session_id, *combined_session_ids}
+        desired_group = {session_id, *shared_ids}
         conflicting_ids = {peer.exam_session_id for peer in conflicts
             if peer.return_materials_method != method
             or (peer.exam_session_id not in control.combined_return_session_ids
@@ -21724,7 +21733,7 @@ def update_return_materials_method(session_id):
             return jsonify(confirmation_required=True, confirmation_type="return_option_conflict",
                 conflicting_session_ids=unconfirmed_ids,
                 error="Are you sure you want to continue? A different return package option has already been configured for this session."), 409
-    previous_group = {session_id, *control.combined_return_session_ids}
+    previous_group = {session_id, *(set(control.combined_return_session_ids) & same_recipient_ids)}
     if combined_session_ids is not None:
         control.combined_return_session_ids_json = json.dumps(combined_session_ids)
         if not changing_linked_method:
@@ -21756,9 +21765,11 @@ def update_return_materials_method(session_id):
         synced_controls.append(control)
 
     if method in combined_methods and not control.return_materials_local_override:
-        eligible_ids = {record.id for record in combined_return_session_options(session_record) if combined_return_examiner_confirmed(record)}
-        member_ids = {session_id, *(set(control.combined_return_session_ids) & eligible_ids)}
-        control.combined_return_session_ids_json = json.dumps(sorted(member_ids - {session_id}))
+        eligible_ids = {record.id for record in combined_return_session_options(session_record) if combined_return_selectable(session_record, record)}
+        selected_ids = set(control.combined_return_session_ids) & eligible_ids
+        local_ids = selected_ids - same_recipient_ids
+        member_ids = {session_id, *(selected_ids & same_recipient_ids)}
+        control.combined_return_session_ids_json = json.dumps(sorted((member_ids - {session_id}) | local_ids))
         peers = ExamSessionSinapsisControl.query.filter(
             ExamSessionSinapsisControl.exam_session_id.in_((member_ids | previous_group) - {session_id})
         ).all()
@@ -21777,7 +21788,7 @@ def update_return_materials_method(session_id):
                 control.combined_return_shipping_label = db.session.get(ReturnShippingLabel, next(iter(labels)))
         if combined_session_ids is None:
             member_ids -= {member_id for member_id, peer in peers_by_session.items() if peer.return_materials_local_override}
-            control.combined_return_session_ids_json = json.dumps(sorted(member_ids - {session_id}))
+            control.combined_return_session_ids_json = json.dumps(sorted((member_ids - {session_id}) | local_ids))
         instruction_sets = {(peer.return_instructions_title or '', peer.return_instructions_html)
                             for peer in [control, *peers] if peer.exam_session_id in member_ids and peer.return_instructions_html}
         if len(instruction_sets) > 1:
@@ -21798,14 +21809,15 @@ def update_return_materials_method(session_id):
                 peer.combined_return_shipping_label = control.combined_return_shipping_label
             else:
                 setattr(peer, combined_url_field, getattr(control, combined_url_field))
-            peer.combined_return_session_ids_json = json.dumps(sorted(member_ids - {member_id}))
+            peer_local_ids = set(peer.combined_return_session_ids) - same_recipient_ids - {session_id}
+            peer.combined_return_session_ids_json = json.dumps(sorted((member_ids - {member_id}) | peer_local_ids))
             peer.updated_by = session.get("user")
             synced_controls.append(peer)
         # Detach removed members only when they still belong to the previous group.
         for removed_id in previous_group - member_ids:
             peer = peers_by_session.get(removed_id)
-            if peer and session_shipment_recipient_confirmed_for_shipment(peer.exam_session) and not peer.return_materials_local_override and {removed_id, *peer.combined_return_session_ids} == previous_group:
-                peer.combined_return_session_ids_json = "[]"
+            if peer and session_shipment_recipient_confirmed_for_shipment(peer.exam_session) and not peer.return_materials_local_override and {removed_id, *(set(peer.combined_return_session_ids) & (same_recipient_ids | {session_id}))} == previous_group:
+                peer.combined_return_session_ids_json = json.dumps(sorted(set(peer.combined_return_session_ids) - previous_group))
                 if method == 'combined_dispatch':
                     peer.combined_return_shipping_label = None
                 else:
