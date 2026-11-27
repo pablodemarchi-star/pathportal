@@ -10,6 +10,15 @@ from app import db, login_required
 from app import models as m
 
 quality_bp = Blueprint('quality_control', __name__)
+
+
+@quality_bp.before_request
+def require_quality_control_access():
+    if not getattr(g, 'user', None):
+        return None
+    from app.routes import require_menu_view
+    require_menu_view('quality_control')
+
 PROCESSES = [('date', 'Date'), ('registrations', 'Registrations'), ('schedule', 'Schedule'),
              ('staffing', 'Staffing'), ('package', 'Package'), ('shipment', 'Shipment'),
              ('logistics', 'Logistics'), ('finance', 'Finance'), ('final_checks', 'Final checks'),('attendance','Attendance'), ('exam_records', 'Exam records')]
@@ -141,15 +150,15 @@ def load_rows(records, today=None):
     if peer_ids:
         peers = m.ExamSession.query.options(selectinload(m.ExamSession.supervisor_assignments),
             selectinload(m.ExamSession.examiner_assignments), selectinload(m.ExamSession.intern_assignments)).filter(m.ExamSession.id.in_(peer_ids)).all()
-        eligible_by_supervisor = defaultdict(set)
+        eligible_by_recipient = defaultdict(set)
         for peer in peers:
-            supervisor = r.shipment_recipient_supervisor_assignment([a for a in peer.supervisor_assignments if a.participation_status not in {'Declined','Cancelled'}])
-            if peer.format == 'Onsite' and supervisor and r.combined_return_examiner_confirmed(peer):
-                eligible_by_supervisor[supervisor.team_member_id].add(peer.id)
+            assigned = r.combined_return_recipient(peer)
+            if peer.format == 'Onsite' and assigned and r.combined_return_examiner_confirmed(peer):
+                eligible_by_recipient[r.staffing_assignment_person_ref(assigned)].add(peer.id)
         for record in records:
-            supervisor = r.shipment_recipient_supervisor_assignment([a for a in groups[0].get(record.id, []) if a.participation_status not in {'Declined','Cancelled'}])
-            if supervisor:
-                combined_eligible[record.id] = eligible_by_supervisor[supervisor.team_member_id] - {record.id}
+            assigned = r.combined_return_recipient(record, groups[0].get(record.id, []) + groups[1].get(record.id, []))
+            if assigned:
+                combined_eligible[record.id] = eligible_by_recipient[r.staffing_assignment_person_ref(assigned)] - {record.id}
     from app.pen_arrangements import completion_states
     pen_states = completion_states(records)
     old_cache = {}
@@ -443,8 +452,6 @@ def dashboard_rows(year, format_name=None):
 @quality_bp.route('/quality-control')
 @login_required
 def index():
-    if not getattr(getattr(g, 'current_user', None), 'is_superadmin', False):
-        abort(403)
     years = [int(year) for year, in db.session.query(extract('year', m.ExamSession.session_date)).distinct().order_by(
         extract('year', m.ExamSession.session_date).desc())]
     year = request.args.get('session_year', type=int) or (years[0] if years else datetime.now().year)

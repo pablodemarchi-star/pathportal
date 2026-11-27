@@ -176,3 +176,21 @@ class SessionReportEditTest(unittest.TestCase):
         self.assertEqual(candidate.document_id, 'evidence')
         self.assertEqual(candidate.it_reason, '')
         self.assertEqual(json.loads(candidate.absent_modules), [])
+
+
+    def test_delegated_quality_control_editor_and_viewer_permissions(self):
+        self.saved(online=True)
+        self.user.is_superadmin = False
+        permission = m.UserMenuPermission(user_id=self.user.id, menu_key='quality_control', can_view=True, can_edit=False)
+        db.session.add(permission); db.session.commit()
+        detail = f'/quality-control/session-reports/{self.record.id}'
+        response = self.admin.get(detail)
+        self.assertEqual(response.status_code, 200)
+        self.assertNotIn('data-report-edit-url', response.get_data(as_text=True))
+        self.assertEqual(self.admin.get(self.edit_url).status_code, 403)
+        permission.can_edit=True; db.session.commit()
+        response = self.admin.get(detail)
+        self.assertIn('data-report-edit-url', response.get_data(as_text=True))
+        self.assertEqual(self.admin.get(self.edit_url).status_code, 200)
+        response = self.admin.post(self.edit_url, data=self.payload())
+        self.assertEqual(response.status_code, 200, response.json)

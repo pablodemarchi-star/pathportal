@@ -15,6 +15,7 @@ MENU_PERMISSIONS = (
     ("internship_stages", "Internship stages"),
     ("exam_session_planner", "Exam session planner"),
     ("pre_session_control_tower", "Onsite session control tower"),
+    ("quality_control", "Quality control"),
     ("path_session_journey", "Path Session Journey"),
     ("monthly_exam_session_registrations", "Monthly exam session registrations"),
     ("staff_payments", "Staff payments"),

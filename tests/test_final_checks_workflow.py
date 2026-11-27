@@ -420,3 +420,81 @@ class FinalChecksWorkflowTest(unittest.TestCase):
         self.assertFalse(current['return_enabled'])
         self.assertIsNone(current['return_deadline_badge'])
         self.assertFalse(current['actions'])
+
+    def test_combined_returns_match_recipient_across_supervisor_and_examiner_roles(self):
+        from app.routes import combined_return_session_options, combined_return_examiner_confirmed
+        assigned = self.assign()
+        def peer(name, role, member_id=None, marked=True, status='Confirmed', format='Onsite'):
+            record = ExamSession(exam_session_name=name, category='Path School', status='Pending',
+                session_date=self.session_record.session_date, shifts='Morning', modules='Speaking', format=format)
+            db.session.add(record); db.session.flush()
+            model = ExamSessionSupervisorAssignment if role == 'supervisor' else ExamSessionExaminerAssignment
+            db.session.add(model(exam_session_id=record.id, team_member_id=member_id or assigned.team_member_id,
+                participation_status=status, is_shipment_recipient=marked))
+            if role == 'supervisor':
+                db.session.add(ExamSessionExaminerAssignment(exam_session_id=record.id, team_member_id=assigned.team_member_id, participation_status='Confirmed'))
+            return record
+        as_supervisor = peer('Same person Supervisor', 'supervisor')
+        as_examiner = peer('Same person Examiner', 'examiner')
+        pending = peer('Same person Pending', 'examiner', status='Pending')
+        peer('Same person not recipient', 'examiner', marked=False)
+        peer('Same person declined', 'examiner', status='Declined')
+        peer('Same person cancelled', 'examiner', status='Cancelled')
+        peer('Same person Online', 'examiner', format='Online')
+        other = AcademicStaff(full_name='Different recipient', status='Active', roles='Examiner')
+        db.session.add(other); db.session.flush()
+        peer('Different person', 'examiner', member_id=other.id)
+        db.session.commit()
+        expected = {as_supervisor.id, as_examiner.id, pending.id}
+        self.assertEqual({row.id for row in combined_return_session_options(self.session_record)}, expected)
+        self.assertFalse(combined_return_examiner_confirmed(pending))
+        self.assertTrue(combined_return_examiner_confirmed(as_examiner))
+        # Reverse the source role as well: Examiner can combine with either role.
+        assigned.is_shipment_recipient = False
+        assigned.is_remote = True
+        db.session.add(ExamSessionExaminerAssignment(exam_session_id=self.session_record.id,
+            team_member_id=assigned.team_member_id, participation_status='Confirmed', is_shipment_recipient=True))
+        db.session.commit()
+        self.assertEqual({row.id for row in combined_return_session_options(self.session_record)}, expected)
+        # Both return methods use the same server-side eligibility rule.
+        self.session_record.session_date = datetime.now(LOCAL_TZ).date() + timedelta(days=20)
+        db.session.commit()
+        for method in ['combined_dispatch', 'combined_location_drop_off']:
+            response = self.return_post(return_materials_method=method, save_combined_return_sessions='1',
+                combined_return_session_ids=[str(as_supervisor.id), str(as_examiner.id)],
+                confirm_return_method_change='1', confirm_return_option_session_ids=[str(as_supervisor.id), str(as_examiner.id)])
+            self.assertEqual(response.status_code, 200, response.json)
+            self.assertEqual(set(self.control().combined_return_session_ids), {as_supervisor.id, as_examiner.id})
+            self.assertEqual(self.return_post(return_materials_method=method, save_combined_return_sessions='1',
+                combined_return_session_ids=[str(pending.id)]).status_code, 400)
+        # Quality control's batched cache must use the same person across roles.
+        from app.quality_control import load_rows
+        from app.final_checks import final_checks_state as actual_state
+        from flask import g
+        caches = {}
+        def observe(record, *args, **kwargs):
+            caches[record.id] = set(g._quality_combined_eligible[record.id])
+            return actual_state(record, *args, **kwargs)
+        with patch('app.final_checks.final_checks_state', side_effect=observe):
+            load_rows([self.session_record])
+        self.assertEqual(caches[self.session_record.id], {as_supervisor.id, as_examiner.id})
+
+    def test_combined_return_potential_recipients_are_matched_by_identity(self):
+        from app.models import PotentialEntry
+        from app.routes import combined_return_session_options
+        person = PotentialEntry(full_name='Potential recipient', status='Pending')
+        other = PotentialEntry(full_name='Other potential recipient', status='Pending')
+        db.session.add_all([person, other]); db.session.flush()
+        db.session.add(ExamSessionExaminerAssignment(exam_session_id=self.session_record.id,
+            potential_entry_id=person.id, participation_status='Confirmed', is_shipment_recipient=True))
+        def peer(name, potential_id):
+            record = ExamSession(exam_session_name=name, category='Path School', status='Pending',
+                session_date=self.session_record.session_date, shifts='Morning', modules='Speaking', format='Onsite')
+            db.session.add(record); db.session.flush()
+            db.session.add(ExamSessionSupervisorAssignment(exam_session_id=record.id, potential_entry_id=potential_id,
+                participation_status='Confirmed', is_shipment_recipient=True))
+            return record
+        same = peer('Potential same person', person.id)
+        peer('Potential different person', other.id)
+        db.session.commit()
+        self.assertEqual([row.id for row in combined_return_session_options(self.session_record)], [same.id])

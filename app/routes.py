@@ -273,6 +273,7 @@ PERMANENT_DELETE_PASSWORD = "Path1234"
 EXAM_SESSION_DELETE_PASSWORD = "Path1234"
 REJECTED_POTENTIAL_ENTRY_DELETE_PASSWORD = "Path1234"
 MENU_PERMISSION_PATHS = (
+    ("quality_control", ("/quality-control",)),
     ("potential_entries", ("/potential-entries",)),
     ("staff_members", ("/members", "/staff-members")),
     ("examiner_certification", ("/annual-certification-programme",)),
@@ -420,20 +421,30 @@ def combined_return_examiner_confirmed(session_record):
     )
 
 
+def combined_return_recipient(session_record, assignments=None):
+    if assignments is None:
+        assignments = list(session_record.supervisor_assignments) + list(session_record.examiner_assignments)
+    return next((assignment for assignment in assignments
+                 if assignment.is_shipment_recipient and (assignment.team_member_id or assignment.potential_entry_id)
+                 and assignment.participation_status not in {'Declined', 'Cancelled'}), None)
+
+
 def combined_return_session_options(session_record):
-    supervisor = shipment_recipient_supervisor_assignment([
-        assignment for assignment in session_record.supervisor_assignments
-        if assignment.participation_status not in {"Declined", "Cancelled"}
-    ])
-    if not supervisor:
+    assigned = combined_return_recipient(session_record)
+    if not assigned:
         return []
-    return (ExamSession.query.options(joinedload(ExamSession.examiner_assignments)).join(ExamSessionSupervisorAssignment)
-            .filter(ExamSession.id != session_record.id,
-                    ExamSession.format == "Onsite",
-                    ExamSessionSupervisorAssignment.is_shipment_recipient.is_(True),
-                    ExamSessionSupervisorAssignment.team_member_id == supervisor.team_member_id,
-                    ExamSessionSupervisorAssignment.participation_status.notin_(["Declined", "Cancelled"]))
-            .distinct().order_by(ExamSession.session_date.asc(), ExamSession.exam_session_name.asc()).all())
+    session_ids = []
+    for model in (ExamSessionSupervisorAssignment, ExamSessionExaminerAssignment):
+        person_match = (model.team_member_id == assigned.team_member_id if assigned.team_member_id
+                        else model.potential_entry_id == assigned.potential_entry_id)
+        session_ids.append(db.session.query(model.exam_session_id).filter(
+            person_match, model.is_shipment_recipient.is_(True), model.participation_status.notin_(['Declined', 'Cancelled'])))
+    peers = (ExamSession.query.options(joinedload(ExamSession.supervisor_assignments), joinedload(ExamSession.examiner_assignments))
+             .filter(ExamSession.id != session_record.id, ExamSession.format == 'Onsite',
+                     ExamSession.id.in_(union_all(*session_ids)))
+             .order_by(ExamSession.session_date.asc(), ExamSession.exam_session_name.asc()).all())
+    person_ref = staffing_assignment_person_ref(assigned)
+    return [peer for peer in peers if staffing_assignment_person_ref(combined_return_recipient(peer)) == person_ref]
 
 
 RETURN_MATERIALS_OPTIONS = [
@@ -20693,8 +20704,8 @@ def submit_staff_session_report(token, submission_id, _editing=None):
         abort(404)
     record = submission.exam_session
     assignment, person_ref = staff_submission_assignment(record, submission.assignment_type, submission.assignment_id)
-    if _editing is not None and not getattr(getattr(g, "current_user", None), "is_superadmin", False):
-        abort(403)
+    if _editing is not None:
+        require_menu_edit("quality_control")
     if _editing is None and (not assignment or person_ref != share.person_ref):
         abort(404)
     if _editing is None and (not staff_report_assignment_eligible(record, assignment, submission.assignment_type) or not staff_report_available(record)):
@@ -21682,7 +21693,7 @@ def update_return_materials_method(session_id):
             return jsonify(error="Select valid exam sessions."), 400
         eligible_ids = {record.id for record in combined_return_session_options(session_record) if combined_return_examiner_confirmed(record)}
         if not set(combined_session_ids).issubset(eligible_ids):
-            return jsonify(error="Select sessions assigned to this supervisor with confirmed Examiner participation."), 400
+            return jsonify(error="Select sessions for the same staff member marked Receives shipment, with confirmed Examiner participation."), 400
     control = ExamSessionSinapsisControl.query.filter_by(exam_session_id=session_id).first()
     if control is None:
         control = ExamSessionSinapsisControl(exam_session_id=session_id, status="Not reviewed")

@@ -111,7 +111,8 @@ def render_index(year, years, selected_format='Onsite'):
 
 
 def render_detail(session_id):
-    if not getattr(getattr(g,'current_user',None),'is_superadmin',False): abort(403)
+    from app.routes import require_menu_view
+    require_menu_view('quality_control')
     record=db.session.get(m.ExamSession,session_id)
     if not record: abort(404)
     reports=m.StaffExamSessionReport.query.join(m.StaffExamSessionSubmission).filter(m.StaffExamSessionSubmission.exam_session_id==record.id).order_by(m.StaffExamSessionReport.id).all()

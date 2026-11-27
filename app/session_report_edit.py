@@ -7,8 +7,8 @@ from app import models as m
 
 
 def require_editor():
-    if not getattr(getattr(g, 'current_user', None), 'is_superadmin', False):
-        abort(403)
+    from app.routes import require_menu_edit
+    require_menu_edit('quality_control')
 
 
 def snapshot(report):

@@ -758,7 +758,7 @@ class UsersTest(unittest.TestCase):
         self.assertIn("Permission management scope", body)
         self.assertIn("You can only manage permissions for the menus assigned to your permission management scope.", body)
         self.assertIn("Exam session planner", body)
-        self.assertIn("Pre onsite session control tower", body)
+        self.assertIn("Onsite session control tower", body)
         self.assertNotIn("Staff members", body)
         self.assertNotIn("Fees", body)
         self.assertNotIn("Providers", body)
@@ -1042,7 +1042,7 @@ class UsersTest(unittest.TestCase):
         self.assertIn("Staff members", body)
         self.assertIn("Fees", body)
         self.assertNotIn("Exam session planner", body)
-        self.assertNotIn("Pre onsite session control tower", body)
+        self.assertNotIn("Onsite session control tower", body)
         self.assertNotIn(">Users<", body)
 
     def test_sidebar_places_monthly_registrations_below_exam_session_planner(self):
@@ -1060,7 +1060,7 @@ class UsersTest(unittest.TestCase):
         )
         self.assertLess(
             body.index("Monthly exam session registrations"),
-            body.index("Pre onsite session control tower"),
+            body.index("Onsite session control tower"),
         )
         self.assertNotIn("path-session-journey-nav", body)
         self.assertNotIn("Path Session Journey</div>", body)
@@ -1116,6 +1116,52 @@ class UsersTest(unittest.TestCase):
         )
         self.assertEqual(response.status_code, 403)
         self.assertIn("Access denied", response.get_data(as_text=True))
+
+
+    def test_quality_control_permission_is_selectable_and_persists(self):
+        client = self.admin_client()
+        html = client.get('/users').get_data(as_text=True)
+        self.assertIn('Quality control', html)
+        self.assertIn('permissions[quality_control][view]', html)
+        self.assertIn('permissions[quality_control][edit]', html)
+        from app.routes import apply_user_menu_permissions
+        user = self.create_user_record(email='quality-permissions@example.com')
+        apply_user_menu_permissions(user, {'quality_control':{'can_view':True, 'can_edit':False}}, {'quality_control'})
+        db.session.commit()
+        permission = UserMenuPermission.query.filter_by(user_id=user.id, menu_key='quality_control').one()
+        self.assertTrue(permission.can_view)
+        self.assertFalse(permission.can_edit)
+
+    def test_existing_database_adds_quality_control_without_granting_access_to_all(self):
+        import sqlite3
+        import tempfile
+        from pathlib import Path
+        from unittest.mock import patch
+        ordinary = self.create_user_record(email='ordinary-quality@example.com')
+        superadmin = self.create_user_record(email='super-quality@example.com', is_superadmin=True)
+        db.session.add(UserMenuPermission(user_id=ordinary.id, menu_key='staff_members', can_view=True, can_edit=False))
+        db.session.commit()
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / 'legacy.db'
+            target = sqlite3.connect(path)
+            db.session.connection().connection.driver_connection.backup(target)
+            ddl = target.execute("SELECT sql FROM sqlite_master WHERE type='table' AND name='user_menu_permission'").fetchone()[0]
+            target.execute('ALTER TABLE user_menu_permission RENAME TO old_user_permissions')
+            ddl = ddl.replace("'quality_control', ", '').replace(", 'quality_control'", '')
+            target.execute(ddl)
+            target.execute('INSERT INTO user_menu_permission SELECT * FROM old_user_permissions')
+            target.execute('DROP TABLE old_user_permissions')
+            target.commit(); target.close()
+            with patch.dict(os.environ, {'DATABASE_URL':'sqlite:///' + str(path)}):
+                upgraded = create_app()
+            with upgraded.app_context():
+                permission = UserMenuPermission.query.filter_by(user_id=ordinary.id, menu_key='quality_control').one()
+                self.assertFalse(permission.can_view)
+                self.assertFalse(permission.can_edit)
+                old = UserMenuPermission.query.filter_by(user_id=ordinary.id, menu_key='staff_members').one()
+                self.assertTrue(old.can_view); self.assertFalse(old.can_edit)
+                permission = UserMenuPermission.query.filter_by(user_id=superadmin.id, menu_key='quality_control').one()
+                self.assertTrue(permission.can_view); self.assertTrue(permission.can_edit)
 
 
 if __name__ == "__main__":

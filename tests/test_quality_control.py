@@ -331,3 +331,23 @@ class QualityControlTest(unittest.TestCase):
                 self.assertIn(f'data-qc-sort-cell="{key}"',html)
             if tab=='timing':
                 self.assertLess(html.index('js/process_timing.js'),html.index('js/quality_control.js'))
+
+
+    def test_quality_control_can_be_delegated_without_tower_permissions(self):
+        user = self.admin(False)
+        client = self.login_client_for_user(user)
+        self.assertEqual(client.get('/quality-control').status_code, 403)
+        permission = m.UserMenuPermission(user_id=user.id, menu_key='quality_control', can_view=True, can_edit=False)
+        db.session.add(permission); db.session.commit()
+        for tab in ['readiness', 'timing', 'reports']:
+            response = client.get('/quality-control', query_string={'tab':tab})
+            self.assertEqual(response.status_code, 200)
+            self.assertIn('href="/quality-control"', response.get_data(as_text=True))
+        detail = f'/quality-control/session-reports/{self.session_record.id}'
+        self.assertEqual(client.get(detail).status_code, 200)
+        self.assertEqual(client.get(detail + '/edit').status_code, 403)
+        self.assertEqual(client.post(detail + '/edit/media').status_code, 403)
+        permission.can_view=False; db.session.commit()
+        self.assertEqual(client.get(detail).status_code, 403)
+        self.assertEqual(client.get('/quality-control').status_code, 403)
+        self.assertEqual(self.app.test_client().get('/quality-control').status_code, 302)

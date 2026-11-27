@@ -2221,7 +2221,7 @@ This stage has already been marked as complete. Reopening it may affect package 
                                 {% set examiner_confirmed = combined_return_examiner_confirmed(other_session) %}
                                 <label{% if not examiner_confirmed %} class="combined-return-session-unconfirmed"{% endif %}><input type="checkbox" name="combined_return_session_ids" value="{{ other_session.id }}" data-return-combined-session{% if return_method == option.key and examiner_confirmed and view.sinapsis.control and other_session.id in view.sinapsis.control.combined_return_session_ids %} checked{% endif %}{% if not examiner_confirmed %} disabled{% endif %}><span>{{ other_session.exam_session_name }}{% if other_session.session_date %} — {{ other_session.session_date|session_date }}{% endif %}{% if examiner_confirmed %}<span class="badge combined-return-confirmed">Confirmed</span>{% else %}<span class="badge combined-return-not-confirmed">Not confirmed yet</span>{% endif %}</span></label>
                               {% else %}
-                                <p>No other exam sessions assigned to this supervisor.</p>
+                                <p>No other exam sessions for this staff member marked Receives shipment.</p>
                               {% endfor %}
                             </div>
                           </details>

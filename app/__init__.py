@@ -409,6 +409,7 @@ def create_app():
             "'finance_requests'" not in user_menu_permission_sql
             or "'potential_entries'" not in user_menu_permission_sql
             or "'path_session_journey'" not in user_menu_permission_sql
+            or "'quality_control'" not in user_menu_permission_sql
         ):
             db.session.execute(text("ALTER TABLE user_menu_permission RENAME TO user_menu_permission_legacy"))
             db.session.execute(text(f"""
@@ -1419,8 +1420,8 @@ def create_app():
                     UserMenuPermission(
                         user_id=user.id,
                         menu_key=menu_key,
-                        can_view=True,
-                        can_edit=True,
+                        can_view=bool(user.is_superadmin) if menu_key == "quality_control" else True,
+                        can_edit=bool(user.is_superadmin) if menu_key == "quality_control" else True,
                     )
                 )
         db.session.flush()
